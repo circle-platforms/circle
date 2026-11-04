@@ -94,9 +94,8 @@ These are gaps to know about before you trust Circle with a repository or a mach
 
 ## ChatGPT plan
 
-- **The desktop application cannot sign in with ChatGPT yet.** Its provider list leaves the ChatGPT plan out, and its connection form refuses `chatgpt`; sign in from the terminal. A desktop session whose data folder already holds a ChatGPT sign-in is not supported either.
 - **The plan route's limits are followed as documented, without a check against a real account.** Circle's checks use a local stand-in for OpenAI. Grouping the tools in a namespace and compressing every body are the cautious reading of OpenAI's preview limitations; a request the real route refuses stops with the route's own code.
-- **Line setup cannot take a pasted address.** When the browser cannot reach the machine Circle runs on, sign in from the full-screen setup or `/login`, which can.
+- **Line setup cannot take a pasted address.** When the browser cannot reach the machine Circle runs on, sign in from the full-screen setup, `/login` or the desktop connection form, which can.
 - **One ChatGPT account at a time.** Circle keeps each registration it has signed in to, but offers no picker between them; signing in to another account needs `/logout` first.
 - **No remaining usage.** OpenAI offers no way to ask how much of the plan is left, so Circle shows none; ChatGPT settings → Usage does.
 

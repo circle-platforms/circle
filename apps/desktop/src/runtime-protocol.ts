@@ -28,6 +28,8 @@ export type RuntimeCommandName =
   | 'set-mode'
   | 'configure'
   | 'probe-connection'
+  | 'chatgpt-sign-in'
+  | 'chatgpt-connect'
   | 'logout'
   | 'trust'
   | 'save-settings'
@@ -138,6 +140,8 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'set-mode',
   'configure',
   'probe-connection',
+  'chatgpt-sign-in',
+  'chatgpt-connect',
   'logout',
   'trust',
   'save-settings',

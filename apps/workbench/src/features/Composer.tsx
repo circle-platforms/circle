@@ -10,6 +10,7 @@ import {
 import type { Effort, Model, Session, SessionMode } from '../model/types';
 import { EFFORTS, MODES, sessionMode } from '../model/state';
 import { t } from '../i18n';
+import { desktopHost } from '../host';
 import './composer.css';
 
 export const MODE_TEXT: Record<
@@ -169,6 +170,7 @@ export function ModelMenu({
   enabled,
   onModel,
   onManage,
+  plan = false,
   side = 'top',
   onCloseFocus,
 }: {
@@ -177,6 +179,8 @@ export function ModelMenu({
   enabled: string[];
   onModel: (id: string) => void;
   onManage: () => void;
+  /** Requests use the person's ChatGPT plan (Sign in with ChatGPT). */
+  plan?: boolean;
 } & MenuPlacement) {
   const shown = models.filter(
     (model) =>
@@ -186,48 +190,63 @@ export function ModelMenu({
         model.id === session.model),
   );
   return (
-    <DropdownMenu.Root modal={false}>
-      <DropdownMenu.Trigger asChild>
-        <button
-          className="footbar-button"
-          aria-label={t('model')}
-          onMouseDown={(event) => event.preventDefault()}
-        >
-          <span className="footbar-model" title={session.model}>
-            {session.model}
-          </span>
-          <ChevronDown size={11} />
-        </button>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          className={`dropdown composer-menu footbar-menu model-menu${side === 'bottom' ? ' home-menu' : ''}`}
-          side={side}
-          // Home menus always open downward and scroll within the room below;
-          // flipping would cover the composer they belong to.
-          avoidCollisions={side !== 'bottom'}
-          collisionPadding={8}
-          align="end"
-          sideOffset={7}
-          onCloseAutoFocus={closeMenu(onCloseFocus)}
-        >
-          {shown.map((model) => (
-            <DropdownMenu.Item
-              key={model.id}
-              onSelect={() => onModel(model.id)}
-            >
-              <span title={model.id}>{model.id}</span>
-              {model.id === session.model && <Check size={13} />}
+    <>
+      {plan && <span className="footbar-plan">{t('Using ChatGPT plan')}</span>}
+      <DropdownMenu.Root modal={false}>
+        <DropdownMenu.Trigger asChild>
+          <button
+            className="footbar-button"
+            aria-label={t('model')}
+            onMouseDown={(event) => event.preventDefault()}
+          >
+            <span className="footbar-model" title={session.model}>
+              {session.model}
+            </span>
+            <ChevronDown size={11} />
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            className={`dropdown composer-menu footbar-menu model-menu${side === 'bottom' ? ' home-menu' : ''}`}
+            side={side}
+            // Home menus always open downward and scroll within the room below;
+            // flipping would cover the composer they belong to.
+            avoidCollisions={side !== 'bottom'}
+            collisionPadding={8}
+            align="end"
+            sideOffset={7}
+            onCloseAutoFocus={closeMenu(onCloseFocus)}
+          >
+            {shown.map((model) => (
+              <DropdownMenu.Item
+                key={model.id}
+                onSelect={() => onModel(model.id)}
+              >
+                <span title={model.id}>{model.id}</span>
+                {model.id === session.model && <Check size={13} />}
+              </DropdownMenu.Item>
+            ))}
+            <DropdownMenu.Separator className="dropdown-separator" />
+            <DropdownMenu.Item onSelect={onManage}>
+              {t('manage models…')}
             </DropdownMenu.Item>
-          ))}
-          <DropdownMenu.Separator className="dropdown-separator" />
-          <DropdownMenu.Item onSelect={onManage}>
-            {t('manage models…')}
-          </DropdownMenu.Item>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
+            {plan && (
+              <DropdownMenu.Item onSelect={openUsage}>
+                {t('Manage usage')}
+              </DropdownMenu.Item>
+            )}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    </>
   );
+}
+/** ChatGPT settings → Usage, in the system browser. */
+function openUsage() {
+  const url = 'https://chatgpt.com/settings/usage';
+  const host = desktopHost();
+  if (host?.openExternal) void host.openExternal(url).catch(() => {});
+  else window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 /** The thinking depth of this session. */

@@ -4272,6 +4272,21 @@ pre {
 .footbar-button.attention {
   color: var(--status-warn-text);
 }
+/* The ChatGPT sign-in address: long, wrapped anywhere, selectable as a whole. */
+.sign-in-address {
+  display: block;
+  max-height: 7.5em;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  user-select: all;
+}
+/* Beside the model selector while requests use the person's ChatGPT plan. */
+.footbar-plan {
+  color: var(--muted);
+  font-size: var(--ui-small);
+  white-space: nowrap;
+}
 .footbar-model {
   max-width: 190px;
   overflow: hidden;

@@ -21,6 +21,8 @@ import {
   PROVIDER_PRESET_DATE,
 } from '../../../../src/providers';
 import { PROTOCOLS, type Protocol } from '../../../../src/protocols';
+// ChatGPT settings → Usage, where plan use and Circle's limit within it are managed.
+const MANAGE_USAGE = 'https://chatgpt.com/settings/usage';
 import { VERSION } from '../../../../src/version';
 import { useRuntime } from '../app/context';
 import { t, tn } from '../i18n';
@@ -184,6 +186,12 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState('');
   const [focus, setFocus] = useState(0);
   const [typedModel, setTypedModel] = useState('');
+  // Sign in with ChatGPT: the address the browser was sent to, what was pasted back, and the
+  // one-time confirmation after the first sign-in.
+  const [signInUrl, setSignInUrl] = useState('');
+  const [pasted, setPasted] = useState('');
+  const [welcome, setWelcome] = useState(false);
+  const signsIn = provider.source === 'signin';
   const list = useRef<HTMLDivElement>(null);
   // As in the terminal: an empty key keeps the saved one only on the saved endpoint's host.
   const savedHost = hostOf(snapshot.settings.endpoint);
@@ -219,6 +227,32 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
     setError('');
     setBusy(true);
     try {
+      if (!probe && signsIn) {
+        // The system browser signs in; this waits until it comes back (or is pasted).
+        const { url } = (await runtime.request('chatgpt-sign-in', {
+          action: 'start',
+        })) as { url: string };
+        setSignInUrl(url);
+        openOutside(url);
+        const done = (await runtime.request('chatgpt-sign-in', {
+          action: 'wait',
+        })) as { email: string; models: string[] };
+        setSignInUrl('');
+        setPasted('');
+        setQuery('');
+        setTypedModel('');
+        setFocus(Math.max(0, done.models.indexOf(current.model)));
+        setProbe({
+          status: done.models.length ? 'discovered' : 'empty',
+          protocol: 'chatgpt',
+          models: done.models,
+          baseUrl: provider.baseUrl,
+          inferred: false,
+          summary: '',
+          detail: '',
+        });
+        return;
+      }
       if (!probe) {
         let url: URL | undefined;
         try {
@@ -253,6 +287,16 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
       }
       const model = listed ? chosen?.id : typedModel.trim();
       if (!model) throw Error(t('choose a model or type its id'));
+      if (probe.protocol === 'chatgpt') {
+        const saved = (await runtime.request('chatgpt-connect', {
+          model,
+        })) as { welcome?: boolean };
+        notify(t('connection saved'));
+        // The first sign-in to this account confirms plan use once.
+        if (saved.welcome) setWelcome(true);
+        else onClose();
+        return;
+      }
       await runtime.request('configure-connection', {
         // The URL that answered; for a kind of API chosen here, the URL as typed
         endpoint: manual ? endpoint.trim() : probe.baseUrl,
@@ -268,6 +312,31 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
     } finally {
       setBusy(false);
     }
+  };
+  const openOutside = (url: string) => {
+    // Only HTTPS goes to the system browser; any other address is shown to open by hand.
+    if (!url.startsWith('https://')) return;
+    const host = desktopHost();
+    if (host?.openExternal)
+      void host.openExternal(url).catch((e) => notify(String(e)));
+    else window.open(url, '_blank', 'noopener,noreferrer');
+  };
+  const paste = async () => {
+    setError('');
+    try {
+      await runtime.request('chatgpt-sign-in', {
+        action: 'paste',
+        url: pasted.trim(),
+      });
+    } catch (problem) {
+      setError(problem instanceof Error ? problem.message : t('action failed'));
+    }
+  };
+  const cancelSignIn = () => {
+    void Promise.resolve(
+      runtime.request('chatgpt-sign-in', { action: 'cancel' }),
+    ).catch(() => {});
+    setSignInUrl('');
   };
   const actions = (primary: string) => (
     <div className="dialog-actions">
@@ -303,6 +372,102 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
       {error}
     </p>
   );
+  if (welcome)
+    return (
+      <div
+        className="form-stack"
+        role="dialog"
+        aria-label={t("You're using your ChatGPT plan")}
+      >
+        <h3>{t("You're using your ChatGPT plan")}</h3>
+        <p className="dialog-paragraph">
+          {t(
+            'Eligible AI requests in Circle use your ChatGPT plan. You can manage usage in ChatGPT settings.',
+          )}
+        </p>
+        <div className="dialog-actions">
+          <Button type="button" onClick={() => openOutside(MANAGE_USAGE)}>
+            {t('Manage usage')}
+          </Button>
+          <Button type="button" className="primary" autoFocus onClick={onClose}>
+            {t('Got it')}
+          </Button>
+        </div>
+      </div>
+    );
+  if (!probe && signsIn)
+    return (
+      <form className="form-stack" onSubmit={submit}>
+        <label>
+          {t('provider')}
+          <select
+            aria-label={t('provider')}
+            value={providerId}
+            disabled={busy}
+            onChange={(event) => {
+              const next = providerPreset(event.target.value);
+              setProviderId(next.id);
+              setEndpoint(
+                next.baseUrl ||
+                  (next.id === 'custom' ? snapshot.settings.endpoint : ''),
+              );
+              setError('');
+            }}
+          >
+            {PROVIDER_PRESETS.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.id === 'custom' ? t('custom endpoint') : item.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="dialog-paragraph">
+          {t(
+            'Use your ChatGPT plan: complete eligible AI requests in Circle with usage included in your ChatGPT plan.',
+          )}
+        </p>
+        {signInUrl ? (
+          <>
+            <p className="pending-message" role="status">
+              <i />
+              {t(
+                'Sign in in your browser. If it did not open, open this address:',
+              )}
+            </p>
+            <code className="sign-in-address">{signInUrl}</code>
+            <label>
+              {t(
+                'If the browser cannot reach this machine, paste the address it ends on',
+              )}
+              <input
+                aria-label={t('address the browser ended on')}
+                value={pasted}
+                onChange={(event) => setPasted(event.target.value)}
+              />
+            </label>
+            {problem}
+            <div className="dialog-actions">
+              <Button type="button" onClick={cancelSignIn}>
+                {t('cancel')}
+              </Button>
+              <Button
+                type="button"
+                className="primary"
+                disabled={!pasted.trim()}
+                onClick={() => void paste()}
+              >
+                {t('continue')}
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            {problem}
+            {actions(t('Continue with ChatGPT'))}
+          </>
+        )}
+      </form>
+    );
   if (!probe)
     return (
       <form className="form-stack" onSubmit={submit}>
@@ -338,14 +503,11 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
               setError('');
             }}
           >
-            {/* Sign in with ChatGPT is not in the desktop app yet. */}
-            {PROVIDER_PRESETS.filter((item) => item.source !== 'signin').map(
-              (item) => (
-                <option key={item.id} value={item.id}>
-                  {item.id === 'custom' ? t('custom endpoint') : item.name}
-                </option>
-              ),
-            )}
+            {PROVIDER_PRESETS.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.id === 'custom' ? t('custom endpoint') : item.name}
+              </option>
+            ))}
           </select>
         </label>
         <p className="panel-note">

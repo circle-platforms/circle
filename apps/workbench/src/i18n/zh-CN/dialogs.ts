@@ -205,4 +205,18 @@ export const dialogs: Record<string, string> = {
   tool: '工具',
   notice: '提示',
   'trust this device key for good': '永久信任这台设备的这个密钥',
+  // Sign in with ChatGPT, in OpenAI's wording (the owner's decision, 2026-11-04)
+  'Continue with ChatGPT': '使用 ChatGPT 继续',
+  'Use your ChatGPT plan: complete eligible AI requests in Circle with usage included in your ChatGPT plan.':
+    '使用 ChatGPT 套餐：Circle 中符合条件的 AI 请求计入 ChatGPT 套餐用量。',
+  'Sign in in your browser. If it did not open, open this address:':
+    '在浏览器中登录。浏览器没有打开时，打开这个地址：',
+  'If the browser cannot reach this machine, paste the address it ends on':
+    '浏览器无法访问这台机器时，粘贴浏览器最后停留的地址',
+  'address the browser ended on': '浏览器最后停留的地址',
+  "You're using your ChatGPT plan": '正在使用 ChatGPT 套餐',
+  'Eligible AI requests in Circle use your ChatGPT plan. You can manage usage in ChatGPT settings.':
+    'Circle 中符合条件的 AI 请求会使用 ChatGPT 套餐，用量可在 ChatGPT 设置中管理。',
+  'Manage usage': '管理用量',
+  'Got it': '知道了',
 };
