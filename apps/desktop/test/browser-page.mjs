@@ -677,6 +677,85 @@ try {
     run('point', { x: shadowPoint.x, y: shadowPoint.y, capture: oldShadow }),
     /screenshot is stale/,
   );
+  // Pointing at the page from the panel uses the same composed hit-test. A look as the
+  // cursor moves names what is there and claims no ref; the click that commits is a
+  // coordinate click, and a control that cannot take input is still one's answer.
+  const usernameLook = await run('prepare', { ref: ref('username') });
+  const looked = await run('pick', { x: usernameLook.x, y: usernameLook.y });
+  assert.equal(looked.role, 'textbox');
+  assert.equal(looked.name, 'username');
+  assert.equal(looked.tag, 'input');
+  assert.equal(looked.known, true);
+  assert.equal(looked.disabled, false);
+  assert.equal(
+    looked.ref,
+    ref('username'),
+    'a look answers with the ref the snapshot already gave',
+  );
+  const usernameRect = await page.locator('#username').evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return { left: rect.left, top: rect.top, width: rect.width };
+  });
+  assert.ok(
+    Math.abs(looked.box.left - usernameRect.left) <= 2 &&
+      Math.abs(looked.box.top - usernameRect.top) <= 2 &&
+      Math.abs(looked.box.width - usernameRect.width) <= 2,
+    `box ${JSON.stringify(looked.box)} vs ${JSON.stringify(usernameRect)}`,
+  );
+  // Not a control: the person can still mean it, and a look gives it no ref.
+  await page.locator('h1').scrollIntoViewIfNeeded();
+  const headingRect = await page.locator('h1').evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return { left: rect.left, top: rect.top };
+  });
+  const heading = await run('pick', {
+    x: headingRect.left + 6,
+    y: headingRect.top + 6,
+  });
+  assert.equal(heading.role, 'heading');
+  assert.equal(heading.known, false);
+  assert.equal(heading.text, 'visible heading');
+  assert.equal(heading.ref, null, 'a look claims no ref');
+  // A shadow root and a same-origin frame are read through, as a click does.
+  const shadowLook = await run('pick', { x: shadowPoint.x, y: shadowPoint.y });
+  assert.equal(shadowLook.role, 'button');
+  // Its text changed above, after the snapshot that gave it its ref: the answer is the
+  // page as it is now, read through the shadow root.
+  assert.equal(shadowLook.name, 'changed action');
+  const framePoint = await run('prepare', { ref: ref('frame submit') });
+  const inFrame = await run('pick', { x: framePoint.x, y: framePoint.y });
+  assert.equal(inFrame.name, 'frame submit');
+  assert.equal(
+    inFrame.framed,
+    true,
+    'a point inside a frame is the frame’s own coordinates',
+  );
+  assert.equal(inFrame.box, null, 'so the picture gets no box for it');
+  await assert.rejects(
+    run('pick', { x: foreignRect.x + 10, y: foreignRect.y + 10 }),
+    /cross-origin frame/,
+  );
+  await assert.rejects(run('pick', { x: 99999, y: 10 }), /outside the page/);
+  await page.locator('[aria-label="disabled field"]').scrollIntoViewIfNeeded();
+  const disabledPoint = await page
+    .locator('[aria-label="disabled field"]')
+    .evaluate((node) => {
+      const rect = node.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    });
+  const disabledCapture = await run('capture-state');
+  await assert.rejects(
+    run('point', { ...disabledPoint, capture: disabledCapture }),
+    /the element is disabled/,
+  );
+  const disabledNamed = await run('point', {
+    ...disabledPoint,
+    capture: disabledCapture,
+    describe: true,
+  });
+  assert.equal(disabledNamed.disabled, true);
+  assert.equal(disabledNamed.name, 'disabled field');
+  assert.ok(disabledNamed.ref, 'a pick still takes a ref a click can act on');
   await page.evaluate(() => {
     for (let index = 0; index < 400; index++) {
       const long = document.createElement('p');

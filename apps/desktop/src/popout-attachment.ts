@@ -2,8 +2,9 @@ import type { PopoutAttachment, PopoutKind } from './contracts';
 import { MAX_FILE_BYTES, parseImageDataUrl } from './policy';
 
 // What a window of its own puts into its conversation's message box, which the main window
-// keeps: a page screenshot from the browser's window, a terminal selection from the
-// terminal's. The main process passes on only what the drawer itself would have added.
+// keeps: a page screenshot or an element the person pointed at from the browser's window,
+// a terminal selection from the terminal's. The main process passes on only what the
+// drawer itself would have added.
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,199}$/;
 
@@ -28,12 +29,21 @@ export function validPopoutAttachment(
   if (typeof content !== 'string' || typeof size !== 'number')
     throw Error('invalid attachment');
   if (from === 'browser') {
-    // A picture of the page, as the browser's capture makes it
-    if (kind !== 'image' || mime !== 'image/png')
-      throw Error('invalid attachment');
-    const image = parseImageDataUrl(content);
-    if (image.mime !== 'image/png') throw Error('invalid attachment');
-    if (size !== image.bytes.length) throw Error('invalid attachment size');
+    if (id.startsWith('browser-element:')) {
+      // The element the person pointed at, as the page names it
+      if (kind !== 'file' || mime !== 'text/plain')
+        throw Error('invalid attachment');
+      const bytes = Buffer.byteLength(content, 'utf8');
+      if (!content || bytes > MAX_FILE_BYTES || size !== bytes)
+        throw Error('invalid attachment size');
+    } else {
+      // A picture of the page, as the browser's capture makes it
+      if (kind !== 'image' || mime !== 'image/png')
+        throw Error('invalid attachment');
+      const image = parseImageDataUrl(content);
+      if (image.mime !== 'image/png') throw Error('invalid attachment');
+      if (size !== image.bytes.length) throw Error('invalid attachment size');
+    }
   } else {
     // The text of a terminal selection, with where it came from
     if (

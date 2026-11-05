@@ -208,14 +208,14 @@ export interface DesktopBridge {
   /**
    * What the person does to the shown page from the panel: stop loading, zoom, find in
    * the page, switch to the next or previous tab, open or close Chromium's developer
-   * tools, a still picture of the page to show while a menu covers it, and whether the
-   * panel has the keyboard.
+   * tools, a still picture of the page to show while a menu covers it, point at an
+   * element of the page, and whether the panel has the keyboard.
    */
   browserPage: (
     sessionId: string,
     action: BrowserPageAction,
     value?: unknown,
-  ) => Promise<BrowserState | string | null>;
+  ) => Promise<BrowserState | BrowserPick | string | null>;
   /**
    * Whether the browser panel, not the page, has the keyboard. Synchronous so the
    * first key after a click is not lost to the page view.
@@ -348,7 +348,32 @@ export type BrowserPageAction =
   | 'devtools'
   | 'inspect'
   | 'snapshot'
-  | 'keys';
+  | 'keys'
+  | 'pick';
+/**
+ * What the person points at in the panel's picture of the page, from the page's own
+ * composed hit-test. A `preview` is a look taken as the cursor moves and claims no ref;
+ * a committed pick carries `ref`, the element's own place in the snapshot's ref map, and
+ * the `screenshotId` its point was measured against.
+ */
+export interface BrowserPick {
+  ref: string | null;
+  role: string;
+  name: string;
+  known: boolean;
+  tag: string;
+  text: string;
+  disabled: boolean;
+  /** Where the element is in the picture, in CSS pixels, or null when it has no box. */
+  box: { left: number; top: number; width: number; height: number } | null;
+  /** The point lies inside a frame, so its box is not in the picture's coordinates. */
+  framed: boolean;
+  origin: string;
+  x: number;
+  y: number;
+  preview: boolean;
+  screenshotId?: string;
+}
 export interface BrowserKeyEvent {
   /** `browser:<session>`, as BrowserState names it. */
   sessionId: string;
@@ -585,8 +610,9 @@ export interface PopoutEvent extends PopoutState {
 }
 /**
  * What a window of its own puts into its conversation's message box: a page screenshot
- * (`image`, a PNG data URL) from the browser's window, a terminal selection (`file`, plain
- * text) from the terminal's. `size` is its bytes.
+ * (`image`, a PNG data URL) or an element the person pointed at (`file`, plain text,
+ * `browser-element:` ids) from the browser's window, a terminal selection (`file`, plain
+ * text, `terminal-selection:` ids) from the terminal's. `size` is its bytes.
  */
 export interface PopoutAttachment {
   id: string;

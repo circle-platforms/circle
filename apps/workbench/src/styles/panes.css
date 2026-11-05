@@ -327,6 +327,59 @@
   object-position: left top;
   pointer-events: none;
 }
+/* Pointing at an element: the page's picture, with what is under the cursor ringed. */
+.inspector .browser-pick {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--bg);
+  outline: none;
+}
+.inspector .browser-pick-picture {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* The picture is the page's viewport, so filling the box keeps one scale in both
+     directions and a point in the picture a point in the page. */
+  object-fit: fill;
+  cursor: crosshair;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+/* Sized in the picture's own percentages, so a resized panel keeps the ring on it. */
+.inspector .browser-pick-box {
+  position: absolute;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  pointer-events: none;
+}
+.inspector .browser-pick-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 24px);
+  padding: 3px 6px 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: var(--ui-small);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--fg) 14%, transparent);
+}
+.inspector .browser-pick-hint > svg {
+  flex: none;
+  color: var(--accent);
+}
+.inspector .browser-pick-hint > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .inspector .native-browser-frame {
   /* Shrink with the panel so the page stays inside it, including full view,
      where the column can be shorter than the bars plus the page. The ring is
