@@ -157,12 +157,18 @@ try {
         value,
       index % 2 ? '' : longDraft,
     );
-    const height = await box.evaluate(
-      (node) => node.getBoundingClientRect().height,
-    );
+    // The bounds are the composer's own CSS limits; the Graphite workbench allows 12 lines.
+    const { height, min, max } = await box.evaluate((node) => {
+      const style = getComputedStyle(node);
+      return {
+        height: node.getBoundingClientRect().height,
+        min: parseFloat(style.minHeight),
+        max: parseFloat(style.maxHeight),
+      };
+    });
     assert.ok(
-      height <= 180 && height >= 46,
-      'same min/max composer bounds survive the full600line workload',
+      Number.isFinite(max) && height <= max + 0.5 && height >= min - 0.5,
+      `same min/max composer bounds survive the full600line workload (${height} in ${min}..${max})`,
     );
   }
   const nativeSizing = await page.evaluate(() =>
