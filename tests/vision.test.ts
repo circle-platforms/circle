@@ -11,6 +11,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
@@ -32,6 +33,7 @@ import {
   type BrowserPort,
 } from '../src/browser/tools.js';
 import type { FileMutations } from '../src/file_mutations.js';
+import { readFileBytes } from '../src/file_access.js';
 import { projectDataDir } from '../src/paths.js';
 import { defaultSettings, saveCredentials } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
@@ -726,6 +728,152 @@ test('a browser screenshot for such a model is saved under the run data and desc
   const saved = result.match(/saved as (\S+\.png)/)![1]!;
   assert.ok(existsSync(saved));
   assert.ok(saved.startsWith(join(root, 'projects')));
+});
+
+test('a model without vision can explicitly save a browser screenshot as a file', async (t) => {
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
+  const picture = png();
+  const requests: Array<{ action: string; args: Record<string, unknown> }> = [];
+  const port: BrowserPort = {
+    async request(_session, action, args) {
+      requests.push({ action, args: structuredClone(args) });
+      return { text: 'A synthetic page.', image: picture.toString('base64') };
+    },
+  };
+  const model = Object.assign(
+    new ScriptedModel([
+      reply('one', [
+        { id: 'default', name: 'browser_screenshot', args: {} },
+        { id: 'save', name: 'browser_screenshot', args: { save_only: true } },
+      ]),
+      reply('done', [], 'ok'),
+    ]),
+    { imageInput: false },
+  );
+  let runtime!: AgentRuntime;
+  runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model,
+    headless: true,
+    extraTools: browserTools(
+      port,
+      runtimeBrowserOptions(() => runtime),
+    ),
+  });
+  cleanup(t, () => runtime.close());
+  runtime.policy.setYolo(runtime.session.id, true);
+  await runtime.harness.run('save a browser screenshot');
+  const results = Object.fromEntries(
+    model.requests[1]!.messages.filter(
+      (message) => message.role === 'tool',
+    ).map((message) => [message.tool_call_id, message]),
+  );
+  assert.match(results.default!.content, /does not read images/);
+  const saved = results.save!.content.match(/saved as (.+\.png)/)?.[1];
+  assert.ok(saved);
+  assert.equal(runtime.sandbox.isOffloadOutput(saved), true);
+  assert.deepEqual(readFileSync(saved), picture);
+  if (process.platform !== 'win32')
+    assert.equal(statSync(saved).mode & 0o777, 0o600);
+  assert.equal(results.save!.attachments?.length ?? 0, 0);
+  const upload = await readFileBytes(
+    runtime.sandbox,
+    undefined,
+    saved,
+    { signal: new AbortController().signal, sessionId: runtime.session.id },
+    1024 * 1024,
+  );
+  assert.deepEqual(
+    upload.bytes,
+    picture,
+    'the MCP file reader can send the exact PNG',
+  );
+  assert.deepEqual(
+    requests.map((request) => [request.action, request.args]),
+    [['screenshot', {}]],
+  );
+});
+
+test('save-only reports a missing browser image without inventing a file', async (t) => {
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
+  const target = join(root, 'missing.png');
+  const port: BrowserPort = {
+    async request() {
+      return { text: 'No page.' };
+    },
+  };
+  const model = Object.assign(
+    new ScriptedModel([
+      reply('one', [
+        { id: 'shot', name: 'browser_screenshot', args: { save_only: true } },
+      ]),
+      reply('done', [], 'ok'),
+    ]),
+    { imageInput: false },
+  );
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model,
+    headless: true,
+    extraTools: browserTools(port, { screenshotTarget: () => target }),
+  });
+  cleanup(t, () => runtime.close());
+  runtime.policy.setYolo(runtime.session.id, true);
+  await runtime.harness.run('save a browser screenshot');
+  assert.match(
+    model.requests[1]!.messages.at(-1)!.content,
+    /did not return a screenshot/,
+  );
+  assert.equal(existsSync(target), false);
+});
+
+test('save-only is explicit for a model that can read images too', async (t) => {
+  const root = realpathSync.native(scratch(t, 'circle-vision-'));
+  const picture = png();
+  const port: BrowserPort = {
+    async request() {
+      return { text: 'A synthetic page.', image: picture.toString('base64') };
+    },
+  };
+  const model = Object.assign(
+    new ScriptedModel([
+      reply('one', [
+        { id: 'default', name: 'browser_screenshot', args: {} },
+        { id: 'save', name: 'browser_screenshot', args: { save_only: true } },
+      ]),
+      reply('done', [], 'ok'),
+    ]),
+    { imageInput: true },
+  );
+  let runtime!: AgentRuntime;
+  runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model,
+    headless: true,
+    extraTools: browserTools(
+      port,
+      runtimeBrowserOptions(() => runtime),
+    ),
+  });
+  cleanup(t, () => runtime.close());
+  runtime.policy.setYolo(runtime.session.id, true);
+  await runtime.harness.run('save a browser screenshot');
+  const results = Object.fromEntries(
+    model.requests[1]!.messages.filter(
+      (message) => message.role === 'tool',
+    ).map((message) => [message.tool_call_id, message]),
+  );
+  assert.equal(results.default!.attachments?.[0]?.kind, 'image');
+  const saved = results.save!.content.match(/saved as (.+\.png)/)?.[1];
+  assert.ok(saved);
+  assert.deepEqual(readFileSync(saved), picture);
+  assert.equal(results.save!.attachments?.length ?? 0, 0);
 });
 
 test('a picture given with the prompt is saved under the run data and its path stays in the message', async (t) => {

@@ -71,14 +71,17 @@ Every session starts with a welcome block at the top of the conversation. It is 
 
    recent
    why does the export test fail on windows?    2h
+     last: The path separator is the cause.
    add the sheet diff to compile-excel          1d
+     last: Added the diff and its regression tests.
    clean up the adapters folder                 3d
+     last: Removed the unused adapter.
    … +6 more · /resume
 ```
 
 - **The logo** is Circle's rainbow ring, three rows tall, drawn with the sextant block characters of Unicode 13 (a font without them shows boxes instead). Beside it: the version, the model and the endpoint it runs on (`not connected yet` while setup is asking), the folder and its git branch.
 - **What the folder brings**: its instruction files (`AGENTS.md`, `CLAUDE.md` and the like), skills, custom commands, extensions and project settings. Each row has a lamp: unlit before you trust the folder, yellow and blinking while Circle loads it, green once loaded. The extensions row turns red when one failed to load, with the reason under it. Only what the folder itself holds is listed, not a parent folder's files and not your own skills, commands or extensions. A folder that holds none of these shows no rows.
-- **recent**: the folder's three other sessions with the latest messages, and how long ago that message was. Opening a session or repairing its title does not move a row. An empty session with no title is left out. A short title such as `hi` and an untitled session that has a message are included. When two rows share a title, each adds the start of its first reply (`hi · hello there`); if that reply is missing or also shared, the row adds the short id (`hi · 3f9a1c2e`). `/resume` uses the same line, including in search results, and lines the times up by display width. At startup those three rows are asked for a new title in the background when a reply is already stored and the name is not locked. More are folded into `… +N more · /resume`.
+- **recent**: the folder's three other sessions with the latest messages, and how long ago that message was. Under each, `last:` previews the last visible message of its current branch, so sessions that open alike can be told apart; tool results and internal notes are not shown. Opening a session or repairing its title does not move a row. An empty session with no title is left out. A short title such as `hi` and an untitled session that has a message are included. When two rows share a title, each adds the start of its first reply (`hi · hello there`); if that reply is missing or also shared, the row adds the short id (`hi · 3f9a1c2e`). `/resume` uses the same line, including in search results, and lines the times up by display width. At startup those three rows are asked for a new title in the background when a reply is already stored and the name is not locked. More are folded into `… +N more · /resume`.
 - **The network line**, dim, at the bottom: whether Circle goes through a proxy and how many certificate authorities it trusts, by where they come from (`network: proxy off; trust 121 authorities (default: 121)`), the bundle it gives the tools it starts, and any certificate file it could not read. `/session` shows the same line.
 
 The welcome is not part of the conversation's record: it is not saved and not exported, and `/new` draws a fresh one. Your first message goes right under it. Once the welcome scrolls away, the header takes over the version, model and folder.

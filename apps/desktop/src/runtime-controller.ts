@@ -4593,7 +4593,10 @@ export class RuntimeController {
       )
         break;
       if (error) throw error;
-      if (Date.now() > deadline) throw Error('the first message was not saved');
+      // Connecting the session's MCP servers comes before the message is stored and can
+      // take longer than this. The turn goes on and reports its own failure, so a slow
+      // connection is no error here: the session exists and the window can open it.
+      if (Date.now() > deadline) break;
     }
     return { sessionId: runtime.session.id };
   }

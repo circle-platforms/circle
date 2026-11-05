@@ -1,5 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
+import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import type { ModelRequest, ModelResponse, ModelNotice } from './types.js';
 import { RepetitionMonitor } from './text_repetition.js';
 import { isRecord } from './settings.js';
@@ -136,6 +138,15 @@ function bodies(error: unknown): Record<string, unknown>[] {
 // The SDKs' errors keep the name `Error`: their class is in the constructor's name
 const TIMEOUT_NAMES =
   /^(?:APIConnectionTimeoutError|APITimeoutError|TimeoutError|ConnectTimeout|ReadTimeout|WriteTimeout|PoolTimeout|TimeoutException|ConnectTimeoutError|HeadersTimeoutError|BodyTimeoutError)$/;
+// Both SDKs use the same class names, so a bundle renames one SDK's classes: the class itself
+// still tells what its name was
+const SDK_ERRORS = new Map<unknown, string>(
+  [OpenAI, Anthropic].flatMap((sdk): [unknown, string][] => [
+    [sdk.APIConnectionTimeoutError, 'APIConnectionTimeoutError'],
+    [sdk.APIConnectionError, 'APIConnectionError'],
+    [sdk.APIError, 'APIError'],
+  ]),
+);
 const TIMEOUT_CODES = [
   'ETIMEDOUT',
   'UND_ERR_CONNECT_TIMEOUT',
@@ -222,10 +233,12 @@ export function errorKind(error: unknown): RetryKind | undefined {
   ) {
     seen.add(current);
     const item = record(current);
+    const type = (current as object).constructor;
     chain.push({
       names: [
         String(item.name ?? ''),
-        String((current as object).constructor?.name ?? ''),
+        String(type?.name ?? ''),
+        SDK_ERRORS.get(type) ?? '',
       ],
       code: String(item.code ?? ''),
     });

@@ -13,9 +13,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
-# A newer push to a pull request replaces the run of the older one
+# A newer push to a pull request replaces the run of the older one. Every other run (a merge group, a manual run) has a
+# group of its own, so none is cancelled or replaced while it waits.
 concurrency:
-  group: check-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   check:
