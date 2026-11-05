@@ -167,11 +167,18 @@ try {
           ),
           ['save-settings'],
         );
-        const addField = detail.getByRole('textbox', {
-          name: label('add repository', '添加仓库'),
-          exact: true,
-        });
-        assert.equal(await addField.inputValue(), '');
+        // The account access policy has no repository list: nothing gates
+        // connecting, and there is no repository field to fill.
+        assert.equal(
+          await detail
+            .getByRole('textbox', {
+              name: label('add repository', '添加仓库'),
+              exact: true,
+            })
+            .count(),
+          0,
+          'no repository field under the account access policy',
+        );
         assert.equal(
           await detail
             .getByRole('button', {
@@ -180,7 +187,7 @@ try {
             })
             .isEnabled(),
           true,
-          'repositories are optional before connecting',
+          'connecting needs no repository first',
         );
         assert.deepEqual(await overflow(), { page: 0, card: 0 });
         await detail.locator('#github-connection h2').click();
@@ -194,7 +201,16 @@ try {
         assert.deepEqual(await primaries(), [
           label('open GitHub', '打开 GitHub'),
         ]);
-        assert.equal(await addField.count(), 0);
+        assert.equal(
+          await detail
+            .getByRole('textbox', {
+              name: label('add repository', '添加仓库'),
+              exact: true,
+            })
+            .count(),
+          0,
+          'no repository field while authorizing',
+        );
         assert.deepEqual(await overflow(), { page: 0, card: 0 });
         // A failure says what happened and what to do; the raw text is folded.
         await page.evaluate(() => window.githubPluginFixture.failed());
@@ -223,6 +239,26 @@ try {
             { exact: true },
           )
           .waitFor();
+        // Access follows the connected GitHub account; no repository list
+        // is shown or edited here.
+        await detail
+          .getByText(
+            label(
+              'Repository access follows your GitHub account permissions.',
+              '仓库访问遵循你的 GitHub 账户权限。',
+            ),
+            { exact: true },
+          )
+          .waitFor();
+        await detail
+          .getByText(
+            label(
+              'Circle uses your connected GitHub credentials for the current workspace repository. GitHub decides which actions are allowed.',
+              'Circle 使用已连接的 GitHub 凭据操作当前工作区的仓库，允许的操作由 GitHub 权限决定。',
+            ),
+            { exact: true },
+          )
+          .waitFor();
         assert.equal(await tryButton.isEnabled(), true);
         assert.equal(
           await tryButton.evaluate((button) =>
@@ -246,6 +282,15 @@ try {
           true,
         );
         // What Circle can do is listed in plain words, not folded.
+        await detail
+          .getByText(
+            label(
+              'check the connection and Circle repository access',
+              '查看连接状态及 Circle 仓库访问范围',
+            ),
+            { exact: true },
+          )
+          .waitFor();
         await detail
           .getByText(
             label('read pull request checks', '读取拉取请求检查结果'),

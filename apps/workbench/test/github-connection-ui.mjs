@@ -53,12 +53,6 @@ try {
           name: label('sign out when Circle closes', 'Circle 关闭时退出登录'),
           exact: true,
         });
-        const addField = card.getByRole('textbox', {
-          name: label('add repository', '添加仓库'),
-          exact: true,
-        });
-        const listed = () =>
-          card.locator('.github-repositories li > span').allInnerTexts();
         const primaries = () =>
           card
             .locator('.github-summary button.primary')
@@ -78,14 +72,23 @@ try {
           label('connect GitHub', '连接 GitHub'),
         ]);
         assert.deepEqual(await overflow(), { page: 0, card: 0 });
-        // A repository that is not owner/repository blocks both adding and connecting.
-        await addField.fill('not a repository');
-        assert.equal(await button('add', '添加').isDisabled(), true);
-        assert.equal(await connect.isDisabled(), true);
-        await card.locator('.github-field-error').waitFor();
-        await addField.fill('');
-        assert.equal(await connect.isEnabled(), true);
-        assert.equal(await card.locator('.github-field-error').count(), 0);
+        // Nothing to add, save or reset before connecting: the account
+        // access policy has no repository list at all.
+        assert.equal(
+          await card
+            .getByRole('textbox', {
+              name: label('add repository', '添加仓库'),
+              exact: true,
+            })
+            .count(),
+          0,
+          'no repository field under the account access policy',
+        );
+        assert.equal(
+          await card.locator('.github-repositories').count(),
+          0,
+          'no repository list under the account access policy',
+        );
         assert.deepEqual(
           await page.evaluate(() => window.githubFixture.calls),
           [],
@@ -187,15 +190,52 @@ try {
             { exact: true },
           )
           .waitFor();
+        // Access follows the connected GitHub account; there is no list of
+        // repositories to add, save or reset, and no repository selection
+        // note to show. This connection uses session storage, chosen above.
         await card
           .getByText(
             label(
-              'No repositories selected; repository actions are unavailable.',
-              '尚未选择仓库，暂不能执行仓库操作。',
+              'GitHub connection lasts only for this Circle session.',
+              'GitHub 连接仅在本次 Circle 会话中有效。',
             ),
             { exact: true },
           )
           .waitFor();
+        await card
+          .getByText(
+            label(
+              'Circle uses your connected GitHub credentials for the current workspace repository. GitHub decides which actions are allowed.',
+              'Circle 使用已连接的 GitHub 凭据操作当前工作区的仓库，允许的操作由 GitHub 权限决定。',
+            ),
+            { exact: true },
+          )
+          .waitFor();
+        assert.equal(
+          await card
+            .getByRole('textbox', {
+              name: label('add repository', '添加仓库'),
+              exact: true,
+            })
+            .count(),
+          0,
+          'no repository field once connected',
+        );
+        assert.equal(
+          await card.locator('.github-repositories').count(),
+          0,
+          'no repository list once connected',
+        );
+        assert.equal(
+          await button('save', '保存').count(),
+          0,
+          'no save without a repository form',
+        );
+        assert.equal(
+          await button('reset', '重置').count(),
+          0,
+          'no reset without a repository form',
+        );
         assert.equal(await card.getByRole('alert').count(), 0);
         // Connected: no primary in the summary, disconnect is the danger action.
         assert.deepEqual(await primaries(), []);
@@ -205,76 +245,40 @@ try {
           ),
           true,
         );
-        const save = button('save', '保存');
-        assert.equal(await save.isDisabled(), true);
-        await addField.fill('circle-platforms/circle');
-        await addField.press('Enter');
-        assert.deepEqual(await listed(), ['circle-platforms/circle']);
-        assert.equal(await addField.inputValue(), '');
-        await page.evaluate(() => window.githubFixture.failNextConfigure());
-        await save.click();
-        await alert.waitFor();
-        assert.deepEqual(await listed(), ['circle-platforms/circle']);
-        assert.match(
-          await alert.innerText(),
-          language === 'en'
-            ? /GitHub action could not be completed\./
-            : /未能完成 GitHub 操作。/,
-        );
-        assert.doesNotMatch(
-          await alert.innerText(),
-          /configuration write failed/,
-        );
-        await save.click();
-        await page.waitForFunction(
-          () =>
-            window.githubFixture.state().repositories[0] ===
-            'circle-platforms/circle',
-        );
-        await page.waitForFunction(
-          () =>
-            [
-              ...document.querySelectorAll(
-                '#github-connection .github-repositories li > span',
-              ),
-            ]
-              .map((node) => node.textContent)
-              .join() === 'circle-platforms/circle',
+        // Refresh re-reads the connection without changing it.
+        await button('refresh', '刷新').click();
+        assert.equal(
+          (await page.evaluate(() => window.githubFixture.calls)).at(-1).args,
+          'status',
         );
         assert.equal(await card.getByRole('alert').count(), 0);
-        assert.equal(
-          await save.isDisabled(),
-          true,
-          'actual successful epoch clears dirty form',
-        );
         assert.deepEqual(await overflow(), { page: 0, card: 0 });
         await page.screenshot({
           path: `${out}/${language}-${theme}-${width}-connected.png`,
         });
-        const editEpoch = await page.evaluate(
-          () => window.githubFixture.state().epoch,
+        // A failed read on the connected card folds the raw failure the
+        // same way the sign-in failure does.
+        await page.evaluate(() =>
+          window.githubFixture.viewError('GitHub request failed: fetch failed'),
         );
-        await card
-          .getByRole('button', {
-            name: label(
-              'remove circle-platforms/circle',
-              '移除 circle-platforms/circle',
-            ),
-            exact: true,
-          })
-          .click();
-        await addField.fill('circle-platforms/other');
-        await button('add', '添加').click();
-        await page.evaluate(() => window.githubFixture.advanceEpoch());
-        await save.click();
         await alert.waitFor();
-        assert.equal(
-          (await page.evaluate(() => window.githubFixture.calls)).at(-1).args,
-          `configure {"epoch":${editEpoch},"repositories":["circle-platforms/other"]}`,
+        assert.match(
+          await alert.innerText(),
+          language === 'en'
+            ? /GitHub could not be reached or the request failed\./
+            : /无法连接 GitHub 或请求失败。/,
         );
-        assert.deepEqual(await listed(), ['circle-platforms/other']);
-        await button('reset', '重置').click();
-        assert.deepEqual(await listed(), ['circle-platforms/circle']);
+        assert.doesNotMatch(
+          await alert.innerText(),
+          /fetch failed/,
+          'raw failure detail stays folded',
+        );
+        await page.evaluate(() => window.githubFixture.viewError());
+        await page.waitForFunction(
+          () =>
+            document.querySelectorAll('#github-connection [role="alert"]')
+              .length === 0,
+        );
         const disconnectEpoch = await page.evaluate(
           () => window.githubFixture.state().epoch,
         );
@@ -291,6 +295,47 @@ try {
             ? /revocation is not confirmed/
             : /尚未确认 GitHub 授权已撤销/,
         );
+        // The same account, kept on this computer: the connected status now
+        // says access follows the GitHub account permissions. The first
+        // encrypted sign-in failed above, so this one succeeds.
+        await stay.check();
+        await connect.click();
+        await card.getByText('CODE-TEST', { exact: true }).waitFor();
+        await page.evaluate(() => window.githubFixture.completeAuthorization());
+        await card
+          .getByText(
+            label('connected as fixture-account', '已连接：fixture-account'),
+            { exact: true },
+          )
+          .waitFor();
+        await card
+          .getByText(
+            label(
+              'Repository access follows your GitHub account permissions.',
+              '仓库访问遵循你的 GitHub 账户权限。',
+            ),
+            { exact: true },
+          )
+          .waitFor();
+        assert.equal(
+          await card.locator('.github-repositories').count(),
+          0,
+          'no repository list with encrypted storage either',
+        );
+        assert.deepEqual(await primaries(), []);
+        await page.screenshot({
+          path: `${out}/${language}-${theme}-${width}-connected-encrypted.png`,
+        });
+        const secondDisconnectEpoch = await page.evaluate(
+          () => window.githubFixture.state().epoch,
+        );
+        await button('disconnect', '断开连接').click();
+        await connect.waitFor();
+        assert.equal(
+          (await page.evaluate(() => window.githubFixture.calls)).at(-1).args,
+          `disconnect {"epoch":${secondDisconnectEpoch}}`,
+        );
+        assert.equal(await card.getByRole('alert').count(), 0);
         await page.evaluate(() => window.githubFixture.integrationLoading());
         await card
           .getByText(
