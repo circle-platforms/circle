@@ -18,6 +18,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ### Fixed
 
+- **The settings dialog sits on whole pixels in a narrow window.** Centring it at an odd window width left it on a half pixel, so its text could land on either side between two runs.
 - **A distant model endpoint is found.** Listing an endpoint's models now waits 10 seconds instead of 2.5, so an endpoint that answers slowly is not reported as failed, and a timeout ends the search instead of trying each address in turn.
 - **A long connection error stays readable.** The connection banner wraps at every window width.
 - **A new desktop session opens when connecting takes long.** Waiting for the first message to be stored no longer fails the session after eight seconds.
