@@ -4,11 +4,11 @@ Prefer specialized file tools over shell for reading, writing, editing, searchin
 
 Use this tool for terminal work such as git, package managers, builds, tests, and process control.
 
-When the user asks you to run a command in their own terminal tab, their shell tab, or "my terminal", do not use this tool. Use `terminal_sessions` to find that tab, then `terminal_send` and `terminal_wait`. This tool runs in Circle's own shell and does not type into theirs.
+For a command in the user's own terminal tab or "my terminal", use `terminal_sessions` to find that tab, then `terminal_send` and `terminal_wait`. This tool runs in Circle's own shell and does not type into theirs.
 
-Use background: true for a server, watcher or long-running command. The call returns a job id and output path immediately, and a notice arrives when it ends. Do not poll or sleep for its result. Ctrl+B and the default 120-second timeout also move a foreground command into the background without restarting it. An explicit foreground timeout ends the command instead; a background timeout is its maximum lifetime.
+Use background: true for a server, watcher or long-running command: the call returns a job id and output path at once, and a notice arrives when it ends — do not poll or sleep. Ctrl+B and the default 120-second timeout also move a foreground command to the background without restarting it. An explicit foreground timeout ends it instead; a background timeout is its maximum lifetime.
 
-Give a background command a `description`: what it does, in a few words, such as "Run the gateway test suite". It names the job in the background jobs list; without one, the command itself does.
+Give a background command a `description`: what it does, in a few words ("Run the gateway test suite"). It names the job in the background jobs list; without one, the command itself does.
 
 # Git and GitHub
 
