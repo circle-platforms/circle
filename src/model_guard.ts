@@ -138,16 +138,15 @@ function bodies(error: unknown): Record<string, unknown>[] {
 // The SDKs' errors keep the name `Error`: their class is in the constructor's name
 const TIMEOUT_NAMES =
   /^(?:APIConnectionTimeoutError|APITimeoutError|TimeoutError|ConnectTimeout|ReadTimeout|WriteTimeout|PoolTimeout|TimeoutException|ConnectTimeoutError|HeadersTimeoutError|BodyTimeoutError)$/;
-// Both SDKs use the same class names, so a bundle renames one SDK's classes: only the
-// classes themselves still tell them apart there
-const TIMEOUT_CLASSES = [
-  OpenAI.APIConnectionTimeoutError,
-  Anthropic.APIConnectionTimeoutError,
-];
-const CONNECTION_CLASSES = [
-  OpenAI.APIConnectionError,
-  Anthropic.APIConnectionError,
-];
+// Both SDKs use the same class names, so a bundle renames one SDK's classes: the class itself
+// still tells what its name was
+const SDK_ERRORS = new Map<unknown, string>(
+  [OpenAI, Anthropic].flatMap((sdk): [unknown, string][] => [
+    [sdk.APIConnectionTimeoutError, 'APIConnectionTimeoutError'],
+    [sdk.APIConnectionError, 'APIConnectionError'],
+    [sdk.APIError, 'APIError'],
+  ]),
+);
 const TIMEOUT_CODES = [
   'ETIMEDOUT',
   'UND_ERR_CONNECT_TIMEOUT',
@@ -209,7 +208,7 @@ export function errorKind(error: unknown): RetryKind | undefined {
     return 'server';
   if (status !== undefined && status !== 200) return undefined;
   // The error and its causes: a timeout anywhere in them makes it one
-  const chain: { error: unknown; names: string[]; code: string }[] = [];
+  const chain: { names: string[]; code: string }[] = [];
   const seen = new Set<unknown>();
   for (
     let current: unknown = error;
@@ -218,11 +217,12 @@ export function errorKind(error: unknown): RetryKind | undefined {
   ) {
     seen.add(current);
     const item = record(current);
+    const type = (current as object).constructor;
     chain.push({
-      error: current,
       names: [
         String(item.name ?? ''),
-        String((current as object).constructor?.name ?? ''),
+        String(type?.name ?? ''),
+        SDK_ERRORS.get(type) ?? '',
       ],
       code: String(item.code ?? ''),
     });
@@ -230,7 +230,6 @@ export function errorKind(error: unknown): RetryKind | undefined {
   if (
     chain.some(
       (item) =>
-        TIMEOUT_CLASSES.some((type) => item.error instanceof type) ||
         item.names.some((name) => TIMEOUT_NAMES.test(name)) ||
         TIMEOUT_CODES.includes(item.code),
     )
@@ -239,7 +238,6 @@ export function errorKind(error: unknown): RetryKind | undefined {
   if (
     chain.some(
       (item) =>
-        CONNECTION_CLASSES.some((type) => item.error instanceof type) ||
         item.names.includes('APIConnectionError') ||
         NETWORK_CODES.includes(item.code),
     )

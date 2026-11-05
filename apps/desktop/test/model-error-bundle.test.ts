@@ -10,7 +10,7 @@ const root = fileURLToPath(new URL('../../..', import.meta.url));
 
 // The desktop runtime is one bundle, and a bundle renames the classes both SDKs share:
 // a timed-out request must still be known for one there, or it is never sent again
-test('a timeout or a lost connection from either SDK is still retried inside a bundle', async () => {
+test('a timeout, a lost connection or an error inside the stream from either SDK is still retried inside a bundle, a stop is not', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'circle-model-errors-'));
   try {
     const outfile = join(folder, 'guard.mjs');
@@ -40,6 +40,11 @@ test('a timeout or a lost connection from either SDK is still retried inside a b
     for (const sdk of [OpenAI, Anthropic]) {
       assert.equal(errorKind(new sdk.APIConnectionTimeoutError()), 'timeout');
       assert.equal(errorKind(new sdk.APIConnectionError({})), 'network');
+      assert.equal(
+        errorKind(new sdk.APIError(undefined, {}, 'overloaded', new Headers())),
+        'inband',
+      );
+      assert.equal(errorKind(new sdk.APIUserAbortError()), undefined);
     }
   } finally {
     await rm(folder, { recursive: true, force: true });
