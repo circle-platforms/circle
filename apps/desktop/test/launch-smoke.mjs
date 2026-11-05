@@ -337,6 +337,36 @@ try {
   assert.match(turns[0].last, new RegExp(said));
   check('a turn reaches the model and its answer comes back');
 
+  phase = 'duplicate launch';
+  const originalPid = (
+    await page.evaluate(() => window.circleDesktop.runtimeState())
+  ).snapshot.runtime.processId;
+  const duplicate = spawn(program, [], { env, stdio: 'ignore' });
+  const duplicateExit = await new Promise((done, reject) => {
+    const timer = setTimeout(() => {
+      duplicate.kill();
+      reject(Error('the duplicate application did not exit'));
+    }, patience(20000));
+    duplicate.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    duplicate.once('exit', (code, signal) => {
+      clearTimeout(timer);
+      done({ code, signal });
+    });
+  });
+  assert.deepEqual(duplicateExit, { code: 0, signal: null });
+  assert.equal(
+    (await page.evaluate(() => window.circleDesktop.runtimeState())).snapshot
+      .runtime.processId,
+    originalPid,
+  );
+  assert.equal(requests.filter((request) => !request.title).length, 1);
+  check(
+    'a second launch exits without replacing the runtime or starting another turn',
+  );
+
   phase = 'quit';
   await page
     .evaluate(() => window.circleDesktop.windowControl('quit'))

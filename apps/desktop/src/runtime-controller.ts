@@ -153,6 +153,7 @@ import { TurnStatus } from '../../../src/tui/turn_status.js';
 import { currentNetworkStatus } from '../../../src/net.js';
 import { SessionMetadata } from './session-metadata';
 import { WorkspaceServices } from './workspace/workspace-services';
+import { isDesktopDataInUse } from './runtime-failure';
 import { OperationLedger } from './workspace/operation-ledger';
 import {
   TaskService,
@@ -324,6 +325,7 @@ interface Streaming {
 }
 export interface ControllerOptions {
   home: string;
+  onFatalError?: (error: Error) => void;
   emitWorkspaceEvent?: (event: WorkspaceServiceEvent) => void;
   emitTokenDelta?: (delta: RuntimeTokenDelta) => void;
   credentialStore?: RuntimeCredentialStore;
@@ -1010,6 +1012,7 @@ export class RuntimeController {
     const message = `workspace event persistence failed: ${String(error)}`;
     this.workspaceStreamFailures.set(workspace, message);
     this.error = message;
+    if (isDesktopDataInUse(error)) this.options.onFatalError?.(error as Error);
     const origin = this.taskWorkspaces.get(workspace) ?? workspace;
     void this.taskServices
       .get(origin)

@@ -53,18 +53,26 @@ async function fixture(
     const epoch = `epoch-${children.length}`;
     children.push(child);
     queueMicrotask(() =>
-      child.emit('message', {
-        type: 'update',
-        update: {
-          seq: 1,
-          connected: true,
-          tokenStream: { epoch, seq: 0 },
-          snapshot: first ?? {
-            sessions: [],
-            runtime: { connected: true },
-          },
-        },
-      }),
+      child.emit(
+        'message',
+        options.failureBeforeReady
+          ? {
+              type: 'runtime-failure',
+              code: 'DESKTOP_DATA_IN_USE',
+            }
+          : {
+              type: 'update',
+              update: {
+                seq: 1,
+                connected: true,
+                tokenStream: { epoch, seq: 0 },
+                snapshot: first ?? {
+                  sessions: [],
+                  runtime: { connected: true },
+                },
+              },
+            },
+      ),
     );
     return child;
   };
@@ -118,6 +126,49 @@ async function fixture(
   }
 }
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+test('a reported occupancy failure before the first state rejects startup with its code', async () => {
+  await assert.rejects(
+    fixture(
+      async () => {
+        assert.fail('startup must not succeed');
+      },
+      { failureBeforeReady: true },
+    ),
+    (error: Error & { code?: string }) => error.code === 'DESKTOP_DATA_IN_USE',
+  );
+});
+
+test('a reported occupancy failure after the first state does not restart or accept later states', async () => {
+  const failures: Error[] = [];
+  await fixture(
+    async (supervisor, child, children) => {
+      const before = supervisor.state();
+      child.emit('message', { type: 'runtime-failure', code: 'unknown' });
+      assert.equal(failures.length, 0);
+      child.emit('message', {
+        type: 'runtime-failure',
+        code: 'DESKTOP_DATA_IN_USE',
+        message: 'secret',
+      });
+      assert.equal(failures.length, 1);
+      assert.equal(
+        (failures[0] as Error & { code: string }).code,
+        'DESKTOP_DATA_IN_USE',
+      );
+      child.emit('message', {
+        type: 'update',
+        update: { ...before, seq: 999 },
+      });
+      assert.notEqual(supervisor.state()?.seq, 999);
+      child.emit('exit', 1);
+      await settle();
+      assert.equal(children.length, 1);
+      assert.equal(supervisor.state()?.connected, false);
+    },
+    { onFailure: (error: Error) => failures.push(error), restartDelayMs: 0 },
+  );
+});
 
 test('workspace events use independent subscribers and survive a failing consumer', () =>
   fixture(async (supervisor, child) => {

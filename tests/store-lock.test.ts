@@ -108,6 +108,10 @@ test('a locked database waits and then opens', async (t) => {
 test('a database lock that outlasts the wait says another Circle is using the folder', (t) => {
   const locked = Object.assign(new Error('database is locked'), { errcode: 5 });
   const friendly = databaseOpenError(locked);
+  assert.equal(
+    (friendly as Error & { code: string }).code,
+    'CIRCLE_DATABASE_BUSY',
+  );
   assert.match(friendly.message, /another Circle is using this data folder/);
   assert.equal(friendly.cause, locked);
   const busy = new Error('SQLITE_BUSY');

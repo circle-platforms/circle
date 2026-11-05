@@ -15,6 +15,7 @@ import type {
 } from './runtime-protocol';
 import { RuntimeTokenBuffer } from './runtime-token-stream';
 import { runtimeCommandDiagnosticMetadata } from './runtime-performance-diagnostics';
+import { runtimeFailure } from './runtime-failure';
 import type { PrivateExternalFileRequest } from './runtime-external-file-channel';
 import type { LocalTerminalRow, RuntimeCommandWait } from './contracts';
 import {
@@ -147,6 +148,7 @@ export const RUNTIME_CLOSE_LIMIT_MS = 10_000;
 /** After the kill, the exit is waited on only this long before a SIGKILL settles it. */
 const RUNTIME_CLOSE_EXIT_MS = 5_000;
 export interface RuntimeSupervisorOptions {
+  onFailure?: (error: Error) => void;
   /** Where unexpected exits, with the end of the runtime's stderr, are recorded. */
   logFile?: string;
   restartDelayMs?: number;
@@ -187,6 +189,7 @@ export class RuntimeSupervisor {
   private waiting?: RuntimeCommandWait;
   private stdoutTail = '';
   private stderrTail = '';
+  private fatalFailure?: Error;
   private externalGrantRequests = new Map<string, string>();
   private latest?: RuntimeUpdate;
   private tokenBuffer = new RuntimeTokenBuffer();
@@ -235,6 +238,7 @@ export class RuntimeSupervisor {
     await this.spawn();
   }
   private spawn() {
+    this.fatalFailure = undefined;
     let stderr = '';
     this.stdoutTail = '';
     this.stderrTail = '';
@@ -283,6 +287,18 @@ export class RuntimeSupervisor {
           waitedMs?: unknown;
           pending?: unknown;
         }) => {
+          if (this.child !== child) return;
+          const failure = runtimeFailure(message);
+          if (failure) {
+            if (this.fatalFailure) return;
+            this.fatalFailure = failure;
+            clearTimeout(timer);
+            reject(failure);
+            this.options.onFailure?.(failure);
+            return;
+          }
+          if (this.fatalFailure && !(this.closing && message.type === 'reply'))
+            return;
           if (message.type === 'thread-pool-stalled') {
             this.stalled(child, message);
             return;
@@ -411,14 +427,18 @@ export class RuntimeSupervisor {
     this.terminalTabRequests.clear();
     this.terminalTabRows.clear();
     this.terminalTabsHandler?.('gone');
-    const error = Error(exit.message);
+    const error = this.fatalFailure ?? Error(exit.message);
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(error);
     }
     this.pending.clear();
     this.reportWait();
-    const restarting = !expected && !!this.latest && this.automaticRestart();
+    const restarting =
+      !expected &&
+      !this.fatalFailure &&
+      !!this.latest &&
+      this.automaticRestart();
     if (!expected)
       this.log(
         [
