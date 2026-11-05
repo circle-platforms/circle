@@ -9,9 +9,58 @@ The desktop's right-hand side is the overview, a column of view-only cards pinne
 
 This page describes the source in this checkout. It does not establish that an older installed application contains these changes, or that a candidate has passed native or packaged acceptance.
 
+## The owner's layout rules
+
+The owner set these rules on 2026-11-05, after the graphite restyle of #405 was taken back to the layout before it. A later change to the window, the sidebar, the composer or the right-hand side keeps to them unless the owner decides otherwise, and records the decision here.
+
+**Window and top bar**
+
+- On macOS there is no empty strip above the content. The window's own buttons sit in the first row, which is also the top bar's row (52 pixels). Those rows move the window, and the controls inside them do not.
+- One 1px rule runs under the top bar, across the conversation and the right-hand side.
+
+**Sidebar**
+
+- The first row of the sidebar is left to the window's buttons. Circle's logo and name are at the left of the sidebar's foot, before search, settings and hide sidebar.
+- The foot shows no model and no connection state. The connection light is beside the model under the message box. When the runtime has stopped or is restarting, that button says so and restarts it. Without a model, the message box offers to connect one.
+- A session row's highlight covers the whole row, its ⋯ included. The ⋯ shows on hover and has no tooltip; its accessible name stays.
+
+**Composer**
+
+- The composer has no ring and no "waiting for Circle" line while a turn runs, and there is no usage line (tokens, context, cache) under it. Those figures are in the overview's context card.
+- A ChatGPT plan is not marked apart from other connections and shows no cost anywhere.
+
+**The overview**
+
+- The overview belongs with the conversation, not with the modes. There is no rule between the conversation and the overview, and its cards keep their own frames. It is not restyled with the modes.
+
+**The modes: files, changes, browser, subagents and terminal**
+
+They share one frame, and a change to one is made to all five:
+
+- the same surface (`--bg`), with no tint of their own;
+- the same opening width, 380 pixels, the overview's width; an opened file or subagent widens to 760;
+- a first row 44 pixels high with a 1px rule under it, its controls 16 pixels in from the left edge; the subagents list has this row too;
+- every rule between columns is the same 1px line in `--border`, including the drawer's resize handle, whose grip is wider than the line it draws.
+
+An empty mode uses [PaneEmpty](../../apps/workbench/src/components/ui.tsx) and nothing else: the mode's icon, its name and one line saying what it is for, at the same height in every mode, whatever else the mode has. It has no buttons. A mode's own toolbar already has its actions; the terminal's **+** opens a terminal.
+
+| Mode      | Name (zh-CN) | Line (zh-CN)                   |
+| --------- | ------------ | ------------------------------ |
+| files     | 文件         | 显示当前工作文件夹中的文件     |
+| changes   | 改动         | 显示当前工作文件夹中的所有改动 |
+| browser   | 网页         | 使用内置浏览器进行控制和访问   |
+| terminal  | 终端         | 显示当前的后台任务或创建新终端 |
+| subagents | 子代理       | 控制和查看当前运行的所有子代理 |
+
+Status lines that say nothing useful are not shown, such as a loaded-file count. A field shows its whole text; an input is as tall as its field.
+
+**Responsiveness**
+
+- Opening a mode does not wait visibly. The terminal's code is loaded while the window is idle and, once loaded, rendered without a suspense fallback, which React would otherwise keep up for about 300ms.
+
 ## Layout and ownership
 
-[PanelButtons and Inspector](../../apps/workbench/src/features/Panels.tsx) provide the top bar's icon buttons (named `overview panel`, `files panel` and so on, with the count of running subagents and background commands on theirs) and the drawer, which has no heading of its own. Selecting the active mode, or `esc`, closes the drawer; selecting another mode opens it in the same container. Each mode ends its own toolbar with what [mode-chrome](../../apps/workbench/src/features/mode-chrome.tsx) offers: full view, and for the browser and the terminal a window of their own. The [application shell](../../apps/workbench/src/app/App.tsx) places the overview and the drawer with the rules in [workspace-layout](../../apps/workbench/src/app/workspace-layout.ts): the overview is 380 pixels, the conversation keeps 420, a mode opens at its last width (files and subagents as a 300-pixel list, 760 with a document open), the overview steps aside when the conversation would be squeezed and comes back with the room, and the sidebar folds for a document that needs its room. Full view keeps the composer and pending interactions available.
+[PanelButtons and Inspector](../../apps/workbench/src/features/Panels.tsx) provide the top bar's icon buttons (named `overview panel`, `files panel` and so on, with the count of running subagents and background commands on theirs) and the drawer, which has no heading of its own. Selecting the active mode, or `esc`, closes the drawer; selecting another mode opens it in the same container. Each mode ends its own toolbar with what [mode-chrome](../../apps/workbench/src/features/mode-chrome.tsx) offers: full view, and for the browser and the terminal a window of their own. The [application shell](../../apps/workbench/src/app/App.tsx) places the overview and the drawer with the rules in [workspace-layout](../../apps/workbench/src/app/workspace-layout.ts): the overview is 380 pixels, the conversation keeps 420, a mode opens at its last width (every mode at 380, the overview's width, and files and subagents at 760 with a document open), the overview steps aside when the conversation would be squeezed and comes back with the room, and the sidebar folds for a document that needs its room. Full view keeps the composer and pending interactions available.
 
 `InspectorResources` retains visited resource subtrees while switching modes. `DrawerFiles` puts the file index beside the document and hides it when appropriate for the available width. Hiding the index does not recreate the document editor. Closing or hiding a resource surface is a navigation action, not a request to cancel the task or process it displays. Actual resource lifetime is owned by the host and its session, not the position of a tab.
 
@@ -44,7 +93,7 @@ Session changes remain a different view from Git changes. Session changes cover 
 
 The native [Files.open / nextPage](../../apps/desktop/src/files.ts) path discovers metadata incrementally through [discoverWorkspace](../../apps/desktop/src/workspace-discovery.ts). A page contains at most 2,000 file records and an opaque continuation cursor while more discovery remains. Each continuation rechecks the captured workspace root identity and the active grant. A continuation is consumed once; cancellation closes its iterator. File IDs remain host-owned handles, not renderer-supplied filesystem authority.
 
-Discovery is explicitly bounded to 100,000 files, 250,000 visited directory entries and depth 128. Credential names, application-private/build/dependency directories, symbolic links and multiply linked files are excluded. A stopped or inaccessible traversal marks the listing incomplete; the files panel separately shows loaded count, loading, incomplete and error states. Filtering searches the currently discovered records and does not imply that an incomplete repository listing is exhaustive.
+Discovery is explicitly bounded to 100,000 files, 250,000 visited directory entries and depth 128. Credential names, application-private/build/dependency directories, symbolic links and multiply linked files are excluded. A stopped or inaccessible traversal marks the listing incomplete; the files panel shows a line only while loading, or when the listing is incomplete or failed; it shows no loaded count. Filtering searches the currently discovered records and does not imply that an incomplete repository listing is exhaustive.
 
 These are discovery and renderer bounds. Pagination and a virtualized tree do not establish a 100,000-file live watcher or a complete large-repository performance guarantee. The document service's watcher and transaction limits remain independent.
 

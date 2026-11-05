@@ -1,3 +1,5 @@
+import { useRuntime } from '../app/context';
+import { connectionState } from '../model/connection-state';
 import { DropdownMenu } from 'radix-ui';
 import {
   Check,
@@ -185,6 +187,30 @@ export function ModelMenu({
         enabled.includes(model.id) ||
         model.id === session.model),
   );
+  const { runtime, snapshot, perform } = useRuntime();
+  const connection = connectionState(runtime.mode, snapshot);
+  // A stopped runtime has no model to choose: the same place starts it again.
+  if (connection === 'stopped' || connection === 'restarting')
+    return (
+      <button
+        className="footbar-button attention"
+        disabled={connection === 'restarting' || !runtime.restartRuntime}
+        onClick={() => void perform(() => runtime.restartRuntime!())}
+      >
+        <i
+          className="model-status"
+          data-state={connection}
+          aria-hidden="true"
+        />
+        <span>
+          {connection === 'restarting'
+            ? t('runtime restarting…')
+            : runtime.restartRuntime
+              ? t('runtime stopped · restart')
+              : t('runtime stopped')}
+        </span>
+      </button>
+    );
   return (
     <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild>
@@ -193,6 +219,11 @@ export function ModelMenu({
           aria-label={t('model')}
           onMouseDown={(event) => event.preventDefault()}
         >
+          <i
+            className="model-status"
+            data-state={connection}
+            aria-hidden="true"
+          />
           <span className="footbar-model" title={session.model}>
             {session.model}
           </span>

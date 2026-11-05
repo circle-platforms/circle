@@ -3,7 +3,7 @@ import {
   runtimeCommandDiagnosticMetadata,
 } from './runtime-performance-diagnostics.js';
 import { close as closeFile, open, readFileSync, stat } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { RuntimeController } from './runtime-controller';
 import { pendingResources, ThreadPoolWatch } from './thread-pool-watch';
 import { BrowserBridge } from '../../../src/browser/tools.js';
@@ -79,6 +79,16 @@ const controller = new RuntimeController({
     await terminal.releaseSession(sessionId);
   },
   userHome: home,
+  // A test profile keeps its ChatGPT host ID with its data, away from ~/.circle.
+  // and its ChatGPT plan may point at a local stand-in for OpenAI.
+  ...(process.env.CIRCLE_WORKBENCH_TEST_PROFILE
+    ? {
+        agentHostFile: join(dirname(home), 'agent-host-id'),
+        ...(process.env.CIRCLE_CHATGPT_API_URL
+          ? { chatgptBaseUrl: process.env.CIRCLE_CHATGPT_API_URL }
+          : {}),
+      }
+    : {}),
   catalog: process.env.CIRCLE_WORKBENCH_TEST_PROFILE
     ? (path) =>
         new ModelCatalog(path, { env: { CIRCLE_NO_MODELS_REFRESH: '1' } })

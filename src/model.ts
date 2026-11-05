@@ -7,6 +7,12 @@ import type {
   ChatCompletionCreateParamsStreaming,
 } from 'openai/resources/chat/completions';
 import type {
+  ResponseCreateParamsStreaming,
+  ResponseInputItem,
+  ResponseReasoningItem,
+  ResponseStreamEvent,
+} from 'openai/resources/responses/responses';
+import type {
   ContentBlockParam,
   MessageParam,
   MessageCreateParamsNonStreaming,
@@ -28,7 +34,16 @@ import {
   TextRepetitionLoop,
   type GuardOptions,
   isThinkingSignatureError,
+  isEncryptedReasoningError,
 } from './model_guard.js';
+import { apiFamily, CHATGPT_PROTOCOL, speaksResponses } from './protocols.js';
+import { zstdCompressSync } from 'node:zlib';
+import {
+  chatgptAccessToken,
+  chatgptIdentityIfSignedIn,
+  ChatGPTSignInError,
+  planFailureMessage,
+} from './chatgpt_plan.js';
 import { parseToolInput } from './tool_call_compat.js';
 import { isRecord } from './settings.js';
 import { desktopText } from './locale.js';
@@ -48,6 +63,7 @@ import {
   leaveOutImages,
   openAIContent,
   anthropicContent,
+  responsesContent,
 } from './model_media.js';
 import { orderModeToolResults } from './tool_history.js';
 import {
@@ -74,7 +90,7 @@ export const EFFORT_LEVELS = [
   'max',
 ] as const;
 function completion(
-  protocol: 'openai' | 'anthropic',
+  protocol: 'openai' | 'anthropic' | 'responses',
   finish: string | null | undefined,
   outputLimit?: number,
   repetition = false,
@@ -90,13 +106,19 @@ function completion(
           refusal: 'filter',
           pause_turn: 'pause',
         }
-      : {
-          stop: 'stop',
-          tool_calls: 'tool_calls',
-          function_call: 'tool_calls',
-          length: 'length',
-          content_filter: 'filter',
-        };
+      : protocol === 'responses'
+        ? {
+            completed: 'stop',
+            max_output_tokens: 'length',
+            content_filter: 'filter',
+          }
+        : {
+            stop: 'stop',
+            tool_calls: 'tool_calls',
+            function_call: 'tool_calls',
+            length: 'length',
+            content_filter: 'filter',
+          };
   return {
     reason: finish
       ? Object.hasOwn(reasons, finish)
@@ -127,6 +149,10 @@ export class GatewayModel implements ChatModel {
   readonly reportsAttempts = true;
   private openai?: OpenAI;
   private anthropic?: Anthropic;
+  /** The connection speaks the Responses API through the OpenAI client. */
+  private readonly responsesApi: boolean;
+  /** A ChatGPT plan: OAuth tokens and the plan route's request rules. */
+  private readonly planRoute: boolean;
   // How long a request waits for the answer to start (`CIRCLE_LLM_TIMEOUT`)
   private readonly timeout: number;
   effort: string;
@@ -144,10 +170,14 @@ export class GatewayModel implements ChatModel {
   private estimateFactor = 1.5;
   private readonly guard: ModelGuard;
   readonly catalog: ModelCatalog;
-  private readonly searchConnection: import('./native_websearch.js').NativeSearchConnection;
-  /** A snapshot of the same connection used by the main model client. Never persisted. */
-  webSearchConnection(): import('./native_websearch.js').NativeSearchConnection {
-    return { ...this.searchConnection };
+  private readonly searchConnection?: import('./native_websearch.js').NativeSearchConnection;
+  /**
+   * A snapshot of the same connection used by the main model client. Never persisted.
+   * A ChatGPT plan has none: hosted search is not part of its route.
+   */
+  webSearchConnection():
+    import('./native_websearch.js').NativeSearchConnection | undefined {
+    return this.searchConnection && { ...this.searchConnection };
   }
   constructor(
     readonly settings: CircleSettings,
@@ -160,20 +190,33 @@ export class GatewayModel implements ChatModel {
     this.catalog = catalog ?? new ModelCatalog(circleHome(home));
     if (!this.model)
       throw new Error('no model name in settings; re-run circle --init');
-    const credentials = loadCredentials(home);
-    const apiKey =
-      credentials[settings.auth.api_key_ref] || credentials.api_key;
-    if (!apiKey)
-      throw new Error(desktopText('missing API key; re-run circle --init'));
-    this.searchConnection = Object.freeze({
-      baseUrl: settings.auth.base_url,
-      protocol: settings.auth.protocol === 'anthropic' ? 'anthropic' : 'openai',
-      model: this.model,
-      apiKey,
-    });
+    this.planRoute = settings.auth.protocol === CHATGPT_PROTOCOL;
+    this.responsesApi = speaksResponses(settings.auth.protocol);
+    let apiKey: string | (() => Promise<string>);
+    let identity: string;
+    if (this.planRoute) {
+      const signedIn = home ?? circleHome();
+      // The account, never its rotating token, names whose reasoning history holds.
+      // Signed out, the connection still starts: its first request says to sign in.
+      identity = chatgptIdentityIfSignedIn(signedIn) ?? 'chatgpt signed out';
+      apiKey = () => chatgptAccessToken(signedIn);
+    } else {
+      const credentials = loadCredentials(home);
+      const key = credentials[settings.auth.api_key_ref] || credentials.api_key;
+      if (!key)
+        throw new Error(desktopText('missing API key; re-run circle --init'));
+      apiKey = identity = key;
+      this.searchConnection = Object.freeze({
+        baseUrl: settings.auth.base_url,
+        protocol:
+          settings.auth.protocol === 'anthropic' ? 'anthropic' : 'openai',
+        model: this.model,
+        apiKey: key,
+      });
+    }
     // Keyed identity lets saved history detect account/endpoint/model changes without
     // storing a key or endpoint in the transcript. Rotation conservatively drops replay.
-    this.thinkingScope = createHmac('sha256', apiKey)
+    this.thinkingScope = createHmac('sha256', identity)
       .update(
         JSON.stringify([
           settings.auth.protocol,
@@ -188,14 +231,19 @@ export class GatewayModel implements ChatModel {
       Math.round((Number(process.env.CIRCLE_LLM_TIMEOUT) || 45) * 1000),
     );
     const options = {
-      apiKey,
       baseURL: settings.auth.base_url,
       timeout: this.timeout,
       maxRetries: 0,
     };
     if (settings.auth.protocol === 'anthropic')
-      this.anthropic = new Anthropic(options);
-    else this.openai = new OpenAI(options);
+      this.anthropic = new Anthropic({ ...options, apiKey: apiKey as string });
+    else
+      this.openai = new OpenAI({
+        ...options,
+        apiKey,
+        // The plan route takes compressed bodies and refuses large plain ones.
+        ...(this.planRoute ? { fetch: compressedFetch } : {}),
+      });
     this.effort = defaultEffort(
       this.anthropic ? 'anthropic' : 'openai',
       settings.default_thinking,
@@ -223,12 +271,28 @@ export class GatewayModel implements ChatModel {
         this.guard.execute(request, (current) =>
           this.anthropic
             ? this.completeAnthropic(current)
-            : this.completeOpenAI(current),
+            : this.responsesApi
+              ? this.completeResponses(current)
+              : this.completeOpenAI(current),
         ),
       );
     } catch (error) {
       if (request.signal.aborted) throw error;
       const records = providerErrorRecords(error);
+      if (this.planRoute) {
+        // A sign-in that has ended says so itself, not as the SDK's key failure.
+        for (
+          let cause: unknown = error;
+          cause;
+          cause = (cause as { cause?: unknown }).cause
+        )
+          if (cause instanceof ChatGPTSignInError) throw cause;
+        const plan = planFailureMessage(
+          records,
+          (error as { status?: number }).status,
+        );
+        if (plan) throw new Error(plan, { cause: error });
+      }
       const limit = (name: string) =>
         records
           .map((row) => row[name])
@@ -319,17 +383,21 @@ export class GatewayModel implements ChatModel {
       this.catalog.facts(
         response.message.model || this.model,
         this.settings,
-        modelProfile(this.settings.auth.protocol, this.model)?.max_input_tokens,
+        modelProfile(this.profileProtocol, this.model)?.max_input_tokens,
       ),
       response.usage,
     );
     return response;
   }
+  /** Model profiles are kept per API family; a Responses connection reads OpenAI's. */
+  private get profileProtocol(): string {
+    return apiFamily(this.settings.auth.protocol);
+  }
   get modelFacts(): ModelFacts {
     const facts = this.catalog.facts(
       this.model,
       this.settings,
-      modelProfile(this.settings.auth.protocol, this.model)?.max_input_tokens,
+      modelProfile(this.profileProtocol, this.model)?.max_input_tokens,
     );
     return this.observedContextLimit === undefined ||
       this.observedContextLimit >= facts.contextWindow
@@ -360,8 +428,7 @@ export class GatewayModel implements ChatModel {
   get outputLimit(): number | undefined {
     const limit = Math.min(
       this.modelFacts.outputLimit ??
-        modelProfile(this.settings.auth.protocol, this.model)
-          ?.max_output_tokens ??
+        modelProfile(this.profileProtocol, this.model)?.max_output_tokens ??
         Infinity,
       this.observedOutputLimit ?? Infinity,
     );
@@ -395,6 +462,14 @@ export class GatewayModel implements ChatModel {
         this.imageInput === false,
       ),
     };
+    if (this.responsesApi) {
+      const body = this.responsesBody(projected);
+      return providerInputEstimate({
+        system: body.instructions,
+        messages: body.input,
+        tools: body.tools,
+      });
+    }
     const body = this.anthropic
       ? this.anthropicBody(this.projectThinking(projected))
       : this.openAIBody(projected);
@@ -461,7 +536,7 @@ export class GatewayModel implements ChatModel {
   get imageInput(): boolean | undefined {
     return (
       this.modelFacts.imageInput ??
-      modelProfile(this.settings.auth.protocol, this.model)?.image_inputs
+      modelProfile(this.profileProtocol, this.model)?.image_inputs
     );
   }
   get outputBudget(): number | undefined {
@@ -512,7 +587,11 @@ export class GatewayModel implements ChatModel {
     }
     let root = parameter.split('.')[0]!;
     if (root === 'effort')
-      root = this.anthropic ? 'output_config' : 'reasoning_effort';
+      root = this.anthropic
+        ? 'output_config'
+        : this.responsesApi
+          ? 'reasoning'
+          : 'reasoning_effort';
     if (root === 'budget_tokens') root = 'thinking';
     if (
       ![
@@ -523,6 +602,7 @@ export class GatewayModel implements ChatModel {
         'stream_options',
         'parallel_tool_calls',
         'betas',
+        'include',
       ].includes(root) ||
       !this.sent(root)
     )
@@ -743,24 +823,7 @@ export class GatewayModel implements ChatModel {
       stream.controller.abort();
     }
     request.signal.throwIfAborted();
-    const tool_calls: ToolCall[] = [...calls.values()].map((call) => {
-      const incomplete = !call.id || !call.name;
-      let args = parseToolInput(call.args || '{}');
-      if (typeof args === 'string') args = parseToolInput(args);
-      return {
-        id: call.id || randomUUID(),
-        name: call.name || 'incomplete_tool_call',
-        args: isRecord(args) ? args : {},
-        ...(incomplete || !isRecord(args)
-          ? {
-              raw_args: call.args,
-              argument_error: incomplete
-                ? 'incomplete tool call; repair the call before retrying'
-                : 'tool arguments must be a JSON object; repair the call before retrying',
-            }
-          : {}),
-      };
-    });
+    const tool_calls = finishedToolCalls([...calls.values()]);
     const response: ModelResponse = {
       message: {
         id: randomUUID(),
@@ -795,6 +858,375 @@ export class GatewayModel implements ChatModel {
         Boolean(content || thinking || calls.size),
       );
     if (finish === 'length' && !content && !calls.size)
+      request.notice?.({
+        event: 'output_budget_exhausted',
+        finish_reason: finish,
+      });
+    return response;
+  }
+  /** Encrypted reasoning goes back only to the connection that wrote it, and not after a rejection. */
+  private replaysReasoning(message: Message): boolean {
+    return (
+      Boolean(message.reasoning_items?.length) &&
+      // A reasoning item must be followed by what it produced; a stopped,
+      // thinking-only turn has nothing after it.
+      Boolean(message.content?.trim() || message.tool_calls?.length) &&
+      message.thinking_scope === this.thinkingScope &&
+      !this.rejectedThinking.has(thinkingIdentity(message))
+    );
+  }
+  private responsesBody(request: ModelRequest): ResponseCreateParamsStreaming {
+    const input: ResponseInputItem[] = [];
+    const text = (role: 'user' | 'developer', content: string) =>
+      input.push({
+        type: 'message',
+        role,
+        content: [{ type: 'input_text', text: content }],
+      });
+    for (const message of request.messages) {
+      if (message.role === 'system') {
+        if (message.content.trim()) text('developer', message.content);
+      } else if (message.role === 'tool') {
+        const output =
+          commandExecutionModelContent(message) || EMPTY_TOOL_RESULT;
+        input.push({
+          type: 'function_call_output',
+          call_id: message.tool_call_id!,
+          // A tool's pictures travel in its own result, as opencode sends them.
+          output: message.attachments?.length
+            ? responsesContent(output, message.attachments)
+            : output,
+        });
+      } else if (message.role === 'assistant') {
+        if (this.replaysReasoning(message))
+          for (const item of message.reasoning_items ?? [])
+            if (
+              isRecord(item) &&
+              item.type === 'reasoning' &&
+              typeof item.encrypted_content === 'string'
+            )
+              input.push(item as unknown as ResponseReasoningItem);
+        // The text and calls are rebuilt from the stored message, so a call the
+        // harness rewrote for privacy is sent as it was stored.
+        if (message.content?.trim())
+          input.push({
+            type: 'message',
+            role: 'assistant',
+            status: 'completed',
+            content: [
+              { type: 'output_text', text: message.content, annotations: [] },
+            ],
+            // Replayed without an item id: the endpoint stored nothing to refer to.
+          } as unknown as ResponseInputItem);
+        for (const call of message.tool_calls ?? [])
+          input.push({
+            type: 'function_call',
+            call_id: call.id,
+            ...(this.planRoute ? { namespace: PLAN_TOOL_NAMESPACE } : {}),
+            name: call.name,
+            arguments: JSON.stringify(call.args),
+          });
+      } else {
+        const content = commandExecutionModelContent(message);
+        // An empty prompt says nothing, and strict gateways reject it.
+        if (!message.attachments?.length && !content.trim()) continue;
+        input.push({
+          type: 'message',
+          role: 'user',
+          content: responsesContent(content, message.attachments),
+        });
+      }
+    }
+    const body: ResponseCreateParamsStreaming = {
+      model: this.model,
+      instructions: request.system,
+      input,
+      stream: true,
+      // Circle keeps the conversation; the endpoint keeps nothing, so reasoning
+      // comes back encrypted and is replayed from history.
+      store: false,
+      include: ['reasoning.encrypted_content'],
+    };
+    const functions = request.tools.map((tool) => ({
+      type: 'function' as const,
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      strict: false,
+    }));
+    // The plan route takes function tools grouped in a namespace.
+    if (functions.length)
+      body.tools = this.planRoute
+        ? [
+            {
+              type: 'namespace',
+              name: PLAN_TOOL_NAMESPACE,
+              description: "Circle's tools for this workspace.",
+              tools: functions,
+            },
+          ]
+        : functions;
+    const effort = this.effortFor(request);
+    if (effort)
+      body.reasoning = {
+        effort: effort as NonNullable<
+          ResponseCreateParamsStreaming['reasoning']
+        >['effort'],
+        summary: 'auto',
+      };
+    const output =
+      request.maxTokens ??
+      (request.enforceBudget ? this.outputBudget : undefined);
+    // The plan route refuses an output cap; the answer's end says when it ran long.
+    if (output !== undefined && !this.planRoute)
+      body.max_output_tokens = output;
+    return body;
+  }
+  private async completeResponses(
+    request: ModelRequest,
+  ): Promise<ModelResponse> {
+    try {
+      return await this.sendResponses(request);
+    } catch (error) {
+      request.signal.throwIfAborted();
+      if (!isEncryptedReasoningError(error)) throw error;
+      const replayed = request.messages.filter(
+        (message) =>
+          message.role === 'assistant' && this.replaysReasoning(message),
+      );
+      if (!replayed.length) throw error;
+      request.recovery?.take();
+      // The endpoint cannot read this history's reasoning (another account, or an
+      // expired key). Send those turns once more without it, as Anthropic's signed
+      // thinking is dropped after the same kind of rejection.
+      for (const message of replayed)
+        this.rejectedThinking.add(thinkingIdentity(message));
+      try {
+        request.notice?.({ event: 'thinking_signature_retry' });
+      } catch {
+        /* Display subscribers cannot stop recovery. */
+      }
+      return this.sendResponses(request);
+    }
+  }
+  private async sendResponses(request: ModelRequest): Promise<ModelResponse> {
+    const body = this.responsesBody(request);
+    this.configureBody(body as unknown as Record<string, unknown>);
+    const observe = this.observeRequest(request, {
+      system: body.instructions,
+      messages: body.input,
+      tools: body.tools,
+      max_tokens: body.max_output_tokens,
+    });
+    const stream = await this.openai!.responses.create(body, {
+      signal: request.signal,
+      timeout: this.requestTimeout(request),
+    });
+    const stopStream = () => {
+      try {
+        stream.controller.abort();
+      } catch {
+        /* The body is already closed. */
+      }
+    };
+    request.signal.addEventListener('abort', stopStream, { once: true });
+    request.progress?.('connected');
+    let content = '';
+    let thinking = '';
+    let finish = '';
+    let servedModel = this.model;
+    const calls = new Map<number, { id: string; name: string; args: string }>();
+    const reasoning: Record<string, unknown>[] = [];
+    // Output items whose text streamed as deltas; an item that arrives whole is read at its end.
+    const streamedText = new Set<number>();
+    const usage = emptyUsage();
+    let usageReported = false;
+    let cacheReported = false;
+    let guardedStop = false;
+    const think = (delta: string) => {
+      thinking += delta;
+      request.token(delta, true);
+    };
+    try {
+      for await (const event of stream as AsyncIterable<ResponseStreamEvent>) {
+        if (request.signal.aborted) break;
+        switch (event.type) {
+          case 'response.created':
+          case 'response.in_progress':
+            if (event.response.model) servedModel = event.response.model;
+            request.progress?.('keepalive');
+            break;
+          case 'response.output_text.delta':
+            streamedText.add(event.output_index);
+            request.progress?.('text');
+            content += event.delta;
+            request.token(event.delta);
+            break;
+          case 'response.reasoning_summary_part.added':
+            // Summary parts are separate paragraphs.
+            if (thinking && !thinking.endsWith('\n\n')) think('\n\n');
+            request.progress?.('keepalive');
+            break;
+          case 'response.reasoning_summary_text.delta':
+          case 'response.reasoning_text.delta':
+            request.progress?.('keepalive');
+            think(event.delta);
+            break;
+          case 'response.output_item.added':
+            if (event.item.type === 'function_call')
+              calls.set(event.output_index, {
+                id: event.item.call_id,
+                name: event.item.name,
+                args: event.item.arguments ?? '',
+              });
+            request.progress?.(
+              event.item.type === 'function_call' ? 'tool' : 'keepalive',
+            );
+            break;
+          case 'response.function_call_arguments.delta': {
+            const call = calls.get(event.output_index) ?? {
+              id: '',
+              name: '',
+              args: '',
+            };
+            call.args += event.delta;
+            calls.set(event.output_index, call);
+            request.progress?.('tool');
+            break;
+          }
+          case 'response.output_item.done': {
+            const item = event.item;
+            if (item.type === 'function_call') {
+              const call = calls.get(event.output_index);
+              // The finished item is authoritative over the streamed fragments.
+              calls.set(event.output_index, {
+                id: item.call_id || call?.id || '',
+                name: item.name || call?.name || '',
+                args:
+                  typeof item.arguments === 'string'
+                    ? item.arguments
+                    : (call?.args ?? ''),
+              });
+              request.progress?.('tool');
+            } else if (item.type === 'reasoning') {
+              const kept: Record<string, unknown> = {
+                type: 'reasoning',
+                id: item.id,
+                summary: item.summary ?? [],
+              };
+              if (typeof item.encrypted_content === 'string')
+                kept.encrypted_content = item.encrypted_content;
+              reasoning.push(kept);
+              request.progress?.('keepalive');
+            } else if (
+              item.type === 'message' &&
+              !streamedText.has(event.output_index)
+            ) {
+              const whole = item.content
+                .map((part) => (part.type === 'output_text' ? part.text : ''))
+                .join('');
+              if (whole) {
+                request.progress?.('text');
+                content += whole;
+                request.token(whole);
+              }
+            } else request.progress?.('keepalive');
+            break;
+          }
+          case 'response.completed':
+          case 'response.incomplete': {
+            const final = event.response;
+            if (final.model) servedModel = final.model;
+            finish =
+              event.type === 'response.completed'
+                ? 'completed'
+                : (final.incomplete_details?.reason ?? 'incomplete');
+            if (final.usage) {
+              usageReported =
+                Number.isFinite(final.usage.input_tokens) &&
+                Number.isFinite(final.usage.output_tokens);
+              usage.input_tokens = final.usage.input_tokens || 0;
+              usage.output_tokens = final.usage.output_tokens || 0;
+              const cached = final.usage.input_tokens_details?.cached_tokens;
+              if (typeof cached === 'number') {
+                cacheReported = true;
+                usage.cache_read_tokens = cached;
+              }
+              observe('usage', { ...usage });
+            }
+            request.progress?.('usage');
+            break;
+          }
+          case 'response.failed': {
+            const failure = event.response.error;
+            throw new OpenAI.APIError(
+              undefined,
+              failure ?? { message: 'the response failed' },
+              failure?.message ?? 'the response failed',
+              undefined,
+            );
+          }
+          case 'error':
+            throw new OpenAI.APIError(
+              undefined,
+              { code: event.code, message: event.message, param: event.param },
+              event.message,
+              undefined,
+            );
+          default:
+            request.progress?.('keepalive');
+        }
+      }
+    } catch (error) {
+      if (error instanceof TextRepetitionLoop && error.answered) {
+        guardedStop = true;
+        request.notice?.({ event: 'repetition_stopped', period: error.period });
+      } else throw error;
+    } finally {
+      request.signal.removeEventListener('abort', stopStream);
+      stream.controller.abort();
+    }
+    request.signal.throwIfAborted();
+    const tool_calls = finishedToolCalls([...calls.values()]);
+    const ended = completion(
+      'responses',
+      finish,
+      body.max_output_tokens ?? undefined,
+      guardedStop,
+    );
+    if (ended.reason === 'stop' && tool_calls.length)
+      ended.reason = 'tool_calls';
+    const response: ModelResponse = {
+      message: {
+        id: randomUUID(),
+        role: 'assistant',
+        model: servedModel,
+        content,
+        thinking,
+        tool_calls,
+        ...(reasoning.length ? { reasoning_items: reasoning } : {}),
+        thinking_scope: this.thinkingScope,
+        ...(cacheReported ? {} : { cache_reported: false }),
+        completion: ended,
+        ...(request.enforceBudget ? { request_budget: observe.budget } : {}),
+        ...(guardedStop || !finish || ended.reason === 'length'
+          ? { truncated: true }
+          : {}),
+      },
+      usage,
+      ...(usageReported ? {} : { usageReported: false }),
+    };
+    observe(
+      'end',
+      usageReported ? response.usage : undefined,
+      response.message.completion,
+    );
+    if (!finish && !guardedStop)
+      throw new MissingFinish(
+        response,
+        Boolean(content || thinking || calls.size),
+      );
+    if (ended.reason === 'length' && !content && !calls.size)
       request.notice?.({
         event: 'output_budget_exhausted',
         finish_reason: finish,
@@ -1243,6 +1675,47 @@ export class GatewayModel implements ChatModel {
   }
 }
 
+/** The namespace a ChatGPT plan request groups Circle's function tools in. */
+const PLAN_TOOL_NAMESPACE = 'circle';
+/**
+ * Fetch for the ChatGPT plan route: request bodies go zstd-compressed, which the route
+ * decodes, so a long conversation with its encrypted reasoning stays under the route's
+ * limit for plain bodies.
+ */
+const compressedFetch: typeof fetch = (input, init) => {
+  if (typeof init?.body !== 'string') return fetch(input, init);
+  const headers = new Headers(init.headers);
+  headers.set('Content-Encoding', 'zstd');
+  return fetch(input, {
+    ...init,
+    headers,
+    body: zstdCompressSync(Buffer.from(init.body)),
+  });
+};
+/** Streamed function calls as Circle stores them; a broken one keeps its raw text as evidence. */
+function finishedToolCalls(
+  calls: { id: string; name: string; args: string }[],
+): ToolCall[] {
+  return calls.map((call) => {
+    const incomplete = !call.id || !call.name;
+    let args = parseToolInput(call.args || '{}');
+    if (typeof args === 'string') args = parseToolInput(args);
+    return {
+      id: call.id || randomUUID(),
+      name: call.name || 'incomplete_tool_call',
+      args: isRecord(args) ? args : {},
+      ...(incomplete || !isRecord(args)
+        ? {
+            raw_args: call.args,
+            argument_error: incomplete
+              ? 'incomplete tool call; repair the call before retrying'
+              : 'tool arguments must be a JSON object; repair the call before retrying',
+          }
+        : {}),
+    };
+  });
+}
+
 function isThinkingBlock(block: unknown): boolean {
   return (
     isRecord(block) &&
@@ -1257,6 +1730,7 @@ function thinkingIdentity(message: Message): string {
       JSON.stringify([
         message.id,
         message.provider_content?.filter(isThinkingBlock),
+        message.reasoning_items,
       ]),
     )
     .digest('hex');

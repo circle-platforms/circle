@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { connectionKey } from './chatgpt_plan.js';
 import {
   existsSync,
   mkdirSync,
@@ -20,7 +21,6 @@ import {
 import {
   isFolderTrusted,
   isReady,
-  loadCredentials,
   loadSettings,
   saveSettings,
   trustFolder,
@@ -476,9 +476,7 @@ async function listModels(search: string, home: string): Promise<number> {
     throw new UsageError(
       'Circle is not set up yet. Run `circle` in a terminal first.',
     );
-  const credentials = loadCredentials(home);
-  const key =
-    credentials[settings.auth.api_key_ref] || credentials.api_key || '';
+  const key = await connectionKey(settings, home);
   const found = key
     ? await resolveEndpoint(settings.auth.base_url, key, {
         protocol: settings.auth.protocol,

@@ -1,7 +1,7 @@
 import { Bot, Square, X } from 'lucide-react';
 import { useMemo } from 'react';
 import { useRuntime } from '../app/context';
-import { IconButton } from '../components/common';
+import { IconButton, PaneEmpty } from '../components/common';
 import { MessageView } from '../components/MessageView';
 import { SourceNavigation } from '../components/SourceNavigation';
 import { ToolGroup } from '../components/ToolGroup';
@@ -85,9 +85,9 @@ export function AgentsMode({
   const list = (
     <div className="agent-list" role="list" aria-label={t('subagents')}>
       {!agents.length && (
-        <div className="empty-state" role="status">
-          <h3>{t('no subagents yet')}</h3>
-        </div>
+        <PaneEmpty icon={Bot} title={t('subagents')}>
+          <p>{t('watch and control the running subagents')}</p>
+        </PaneEmpty>
       )}
       {[
         { title: t('running'), rows: working },
@@ -111,7 +111,20 @@ export function AgentsMode({
         ))}
     </div>
   );
-  if (!selected) return <section className="agents-mode">{list}</section>;
+  // The list has the same header row as every other mode.
+  if (!selected)
+    return (
+      <section className="agents-mode">
+        <header className="mode-toolbar">
+          <Bot size={14} aria-hidden />
+          <span>{t('subagents')}</span>
+          <span className="mode-toolbar-end">
+            <ModeButtons />
+          </span>
+        </header>
+        {list}
+      </section>
+    );
   const label = agentLabel(selected);
   const job = jobOf(selected);
   const stoppable =

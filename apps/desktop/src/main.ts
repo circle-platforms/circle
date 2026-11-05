@@ -679,7 +679,7 @@ async function createWindow() {
   window = new BrowserWindow({
     width: 1440,
     height: 960,
-    minWidth: 640,
+    minWidth: 760,
     minHeight: 560,
     title: app.name,
     icon: join(
@@ -691,7 +691,7 @@ async function createWindow() {
     show: false,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition:
-      process.platform === 'darwin' ? { x: 16, y: 15 } : undefined,
+      process.platform === 'darwin' ? { x: 16, y: 20 } : undefined,
     autoHideMenuBar: process.platform !== 'darwin',
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),

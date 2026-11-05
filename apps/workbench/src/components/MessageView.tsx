@@ -1,6 +1,5 @@
 import { formatRuntimeNotice } from '../model/runtime-notice';
 import { Brain, ChevronRight, Copy } from 'lucide-react';
-import { CircleMark } from './CircleMark';
 import { useRuntime } from '../app/context';
 import { copyText } from '../host';
 import type { Message } from '../model/types';
@@ -55,12 +54,6 @@ export function MessageView({
   const preview = message.thinking?.trim().split('\n')[0]?.slice(0, 120);
   return (
     <article className={`message ${message.role}`}>
-      {message.role === 'assistant' && (
-        <header className="assistant-heading">
-          <CircleMark className="small" />
-          <strong>circle</strong>
-        </header>
-      )}
       {message.thinking && showThinking && (
         <details className="thinking" open={thinkingOpen}>
           <summary
@@ -179,9 +172,11 @@ const usageText = (usage: NonNullable<Message['usage']>) =>
     usage.elapsed,
     `↑ ${usage.unreported && !usage.input ? 'N/A' : usage.input.toLocaleString() + (usage.unreported ? '+' : '')}`,
     `↓ ${usage.unreported && !usage.output ? 'N/A' : usage.output.toLocaleString() + (usage.unreported ? '+' : '')}`,
-    usage.cost === null || !Number.isFinite(usage.cost)
-      ? t('cost N/A')
-      : formatUsdAmount(usage.cost, usage.estimated === true),
+    usage.cost === undefined
+      ? ''
+      : usage.cost === null || !Number.isFinite(usage.cost)
+        ? t('cost N/A')
+        : formatUsdAmount(usage.cost, usage.estimated === true),
   ]
     .filter(Boolean)
     .join(' · ');

@@ -27,6 +27,37 @@
   width: 24px;
   height: 24px;
 }
+/* The row's highlight spans the whole row, the ⋯ slot included. */
+.session-row {
+  border-radius: 7px;
+}
+.session-row:hover {
+  background: var(--hover);
+}
+.session-row:has(> .session-link.active) {
+  background: var(--active);
+}
+.session-row > .session-link,
+.session-row > .session-link:hover,
+.session-row > .session-link.active {
+  background: transparent;
+}
+/* The ⋯ has no focus ring that the row's edge would cut; it shows hover, keyboard focus
+   and an open menu with a background one step darker than the row's. */
+.session-row > .icon-button:focus-visible {
+  outline: none;
+}
+.session-row > .icon-button:hover,
+.session-row > .icon-button:focus-visible,
+.session-row > .icon-button[data-state='open'] {
+  background: var(--active);
+  color: var(--fg);
+}
+.session-row:has(> .session-link.active) > .icon-button:hover,
+.session-row:has(> .session-link.active) > .icon-button:focus-visible,
+.session-row:has(> .session-link.active) > .icon-button[data-state='open'] {
+  background: var(--border);
+}
 .session-row:hover > .icon-button,
 .session-row:focus-within > .icon-button,
 .session-row > .icon-button[data-state='open'] {
@@ -47,6 +78,18 @@
   font-size: var(--ui-tiny);
   white-space: normal;
   overflow-wrap: anywhere;
+}
+/* The opening click's pointerup must not land on an item and rename the row. */
+.session-menu[data-state='open'] {
+  animation: session-menu-ready 160ms step-end;
+}
+@keyframes session-menu-ready {
+  from {
+    pointer-events: none;
+  }
+  to {
+    pointer-events: auto;
+  }
 }
 /* Tasks a conversation started fold under its row, as Claude keeps sub-agents
    with their parent. The disclosure lines up with the row's title. */

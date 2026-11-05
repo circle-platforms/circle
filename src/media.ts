@@ -36,6 +36,7 @@ export function summaryMessages(messages: Message[]): unknown[] {
     ({
       attachments,
       provider_content: _provider,
+      reasoning_items: _reasoning,
       legacy_data: _legacy,
       ...message
     }) => ({

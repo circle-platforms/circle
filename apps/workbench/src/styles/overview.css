@@ -11,7 +11,7 @@
   width: 380px;
   min-width: 380px;
   min-height: 0;
-  border-left: 1px solid var(--border);
+  /* No rule between the conversation and the overview; the other edges keep a 1px rule. */
   background: var(--bg);
 }
 .work-cluster > .inspector-resource-host {
@@ -320,7 +320,7 @@ button.overview-row:hover .overview-name {
   height: 28px;
   padding: 0 11px;
   border: 1px solid var(--control-border);
-  border-radius: var(--radius);
+  border-radius: 7px;
   background: var(--surface);
   color: var(--fg);
   font: inherit;

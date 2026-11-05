@@ -358,7 +358,7 @@ try {
   );
   await select(b);
   await page
-    .getByRole('button', { name: 'stop conversation', exact: true })
+    .getByRole('button', { name: 'pause conversation', exact: true })
     .click();
   await until(async () => (await session(b)).state !== 'waiting', 'B stopped');
   assert.equal((await session(a)).state, 'waiting');
@@ -455,8 +455,17 @@ try {
       .getBoundingClientRect();
     const transcript = button.closest('.transcript');
     const tool = button.getBoundingClientRect();
-    transcript.scrollTop +=
-      tool.top - (card.top + card.height / 2 - tool.height / 2);
+    const delta = tool.top - (card.top + card.height / 2 - tool.height / 2);
+    // Near the top of the conversation there is nothing above to scroll back to: room
+    // is made above the transcript so the row can come down under the card.
+    if (transcript.scrollTop + delta < 0) {
+      const column = transcript.firstElementChild;
+      column.style.paddingTop = `${
+        parseFloat(getComputedStyle(column).paddingTop) -
+        (transcript.scrollTop + delta)
+      }px`;
+      transcript.scrollTop = 0;
+    } else transcript.scrollTop += delta;
   });
   await page.waitForFunction(() => {
     const button = document.querySelector('.tool-summary');

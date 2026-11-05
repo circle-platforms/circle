@@ -99,8 +99,10 @@ test('search, settings and hide are icons at the end of the sidebar footer', () 
   );
   const actions = footer.slice(footer.indexOf('sidebar-footer-actions'));
   assert.ok(
-    footer.indexOf('connection-status') <
-      footer.indexOf('sidebar-footer-actions'),
+    footer.indexOf('sidebar-brand') > 0 &&
+      footer.indexOf('sidebar-brand') <
+        footer.indexOf('sidebar-footer-actions'),
+    "Circle's name, then the actions",
   );
   const search = actions.indexOf("label={t('search')}");
   const settings = actions.indexOf("label={t('settings')}");

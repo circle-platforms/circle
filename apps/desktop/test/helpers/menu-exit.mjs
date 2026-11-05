@@ -1,6 +1,7 @@
 /**
  * Arrange unmount during typing without sleeping or changing a product duration.
- * The real CSS exit is paused, then finished after the first input has arrived.
+ * A real CSS exit, when the menu has one, is paused, then finished after the first
+ * input has arrived.
  */
 export async function holdMenuExit(page, selector) {
   const key = await page.locator(selector).evaluate((menu) => {
@@ -23,14 +24,22 @@ export async function holdMenuExit(page, selector) {
     return key;
   });
   return async () => {
-    await page
-      .locator(`[data-menu-exit-probe="${key}"][data-state="closed"]`)
-      .evaluate((menu) => {
-        const animations = menu.getAnimations();
-        if (!animations.length)
-          throw Error('expected the actual menu exit animation');
-        for (const animation of animations) animation.finish();
-      });
+    // With an exit animation the menu stays while it plays: finish it. Without one the
+    // menu has already unmounted, and only where the focus went is left to check.
+    await page.waitForFunction(
+      (key) =>
+        window.menuExitProbes?.[key]?.closed ||
+        !!document.querySelector(
+          `[data-menu-exit-probe="${key}"][data-state="closed"]`,
+        ),
+      key,
+    );
+    await page.evaluate((key) => {
+      const menu = document.querySelector(
+        `[data-menu-exit-probe="${key}"][data-state="closed"]`,
+      );
+      for (const animation of menu?.getAnimations() ?? []) animation.finish();
+    }, key);
     await page.waitForFunction(
       (key) => window.menuExitProbes?.[key]?.closed,
       key,

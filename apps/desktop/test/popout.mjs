@@ -510,7 +510,7 @@ try {
     .getByRole('button', { name: 'browser panel', exact: true })
     .click();
   await main.locator('.native-browser').waitFor();
-  await main.getByText('browse the web', { exact: true }).waitFor();
+  await main.getByText('web', { exact: true }).waitFor();
   const drawerAddress = main.getByRole('textbox', { name: 'browser address' });
   await drawerAddress.fill(pageUrl);
   await drawerAddress.press('Enter');
@@ -1138,7 +1138,7 @@ try {
   // The packaged path: the address is typed in the drawer's field, which
   // navigates through the renderer, and the page has to stay painted when it
   // moves. A direct navigate in the main process is a different path.
-  await live.getByText('browse the web', { exact: true }).waitFor();
+  await live.getByText('web', { exact: true }).waitFor();
   const typed = live.getByRole('textbox', { name: 'browser address' });
   await typed.fill(pageUrl);
   await typed.press('Enter');
@@ -1297,9 +1297,8 @@ try {
   // cannot stay in the draft. An exited shell then shows restart, and the
   // replacement keeps the lowest free number.
   const terminalPane = live.locator('[data-inspector-resource="terminal"]');
-  await terminalPane
-    .getByRole('button', { name: 'new terminal', exact: true })
-    .click();
+  // The empty terminal has no button of its own; the tab bar's + opens one.
+  await newLocalTerminal(live, terminalPane);
   const localScreen = live.locator('.native-terminal-screen').first();
   await localScreen
     .locator('.xterm-screen')
@@ -1461,9 +1460,7 @@ try {
   await live
     .getByRole('button', { name: 'stop terminal 1', exact: true })
     .click();
-  await terminalPane
-    .getByRole('button', { name: 'new terminal', exact: true })
-    .waitFor();
+  await terminalPane.locator('.native-terminal-empty').waitFor();
   await terminalPane
     .getByRole('button', { name: 'open in a window', exact: true })
     .click();
@@ -1471,9 +1468,7 @@ try {
     async () => liveWindows('#/popout/terminal/')[0],
     'the terminal window',
   );
-  await liveTerminal
-    .getByRole('button', { name: 'new terminal', exact: true })
-    .click();
+  await newLocalTerminal(liveTerminal, liveTerminal);
   const input = liveTerminal.locator('.xterm-helper-textarea');
   await input.waitFor({ timeout: patience(20000) });
   await liveTerminal.locator('.xterm-accessibility').waitFor();
@@ -1604,4 +1599,12 @@ try {
   await liveApp?.close().catch(() => {});
   site.close();
   await rm(temp, { recursive: true, force: true });
+}
+
+/** Opens a local shell from the tab bar's + menu, as a person does. */
+async function newLocalTerminal(page, scope) {
+  await scope
+    .getByRole('button', { name: 'new terminal or device', exact: true })
+    .click();
+  await page.getByRole('menuitem', { name: /^new local terminal/ }).click();
 }

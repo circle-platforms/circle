@@ -26,6 +26,8 @@ The key is saved in `credentials.json` and the rest in `settings.json`. See [Set
 
 The protocol is set by setup, never guessed from a model name: a model called `claude-…` behind an OpenAI-style gateway is sent OpenAI-style requests.
 
+`responses` is OpenAI's Responses API. Discovery cannot tell it from an OpenAI-style endpoint, since both list models at the same path, so choose it: the `OpenAI · Responses` provider, the third kind of API when a custom endpoint cannot be asked, or `"protocol": "responses"` in `settings.json`. It uses the same key, base URL and model list as the OpenAI protocol. Requests go to `<base>/responses` with `store: false`: the endpoint keeps nothing, Circle sends the whole conversation each time, and mid-conversation system messages go as `developer` messages. Circle asks for the reasoning back encrypted (`include: ["reasoning.encrypted_content"]`) and keeps it in the session, so a reasoning model keeps its chain across tool calls. It is sent back only to the same API URL, key and model that wrote it, and only for a turn that went on to text or a tool call. An endpoint that answers HTTP 400 because it cannot read that encrypted reasoning gets the request once more without it, and that connection leaves it out from then on. An endpoint that refuses `include` is asked again without it. A tool's pictures go inside its result.
+
 ## Switch models
 
 ```text
@@ -47,11 +49,19 @@ Type `/login` in a session. It asks the same questions as setup, on its list's o
 
 Outside a session, `circle --init` runs the same setup. Both keep your other settings. See [CLI](cli.md#setting-up-again).
 
-`/logout` clears `credentials.json` and marks the settings as not set up, so the next start, or `/login`, asks again.
+`/logout` clears `credentials.json` and marks the settings as not set up, so the next start, or `/login`, asks again. On a ChatGPT plan it also signs out of ChatGPT, as below.
 
-## OAuth
+## Use your ChatGPT plan
 
-Circle signs in only with an API URL and key. It has no OAuth sign-in, so a ChatGPT, Claude or other subscription account cannot be used in place of a key.
+The `ChatGPT plan` provider, in the terminal and in the desktop application, signs in with ChatGPT and uses your ChatGPT Plus or Pro plan in place of an API key, through OpenAI's [Sign in with ChatGPT for open-source apps](https://developers.openai.com/siwc/token-sharing-open-source). Other subscriptions, such as Claude Pro or Max, cannot be used: their vendors do not allow third-party tools.
+
+- **Signing in.** Choose `ChatGPT plan` in setup, `/login`, `circle --init` or the desktop connection form (**Continue with ChatGPT**). Circle opens your browser at OpenAI's sign-in, with a one-time address on `127.0.0.1` for the browser to come back to, and shows the address in case the browser did not open. The first time, OpenAI registers a client for Circle in your ChatGPT account and asks whether Circle may use your plan. If you decline, or the answer does not include that permission, Circle says so and nothing is sent to a model; sign in again to allow it, or use an API key. If the browser runs on another machine (Circle over SSH), the page it ends on cannot reach Circle: in the full-screen setup, `/login` or the desktop form, paste that page's address and Circle finishes the sign-in. Line setup (`circle -p` without a terminal interface) cannot take a pasted address. Circle checks the returned ID token's signature against OpenAI's published keys, its issuer, audience, expiry and the one-time `nonce`.
+- **The model.** Circle lists the models your account offers (those OpenAI marks for a picker). Requests go to `https://api.openai.com/v1/responses` with the [Responses protocol](#connect-an-endpoint), `store: false`, the access token as the bearer, and these rules of the plan route: no `max_output_tokens`, Circle's tools grouped in one `circle` namespace, and the body compressed with zstd. Native web search is not used on this connection.
+- **What is saved.** `settings.json` keeps `"protocol": "chatgpt"`, the base URL and the model, and no key; `credentials.json` is left as it was. The account, its issued client ID and its tokens are in `chatgpt-accounts.json` in the data folder, readable only by you (`0600`) and on the [credential list](security.md#credential-files). This machine's opaque host ID, one per machine whatever `CIRCLE_HOME` is, is in `~/.circle/agent-host-id`. History names the account only by an opaque identity, so reasoning replay survives each token renewal.
+- **Renewal.** The access token lasts an hour. Circle renews it shortly before it ends, one process at a time, so two Circle processes never use the same rotating refresh token twice. If the renewal is refused because the sign-in ended (revoked, expired after 30 days unused, or used elsewhere), Circle clears the tokens, keeps the registration and asks you to sign in again. If OpenAI cannot be reached, the current token is used while it lasts.
+- **Usage.** Nothing on screen marks a ChatGPT plan apart from other connections, and no cost is shown for it: the plan is not billed per token, so its calls carry no price. Usage, and Circle's own weekly limit within the plan, are in [ChatGPT settings → Usage](https://chatgpt.com/settings/usage). Plus plans share a five-hour limit across every app that uses the plan.
+- **When it stops.** A usage limit stops the turn with `Usage limit reached` and the Manage usage address; Circle does not retry it or switch to another way of paying. An account or workspace that cannot use its plan in apps, a request the route does not take, and a grant that does not cover it also stop at once and say what to do. A temporary `503` from the plan route is retried like other server errors.
+- **Signing out.** `/logout`, or signing out in the desktop, revokes the sign-in at OpenAI, then clears the tokens. The registration and host ID stay, so the next sign-in to that account reuses Circle's client. If OpenAI does not confirm the revocation, Circle still signs out here and says so; you can disconnect Circle in ChatGPT settings.
 
 ## Thinking depth
 
@@ -69,6 +79,7 @@ A change applies from the next message. When the model has a depth, the header s
 
 - **Anthropic protocol**: the default is `medium`. For a model whose profile lists the levels it supports, Circle sends the highest one at or below your choice. For older Claude models that take a thinking budget, the budgets are 1,024 for `minimal`, 2,048 for `low`, 8,192 for `medium`, 16,000 for `high` and `xhigh`, and 31,999 for `max`, kept below the answer limit.
 - **OpenAI protocol**: nothing is sent unless you choose a depth; then it is sent as `reasoning_effort`.
+- **Responses protocol**: nothing is sent unless you choose a depth; then it is sent as `reasoning: {effort, summary: "auto"}`, and the reasoning summary is shown as thinking. An endpoint that rejects `reasoning` is asked again without it.
 
 If an endpoint rejects a parameter Circle sent (thinking, reasoning effort, stream options and a few others), Circle drops that parameter, sends the request again, and does not send it again for the rest of the session. You see one line saying so. A request drops at most four parameters.
 

@@ -1,5 +1,7 @@
 # Graphite 桌面验收记录
 
+> 2026-11-05：按所有者的决定，#405 的界面布局改动（6af4f5b9 和 169bd3cc）已回滚，现行布局规则见 [workbench-unification.md](../development/workbench-unification.md#the-owners-layout-rules)。本页及其截图和收据只作为历史记录，不描述当前界面；`graphite-native.mjs` 已随回滚删除。
+
 2026-11-03（Asia/Tokyo），decision 93。本轮源码冻结于 `fa905204ff48029eb65c9523edfcce77b40e1d61`；中文审查跟进为 `89ae2b98`。本页记录 macOS arm64 本机开发入口和本地打包应用的实际检查，最终视觉批准由 Claude 审查。
 
 本页的证据采集于变基之前：源码提交 `fa905204`，基线 `8b9c1736`。分支随后变基到 `main` 的 `887849a0`，新增的上游改动是 #399 的本地技能工具（核心 `src/` 下 6 个文件，不涉及 `apps/`）以及两份设计规范文档。原生矩阵没有在变基后重跑；PR 的检查会在变基后的代码上重新运行。收据中的源码摘要对应变基前的文件。

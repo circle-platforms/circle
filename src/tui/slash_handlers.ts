@@ -1,3 +1,4 @@
+import { signOutOfChatGPT } from '../chatgpt_plan.js';
 import {
   knowledgeCommand,
   structuredMemoryCommand,
@@ -1642,6 +1643,7 @@ function effort(host: CommandHost, args: string): void {
 }
 
 function logout(host: CommandHost): void {
+  const plan = host.settings.auth.protocol === 'chatgpt';
   withConnectionLock(host.home, () => {
     clearCredentials(host.home);
     host.settings.auth = defaultAuth();
@@ -1652,8 +1654,24 @@ function logout(host: CommandHost): void {
     });
   });
   host.refreshConnection?.();
-  host.notice(
-    'Signed out · credentials cleared · /login or `circle --init` before the next turn',
+  if (!plan) {
+    host.notice(
+      'Signed out · credentials cleared · /login or `circle --init` before the next turn',
+    );
+    return;
+  }
+  // Revoke the renewable session first, then clear its tokens; the registration stays.
+  void signOutOfChatGPT(host.home).then(
+    ({ revoked }) =>
+      host.notice(
+        revoked
+          ? 'Signed out of ChatGPT · /login or `circle --init` before the next turn'
+          : 'Signed out of ChatGPT here · OpenAI did not confirm the sign-out; disconnect Circle in ChatGPT settings if needed',
+      ),
+    (error: unknown) =>
+      host.notice(
+        `Sign-out failed: ${error instanceof Error ? error.message : String(error)}`,
+      ),
   );
 }
 

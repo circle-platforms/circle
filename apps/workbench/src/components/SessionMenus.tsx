@@ -58,9 +58,6 @@ function Menu({
   onKeyDown?: (event: KeyboardEvent<HTMLButtonElement>) => void;
   onCloseAutoFocus?: (event: Event) => void;
 }) {
-  // A trigger's release can land on the newly opened menu. Consume that release,
-  // independently of animation timing and the system's reduced-motion preference.
-  const openingPointer = useRef<number | undefined>(undefined);
   return (
     <DropdownMenu.Root {...(open === undefined ? {} : { open, onOpenChange })}>
       <DropdownMenu.Trigger asChild>
@@ -72,12 +69,6 @@ function Menu({
           onFocus={onFocus}
           onBlur={onBlur}
           onKeyDown={onKeyDown}
-          onKeyDownCapture={() => {
-            openingPointer.current = undefined;
-          }}
-          onPointerDownCapture={(event) => {
-            if (event.button === 0) openingPointer.current = event.pointerId;
-          }}
         >
           <MoreHorizontal size={13} />
         </IconButton>
@@ -89,15 +80,6 @@ function Menu({
           align="start"
           sideOffset={4}
           onCloseAutoFocus={onCloseAutoFocus}
-          onPointerDownCapture={() => {
-            openingPointer.current = undefined;
-          }}
-          onPointerUpCapture={(event) => {
-            if (openingPointer.current !== event.pointerId) return;
-            openingPointer.current = undefined;
-            event.preventDefault();
-            event.stopPropagation();
-          }}
         >
           {children}
         </DropdownMenu.Content>

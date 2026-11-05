@@ -1,3 +1,5 @@
+import { openai } from '../../../tests/chatgpt-fixture.js';
+import { chatgptAccountsPath } from '../../../src/chatgpt_plan.js';
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -2165,6 +2167,41 @@ test('untrusted workspaces cannot load project context, extensions or execute pr
   await f.call('prompt', { text: 'hello' });
   await wait(() => f.model.requests.length > 0, 'trusted request');
   assert(f.model.requests[0]!.system.includes('private instruction marker'));
+});
+
+test('the desktop saves a Responses connection and refuses an unknown kind of API', async (t) => {
+  const f = await setup(t, []);
+  const refused = await f.call('configure', {
+    endpoint: 'http://127.0.0.1:45678/v1',
+    protocol: 'gopher',
+    model: 'fixture-model',
+    apiKey: 'fixture-key',
+  });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.error, 'invalid protocol');
+  // A ChatGPT plan signs in; the key form never configures one.
+  const plan = await f.call('configure', {
+    endpoint: 'https://api.openai.com/v1',
+    protocol: 'chatgpt',
+    model: 'fixture-model',
+    apiKey: 'fixture-key',
+  });
+  assert.equal(plan.ok, false);
+  assert.equal(plan.error, 'invalid protocol');
+  const saved = await f.call('configure', {
+    endpoint: 'http://127.0.0.1:45678/v1',
+    protocol: 'responses',
+    model: 'fixture-model',
+    apiKey: 'fixture-key',
+  });
+  assert.equal(saved.ok, true, saved.error);
+  assert.deepEqual(loadSettings(f.home).auth, {
+    protocol: 'responses',
+    base_url: 'http://127.0.0.1:45678/v1',
+    model: 'fixture-model',
+    api_key_ref: 'api_key',
+  });
+  assert.equal(f.controller.snapshot().settings.protocol, 'responses');
 });
 
 test('configuration secrets never appear in snapshots or events', async (t) => {
@@ -6814,4 +6851,153 @@ test('opening a folder that is already a project keeps one row and its own id', 
     'the folder keeps its id',
   );
   assert.equal(rows().length, 1, 'one row for one folder');
+});
+
+test('the desktop signs in with ChatGPT, saves no key, runs a turn on the plan and signs out', async (t) => {
+  const gateway = await openai(t);
+  const root = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(home);
+  await mkdir(workspace);
+  saveSettings(trustFolder(defaultSettings(), workspace), home);
+  const previous = process.env.CIRCLE_CHATGPT_ISSUER;
+  process.env.CIRCLE_CHATGPT_ISSUER = gateway.base;
+  const updates: RuntimeUpdate[] = [];
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    agentHostFile: join(root, 'agent-host-id'),
+    chatgptBaseUrl: gateway.base + '/v1',
+    catalog: (path) =>
+      new ModelCatalog(path, { env: { CIRCLE_NO_MODELS_REFRESH: '1' } }),
+    emit: (update) => updates.push(update),
+  });
+  t.after(async () => {
+    await controller.close();
+    if (previous === undefined) delete process.env.CIRCLE_CHATGPT_ISSUER;
+    else process.env.CIRCLE_CHATGPT_ISSUER = previous;
+    await rm(root, { recursive: true, force: true });
+  });
+  const replies: unknown[] = [];
+  const call = async (
+    name: RuntimeCommandName,
+    payload: Record<string, unknown> = {},
+  ) => {
+    const reply = await controller.dispatch({
+      id: randomUUID(),
+      name,
+      payload,
+      sessionId: controller.snapshot().activeSessionId,
+    });
+    replies.push(reply);
+    return reply;
+  };
+  // Nothing signed in: connecting the plan is refused.
+  const early = await call('chatgpt-connect', { model: 'gpt-6.1-sol' });
+  assert.equal(early.ok, false);
+  assert.equal(early.error, 'sign in with ChatGPT first');
+  const started = await call('chatgpt-sign-in', { action: 'start' });
+  assert.equal(started.ok, true, started.error);
+  const { url } = started.data as { url: string };
+  assert.match(
+    url,
+    /\/api\/accounts\/authorize\?client_id=dynamic_agent_client/,
+  );
+  // Before the browser comes back, a wait answers `pending` within its limit, so no
+  // command outlives the supervisor's timeout while the person signs in.
+  const earlyWait = await call('chatgpt-sign-in', {
+    action: 'wait',
+    timeoutMs: 50,
+  });
+  assert.equal(earlyWait.ok, true, earlyWait.error);
+  assert.deepEqual(earlyWait.data, { pending: true });
+  // The system browser signs in and comes back to the loopback address.
+  const waiting = call('chatgpt-sign-in', { action: 'wait' });
+  await gateway.browser(url);
+  const done = await waiting;
+  assert.equal(done.ok, true, done.error);
+  assert.deepEqual(done.data, {
+    email: 'person@example.com',
+    models: ['gpt-6.1-sol'],
+  });
+  const connected = await call('chatgpt-connect', { model: 'gpt-6.1-sol' });
+  assert.equal(connected.ok, true, connected.error);
+  assert.deepEqual(connected.data, {});
+  assert.deepEqual(loadSettings(home).auth, {
+    protocol: 'chatgpt',
+    base_url: gateway.base + '/v1',
+    model: 'gpt-6.1-sol',
+    api_key_ref: 'api_key',
+  });
+  assert.equal(existsSync(join(home, 'credentials.json')), false);
+  assert.equal(controller.snapshot().settings.protocol, 'chatgpt');
+  assert.ok(
+    controller.snapshot().models.some((model) => model.id === 'gpt-6.1-sol'),
+  );
+  // A turn goes to the plan's Responses route with the access token, compressed.
+  assert.equal((await call('prompt', { text: 'hi' })).ok, true);
+  await wait(
+    () => gateway.seen.some((item) => item.path === '/v1/responses'),
+    'plan request',
+  );
+  const request = gateway.seen.find((item) => item.path === '/v1/responses')!;
+  assert.equal(request.headers.authorization, 'Bearer access-1');
+  assert.equal(request.headers['content-encoding'], 'zstd');
+  assert.equal(request.json?.store, false);
+  // A sign-in whose browser cannot reach this machine finishes with the pasted address.
+  const again = await call('chatgpt-sign-in', { action: 'start' });
+  const elsewhere = await fetch((again.data as { url: string }).url, {
+    redirect: 'manual',
+  });
+  const refused = await call('chatgpt-sign-in', {
+    action: 'paste',
+    url: 'https://example.com/elsewhere',
+  });
+  assert.equal(refused.ok, false);
+  assert.equal(
+    (
+      await call('chatgpt-sign-in', {
+        action: 'paste',
+        url: elsewhere.headers.get('location')!,
+      })
+    ).ok,
+    true,
+  );
+  assert.equal((await call('chatgpt-sign-in', { action: 'wait' })).ok, true);
+  // A cancelled sign-in ends its wait.
+  await call('chatgpt-sign-in', { action: 'start' });
+  const cancelled = call('chatgpt-sign-in', { action: 'wait' });
+  await call('chatgpt-sign-in', { action: 'cancel' });
+  assert.match(String((await cancelled).error), /cancelled/);
+  await wait(
+    () =>
+      controller
+        .snapshot()
+        .sessions.every((session) => session.state === 'idle'),
+    'turn ends',
+  );
+  // A plan is not billed per token: no reply and no meter carries a cost.
+  const planSession = controller
+    .snapshot()
+    .sessions.find((session) =>
+      session.messages.some((message) => message.usage),
+    )!;
+  assert.ok(planSession, 'the plan turn has a usage line');
+  for (const message of planSession.messages)
+    assert.equal(message.usage?.cost, undefined);
+  assert.equal(planSession.meters?.cost, '');
+  // Signing out revokes the plan's renewable session and clears its tokens.
+  const out = await call('logout');
+  assert.equal(out.ok, true, out.error);
+  assert.deepEqual(out.data, { revoked: true });
+  assert.ok(gateway.state.revoked.length >= 1);
+  assert.equal(
+    JSON.parse(readFileSync(chatgptAccountsPath(home), 'utf8')).active,
+    undefined,
+  );
+  // No token reached a reply, a snapshot or an event.
+  for (const shown of [replies, updates, controller.snapshot()])
+    assert.doesNotMatch(JSON.stringify(shown), /access-\d|refresh-\d/);
 });

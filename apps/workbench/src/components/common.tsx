@@ -9,6 +9,7 @@ export {
   Badge,
   DataBlock,
   EmptyState,
+  PaneEmpty,
   usePressAction,
 } from './ui';
 export function Page({

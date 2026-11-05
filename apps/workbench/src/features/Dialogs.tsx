@@ -20,6 +20,7 @@ import {
   providerPreset,
   PROVIDER_PRESET_DATE,
 } from '../../../../src/providers';
+import { PROTOCOLS, type Protocol } from '../../../../src/protocols';
 import { VERSION } from '../../../../src/version';
 import { useRuntime } from '../app/context';
 import { t, tn } from '../i18n';
@@ -119,7 +120,7 @@ function desktopShortcuts(): [string, string][] {
 // API, the models it lists and the URL that answered. Never the key.
 interface ConnectionProbe {
   status: 'discovered' | 'empty' | 'failed' | 'preset';
-  protocol: 'openai' | 'anthropic';
+  protocol: Protocol;
   models: string[];
   baseUrl: string;
   inferred: boolean;
@@ -179,10 +180,25 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [probe, setProbe] = useState<ConnectionProbe | null>(null);
-  const [protocol, setProtocol] = useState<'openai' | 'anthropic'>('openai');
+  const [protocol, setProtocol] = useState<Protocol>('openai');
   const [query, setQuery] = useState('');
   const [focus, setFocus] = useState(0);
   const [typedModel, setTypedModel] = useState('');
+  // Sign in with ChatGPT: the address the browser was sent to, and what was pasted back.
+  const [signInUrl, setSignInUrl] = useState('');
+  const [pasted, setPasted] = useState('');
+  const signsIn = provider.source === 'signin';
+  // A sign-in still waiting when the dialog closes is cancelled, so nothing waits on it.
+  const waitingSignIn = useRef(false);
+  useEffect(
+    () => () => {
+      if (waitingSignIn.current)
+        void Promise.resolve(
+          runtime.request('chatgpt-sign-in', { action: 'cancel' }),
+        ).catch(() => {});
+    },
+    [runtime],
+  );
   const list = useRef<HTMLDivElement>(null);
   // As in the terminal: an empty key keeps the saved one only on the saved endpoint's host.
   const savedHost = hostOf(snapshot.settings.endpoint);
@@ -218,6 +234,38 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
     setError('');
     setBusy(true);
     try {
+      if (!probe && signsIn) {
+        // The system browser signs in; this waits until it comes back (or is pasted).
+        const { url } = (await runtime.request('chatgpt-sign-in', {
+          action: 'start',
+        })) as { url: string };
+        setSignInUrl(url);
+        waitingSignIn.current = true;
+        openOutside(url);
+        // Each wait is short (the runtime answers `pending`); ask until the sign-in ends.
+        let done: { email: string; models: string[]; pending?: boolean };
+        do {
+          done = (await runtime.request('chatgpt-sign-in', {
+            action: 'wait',
+          })) as typeof done;
+        } while (done.pending);
+        waitingSignIn.current = false;
+        setSignInUrl('');
+        setPasted('');
+        setQuery('');
+        setTypedModel('');
+        setFocus(Math.max(0, done.models.indexOf(current.model)));
+        setProbe({
+          status: done.models.length ? 'discovered' : 'empty',
+          protocol: 'chatgpt',
+          models: done.models,
+          baseUrl: provider.baseUrl,
+          inferred: false,
+          summary: '',
+          detail: '',
+        });
+        return;
+      }
       if (!probe) {
         let url: URL | undefined;
         try {
@@ -239,7 +287,11 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
           apiKey: secret,
           provider: providerId,
         })) as ConnectionProbe;
-        setProtocol(found.protocol === 'anthropic' ? 'anthropic' : 'openai');
+        setProtocol(
+          (PROTOCOLS as readonly string[]).includes(found.protocol)
+            ? found.protocol
+            : 'openai',
+        );
         setQuery('');
         setTypedModel('');
         setFocus(Math.max(0, found.models.indexOf(current.model)));
@@ -248,6 +300,12 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
       }
       const model = listed ? chosen?.id : typedModel.trim();
       if (!model) throw Error(t('choose a model or type its id'));
+      if (probe.protocol === 'chatgpt') {
+        await runtime.request('chatgpt-connect', { model });
+        notify(t('connection saved'));
+        onClose();
+        return;
+      }
       await runtime.request('configure-connection', {
         // The URL that answered; for a kind of API chosen here, the URL as typed
         endpoint: manual ? endpoint.trim() : probe.baseUrl,
@@ -263,6 +321,31 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
     } finally {
       setBusy(false);
     }
+  };
+  const openOutside = (url: string) => {
+    // Only HTTPS goes to the system browser; any other address is shown to open by hand.
+    if (!url.startsWith('https://')) return;
+    const host = desktopHost();
+    if (host?.openExternal)
+      void host.openExternal(url).catch((e) => notify(String(e)));
+    else window.open(url, '_blank', 'noopener,noreferrer');
+  };
+  const paste = async () => {
+    setError('');
+    try {
+      await runtime.request('chatgpt-sign-in', {
+        action: 'paste',
+        url: pasted.trim(),
+      });
+    } catch (problem) {
+      setError(problem instanceof Error ? problem.message : t('action failed'));
+    }
+  };
+  const cancelSignIn = () => {
+    void Promise.resolve(
+      runtime.request('chatgpt-sign-in', { action: 'cancel' }),
+    ).catch(() => {});
+    setSignInUrl('');
   };
   const actions = (primary: string) => (
     <div className="dialog-actions">
@@ -298,6 +381,79 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
       {error}
     </p>
   );
+  if (!probe && signsIn)
+    return (
+      <form className="form-stack" onSubmit={submit}>
+        <label>
+          {t('provider')}
+          <select
+            aria-label={t('provider')}
+            value={providerId}
+            disabled={busy}
+            onChange={(event) => {
+              const next = providerPreset(event.target.value);
+              setProviderId(next.id);
+              setEndpoint(
+                next.baseUrl ||
+                  (next.id === 'custom' ? snapshot.settings.endpoint : ''),
+              );
+              setError('');
+            }}
+          >
+            {PROVIDER_PRESETS.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.id === 'custom' ? t('custom endpoint') : item.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="dialog-paragraph">
+          {t(
+            'Use your ChatGPT plan: complete eligible AI requests in Circle with usage included in your ChatGPT plan.',
+          )}
+        </p>
+        {signInUrl ? (
+          <>
+            <p className="pending-message" role="status">
+              <i />
+              {t(
+                'Sign in in your browser. If it did not open, open this address:',
+              )}
+            </p>
+            <code className="sign-in-address">{signInUrl}</code>
+            <label>
+              {t(
+                'If the browser cannot reach this machine, paste the address it ends on',
+              )}
+              <input
+                aria-label={t('address the browser ended on')}
+                value={pasted}
+                onChange={(event) => setPasted(event.target.value)}
+              />
+            </label>
+            {problem}
+            <div className="dialog-actions">
+              <Button type="button" onClick={cancelSignIn}>
+                {t('cancel')}
+              </Button>
+              <Button
+                type="button"
+                className="primary"
+                disabled={!pasted.trim()}
+                onClick={() => void paste()}
+              >
+                {t('continue')}
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            {problem}
+            {actions(t('Continue with ChatGPT'))}
+          </>
+        )}
+      </form>
+    );
   if (!probe)
     return (
       <form className="form-stack" onSubmit={submit}>
@@ -514,7 +670,7 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
                 role="radiogroup"
                 aria-label={t('kind of API')}
               >
-                {(['openai', 'anthropic'] as const).map((kind) => (
+                {PROTOCOLS.map((kind) => (
                   <button
                     type="button"
                     role="radio"
@@ -525,7 +681,9 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
                   >
                     {kind === 'openai'
                       ? t('openai-style')
-                      : t('anthropic-style')}
+                      : kind === 'anthropic'
+                        ? t('anthropic-style')
+                        : t('responses api')}
                   </button>
                 ))}
               </div>
@@ -588,7 +746,7 @@ export function DialogHost({
   const [label, setLabel] = useState('');
   const [format, setFormat] = useState('markdown');
   const [endpoint, setEndpoint] = useState('');
-  const [protocol, setProtocol] = useState<'openai' | 'anthropic'>('openai');
+  const [protocol, setProtocol] = useState<Protocol>('openai');
   const [model, setModel] = useState('');
   const [secret, setSecret] = useState('');
   const [resetConfirm, setResetConfirm] = useState(false);
@@ -1170,6 +1328,7 @@ export function DialogHost({
             >
               <option value="openai">openai</option>
               <option value="anthropic">anthropic</option>
+              <option value="responses">responses</option>
             </select>
           </label>
           <label>

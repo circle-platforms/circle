@@ -1019,6 +1019,7 @@ test('setup says what is wrong and asks again; an endpoint that cannot list its 
   assert.deepEqual(app.state.dialog!.options, [
     'OpenAI-style API',
     'Anthropic-style API',
+    'OpenAI Responses API',
   ]);
   key('2');
   assert.equal(app.state.dialog?.title, 'Which model?');

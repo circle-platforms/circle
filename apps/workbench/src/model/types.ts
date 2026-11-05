@@ -134,7 +134,8 @@ export interface Message {
     input: number;
     output: number;
     unreported?: boolean;
-    cost: number | null;
+    /** Absent when the connection shows no cost (a ChatGPT plan). */
+    cost?: number | null;
     elapsed: string;
     /** A stopped turn's price is an estimate. The dollar figure then ends with `~`. */
     estimated?: boolean;
@@ -214,6 +215,7 @@ export interface Session {
     cache?: string;
     /** A turn is in flight and the endpoint has not reported input yet. */
     inputUnknown?: boolean;
+    /** Empty when the connection shows no cost (a ChatGPT plan). */
     cost: string;
     contextInput: number | null;
     contextEstimated?: boolean;
@@ -446,7 +448,7 @@ export interface Settings {
   enabledModels: string[];
   doubleEscape: 'tree' | 'fork' | 'none';
   endpoint: string;
-  protocol: 'openai' | 'anthropic';
+  protocol: import('../../../../src/protocols').Protocol;
   credentialFiles: string[];
   /** Values the model may use by name, as `settings.json` keeps them. */
   variables: Record<string, string>;
