@@ -1,5 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
+import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
 import type { ModelRequest, ModelResponse, ModelNotice } from './types.js';
 import { RepetitionMonitor } from './text_repetition.js';
 import { isRecord } from './settings.js';
@@ -136,6 +138,16 @@ function bodies(error: unknown): Record<string, unknown>[] {
 // The SDKs' errors keep the name `Error`: their class is in the constructor's name
 const TIMEOUT_NAMES =
   /^(?:APIConnectionTimeoutError|APITimeoutError|TimeoutError|ConnectTimeout|ReadTimeout|WriteTimeout|PoolTimeout|TimeoutException|ConnectTimeoutError|HeadersTimeoutError|BodyTimeoutError)$/;
+// Both SDKs use the same class names, so a bundle renames one SDK's classes: only the
+// classes themselves still tell them apart there
+const TIMEOUT_CLASSES = [
+  OpenAI.APIConnectionTimeoutError,
+  Anthropic.APIConnectionTimeoutError,
+];
+const CONNECTION_CLASSES = [
+  OpenAI.APIConnectionError,
+  Anthropic.APIConnectionError,
+];
 const TIMEOUT_CODES = [
   'ETIMEDOUT',
   'UND_ERR_CONNECT_TIMEOUT',
@@ -197,7 +209,7 @@ export function errorKind(error: unknown): RetryKind | undefined {
     return 'server';
   if (status !== undefined && status !== 200) return undefined;
   // The error and its causes: a timeout anywhere in them makes it one
-  const chain: { names: string[]; code: string }[] = [];
+  const chain: { error: unknown; names: string[]; code: string }[] = [];
   const seen = new Set<unknown>();
   for (
     let current: unknown = error;
@@ -207,6 +219,7 @@ export function errorKind(error: unknown): RetryKind | undefined {
     seen.add(current);
     const item = record(current);
     chain.push({
+      error: current,
       names: [
         String(item.name ?? ''),
         String((current as object).constructor?.name ?? ''),
@@ -217,6 +230,7 @@ export function errorKind(error: unknown): RetryKind | undefined {
   if (
     chain.some(
       (item) =>
+        TIMEOUT_CLASSES.some((type) => item.error instanceof type) ||
         item.names.some((name) => TIMEOUT_NAMES.test(name)) ||
         TIMEOUT_CODES.includes(item.code),
     )
@@ -225,6 +239,7 @@ export function errorKind(error: unknown): RetryKind | undefined {
   if (
     chain.some(
       (item) =>
+        CONNECTION_CLASSES.some((type) => item.error instanceof type) ||
         item.names.includes('APIConnectionError') ||
         NETWORK_CODES.includes(item.code),
     )

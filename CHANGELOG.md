@@ -16,6 +16,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ### Fixed
 
+- **The desktop sends a timed-out model request again.** In the packaged desktop a request that got no answer within `CIRCLE_LLM_TIMEOUT`, or lost its connection, ended the turn with `Request timed out.` on the first try, because bundling renamed the SDK's error class. It now retries as [Models](docs/models.md) describes.
 - **The browser address stays editable in a compact drawer.** Its own row keeps security and takeover controls from squeezing the field away with wider system fonts or larger text.
 
 - **Desktop overlays keep their position and keyboard focus through animations.** Dialogs and notices stay centred, search can reopen while its previous dialog closes, and a terminal menu cannot steal input from a newly opened shell.
