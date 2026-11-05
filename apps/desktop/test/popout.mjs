@@ -1365,10 +1365,11 @@ try {
     }, 25);
   });
   await localTyping;
-  // The shell echoes every key it receives, in order, so its output after the
-  // click holds a, b and c together once the keys reached it.
+  // The shell echoes every key it receives, so its output after the click holds
+  // a, b and c in that order once the keys reached it. Not side by side: at a
+  // wrap readline redraws the line, which prints a key again.
   await until(
-    async () => printable((await shellOutput(beforeKeys)).text).includes('abc'),
+    async () => /a.*b.*c/s.test(printable((await shellOutput(beforeKeys)).text)),
     'the keys after the click reached the shell',
     20000,
     async () => (await shellOutput(beforeKeys)).text,
