@@ -145,6 +145,12 @@ export interface WelcomeItem {
   state: LampState; // none until trusted, running while it loads, ok, error
   errors?: string[]; // under the row, in red, when it failed
 }
+export interface WelcomeRecent {
+  title: string;
+  age: string;
+  last: string; // the last visible message on the session's current branch, or ''
+}
+
 export interface WelcomeInfo {
   version: string;
   model: string; // '' until setup has connected a model
@@ -152,7 +158,7 @@ export interface WelcomeInfo {
   folder: string;
   branch: string;
   items: WelcomeItem[];
-  recent: [title: string, age: string][];
+  recent: WelcomeRecent[];
   more: number; // recent sessions not listed
 }
 
@@ -224,16 +230,22 @@ export function welcomeRows(
   }
   if (info.recent.length) {
     rows.push('', `   ${p.faint}recent${p.reset}`);
-    const ages = Math.max(...info.recent.map(([, when]) => stringWidth(when)));
+    const ages = Math.max(
+      ...info.recent.map(({ age: when }) => stringWidth(when)),
+    );
     const titleRoom = Math.max(8, width - 3 - 3 - ages - 1);
-    const titles = info.recent.map(([title]) => truncate(title, titleRoom));
+    const titles = info.recent.map(({ title }) => truncate(title, titleRoom));
     const titleW = Math.max(...titles.map((title) => stringWidth(title))) + 3;
     titles.forEach((title, index) => {
-      const when = info.recent[index]![1];
+      const { age: when, last } = info.recent[index]!;
       rows.push(
         `   ${p.text}${title}${p.reset}${' '.repeat(titleW - stringWidth(title))}` +
           `${p.dim}${when.padStart(ages)}${p.reset}`,
       );
+      if (last)
+        rows.push(
+          `     ${p.dim}${truncate(`last: ${last}`, Math.max(8, width - 6))}${p.reset}`,
+        );
     });
     if (info.more > 0)
       rows.push(`   ${p.dim}… +${info.more} more · /resume${p.reset}`);
