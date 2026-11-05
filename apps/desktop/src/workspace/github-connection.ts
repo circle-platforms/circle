@@ -421,7 +421,10 @@ export class NativeGitHubConnection {
     await this.ready;
     return this.snapshot();
   }
-  connect(input: { storage: 'encrypted' | 'session'; repositories?: string[] }) {
+  connect(input: {
+    storage: 'encrypted' | 'session';
+    repositories?: string[];
+  }) {
     if (this.connecting)
       return Promise.reject(Error('GitHub authorization is already starting'));
     const work = this.beginConnect(input);
@@ -673,7 +676,8 @@ export class NativeGitHubConnection {
       epoch !== this.state.epoch ||
       this.state.state !== 'connected' ||
       !this.active ||
-      !/^[-\w.]+\/[-\w.]+$/.test(repository)
+      // owner/name, neither of them `.` or `..`.
+      !/^(?!\.{1,2}\/)[-\w.]+\/(?!\.{1,2}$)[-\w.]+$/.test(repository)
     )
       throw Error('GitHub connection or repository permission changed');
   }

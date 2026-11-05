@@ -25,7 +25,7 @@ let state: GitHubConnectionState = {
   client: 'GitHub CLI',
   epoch: 7,
   state: 'disconnected',
-  repositories: [],
+  accessPolicy: 'github-account',
   remoteRevocation: 'not-requested',
 };
 function publish() {
@@ -72,7 +72,6 @@ runtime.command = (name, args = '') => {
       authorizationPhase: 'waiting-for-user',
       lastAuthorizationOutcome: undefined,
       storage: params.storage,
-      repositories: params.repositories,
       authorization: {
         id: 'fixture-authorization',
         code: 'CODE-TEST',
@@ -98,7 +97,6 @@ runtime.command = (name, args = '') => {
     state = {
       ...state,
       epoch: state.epoch + 1,
-      repositories: params.repositories,
     };
   } else if (verb === 'cancel' || verb === 'disconnect') {
     const outcome =
@@ -113,7 +111,7 @@ runtime.command = (name, args = '') => {
       client: 'GitHub CLI',
       epoch: state.epoch + 1,
       state: 'disconnected',
-      repositories: [],
+      accessPolicy: 'github-account',
       remoteRevocation: verb === 'cancel' ? 'not-requested' : 'unconfirmed',
       lastAuthorizationOutcome: outcome,
     };
