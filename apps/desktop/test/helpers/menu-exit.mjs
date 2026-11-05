@@ -12,13 +12,7 @@ export async function holdMenuExit(page, selector) {
     menu.addEventListener('focusScope.autoFocusOnUnmount', () => {
       // Radix's default return focus runs after dispatch, in the same task.
       queueMicrotask(() => {
-        window.menuExitProbes[key] = {
-          closed: true,
-          terminal: document.activeElement?.closest('.native-terminal-surface')
-            ?.id,
-          tag: document.activeElement?.tagName,
-          label: document.activeElement?.getAttribute('aria-label'),
-        };
+        window.menuExitProbes[key] = { closed: true };
       });
     });
     return key;
@@ -44,10 +38,17 @@ export async function holdMenuExit(page, selector) {
       (key) => window.menuExitProbes?.[key]?.closed,
       key,
     );
+    // Where the focus is now, not at the unmount: a menu with no exit has gone before
+    // the input starts, and a focus taken back at the unmount is still gone from here.
     return page.evaluate((key) => {
-      const observed = window.menuExitProbes[key];
       delete window.menuExitProbes[key];
-      return observed;
+      const active = document.activeElement;
+      return {
+        closed: true,
+        terminal: active?.closest('.native-terminal-surface')?.id,
+        tag: active?.tagName,
+        label: active?.getAttribute('aria-label'),
+      };
     }, key);
   };
 }
