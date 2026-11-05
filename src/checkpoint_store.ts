@@ -7,6 +7,7 @@ import type { Message } from './types.js';
 import {
   acquireSessionLease,
   sessionOccupied,
+  sleepSync,
   sweepStaleSessionLocks,
   type SessionLease,
 } from './session_lock.js';
@@ -92,10 +93,6 @@ export const emptyContextState = (): ContextState => ({
 });
 const STORE_BUSY_MS = 5000;
 const STORE_OPEN_ATTEMPTS = 6;
-
-function pause(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
 
 function isDatabaseLocked(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -236,7 +233,7 @@ function openDatabase(
         told = true;
         onBusy?.();
       }
-      pause(40 * (attempt + 1));
+      sleepSync(40 * (attempt + 1));
     }
   }
   throw databaseOpenError(last);

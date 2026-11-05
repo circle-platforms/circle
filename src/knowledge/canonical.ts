@@ -1,4 +1,3 @@
-// Adapted from Circle Hub contracts/src/sync-canonical.ts (Apache-2.0), without a server or Zod dependency.
 import { createHash } from 'node:crypto';
 import { SYNC_LIMITS, isObjectId, validateSync } from './protocol.js';
 import { parseStrictJson } from './strict-json.js';
@@ -14,24 +13,50 @@ export function normalizeSyncText(value: string): string {
     .replace(/\r\n?/g, '\n')
     .normalize('NFC');
 }
-function canonical(value: unknown, depth = 0): string {
+export function formatJcs(
+  value: unknown,
+  options: { normalizeText?: boolean } = {},
+  depth = 0,
+): string {
   if (depth > 64) throw new TypeError('sync nesting limit');
   if (value === null) return 'null';
   if (typeof value === 'string')
-    return JSON.stringify(normalizeSyncText(value));
+    return JSON.stringify(
+      options.normalizeText ? normalizeSyncText(value) : value,
+    );
   if (typeof value === 'boolean') return JSON.stringify(value);
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) throw new TypeError('non-finite number');
     return JSON.stringify(value);
   }
   if (Array.isArray(value))
-    return '[' + value.map((v) => canonical(v, depth + 1)).join(',') + ']';
+    return (
+      '[' + value.map((v) => formatJcs(v, options, depth + 1)).join(',') + ']'
+    );
   if (
     value &&
     typeof value === 'object' &&
     (Object.getPrototypeOf(value) === Object.prototype ||
       Object.getPrototypeOf(value) === null)
   ) {
+    if (!options.normalizeText)
+      return (
+        '{' +
+        Object.keys(value)
+          .sort()
+          .map(
+            (key) =>
+              JSON.stringify(key) +
+              ':' +
+              formatJcs(
+                (value as Record<string, unknown>)[key],
+                options,
+                depth + 1,
+              ),
+          )
+          .join(',') +
+        '}'
+      );
     const mapped = new Map<string, unknown>();
     for (const [key, item] of Object.entries(value)) {
       const normalized = normalizeSyncText(key);
@@ -45,7 +70,9 @@ function canonical(value: unknown, depth = 0): string {
         .sort()
         .map(
           (key) =>
-            JSON.stringify(key) + ':' + canonical(mapped.get(key), depth + 1),
+            JSON.stringify(key) +
+            ':' +
+            formatJcs(mapped.get(key), options, depth + 1),
         )
         .join(',') +
       '}'
@@ -54,14 +81,13 @@ function canonical(value: unknown, depth = 0): string {
   throw new TypeError('non-JSON sync value');
 }
 export function encodeSyncObject(input: unknown): Buffer {
-  validateSync('personal-sync-object@1', input);
-  const bytes = Buffer.from(canonical(input));
+  const bytes = Buffer.from(formatJcs(input, { normalizeText: true }));
   if (bytes.length > SYNC_LIMITS.objectBytes)
     throw new RangeError('sync object size');
   validateSync('personal-sync-object@1', JSON.parse(bytes.toString('utf8')));
   return bytes;
 }
-export const syncObjectId = (input: unknown): string =>
+export const computeObjectDigest = (input: unknown): string =>
   sha256(encodeSyncObject(input));
 export function decodeSyncObject(
   bytes: Uint8Array,

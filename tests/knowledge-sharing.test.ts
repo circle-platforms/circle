@@ -8,7 +8,7 @@ import { ScriptedModel } from '../src/testing.js';
 import { defaultSettings, saveSettings, trustFolder } from '../src/settings.js';
 import { backgroundMcpConnection } from '../src/mcp_loader.js';
 import { KnowledgeService } from '../src/knowledge/service.js';
-import { sha256, syncObjectId } from '../src/knowledge/canonical.js';
+import { sha256, computeObjectDigest } from '../src/knowledge/canonical.js';
 import {
   prepareKnowledgeShare,
   syncMapping,
@@ -72,7 +72,7 @@ async function world(
   const add = (kind: string, body: unknown) => {
     const value = { schema: 'personal-sync-object@1', kind, body };
     objects.push(value);
-    return syncObjectId(value);
+    return computeObjectDigest(value);
   };
   add('directory_revision', {
     item_id: directory,
@@ -202,8 +202,11 @@ test('a local edit or a failed native qualification cannot dispatch a prepared t
   assert.equal(w.server.shareCalls.length, 0);
   await w.runtime.knowledge.synchronize();
   w.server.knowledgeEntries.forEach((e) => (e.status = 'unverified'));
-  await assert.rejects(w.prepare(), /knowledge-share-unverified/);
-  assert.equal(w.server.shareCalls.length, 0);
+  await assert.rejects(
+    (await w.prepare()).run(),
+    /knowledge-remote-unavailable/,
+  );
+  assert.equal(w.server.shareCalls.length, 1);
 });
 
 test('an unsigned-upload refusal crosses the real MCP and desktop boundary verbatim without retry or local mutation', async (t) => {

@@ -19,7 +19,7 @@ Never run `install.sh`, `install.ps1` or `src/install_manager.ts` by hand on a r
 
 ## Where things are
 
-`src/` is the program. `src/tui/` and `src/ink/` are the interface, `src/middleware/` and `src/model_guard.ts` are the reliability layers, `src/approvals.ts` is the safety policy. `docs/development/architecture.md` has the full map.
+`src/` is the program. `src/tui/` and `src/ink/` are the interface, `src/knowledge/` is local knowledge storage and personal sync (`docs/development/local-knowledge.md`), `src/middleware/` and `src/model_guard.ts` are the reliability layers, `src/approvals.ts` is the safety policy. `docs/development/architecture.md` has the full map.
 
 ## Rules for the interface
 
@@ -41,6 +41,7 @@ Read `docs/development/tui-contract.md` before you change anything on screen. Wh
   - **A needed check measured unreliably**, by wall-clock waits, the runner's screen or input timing: check the same real effect another way, such as waiting on state or events or a deterministic unit test. A longer timeout or a retry is not another way.
   - **A check that is not needed**, because it repeats other coverage or tests the CI machine: take it out of the required path, saying why in the issue.
 - Say what you ran. Do not report that tests pass unless you ran them.
+- Keep unit tests fast and deterministic: use in-process fault injection (`onPhase` hooks) rather than spawning child processes, parameterize cache/size limits rather than allocating multi-megabyte buffers, and close every `KnowledgeStore` and `KnowledgeSync` handle (`CIRCLE_KNOWLEDGE_TEST_STRICT_CLEANUP=1` fails on leaks).
 
 ## Rules for docs
 
@@ -66,6 +67,8 @@ Several agents and people may work in this checkout at once.
 - The version is in `package.json`, `package-lock.json` and `src/version.ts`. Change all three; `tests/version.test.ts` fails if they differ. Do not tag or publish a release unless the user asked.
 - `install.sh`, `install.ps1`, `src/install_layout.ts`, `src/install_manager.ts` and `src/update.ts` share one install layout (`versions/<version>/`, `current.ref`, `installation.json`) and one asset naming (`circle-<version>-<os>-<arch>`). Change them together; `tests/install-layout.test.ts`, `tests/install-manager.test.ts` and `npm run release:smoke` pin it.
 - Never write values that were given for one run only (`-m`, `--thinking`) into `settings.json`.
+- When updating adapted `src/knowledge/` or `tests/knowledge-scan.test.ts` files listed as `derived` in `src/data/knowledge-sync/v1/provenance.json`, run `npx tsx scripts/verify-knowledge-sync.ts --refresh-derived` and verify with `npx tsx scripts/verify-knowledge-sync.ts`.
+- Validate schemas, normalization and SHA-256 digests once at external I/O boundaries; do not re-encode, re-parse or re-hash already validated in-memory envelopes along internal call chains.
 
 ## Desktop workbench
 

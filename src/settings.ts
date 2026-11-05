@@ -18,6 +18,7 @@ import {
 } from './paths.js';
 import type { SessionMode } from './approvals.js';
 import { defaultAttribution, type AttributionSettings } from './attribution.js';
+import { sleepSync } from './session_lock.js';
 
 // Circle signs in only with an API URL and key. A `mode` or `oauth_provider` that older
 // releases wrote is dropped on load.
@@ -267,9 +268,6 @@ function saveSettingsUnlocked(settings: CircleSettings, path: string): string {
   writePrivateJson(path, { ...previous, ...settings });
   return path;
 }
-// The public settings API is synchronous. Critical sections contain only local reads and
-// atomic renames; brief bounded retries serialize other Circle processes without dropping
-// a field another terminal just changed. Never call an asynchronous operation inside one.
 function transientLockError(error: unknown): boolean {
   return ['EPERM', 'EACCES', 'EBUSY'].includes(
     (error as NodeJS.ErrnoException).code ?? '',
@@ -282,7 +280,7 @@ function retryLockFileOperation<T>(operation: () => T): T {
       return operation();
     } catch (error) {
       if (!transientLockError(error) || Date.now() >= deadline) throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      sleepSync(10);
     }
   }
 }
@@ -307,8 +305,6 @@ export function withPrivateJsonLock<T>(path: string, operation: () => T): T {
         realpath: false,
         stale: 30000,
         update: 5000,
-        // Retry the filesystem primitive itself, especially release: replaying a
-        // committed operation after an unlock error can duplicate its writes.
         fs: privateJsonLockFs,
       });
     } catch (error) {
@@ -318,7 +314,7 @@ export function withPrivateJsonLock<T>(path: string, operation: () => T): T {
         Date.now() >= deadline
       )
         throw error;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      sleepSync(10);
     }
   }
   try {

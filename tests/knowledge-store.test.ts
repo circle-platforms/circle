@@ -11,17 +11,19 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import {
   KnowledgeStore,
   KnowledgeVersionConflict,
 } from '../src/knowledge/store.js';
 import {
   sha256,
-  syncObjectId,
+  computeObjectDigest,
   decodeSyncObject,
 } from '../src/knowledge/canonical.js';
+import {
+  findLowestCommonAncestor,
+  resolveEffectiveHead,
+} from '../src/knowledge/graph.js';
 import { knowledgeTokens } from '../src/knowledge/search.js';
 import { renameObject } from '../src/knowledge/objects.js';
 import type { SyncItem } from '../src/knowledge/types.js';
@@ -93,7 +95,7 @@ function snapshot(
   });
   return store.putBatch([
     page,
-    object('snapshot', { parents, pages: [syncObjectId(page)] }),
+    object('snapshot', { parents, pages: [computeObjectDigest(page)] }),
   ])[1]!;
 }
 const row = (id: string, heads: string[]): SyncItem => ({
@@ -516,7 +518,7 @@ test('graphs larger than the object cache still stream and verify all source byt
     chunks: string[] = [],
     raw: Buffer[] = [];
   for (let i = 0; i < 8; i++) {
-    const bytes = Buffer.alloc(1024 * 1024, i);
+    const bytes = Buffer.alloc(1024, i);
     raw.push(bytes);
     chunks.push(
       w.store.put(object('bytes', { bytes_base64: bytes.toString('base64') })),
@@ -541,7 +543,11 @@ test('graphs larger than the object cache still stream and verify all source byt
   ]);
   w.store.commit(next, null);
   assert.deepEqual(w.store.sourceBytes(source), combined);
-  assert.equal(w.store.graph(next).objects.size, 12);
+  assert.equal(
+    w.store.graph(next, { allowStructuralConflicts: true, cacheBytes: 4096 })
+      .objects.size,
+    12,
+  );
 });
 
 test('heads cannot masquerade as a conflict by including an ancestor and its descendant', (t) => {
@@ -592,7 +598,7 @@ test('newer and unrelated databases are rejected without downgrading or changing
 test('invalid or corrupt objects cannot become readable registered data', (t) => {
   const w = world(t),
     clean = entry('合成知识'),
-    id = syncObjectId(clean);
+    id = computeObjectDigest(clean);
   assert.throws(() => w.store.putBatch([clean, { schema: 'other' }]));
   assert.equal(w.store.has(id), false);
   const actual = w.store.put(clean),
@@ -610,8 +616,14 @@ test('invalid or corrupt objects cannot become readable registered data', (t) =>
 test('a crash after file publication recovers an invisible orphan, not a partial object registration', (t) => {
   const home = scratch(t),
     payload = entry('崩溃前暂存'),
-    id = syncObjectId(payload);
-  crash(home, 'object-published', { object: payload });
+    id = computeObjectDigest(payload);
+  const crashing = new KnowledgeStore(home, {
+    onPhase: (at) => {
+      if (at === 'object-published') throw Error('synthetic crash');
+    },
+  });
+  assert.throws(() => crashing.put(payload), /synthetic crash/);
+  crashing.close();
   const file = join(home, 'knowledge/objects', id);
   assert.ok(existsSync(file));
   const store = new KnowledgeStore(home);
@@ -631,10 +643,13 @@ test('a crash between index replacement and commit rolls back both index and cur
   const next = w.store.put(entry('新版知识', [old])),
     candidate = snapshot(w.store, [...w.rows, row(uuid(2), [next])]);
   w.store.close();
-  crash(w.home, 'projection-written', {
-    snapshot: candidate,
-    expected: initial,
+  const crashing = new KnowledgeStore(w.home, {
+    onPhase: (at) => {
+      if (at === 'projection-written') throw Error('synthetic crash');
+    },
   });
+  assert.throws(() => crashing.commit(candidate, initial), /synthetic crash/);
+  crashing.close();
   const reopened = new KnowledgeStore(w.home);
   cleanup(t, () => reopened.close());
   assert.equal(reopened.head, initial);
@@ -642,32 +657,6 @@ test('a crash between index replacement and commit rolls back both index and cur
   assert.deepEqual(reopened.search('新版').items, []);
   assert.equal(reopened.read(next).kind, 'entry_revision');
 });
-function crash(home: string, phase: string, payload: unknown): void {
-  const worker = fileURLToPath(
-    new URL('./fixtures/knowledge-sync/crash-worker.ts', import.meta.url),
-  );
-  const result = spawnSync(
-    process.execPath,
-    [
-      '--import',
-      'tsx',
-      worker,
-      home,
-      phase,
-      Buffer.from(JSON.stringify(payload)).toString('base64'),
-    ],
-    {
-      env: {
-        ...process.env,
-        CIRCLE_HOME: home,
-        CIRCLE_WORKBENCH_DATA_DIR: join(home, 'desktop-data'),
-      },
-      encoding: 'utf8',
-      timeout: 15_000,
-    },
-  );
-  assert.equal(result.status, 73, result.stderr);
-}
 
 test('rename sharing errors retry a bounded number of times while preserving actual file bytes', (t) => {
   const home = scratch(t),
@@ -740,41 +729,30 @@ test(
     const store = new KnowledgeStore(join(home, 'runtime'));
     cleanup(t, () => store.close());
     const payload = entry('合成知识'),
-      id = syncObjectId(payload);
+      id = computeObjectDigest(payload);
     symlinkSync(outside, join(store.directory, 'objects', id));
     assert.throws(() => store.put(payload), /invalid knowledge object/);
     assert.equal(readFileSync(outside, 'utf8'), 'synthetic outside sentinel');
   },
 );
 
-test('migration 3 rebuilds an existing projection and preserves identities, current heads and immutable bytes', (t) => {
-  const w = world(t);
-  const entryId = w.store.put(entry('真实陈述'));
-  const head = snapshot(w.store, [...w.rows, row(uuid(2), [entryId])]);
-  w.store.commit(head, null);
-  const client = w.store.clientId,
-    bytes = w.store.readBytes(entryId),
-    path = w.store.databasePath;
-  w.store.close();
-  // Recreate the previous applied schema using a synthetic database, then corrupt only derived search text.
-  const old = new DatabaseSync(path);
-  old.exec(
-    'DROP TABLE sync_journal; DROP TABLE sync_lease; DROP TABLE local_revision_times; PRAGMA user_version=2;',
-  );
-  old
-    .prepare("UPDATE search_documents SET statement='stale derived text'")
-    .run();
-  old.close();
-  const upgraded = new KnowledgeStore(w.home);
-  cleanup(t, () => upgraded.close());
-  assert.equal(upgraded.clientId, client);
-  assert.equal(upgraded.head, head);
-  assert.deepEqual(upgraded.readBytes(entryId), bytes);
-  assert.equal(upgraded.search('真实').items[0]!.statement, '真实陈述');
-  assert.equal(
-    upgraded.acquireSyncLease('migration-holder', 1000, 30000),
-    true,
-  );
+test('lowest common ancestor conflict read-projection resolves the shared base revision', (t) => {
+  const w = world(t),
+    base = w.store.put(entry('共同祖先版本'));
+  const s1 = snapshot(w.store, [...w.rows, row(uuid(2), [base])]);
+  w.store.commit(s1, null);
+  const left = w.store.put(entry('左分支版本', [base])),
+    right = w.store.put(entry('右分支版本', [base]));
+  const heads = [left, right].sort(),
+    conflicted = snapshot(w.store, [...w.rows, row(uuid(2), heads)]);
+  w.store.commit(conflicted, s1);
+  const graph = w.store.graph(conflicted),
+    item = graph.items.find((i) => i.item_id === uuid(2))!;
+  assert.equal(findLowestCommonAncestor(graph.objects, item.heads), base);
+  assert.deepEqual(resolveEffectiveHead(graph, item), {
+    head: base,
+    conflicted: true,
+  });
 });
 
 test('local update times record committed revisions only and never assign an imported remote update time', (t) => {

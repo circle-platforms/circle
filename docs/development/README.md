@@ -10,10 +10,10 @@ Install Node.js 24 or newer, then run `npm ci`. The compiler and every tool are 
 | Command | Purpose |
 |---|---|
 | `npm run dev -- [options]` | Run Circle from the TypeScript source. |
-| `npm run typecheck` | Strict type check, no output files. |
-| `npm test` | The test suite, with Node's test runner through `tsx`. On CI a failing run goes once more with only its failed tests (`--test-rerun-failures`); a test that passes only then does not fail the check, but is named as flaky: a `flaky test` warning for each of the first ten (GitHub shows them as annotations) and a table of all of them in the job summary. `npm --prefix apps/desktop run test:runtime` does the same for each stage and also lists them in the stage receipt. |
+| `npm run typecheck` | Strict incremental type check (`node_modules/.cache/tsc/typecheck.tsbuildinfo`), no output files. |
+| `npm test` | The test suite, with Node's test runner through `tsx` (`scripts/test.ts`), preloading `scripts/knowledge-test-metrics.mjs` with `CIRCLE_KNOWLEDGE_TEST_STRICT_CLEANUP=1` to reject unclosed `KnowledgeStore` or `KnowledgeSync` handles. On CI a failing run goes once more with only its failed tests (`--test-rerun-failures`); a test that passes only then does not fail the check, but is named as flaky: a `flaky test` warning for each of the first ten (GitHub shows them as annotations) and a table of all of them in the job summary. `npm --prefix apps/desktop run test:runtime` does the same for each stage and also lists them in the stage receipt. |
 | `npm run test:coverage` | The suite with Node's coverage of `src/`; the table at the end of the log gives line, branch and function coverage per file. Pull requests run it in the `coverage` job of the Check workflow, which writes a summary and is not a required check. |
-| `npm run build` | Empty `dist/`, compile into it and copy the prompts and data files. |
+| `npm run build` | Empty `dist/`, incrementally compile into it (`node_modules/.cache/tsc/build.tsbuildinfo`) and copy the prompts and data files. |
 | `npm run check` | Type check, tests and build. |
 | `npm run format` | Format the TypeScript sources and the root JSON files with prettier. |
 | `npm run format:check` | Check the formatting, as CI does. |

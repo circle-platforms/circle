@@ -3,7 +3,6 @@ import { KnowledgeStore } from './store.js';
 import { SYNC_LIMITS } from './protocol.js';
 import type { SyncItem, SyncObject } from './types.js';
 
-/** Ancestry union implements the pinned three-way rule without selecting content or using clocks. */
 export function mergeSnapshots(
   store: KnowledgeStore,
   local: string | null,
@@ -52,7 +51,6 @@ export function mergeSnapshots(
   const parents = [
     ...new Set([local, remote].filter((v): v is string => v !== null)),
   ].sort();
-  // Reusing an already complete descendant prevents heartbeat-only snapshot chains.
   for (const graph of [left, right])
     if (
       graph &&
@@ -74,11 +72,9 @@ export function mergeSnapshots(
         body: { items: items.slice(i, i + SYNC_LIMITS.pageItems) },
       }),
     );
-  const snapshot = store.put({
+  return store.put({
     schema: 'personal-sync-object@1',
     kind: 'snapshot',
     body: { parents, pages: pages.sort() },
   });
-  store.graph(snapshot);
-  return snapshot;
 }

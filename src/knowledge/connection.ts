@@ -13,10 +13,10 @@ import {
   type CircleSettings,
 } from '../settings.js';
 import { KnowledgeSync } from './sync.js';
+import { formatJcs } from './canonical.js';
 import {
   SyncHttp,
   SyncHttpError,
-  requestJson,
   type PurgeConfirmation,
 } from './sync-http.js';
 import type { ModeImpact, SyncCondition } from './sync-types.js';
@@ -101,13 +101,9 @@ export interface KnowledgeConnectionStatus {
   clearing: boolean;
   lastSyncedAt: string | null;
   server: string;
-  /** The server's own text for the last refusal, as it came. */
   detail?: string | null;
-  /** Where the account holder confirms a requested purge, until it expires. */
   confirmation?: PurgeConfirmation | null;
-  /** `document`: the server published a discovery document; `fallback`: fixed v1 paths. */
   discovery?: ServerDiscovery['source'] | null;
-  /** Talking to the server right now. */
   syncing?: boolean;
 }
 export class KnowledgeConnection {
@@ -140,7 +136,6 @@ export class KnowledgeConnection {
       syncing: this.client?.busy ?? false,
     };
   }
-  /** What the bound server said of itself; read once per connection. */
   async discovery(signal: AbortSignal): Promise<ServerDiscovery> {
     if (!this.http) throw new McpLoginRequired();
     return this.http.resolve(signal);
@@ -196,8 +191,6 @@ export class KnowledgeConnection {
     const selectedConfig = JSON.stringify(
       this.settings().mcp_servers.find((c) => c.name === name),
     );
-    // Whether the grant and the saved configuration are still the ones selected. The
-    // selection itself is compared once it is saved: select() installs before saving it.
     const assertCurrent = (): void => {
       port.assertActive();
       const saved = loadSettings(this.home);
@@ -213,15 +206,11 @@ export class KnowledgeConnection {
         throw new McpLoginRequired();
     };
     this.selected = { name, port };
-    // Every request rechecks: a filesystem event about another process's change can
-    // arrive seconds late or not at all (FSEvents on macOS, #415), and until then the
-    // old client would keep syncing under a configuration that is no longer saved.
     this.http = mcpSyncHttp({ ...port, assertActive: assertCurrent });
     this.client = new KnowledgeSync(this.home, this.http, {
       binding: port.binding,
       onStatus: () => this.changed(),
     });
-    // The watcher only reports such a change sooner; the requests above enforce it.
     this.watcher = watch(this.home, (_event, file) => {
       if (
         file &&
@@ -239,7 +228,6 @@ export class KnowledgeConnection {
     });
     this.watcher.unref();
   }
-  /** Called only after the person reviews the selected server and retained local content. */
   async select(name: string, approvedBinding: string): Promise<void> {
     if (
       existsSync(settingsPath(this.home)) &&
@@ -301,7 +289,7 @@ export class KnowledgeConnection {
     if (!this.client) throw Error('select an authorized MCP connection first');
     return this.client.changeMode(
       mode,
-      async (current) => requestJson(current) === requestJson(preview),
+      async (current) => formatJcs(current) === formatJcs(preview),
       signal,
     );
   }
@@ -332,11 +320,6 @@ export class KnowledgeConnection {
     if (!this.client) throw new McpLoginRequired();
     return result;
   }
-  /**
-   * Calls the tool the server declared for a named operation (`entry-share`,
-   * `memory-share`): its argument holds `members` and the fixed members it declared.
-   * Null when the server declares no such operation.
-   */
   async callOperation(
     capability: string,
     members: Record<string, unknown>,
@@ -378,7 +361,6 @@ export class KnowledgeConnection {
       this.mcp.assertNoCredentials(saved.server, text);
     return read;
   }
-  /** Recheck the selected grant at a model boundary too, without waiting for filesystem event delivery. */
   checkAuthorization(): void {
     if (!this.selected || !this.client) return;
     try {

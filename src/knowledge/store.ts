@@ -13,7 +13,8 @@ import {
   assertSuccessor,
   MAX_LOCAL_SOURCE_BYTES,
   validateGraph,
-  type KnowledgeGraph,
+  type SnapshotGraph,
+  type ValidateGraphOptions,
 } from './graph.js';
 import { ObjectFiles, privateDirectory } from './objects.js';
 import { decodeBase64, SYNC_LIMITS, SYNC_PROTOCOL } from './protocol.js';
@@ -27,22 +28,20 @@ import type { SyncItem, SyncObject } from './types.js';
 
 const DATABASE_VERSION = 4;
 const APPLICATION_ID = 0x434b4e31;
-// Append migrations; never change an applied version's SQL.
-const MIGRATIONS = [
-  `
-  CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
-  CREATE TABLE objects(id TEXT PRIMARY KEY, kind TEXT NOT NULL, bytes INTEGER NOT NULL) STRICT;
-  CREATE TABLE versions(sequence INTEGER PRIMARY KEY, snapshot TEXT NOT NULL UNIQUE REFERENCES objects(id)) STRICT;
-  CREATE TABLE current_items(item_id TEXT PRIMARY KEY, kind TEXT NOT NULL, heads TEXT NOT NULL, path TEXT) STRICT;
-  CREATE TABLE search_documents(id INTEGER PRIMARY KEY, item_id TEXT NOT NULL UNIQUE, object_id TEXT NOT NULL REFERENCES objects(id), path TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, statement TEXT NOT NULL) STRICT;
-  CREATE VIRTUAL TABLE search_terms USING fts5(terms, tokenize='ascii');
-  CREATE INDEX search_scope ON search_documents(path,kind,status);
-`,
-  `CREATE TABLE verification_observations(snapshot TEXT NOT NULL REFERENCES objects(id), object_id TEXT NOT NULL REFERENCES objects(id), rule TEXT NOT NULL, observation TEXT NOT NULL, PRIMARY KEY(snapshot,object_id,rule)) STRICT; CREATE TABLE personal_pack_installations(object_id TEXT PRIMARY KEY REFERENCES objects(id), path TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1))) STRICT;`,
-  `CREATE TABLE sync_journal(key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
-   CREATE TABLE sync_lease(singleton INTEGER PRIMARY KEY CHECK(singleton=1), token TEXT NOT NULL, expires INTEGER NOT NULL) STRICT;`,
-  `CREATE TABLE local_revision_times(object_id TEXT PRIMARY KEY REFERENCES objects(id), updated_at TEXT NOT NULL) STRICT;`,
-];
+const SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+  CREATE TABLE IF NOT EXISTS objects(id TEXT PRIMARY KEY, kind TEXT NOT NULL, bytes INTEGER NOT NULL) STRICT;
+  CREATE TABLE IF NOT EXISTS versions(sequence INTEGER PRIMARY KEY, snapshot TEXT NOT NULL UNIQUE REFERENCES objects(id)) STRICT;
+  CREATE TABLE IF NOT EXISTS current_items(item_id TEXT PRIMARY KEY, kind TEXT NOT NULL, heads TEXT NOT NULL, path TEXT) STRICT;
+  CREATE TABLE IF NOT EXISTS search_documents(id INTEGER PRIMARY KEY, item_id TEXT NOT NULL UNIQUE, object_id TEXT NOT NULL REFERENCES objects(id), path TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL, statement TEXT NOT NULL) STRICT;
+  CREATE VIRTUAL TABLE IF NOT EXISTS search_terms USING fts5(terms, tokenize='ascii');
+  CREATE INDEX IF NOT EXISTS search_scope ON search_documents(path,kind,status);
+  CREATE TABLE IF NOT EXISTS verification_observations(snapshot TEXT NOT NULL REFERENCES objects(id), object_id TEXT NOT NULL REFERENCES objects(id), rule TEXT NOT NULL, observation TEXT NOT NULL, PRIMARY KEY(snapshot,object_id,rule)) STRICT;
+  CREATE TABLE IF NOT EXISTS personal_pack_installations(object_id TEXT PRIMARY KEY REFERENCES objects(id), path TEXT NOT NULL, enabled INTEGER NOT NULL CHECK(enabled IN (0,1))) STRICT;
+  CREATE TABLE IF NOT EXISTS sync_journal(key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
+  CREATE TABLE IF NOT EXISTS sync_lease(singleton INTEGER PRIMARY KEY CHECK(singleton=1), token TEXT NOT NULL, expires INTEGER NOT NULL) STRICT;
+  CREATE TABLE IF NOT EXISTS local_revision_times(object_id TEXT PRIMARY KEY REFERENCES objects(id), updated_at TEXT NOT NULL) STRICT;
+`;
 export interface SearchOptions {
   path?: string;
   kind?: string;
@@ -79,7 +78,6 @@ export class KnowledgeStore {
     home: string,
     private readonly options: StoreOptions = {},
   ) {
-    // No implicit real home: every caller supplies its own runtime home.
     mkdirSync(home, { recursive: true, mode: 0o700 });
     this.directory = join(realpathSync.native(home), 'knowledge');
     privateDirectory(this.directory);
@@ -95,24 +93,21 @@ export class KnowledgeStore {
       this.db.exec('PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;');
       this.checkVersion();
       chmodSync(this.databasePath, 0o600);
-      this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
+      this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;');
       this.files = new ObjectFiles(join(this.directory, 'objects'));
       this.recoveredObjects = this.transaction(() => {
         this.checkVersion();
         const version = this.version();
-        for (let i = version; i < MIGRATIONS.length; i++) {
-          this.db.exec(MIGRATIONS[i]!);
+        if (version < DATABASE_VERSION) {
+          this.db.exec(SCHEMA_SQL);
           this.db.exec(
-            `PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=${i + 1};`,
+            `PRAGMA application_id=${APPLICATION_ID}; PRAGMA user_version=${DATABASE_VERSION};`,
           );
         }
         this.db
           .prepare('INSERT OR IGNORE INTO metadata(key,value) VALUES(?,?)')
           .run('client_id', randomUUID());
-        const recovered = this.files.recover((id) => this.has(id));
-        // New structural-conflict rules must also suppress an existing version-2 search projection.
-        if (version < 3 && this.head) this.project(this.graph(this.head));
-        return recovered;
+        return this.files.recover((id) => this.has(id));
       });
     } catch (error) {
       this.db.close();
@@ -183,7 +178,6 @@ export class KnowledgeStore {
   read(id: string): SyncObject {
     return decodeSyncObject(this.readBytes(id), id);
   }
-  /** Atomic batch registration. Staged objects do not enter browsing or search until commit. */
   putBatch(inputs: readonly unknown[]): string[] {
     if (inputs.length > SYNC_LIMITS.batchObjects)
       throw new RangeError('knowledge batch object limit');
@@ -193,16 +187,19 @@ export class KnowledgeStore {
       total += bytes.length;
       if (total > SYNC_LIMITS.objectBytes)
         throw new RangeError('knowledge batch byte limit');
-      return { bytes, id: sha256(bytes) };
+      return {
+        bytes,
+        id: sha256(bytes),
+        kind: (input as SyncObject).kind,
+      };
     });
     return this.transaction(() =>
-      encoded.map(({ id, bytes }) => {
+      encoded.map(({ id, bytes, kind }) => {
         this.files.publish(id, bytes);
         this.options.onPhase?.('object-published');
-        const object = decodeSyncObject(bytes, id);
         this.db
           .prepare('INSERT OR IGNORE INTO objects(id,kind,bytes) VALUES(?,?,?)')
-          .run(id, object.kind, bytes.length);
+          .run(id, kind, bytes.length);
         return id;
       }),
     );
@@ -212,25 +209,51 @@ export class KnowledgeStore {
   }
   importBytes(bytes: Uint8Array, id: string): string {
     const object = decodeSyncObject(bytes, id);
-    const actual = this.put(object);
-    if (actual !== id) throw Error('knowledge object identity changed');
-    return actual;
+    const raw = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+    return this.transaction(() => {
+      this.files.publish(id, raw);
+      this.options.onPhase?.('object-published');
+      this.db
+        .prepare('INSERT OR IGNORE INTO objects(id,kind,bytes) VALUES(?,?,?)')
+        .run(id, object.kind, raw.length);
+      return id;
+    });
   }
-  graph(snapshot: string): KnowledgeGraph {
-    return validateGraph(snapshot, (id) => this.read(id), true);
+  graph(snapshot: string, options?: ValidateGraphOptions): SnapshotGraph {
+    return validateGraph(snapshot, (id) => this.read(id), {
+      allowStructuralConflicts: true,
+      ...options,
+    });
   }
-  /** Caller supplies an explicit expected local head; no last-writer-wins default. */
-  commit(snapshot: string, expected: string | null, sync = false): void {
+  commit(
+    snapshot: string,
+    expected: string | null,
+    sync = false,
+    prevalidatedGraph?: SnapshotGraph,
+    prevalidatedCurrent?: SnapshotGraph | null,
+  ): void {
     this.transaction(() => {
       const current = this.head;
       if (current !== expected) throw new KnowledgeVersionConflict(current);
-      const next = validateGraph(snapshot, (id) => this.read(id), sync);
-      if (current) assertSuccessor(this.graph(current), next);
+      const currentGraph =
+        prevalidatedCurrent !== undefined
+          ? prevalidatedCurrent
+          : current
+            ? this.graph(current)
+            : null;
+      const trustedObjects = currentGraph
+        ? new Set(currentGraph.objects.keys())
+        : undefined;
+      const next =
+        prevalidatedGraph ??
+        validateGraph(snapshot, (id) => this.read(id), {
+          allowStructuralConflicts: sync,
+          trustedObjects,
+        });
+      if (currentGraph) assertSuccessor(currentGraph, next);
       if (!sync) {
         const priorHeads = new Set(
-          current
-            ? this.graph(current).items.flatMap((item) => item.heads)
-            : [],
+          currentGraph ? currentGraph.items.flatMap((item) => item.heads) : [],
         );
         const updatedAt = new Date().toISOString();
         for (const item of next.items)
@@ -264,15 +287,24 @@ export class KnowledgeStore {
         .get(object)?.updated_at as string) ?? null
     );
   }
-  /** Run validation and publication under one write lock, so a stale approval leaves no staged body. */
   apply(expected: string | null, action: () => string): string {
     try {
       return this.transaction(() => {
         if (this.head !== expected)
           throw new KnowledgeVersionConflict(this.head);
+        const currentGraph = expected ? this.graph(expected) : null;
         const snapshot = action();
-        const graph = this.graph(snapshot);
-        const observations = verifyLocal(graph);
+        const trustedObjects = currentGraph
+          ? new Set(currentGraph.objects.keys())
+          : undefined;
+        const graph = validateGraph(snapshot, (id) => this.read(id), {
+          allowStructuralConflicts: false,
+          trustedObjects,
+        });
+        const priorObservations = expected
+          ? new Map(this.observations(expected).map((o) => [o.object, o]))
+          : undefined;
+        const observations = verifyLocal(graph, priorObservations);
         for (const observation of observations)
           this.db
             .prepare(
@@ -284,7 +316,7 @@ export class KnowledgeStore {
               observation.rule,
               JSON.stringify(observation),
             );
-        this.commit(snapshot, expected);
+        this.commit(snapshot, expected, false, graph, currentGraph);
         return snapshot;
       });
     } catch (error) {
@@ -292,14 +324,12 @@ export class KnowledgeStore {
       throw error;
     }
   }
-  /** Persistent transport state contains no access or refresh tokens. */
   syncRead<T>(key: string): T | null {
     const row = this.db
       .prepare('SELECT value FROM sync_journal WHERE key=?')
       .get(key);
     return row ? (JSON.parse(row.value as string) as T) : null;
   }
-  /** Rebuild one mapping from validated version-3 receipt pages when no current projection cache exists. */
   syncProjection(
     epoch: string,
     snapshot: string,
@@ -363,7 +393,6 @@ export class KnowledgeStore {
       .prepare('DELETE FROM sync_lease WHERE singleton=1 AND token=?')
       .run(token);
   }
-  /** The ownership fence and local CAS are checked under the same database write lock. */
   syncAtomic<T>(token: string, now: () => number, action: () => T): T {
     return this.transaction(() => {
       this.assertSyncLease(token, now());
@@ -373,8 +402,19 @@ export class KnowledgeStore {
     });
   }
   publishSync(snapshot: string, expected: string | null): void {
-    const graph = this.graph(snapshot);
-    for (const observation of verifyLocal(graph))
+    const currentGraph =
+      expected && this.has(expected) ? this.graph(expected) : null;
+    const trustedObjects = currentGraph
+      ? new Set(currentGraph.objects.keys())
+      : undefined;
+    const graph = this.graph(snapshot, {
+      allowStructuralConflicts: true,
+      trustedObjects,
+    });
+    const priorObservations = expected
+      ? new Map(this.observations(expected).map((o) => [o.object, o]))
+      : undefined;
+    for (const observation of verifyLocal(graph, priorObservations))
       this.db
         .prepare(
           'INSERT OR REPLACE INTO verification_observations VALUES(?,?,?,?)',
@@ -385,7 +425,13 @@ export class KnowledgeStore {
           observation.rule,
           JSON.stringify(observation),
         );
-    this.commit(snapshot, expected, true);
+    this.commit(
+      snapshot,
+      expected,
+      true,
+      graph,
+      this.head === expected ? currentGraph : undefined,
+    );
   }
   installPack(
     expected: string,
@@ -432,15 +478,68 @@ export class KnowledgeStore {
       .all(snapshot, LOCAL_VERIFIER)
       .map((row) => JSON.parse(row.observation as string));
   }
-  private project(graph: KnowledgeGraph): void {
-    this.db.exec(
-      'DELETE FROM current_items; DELETE FROM search_terms; DELETE FROM search_documents;',
+  private project(graph: SnapshotGraph): void {
+    const existingItems = new Map(
+      this.db
+        .prepare('SELECT item_id, kind, heads, path FROM current_items')
+        .all()
+        .map((row) => [
+          row.item_id as string,
+          {
+            kind: row.kind as string,
+            heads: row.heads as string,
+            path: (row.path as string | null) ?? null,
+          },
+        ]),
     );
+    const existingDocs = new Map(
+      this.db
+        .prepare(
+          'SELECT d.id, d.item_id, d.object_id, d.path, d.kind, d.status, d.statement, length(CAST(t.terms AS BLOB)) AS term_bytes FROM search_documents d LEFT JOIN search_terms t ON t.rowid=d.id',
+        )
+        .all()
+        .map((row) => [
+          row.item_id as string,
+          {
+            id: Number(row.id),
+            object_id: row.object_id as string,
+            path: row.path as string,
+            kind: row.kind as string,
+            status: row.status as string,
+            statement: row.statement as string,
+            termBytes:
+              row.term_bytes === null || row.term_bytes === undefined
+                ? null
+                : Number(row.term_bytes),
+          },
+        ]),
+    );
+    const seenItems = new Set<string>();
+    const conflictedIds = new Set(graph.conflicts.map((c) => c.item_id));
     let indexBytes = 0;
     const observations = new Map(
       this.observations(graph.snapshot).map((row) => [row.object, row]),
     );
+    const deleteItemStmt = this.db.prepare(
+      'DELETE FROM current_items WHERE item_id=?',
+    );
+    const upsertItemStmt = this.db.prepare(
+      'INSERT OR REPLACE INTO current_items(item_id,kind,heads,path) VALUES(?,?,?,?)',
+    );
+    const deleteDocStmt = this.db.prepare(
+      'DELETE FROM search_documents WHERE id=?',
+    );
+    const deleteTermsStmt = this.db.prepare(
+      'DELETE FROM search_terms WHERE rowid=?',
+    );
+    const insertDocStmt = this.db.prepare(
+      'INSERT INTO search_documents(item_id,object_id,path,kind,status,statement) VALUES(?,?,?,?,?,?)',
+    );
+    const insertTermsStmt = this.db.prepare(
+      'INSERT INTO search_terms(rowid,terms) VALUES(?,?)',
+    );
     for (const item of graph.items) {
+      seenItems.add(item.item_id);
       const object =
         item.heads.length === 1
           ? graph.objects.get(item.heads[0]!)!
@@ -452,18 +551,55 @@ export class KnowledgeStore {
             ? item.item_id
             : undefined;
       const path = directory ? (graph.paths.get(directory) ?? null) : null;
-      this.db
-        .prepare(
-          'INSERT INTO current_items(item_id,kind,heads,path) VALUES(?,?,?,?)',
-        )
-        .run(item.item_id, item.kind, JSON.stringify(item.heads), path);
+      const headsJson = JSON.stringify(item.heads);
+      const prevItem = existingItems.get(item.item_id);
+      if (
+        !prevItem ||
+        prevItem.kind !== item.kind ||
+        prevItem.heads !== headsJson ||
+        prevItem.path !== path
+      ) {
+        upsertItemStmt.run(item.item_id, item.kind, headsJson, path);
+      }
+      const prevDoc = existingDocs.get(item.item_id);
       if (
         !object ||
         object.kind !== 'entry_revision' ||
         path === null ||
-        graph.conflicts.some((c) => c.item_id === item.item_id)
-      )
+        conflictedIds.has(item.item_id)
+      ) {
+        if (prevDoc) {
+          deleteTermsStmt.run(prevDoc.id);
+          deleteDocStmt.run(prevDoc.id);
+          existingDocs.delete(item.item_id);
+        }
         continue;
+      }
+      const objectId = item.heads[0]!;
+      const content = object.body.content;
+      const status =
+        observations.get(objectId)?.status === 'verified'
+          ? 'verified'
+          : 'unverified';
+      if (
+        prevDoc &&
+        prevDoc.object_id === objectId &&
+        prevDoc.path === path &&
+        prevDoc.kind === content.kind &&
+        prevDoc.status === status &&
+        prevDoc.statement === content.statement &&
+        prevDoc.termBytes !== null
+      ) {
+        indexBytes += prevDoc.termBytes;
+        if (indexBytes > 64 * 1024 * 1024)
+          throw new RangeError('knowledge space index limit');
+        continue;
+      }
+      if (prevDoc) {
+        deleteTermsStmt.run(prevDoc.id);
+        deleteDocStmt.run(prevDoc.id);
+        existingDocs.delete(item.item_id);
+      }
       const quotations: string[] = [];
       for (const ground of object.body.grounds) {
         const quote = graph.objects.get(
@@ -479,7 +615,6 @@ export class KnowledgeStore {
           if (!(error instanceof TypeError)) throw error;
         }
       }
-      const content = object.body.content;
       const tokens = knowledgeTokens(
         [content.statement, JSON.stringify(content.data), ...quotations].join(
           '\n',
@@ -489,29 +624,36 @@ export class KnowledgeStore {
       indexBytes += Buffer.byteLength(terms);
       if (indexBytes > 64 * 1024 * 1024)
         throw new RangeError('knowledge space index limit');
-      const verified = observations.get(item.heads[0]!)?.status === 'verified';
-      // Qualification belongs to this snapshot and local rule version, never an imported flag.
-      const result = this.db
-        .prepare(
-          'INSERT INTO search_documents(item_id,object_id,path,kind,status,statement) VALUES(?,?,?,?,?,?)',
-        )
-        .run(
-          item.item_id,
-          item.heads[0]!,
-          path,
-          content.kind,
-          verified ? 'verified' : 'unverified',
-          content.statement,
-        );
-      this.db
-        .prepare('INSERT INTO search_terms(rowid,terms) VALUES(?,?)')
-        .run(result.lastInsertRowid, terms);
+      const result = insertDocStmt.run(
+        item.item_id,
+        objectId,
+        path,
+        content.kind,
+        status,
+        content.statement,
+      );
+      insertTermsStmt.run(result.lastInsertRowid, terms);
+    }
+    for (const itemId of existingItems.keys()) {
+      if (!seenItems.has(itemId)) {
+        deleteItemStmt.run(itemId);
+        const prevDoc = existingDocs.get(itemId);
+        if (prevDoc) {
+          deleteTermsStmt.run(prevDoc.id);
+          deleteDocStmt.run(prevDoc.id);
+        }
+      }
     }
   }
   rebuildSearch(): void {
     this.transaction(() => {
       const head = this.head;
-      if (head) this.project(this.graph(head));
+      if (head) {
+        this.db.exec(
+          'DELETE FROM current_items; DELETE FROM search_terms; DELETE FROM search_documents;',
+        );
+        this.project(this.graph(head));
+      }
     });
   }
   items(): (SyncItem & { path: string | null })[] {

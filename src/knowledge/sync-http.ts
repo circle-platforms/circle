@@ -1,6 +1,6 @@
 import { SYNC_PROTOCOL, validateAnswer } from './protocol.js';
 import { parseStrictJson } from './strict-json.js';
-import { sha256 } from './canonical.js';
+import { formatJcs, sha256 } from './canonical.js';
 import { wellFormedText } from './unicode.js';
 import {
   DiscoveryError,
@@ -10,42 +10,13 @@ import {
   type ServerDiscovery,
 } from '../server_resolution.js';
 
-/** JCS request identity, deliberately without editable-object text normalization. */
-export function requestJson(value: unknown, depth = 0): string {
-  if (depth > 64) throw Error('sync request depth');
-  if (value === null || typeof value === 'boolean' || typeof value === 'string')
-    return JSON.stringify(value);
-  if (typeof value === 'number' && Number.isFinite(value))
-    return JSON.stringify(value);
-  if (Array.isArray(value))
-    return '[' + value.map((v) => requestJson(v, depth + 1)).join(',') + ']';
-  if (
-    value &&
-    typeof value === 'object' &&
-    Object.getPrototypeOf(value) === Object.prototype
-  )
-    return (
-      '{' +
-      Object.keys(value)
-        .sort()
-        .map(
-          (k) =>
-            JSON.stringify(k) +
-            ':' +
-            requestJson((value as Record<string, unknown>)[k], depth + 1),
-        )
-        .join(',') +
-      '}'
-    );
-  throw Error('invalid sync request');
-}
 export const operationDigest = (
   route: string,
   session: string | null,
   body: unknown,
 ): string =>
   sha256(
-    requestJson(
+    formatJcs(
       session === null
         ? {
             path: SYNC_PROTOCOL.routes[route]!.path,
@@ -56,7 +27,6 @@ export const operationDigest = (
           : { path: SYNC_PROTOCOL.routes[route]!.path, session, request: body },
     ),
   );
-/** Where the account holder confirms a purge the server would not run on a token alone. */
 export interface PurgeConfirmation {
   url: string;
   expiresAt: string;
@@ -67,18 +37,15 @@ export class SyncHttpError extends Error {
     readonly code: string,
     readonly state?: unknown,
     readonly retryAfterSeconds = 0,
-    /** The server's own text for people (capability `error-detail`), shown as it came. */
     readonly detail?: string,
     readonly confirmation?: PurgeConfirmation,
   ) {
     super(`knowledge sync request failed: ${code}`);
   }
-  /** A code this client has no handling for: a generic failure of that one request. */
   get unknownCode(): boolean {
     return !SYNC_PROTOCOL.codes.includes(this.code);
   }
 }
-/** Server text for people: one bounded, well-formed string, or nothing. */
 export function serverDetail(value: unknown): string | undefined {
   return typeof value === 'string' &&
     value.trim().length > 0 &&
@@ -87,7 +54,7 @@ export function serverDetail(value: unknown): string | undefined {
     ? value
     : undefined;
 }
-function confirmationOf(value: unknown): PurgeConfirmation | undefined {
+export function confirmationOf(value: unknown): PurgeConfirmation | undefined {
   const v = value as { url?: unknown; expires_at?: unknown } | undefined;
   if (
     !v ||
@@ -125,10 +92,6 @@ export class SyncHttp implements SyncTransport {
   readonly origin: string;
   private resolved?: ServerDiscovery;
   private resolving?: Promise<ServerDiscovery>;
-  /**
-   * `discover` finds the sync base: the bound server's discovery document. Without it the
-   * fixed v1 paths under the server's base are used, as for a server that has none.
-   */
   constructor(
     readonly server: string,
     private readonly token: (signal: AbortSignal) => Promise<string>,
@@ -146,7 +109,6 @@ export class SyncHttp implements SyncTransport {
     }
     if (!discover) this.resolved = fallbackDiscovery(server);
   }
-  /** What the server said of itself, once it was read. */
   get discovery(): ServerDiscovery | undefined {
     return this.resolved;
   }
@@ -190,7 +152,6 @@ export class SyncHttp implements SyncTransport {
     if (!def.path.startsWith(SYNC_V1_TEMPLATE_PREFIX + '/'))
       throw Error('unknown sync route template');
     const discovery = await this.resolve(options.signal);
-    // The template stays fixed relative to the base the server named (section 2).
     const url = new URL(
       discovery.syncBase +
         def.path
@@ -227,7 +188,6 @@ export class SyncHttp implements SyncTransport {
       options.signal.throwIfAborted();
       throw new SyncHttpError(0, 'SOURCE_RETRYABLE');
     }
-    // Bound streamed bytes, not just an untrusted Content-Length header.
     const maximum = 16 * 1024 * 1024;
     if (Number(response.headers.get('content-length')) > maximum) {
       await response.body?.cancel();
@@ -263,7 +223,6 @@ export class SyncHttp implements SyncTransport {
       throw new TypeError('invalid sync JSON response');
     }
     if (!response.ok) {
-      // An error from a newer server may carry members and codes this client does not know.
       validateAnswer('personal-sync-error@1', value);
       const error = value as {
         code: string;

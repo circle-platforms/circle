@@ -4,16 +4,13 @@ import {
   KnowledgeVersionConflict,
   type SearchOptions,
 } from './store.js';
-import { encodeSyncObject, decodeSyncObject, sha256 } from './canonical.js';
+import { computeObjectDigest, encodeSyncObject, sha256 } from './canonical.js';
 import { validateGraph, itemKey } from './graph.js';
 import { decodeBase64, isObjectId, SYNC_LIMITS } from './protocol.js';
-import {
-  itemKind,
-  type ItemObject,
-  type SyncItem,
-  type SyncObject,
-} from './types.js';
+import { itemKind, type ItemObject, type SyncObject } from './types.js';
 import { requireClean } from './verification.js';
+
+export const SOURCE_CHUNK_BYTES = 262_144;
 
 export interface KnowledgeAccess {
   /** Host-authored task lock; model arguments cannot relax it. */
@@ -37,10 +34,40 @@ const envelope = (kind: SyncObject['kind'], body: unknown): unknown => ({
   kind,
   body,
 });
-const normalized = (input: unknown): { id: string; object: SyncObject } => {
+export function chunkSourceBytes(raw: Buffer): {
+  chunks: { id: string; object: unknown }[];
+  rawSha256: string;
+  size: number;
+} {
+  const chunks: { id: string; object: unknown }[] = [];
+  for (
+    let offset = 0;
+    offset < raw.length || offset === 0;
+    offset += SOURCE_CHUNK_BYTES
+  ) {
+    const slice = raw.subarray(offset, offset + SOURCE_CHUNK_BYTES);
+    const object = envelope('bytes', {
+      bytes_base64: slice.toString('base64'),
+    });
+    chunks.push({ id: computeObjectDigest(object), object });
+    if (raw.length === 0) break;
+  }
+  return {
+    chunks,
+    rawSha256: sha256(raw),
+    size: raw.length,
+  };
+}
+const normalized = (
+  input: unknown,
+): { id: string; bytes: Buffer; object: SyncObject } => {
   const bytes = encodeSyncObject(input),
     id = sha256(bytes);
-  return { id, object: decodeSyncObject(bytes, id) };
+  return {
+    id,
+    bytes,
+    object: JSON.parse(bytes.toString('utf8')) as SyncObject,
+  };
 };
 /** Opens only the explicitly supplied runtime home; no network or account resolution. */
 export class KnowledgeService {
@@ -116,12 +143,11 @@ export class KnowledgeService {
     let size = 0;
     const proposed = input.objects.map((input) => {
       const entry = normalized(input);
-      size += encodeSyncObject(entry.object).length;
-      return entry;
+      size += entry.bytes.length;
+      return { id: entry.id, object: entry.object };
     });
     if (size > SYNC_LIMITS.objectBytes)
       throw Error('knowledge change byte limit');
-    // Inspect before opening the store, publishing files, asking approval or emitting a preview.
     for (const { object } of proposed)
       requireClean(
         object.kind === 'bytes'
@@ -167,10 +193,10 @@ export class KnowledgeService {
       items.sort((a, b) => (itemKey(a) < itemKey(b) ? -1 : 1));
       const generated: { id: string; object: SyncObject }[] = [];
       const add = (input: unknown) => {
-        const n = normalized(input);
-        pending.set(n.id, n.object);
-        generated.push(n);
-        return n.id;
+        const { id, object } = normalized(input);
+        pending.set(id, object);
+        generated.push({ id, object });
+        return id;
       };
       const pages: string[] = [];
       for (let i = 0; i < items.length; i += SYNC_LIMITS.pageItems)
@@ -212,7 +238,6 @@ export class KnowledgeService {
             const path = graph.paths.get(object.body.directory_id);
             if (Buffer.byteLength(object.body.markdown) > 24000)
               throw Error('memory document exceeds 24000 UTF-8 bytes');
-            // The protocol reserves one document and the largest candidate for a conflict; disabled current documents use no context budget.
             if (
               item.heads.length > 1 ||
               path == null ||
@@ -237,7 +262,6 @@ export class KnowledgeService {
         snapshot,
         objects: proposed,
       };
-      // Closure owns the canonical copies. Later caller mutation cannot change what was approved.
       const frozen = JSON.stringify([...proposed, ...generated]);
       return {
         preview: JSON.parse(JSON.stringify(preview)),
@@ -248,8 +272,9 @@ export class KnowledgeService {
           return this.withStore((current) =>
             current.apply(expectedHead, () => {
               signal.throwIfAborted();
-              for (const { object } of JSON.parse(frozen) as typeof proposed)
-                current.put(object);
+              current.putBatch(
+                (JSON.parse(frozen) as typeof proposed).map((p) => p.object),
+              );
               return snapshot;
             }),
           );
@@ -319,5 +344,110 @@ export class KnowledgeService {
       );
     });
     return this.prepare({ expected_head: args.expected_head, objects });
+  }
+  prepareHostCapture(args: {
+    expected_head: string | null;
+    name: string;
+    originKind: 'exec' | 'terminal' | 'tool';
+    label: string;
+    content: Buffer | string;
+    directory_id?: string;
+    statement?: string;
+    selector?: string;
+  }): PreparedKnowledgeChange {
+    const raw =
+      typeof args.content === 'string'
+        ? Buffer.from(args.content, 'utf8')
+        : args.content;
+    const { chunks, rawSha256, size } = chunkSourceBytes(raw);
+    const objects: unknown[] = [];
+    const seenChunks = new Set<string>();
+    let directory = args.directory_id;
+    this.withStore((store) => {
+      const rows = store.items(),
+        root = rows.find(
+          (i) => i.kind === 'directory_revision' && i.path === '/',
+        );
+      directory = directory ?? root?.item_id ?? randomUUID();
+      if (!root && !args.directory_id)
+        objects.push(
+          envelope('directory_revision', {
+            item_id: directory,
+            parents: [],
+            parent_directory: null,
+            name: '',
+          }),
+        );
+    });
+    for (const chunk of chunks) {
+      if (!seenChunks.has(chunk.id)) {
+        seenChunks.add(chunk.id);
+        objects.push(chunk.object);
+      }
+    }
+    const sourceObject = envelope('source_revision', {
+      item_id: randomUUID(),
+      parents: [],
+      directory_id: directory!,
+      name: (args.name || args.label || 'capture.txt').slice(0, 300),
+      media_type: `text/plain; charset=utf-8; circle-origin=${args.originKind}`,
+      raw_sha256: rawSha256,
+      size,
+      chunks: chunks.map((c) => c.id),
+    });
+    const sourceId = computeObjectDigest(sourceObject);
+    objects.push(sourceObject);
+    if (args.statement) {
+      const firstLine = Buffer.from(
+        raw.toString('utf8').split(/\r?\n/)[0] ?? '',
+        'utf8',
+      );
+      const quoteObject = envelope('bytes', {
+        bytes_base64: firstLine.toString('base64'),
+      });
+      const quoteId = computeObjectDigest(quoteObject);
+      if (!seenChunks.has(quoteId)) {
+        seenChunks.add(quoteId);
+        objects.push(quoteObject);
+      }
+      objects.push(
+        envelope('entry_revision', {
+          item_id: randomUUID(),
+          parents: [],
+          directory_id: directory!,
+          content: {
+            kind: 'observation',
+            statement: args.statement,
+            data: {
+              origin: { kind: args.originKind, label: args.label },
+            },
+            applicability: null,
+          },
+          grounds: [
+            {
+              source: sourceId,
+              quotation: quoteId,
+              parser: 'text@1',
+              selector: args.selector ?? 'l/1',
+            },
+          ],
+        }),
+      );
+    }
+    return this.prepare({ expected_head: args.expected_head, objects });
+  }
+  prepareMemoryPromotion(args: {
+    expected_head: string | null;
+    title: string;
+    markdown: string;
+    directory_id?: string;
+  }): PreparedKnowledgeChange {
+    return this.prepareMemory({
+      expected_head: args.expected_head,
+      directory_id: args.directory_id,
+      title: args.title,
+      markdown: args.markdown,
+      state: 'enabled',
+    });
   }
 }
