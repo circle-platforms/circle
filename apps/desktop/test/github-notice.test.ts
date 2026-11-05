@@ -48,7 +48,7 @@ test('actual bundled command stores notice provenance while identical user/model
     client: 'GitHub CLI',
     epoch: 1,
     state: 'disconnected',
-    repositories: [],
+    accessPolicy: 'github-account',
     remoteRevocation: 'not-requested',
   };
   const backend = {
@@ -292,7 +292,7 @@ test('bundled GitHub connection verbs run while a turn is busy; a same-name user
         client: 'GitHub CLI',
         epoch: 1,
         state: method === 'connect' ? 'authorizing' : 'disconnected',
-        repositories: [],
+        accessPolicy: 'github-account',
         remoteRevocation: 'not-requested',
       } satisfies GitHubConnectionState;
     },

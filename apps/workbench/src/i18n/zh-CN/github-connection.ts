@@ -1,4 +1,9 @@
 export const githubConnection: Record<string, string> = {
+  'Repository access follows your GitHub account permissions.': '仓库访问遵循你的 GitHub 账户权限。',
+  'Circle uses your connected GitHub credentials for the current workspace repository. GitHub decides which actions are allowed.': 'Circle 使用已连接的 GitHub 凭据操作当前工作区的仓库，允许的操作由 GitHub 权限决定。',
+  'Review this account’s repository permissions on GitHub before retrying. Your edits are kept.': '请检查此账户在 GitHub 上的仓库权限后重试，编辑内容已保留。',
+  'Check the GitHub account connection and the current workspace repository. Do not change any repository.': '检查 GitHub 账户连接和当前工作区仓库，不要修改任何仓库。',
+  'Repository tools appear after connecting an account. Writes require approval; merging remains your decision.': '连接账户后即可使用仓库工具。写入操作需要审批，合并仍需人工决定。',
   'loading…': '正在加载…',
   'inspect the exact commit and files before publishing':
     '检查待发布的提交和文件',

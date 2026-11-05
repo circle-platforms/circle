@@ -10,7 +10,7 @@ export interface GitHubConnectionState {
   epoch: number;
   state: 'disconnected' | 'authorizing' | 'connected' | 'error';
   account?: { login: string; id: number };
-  repositories: string[];
+  accessPolicy: 'github-account';
   storage?: 'encrypted' | 'session';
   authorizationPhase?:
     'preparing-code' | 'waiting-for-user' | 'verifying-account';
@@ -52,11 +52,7 @@ export interface GitHubPublishInput {
 export interface GitHubConnectionMethods {
   status: { params: Record<string, never>; result: GitHubConnectionState };
   connect: {
-    params: { storage: 'encrypted' | 'session'; repositories: string[] };
-    result: GitHubConnectionState;
-  };
-  configure: {
-    params: { epoch: number; repositories: string[] };
+    params: { storage: 'encrypted' | 'session'; repositories?: string[] };
     result: GitHubConnectionState;
   };
   cancel: { params: { epoch: number }; result: GitHubConnectionState };

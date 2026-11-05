@@ -22,7 +22,7 @@ const state: GitHubConnectionState = {
   epoch: 1,
   state: 'connected',
   account: { login: 'fixture', id: 1 },
-  repositories: ['fixture/repo'],
+  accessPolicy: 'github-account',
   storage: 'session',
   remoteRevocation: 'not-requested',
 };
@@ -286,7 +286,7 @@ test('the GitHub extension shows no status line and its connection tool tells th
     ...state,
     state: 'disconnected',
     account: undefined,
-    repositories: [],
+    accessPolicy: 'github-account',
   };
   let listener: ((value: GitHubConnectionState) => void) | undefined;
   const backend = {
@@ -330,9 +330,10 @@ test('the GitHub extension shows no status line and its connection tool tells th
     assert.deepEqual(host.statuses(), []);
     assert.equal((await read()).setup, undefined);
     assert(host.tools().some((tool) => tool.name === 'github_publish'));
-    current = { ...state, repositories: [] };
+    current = { ...state, account: undefined };
     listener!(current);
-    assert.match((await read()).setup!, /allow this repository/);
+    assert.match((await read()).setup!, /connect an account/);
+    assert(!host.tools().some((tool) => tool.name === 'github_publish'));
   } finally {
     await host.close();
     await rm(root, { recursive: true, force: true });
