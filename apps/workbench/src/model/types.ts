@@ -98,6 +98,8 @@ export interface ToolCall {
   diff?: DiffView;
 }
 export interface Message {
+  /** An update while the model works (`commentary`), or its answer (`final_answer`). */
+  phase?: 'commentary' | 'final_answer';
   id: string;
   parentId: string | null;
   role: 'user' | 'assistant' | 'tool' | 'notice';

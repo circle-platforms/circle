@@ -1,3 +1,4 @@
+import { groupNote } from '../model/commentary';
 import {
   cleanThinking,
   thinkingHasBody,
@@ -70,6 +71,7 @@ export function ToolGroup({
     expanded,
   );
   const summary = toolSummary(rows);
+  const note = groupNote(rows);
   const running = tools.find((tool) => tool.status === 'running');
   // A picture a tool brought back, such as the browser's screenshot, belongs to the
   // call that took it: the folded line only says how many there are.
@@ -93,6 +95,7 @@ export function ToolGroup({
         ) : runningTool || turn ? (
           <LoaderCircle size={13} className="spin" />
         ) : null}
+        {note && <span className="tool-note">{note}</span>}
         <span className="tool-summary-text">{summary.text}</span>
         {(summary.added > 0 || summary.removed > 0) && (
           <span className="diff-count">
@@ -149,6 +152,15 @@ export function ToolGroup({
                     onAgent={onAgent}
                     onFile={onFile}
                   />
+                </div>
+              ) : row.phase === 'commentary' && row.text.trim() ? (
+                <div
+                  key={row.id}
+                  data-message-id={row.id}
+                  className="group-commentary"
+                >
+                  {row.thinking && <GroupThinking row={row} />}
+                  <Markdown text={row.text} />
                 </div>
               ) : row.thinking ? (
                 <GroupThinking key={row.id} row={row} />

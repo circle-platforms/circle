@@ -5253,3 +5253,19 @@ button.sidebar-brand {
   color: var(--secondary);
   font-size: var(--ui-small);
 }
+.tool-note {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-note + .tool-summary-text {
+  flex: none;
+  color: var(--muted);
+}
+.group-commentary {
+  padding: 4px 12px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+}

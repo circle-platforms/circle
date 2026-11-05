@@ -2601,6 +2601,7 @@ export class RuntimeController {
         ...(runtimeNotice ? { runtimeNotice } : {}),
         text: raw.display ?? raw.content,
         thinking: raw.thinking,
+        ...(raw.phase ? { phase: raw.phase } : {}),
         ...(typeof raw.thinking_seconds === 'number'
           ? { thinkingSeconds: raw.thinking_seconds }
           : {}),

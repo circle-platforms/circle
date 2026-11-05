@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { groupMessages } from '../src/features/Conversation.tsx';
+import { groupNote } from '../src/model/commentary.ts';
 import type { Message } from '../src/model/types.ts';
 
 const row = (
@@ -220,5 +221,64 @@ test('text between steps, and the step with the turn usage, keep their own lines
     { kind: 'message', id: 'said' },
     { kind: 'tools', batchKey: 'a3', ids: ['t3'] },
     { kind: 'message', id: 'end' },
+  ]);
+});
+
+test("the model's update before its calls folds into their line and names it", () => {
+  const tool = (id: string, parentId: string) =>
+    row(id, 'tool', {
+      parentId,
+      tool: {
+        id,
+        name: 'grep',
+        input: { pattern: 'x' },
+        output: 'ok',
+        status: 'success',
+      },
+    });
+  const messages = [
+    row('note-1', 'assistant', {
+      phase: 'commentary',
+      text: 'Checking the **J8** logs first.',
+    }),
+    tool('t1', 'note-1'),
+    tool('t2', 'a2'),
+    row('note-2', 'assistant', {
+      phase: 'commentary',
+      text: 'The port was taken; looking at who holds it.',
+    }),
+    tool('t3', 'note-2'),
+    row('answer', 'assistant', { phase: 'final_answer', text: 'Fixed.' }),
+  ];
+  const items = groupMessages(messages);
+  assert.deepEqual(shape(items), [
+    {
+      kind: 'tools',
+      batchKey: 'note-1',
+      ids: ['note-1', 't1', 't2', 'note-2', 't3'],
+    },
+    { kind: 'message', id: 'answer' },
+  ]);
+  const group = items[0]!;
+  assert.equal(group.kind, 'tools');
+  if (group.kind === 'tools')
+    assert.equal(
+      groupNote(group.rows),
+      'The port was taken; looking at who holds it.',
+    );
+  assert.equal(groupNote([messages[0]!]), 'Checking the J8 logs first.');
+});
+
+test('an update with no call after it is read as it is', () => {
+  const messages = [
+    row('note', 'assistant', {
+      phase: 'commentary',
+      text: 'I will look at it.',
+    }),
+    row('answer', 'assistant', { text: 'Done.' }),
+  ];
+  assert.deepEqual(shape(groupMessages(messages)), [
+    { kind: 'message', id: 'note' },
+    { kind: 'message', id: 'answer' },
   ]);
 });

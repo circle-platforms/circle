@@ -31,6 +31,7 @@ The owner set these rules on 2026-11-05, after the graphite restyle of #405 was 
 - A ChatGPT plan is not marked apart from other connections and shows no cost anywhere.
 - Tool calls of steps with nothing to read between them fold into one line; a thinking-only step joins them. Opened, the line lists the calls with each step's thinking; a call opens to its command and output.
 - The thinking line shows the newest heading of the summary without markdown marks; headings alone do not open.
+- The model's short update before its calls (its `commentary` channel) names their folded line, and shows in order among them when opened. An update with no call after it stays readable as it is. A ChatGPT plan's reasoning summary is often headings alone (openai/codex#34873); this is how a step says what it does in words.
 - A turn's time, tokens and cost show once, under its last message, as the turn's total.
 - Switching the mode raises no notice; the mode button names the mode and its menu explains each one.
 - Queued messages are one panel above the message box, as Claude shows them: a folding `N messages queued` heading, one row per message with a ⋯ menu (edit, remove) and **clear all** at the foot. The rows carry no steering or follow-up label, and the word 插话 is not used. They cannot be reordered, since the runtime keeps their order.

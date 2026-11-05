@@ -702,3 +702,92 @@ function storedHistory(home: string): string {
     db.close();
   }
 }
+
+test('an update before a tool call keeps its commentary phase, and the next request sends it back', async (t) => {
+  const bodies: Record<string, unknown>[] = [];
+  const base = await server(t, (_req, res, body) => {
+    bodies.push(body);
+    stream(
+      res,
+      bodies.length === 1
+        ? [
+            {
+              type: 'response.output_item.added',
+              output_index: 0,
+              item: {
+                type: 'message',
+                id: 'msg_c',
+                role: 'assistant',
+                phase: 'commentary',
+                content: [],
+              },
+            },
+            {
+              type: 'response.output_text.delta',
+              output_index: 0,
+              item_id: 'msg_c',
+              delta: 'Checking the J8 logs first.',
+            },
+            {
+              type: 'response.output_item.done',
+              output_index: 1,
+              item: {
+                type: 'function_call',
+                id: 'fc_1',
+                call_id: 'call_1',
+                name: 'read_file',
+                arguments: '{"file_path":"j8.log"}',
+              },
+            },
+            completed(),
+          ]
+        : [
+            {
+              type: 'response.output_item.added',
+              output_index: 0,
+              item: {
+                type: 'message',
+                id: 'msg_f',
+                role: 'assistant',
+                phase: 'final_answer',
+                content: [],
+              },
+            },
+            {
+              type: 'response.output_text.delta',
+              output_index: 0,
+              item_id: 'msg_f',
+              delta: 'The port was taken.',
+            },
+            completed(),
+          ],
+    );
+  });
+  const home = scratch(t);
+  const gateway = model(base, home);
+  const user: Message = { id: 'u1', role: 'user', content: 'why did J8 fail' };
+  const first = await gateway.complete(request([user]));
+  assert.equal(first.message.phase, 'commentary');
+  assert.equal(first.message.content, 'Checking the J8 logs first.');
+  const result: Message = {
+    id: 't1',
+    role: 'tool',
+    tool_call_id: 'call_1',
+    content: 'EADDRINUSE',
+  };
+  const second = await gateway.complete(request([user, first.message, result]));
+  assert.equal(second.message.phase, 'final_answer');
+  const replayed = (bodies[1]!.input as Record<string, unknown>[]).find(
+    (item) => item.type === 'message' && item.role === 'assistant',
+  );
+  assert.equal(replayed?.phase, 'commentary');
+  // A message without a phase (another endpoint, an older history) is sent without one.
+  const plain = await gateway.complete(
+    request([user, { ...first.message, phase: undefined }, result]),
+  );
+  assert.ok(plain);
+  const unmarked = (bodies[2]!.input as Record<string, unknown>[]).find(
+    (item) => item.type === 'message' && item.role === 'assistant',
+  );
+  assert.equal('phase' in (unmarked ?? {}), false);
+});

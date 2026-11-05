@@ -123,24 +123,29 @@ export type TranscriptItem =
   | { kind: 'message'; message: Message }
   | { kind: 'tools'; id: string; batchKey: string; rows: Message[] };
 /**
- * Fold tool rows (and empty assistant placeholders) into one group per model step.
- * A tool's `parentId` (or a quiet assistant's own id) is the batch key, so consecutive
- * tool rounds do not merge into one whole-turn summary. When thinking is shown, an
- * assistant step that only reasoned stays its own row so OpenAI `reasoning_content`
- * and Anthropic thinking blocks both appear between tool batches.
+ * Fold the steps of a turn that have nothing to read between them into one tool line:
+ * tool rows, assistant steps with only thinking, and the model's short updates on its
+ * commentary channel. Opened, the line lists them in order; each call opens to its
+ * command and output. Text the person should read (an answer, an update with no tool
+ * after it) and the step that carries the turn's usage keep their own rows.
  */
 export function groupMessages(
   messages: Message[],
   options: { showThinking?: boolean } = {},
 ): TranscriptItem[] {
+  void options;
   const items: TranscriptItem[] = [];
-  // A step with nothing to read but its thinking folds in with its tools, where its
-  // thinking shows when the group is opened. The step that carries the turn's usage
-  // stays out, so the turn's one summary line shows.
   const quiet = (message: Message) =>
     message.role === 'assistant' &&
     message.at !== 'streaming' &&
     !message.text.trim() &&
+    !message.attachments?.length &&
+    !message.usage;
+  // An update while the model works goes with the calls it introduces.
+  const commentary = (message: Message) =>
+    message.role === 'assistant' &&
+    message.phase === 'commentary' &&
+    message.at !== 'streaming' &&
     !message.attachments?.length &&
     !message.usage;
   // Tools inherit the issuing assistant's id as parentId; a quiet assistant is that id.
@@ -148,10 +153,12 @@ export function groupMessages(
     message.role === 'tool' ? (message.parentId ?? message.id) : message.id;
   for (const message of messages) {
     const last = items.at(-1);
-    if ((message.role === 'tool' && message.tool) || quiet(message)) {
+    if (
+      (message.role === 'tool' && message.tool) ||
+      quiet(message) ||
+      commentary(message)
+    ) {
       const key = batchKey(message);
-      // Steps with nothing to read between them share one folded line: it opens to the
-      // list of calls, and each call opens to its command and output.
       if (last?.kind === 'tools') last.rows.push(message);
       else
         items.push({
@@ -162,7 +169,15 @@ export function groupMessages(
         });
     } else items.push({ kind: 'message', message });
   }
-  return items;
+  // Updates with no call after them are read as they are, not folded away.
+  return items.flatMap((item) => {
+    if (item.kind !== 'tools' || item.rows.some((row) => row.tool))
+      return [item];
+    const said = item.rows.filter((row) => row.text.trim());
+    return said.length
+      ? item.rows.map((message) => ({ kind: 'message' as const, message }))
+      : [item];
+  });
 }
 const transcriptKey = (item: TranscriptItem) =>
   item.kind === 'tools' ? item.id : item.message.id;
