@@ -115,6 +115,20 @@ export function chatgptIdentity(home = circleHome()): string {
     );
   return `chatgpt ${account.issuer} ${accountKey(account)}`;
 }
+/**
+ * The same name, or undefined while signed out. A connection is still built then, so a
+ * signed-out plan reports itself on its first request instead of stopping the runtime.
+ */
+export function chatgptIdentityIfSignedIn(
+  home = circleHome(),
+): string | undefined {
+  try {
+    return chatgptIdentity(home);
+  } catch (error) {
+    if (error instanceof ChatGPTSignInError) return undefined;
+    throw error;
+  }
+}
 
 export class ChatGPTSignInError extends Error {}
 /** Consent was declined, or the grant does not include ChatGPT plan use. */

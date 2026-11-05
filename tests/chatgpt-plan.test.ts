@@ -456,11 +456,22 @@ test("history's reasoning scope follows the account, not the token that rotates"
   ).message.thinking_scope;
   assert.ok(before);
   assert.equal(before, after);
-  // Signed out: the model cannot start, and says how to sign in.
+  // Signed out: the connection still starts (a runtime must not stop over it), and its
+  // first request says how to sign in, without reaching the plan route.
   await signOutOfChatGPT(home, { CIRCLE_CHATGPT_ISSUER: gateway.base });
-  assert.throws(
-    () => planModel(gateway.base, home),
-    /not signed in to ChatGPT/,
+  const signedOut = planModel(gateway.base, home);
+  const asked = gateway.seen.filter(
+    (item) => item.path === '/v1/responses',
+  ).length;
+  await assert.rejects(
+    signedOut.complete(ask([{ id: 'u', role: 'user', content: 'hi' }])),
+    (error: unknown) =>
+      error instanceof ChatGPTSignInError &&
+      /not signed in to ChatGPT/.test(error.message),
+  );
+  assert.equal(
+    gateway.seen.filter((item) => item.path === '/v1/responses').length,
+    asked,
   );
 });
 

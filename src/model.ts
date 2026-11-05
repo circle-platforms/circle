@@ -40,7 +40,7 @@ import { apiFamily, CHATGPT_PROTOCOL, speaksResponses } from './protocols.js';
 import { zstdCompressSync } from 'node:zlib';
 import {
   chatgptAccessToken,
-  chatgptIdentity,
+  chatgptIdentityIfSignedIn,
   ChatGPTSignInError,
   planFailureMessage,
 } from './chatgpt_plan.js';
@@ -197,7 +197,8 @@ export class GatewayModel implements ChatModel {
     if (this.planRoute) {
       const signedIn = home ?? circleHome();
       // The account, never its rotating token, names whose reasoning history holds.
-      identity = chatgptIdentity(signedIn);
+      // Signed out, the connection still starts: its first request says to sign in.
+      identity = chatgptIdentityIfSignedIn(signedIn) ?? 'chatgpt signed out';
       apiKey = () => chatgptAccessToken(signedIn);
     } else {
       const credentials = loadCredentials(home);
