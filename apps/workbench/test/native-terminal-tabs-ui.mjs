@@ -633,10 +633,16 @@ try {
         0,
         "a command's words are its tab, not a details line",
       );
+      // The background jobs button counts the command that runs in the
+      // background, and the terminal button carries no count.
       assert.equal(
-        await toggle.locator('.drawer-mode-badge').textContent(),
+        await page
+          .getByRole('button', { name: 'background jobs panel', exact: true })
+          .locator('.drawer-mode-badge')
+          .textContent(),
         '1',
       );
+      assert.equal(await toggle.locator('.drawer-mode-badge').count(), 0);
       assert.equal(
         await terminalMenuItemEnabled(page, 'restart terminal'),
         false,
