@@ -358,7 +358,7 @@ try {
   );
   await select(b);
   await page
-    .getByRole('button', { name: 'stop conversation', exact: true })
+    .getByRole('button', { name: 'pause conversation', exact: true })
     .click();
   await until(async () => (await session(b)).state !== 'waiting', 'B stopped');
   assert.equal((await session(a)).state, 'waiting');

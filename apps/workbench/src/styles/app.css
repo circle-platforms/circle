@@ -323,7 +323,7 @@ pre {
   height: 32px;
   display: grid;
   place-items: center;
-  border-radius: var(--radius);
+  border-radius: 7px;
   background: var(--surface);
   color: var(--secondary);
 }
@@ -595,7 +595,7 @@ pre {
   background: var(--subtle);
   border-left: 1px solid var(--border);
   cursor: col-resize;
-  transition: background var(--dur-fast);
+  transition: background 0.1s;
 }
 .resize-handle:hover,
 .resize-handle[data-separator='active'] {
@@ -722,7 +722,7 @@ pre {
   background: var(--surface);
   border: 1px solid var(--border);
   padding: 14px;
-  border-radius: var(--radius);
+  border-radius: 7px;
   font-size: var(--code-size);
   line-height: 1.7;
   overflow: auto;
@@ -817,7 +817,7 @@ pre {
 }
 .tool-call {
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 7px;
   margin: 8px 0 12px;
   overflow: hidden;
 }
@@ -1629,7 +1629,7 @@ pre {
 .code-editor.editor-draft {
   min-height: 330px;
   border: 1px solid var(--control-border);
-  border-radius: var(--radius);
+  border-radius: 7px;
 }
 
 .welcome {
@@ -1854,7 +1854,7 @@ pre {
   gap: 12px;
   padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 7px;
   background: var(--subtle);
   font-size: var(--ui-small);
   margin: 15px 0 22px;
@@ -1883,7 +1883,7 @@ pre {
 }
 .model-list {
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 7px;
   overflow: hidden;
 }
 .model-row {
@@ -1932,7 +1932,7 @@ pre {
   max-height: min(320px, 38vh);
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 7px;
   margin-top: -6px;
 }
 .model-choices button {
@@ -2095,7 +2095,7 @@ pre {
   height: 11px;
   background: var(--bg);
   border-radius: 50%;
-  transition: transform var(--dur-fast);
+  transition: transform 0.1s;
 }
 .toggle > input:checked + i {
   background: var(--accent);
@@ -2179,7 +2179,7 @@ pre {
 .source-preview {
   border: 1px solid var(--border);
   padding: 18px;
-  border-radius: var(--radius);
+  border-radius: 7px;
   background: var(--subtle);
   font-size: var(--code-size);
   line-height: 1.8;
@@ -2548,7 +2548,7 @@ pre {
   text-align: left;
   width: 100%;
   border: 1px solid var(--control-border);
-  border-radius: var(--radius);
+  border-radius: 7px;
   padding: 15px;
   margin-bottom: 10px;
 }
@@ -2569,7 +2569,7 @@ pre {
   max-height: 42vh;
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 7px;
   margin-top: 12px;
 }
 .tree-node {
@@ -2636,7 +2636,7 @@ pre {
   padding: 16px;
   background: var(--write-bg);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 7px;
   font-size: var(--code-size);
   line-height: 1.8;
   margin-bottom: 18px;
@@ -3342,7 +3342,7 @@ pre {
   stroke-width: 1.7;
   stroke-linejoin: round;
   filter: drop-shadow(0 1px 1px var(--bg));
-  transition: transform var(--dur-slow) cubic-bezier(0.2, 0.7, 0.2, 1);
+  transition: transform 420ms cubic-bezier(0.2, 0.7, 0.2, 1);
   pointer-events: none;
   z-index: 2;
 }
@@ -3363,7 +3363,7 @@ pre {
   padding: 1.5px;
   pointer-events: none;
   opacity: 0;
-  transition: opacity var(--dur-base) ease;
+  transition: opacity 0.25s ease;
   -webkit-mask:
     linear-gradient(var(--fg) 0 0) content-box,
     linear-gradient(var(--fg) 0 0);
@@ -3387,6 +3387,23 @@ pre {
   font-variant-numeric: tabular-nums;
   color: var(--muted);
 }
+/* Before the turn's first tool: Circle's ring turns beside the clock. */
+.turn-ring {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--logo-gradient);
+  -webkit-mask: radial-gradient(circle, transparent 3.5px, var(--fg) 4px);
+  mask: radial-gradient(circle, transparent 3.5px, var(--fg) 4px);
+  animation: spin 1.2s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .turn-ring {
+    animation: none;
+  }
+}
+
 /* The approval mode in the composer and its menu. */
 .mode-button {
   display: inline-flex;
@@ -3478,7 +3495,7 @@ pre {
   height: 30px;
   margin: 2px 0;
   padding: 0 10px 0 22px;
-  border-radius: var(--radius);
+  border-radius: 7px;
   font-size: var(--ui-size);
   line-height: 30px;
   box-shadow: inset 0 0 0 1px var(--accent);
@@ -3583,7 +3600,7 @@ pre {
   gap: 8px;
   padding: 7px 10px;
   border: 1px solid var(--control-border);
-  border-radius: var(--radius);
+  border-radius: 7px;
   cursor: pointer;
 }
 .request-choices label:has(input:checked) {
@@ -3606,7 +3623,7 @@ pre {
 /* A diff as the core draws it. */
 .diff-block {
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 7px;
   overflow: hidden;
   background: var(--bg);
 }
@@ -3761,7 +3778,7 @@ pre {
   gap: 10px;
   height: 32px;
   padding: 0 10px;
-  border-radius: var(--radius);
+  border-radius: 7px;
   color: var(--secondary);
   font-size: var(--ui-size);
   text-align: left;
@@ -3837,7 +3854,7 @@ pre {
   gap: 8px;
   height: 30px;
   padding: 0 10px 0 22px;
-  border-radius: var(--radius);
+  border-radius: 7px;
   color: var(--secondary);
   font-size: var(--ui-size);
 }
@@ -3881,7 +3898,7 @@ pre {
   gap: 8px;
   min-width: 0;
   padding: 6px 8px;
-  border-radius: var(--radius);
+  border-radius: 7px;
   color: var(--secondary);
   font-size: var(--ui-small);
 }
@@ -3918,7 +3935,7 @@ pre {
   gap: 2px;
 }
 .sidebar-footer .sidebar-footer-actions .icon-button {
-  border-radius: var(--radius);
+  border-radius: 7px;
   color: var(--secondary);
 }
 .sidebar-footer .sidebar-footer-actions .icon-button:hover {
@@ -3953,7 +3970,7 @@ pre {
   max-width: min(46vw, calc(100% + 8px));
   padding: 4px 8px;
   margin-left: -8px;
-  border-radius: var(--radius);
+  border-radius: 7px;
 }
 .session-title button:hover,
 .session-title button[data-state='open'] {
@@ -3996,7 +4013,7 @@ pre {
   flex-shrink: 0;
   max-width: 280px;
   padding: 3px 9px;
-  border-radius: var(--radius);
+  border-radius: 7px;
   background: var(--hover);
   color: var(--secondary);
   font-size: var(--ui-tiny);
@@ -4057,7 +4074,7 @@ pre {
   color: var(--muted);
   font-size: var(--ui-tiny);
   opacity: 0;
-  transition: opacity var(--dur-fast) ease;
+  transition: opacity 0.15s ease;
 }
 .message .message-meta,
 .message:hover .message-meta,
@@ -4253,7 +4270,7 @@ pre {
   gap: 5px;
   height: 28px;
   padding: 0 8px;
-  border-radius: var(--radius);
+  border-radius: 7px;
   background: none;
   color: var(--secondary);
   font-size: var(--ui-small);
@@ -4444,7 +4461,7 @@ pre {
   max-height: 260px;
   overflow: auto;
   padding: 10px 12px;
-  border-radius: var(--radius);
+  border-radius: 7px;
   background: var(--subtle);
   font-size: var(--ui-tiny);
   line-height: 1.6;
@@ -4808,7 +4825,7 @@ pre {
   min-width: 13px;
   height: 13px;
   padding: 0 3px;
-  border-radius: var(--radius);
+  border-radius: 7px;
   background: var(--accent);
   color: var(--bg);
   font-size: 9px;

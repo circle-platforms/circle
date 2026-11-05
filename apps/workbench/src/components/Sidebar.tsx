@@ -1,7 +1,6 @@
 import { knowledgeServerBound } from '../model/knowledge';
 import { KnowledgeSyncStatus } from '../features/KnowledgePage';
 import '../features/navigation-settings.css';
-import { CircleMark } from './CircleMark';
 import { openHome } from '../features/home-selection';
 import {
   Component,
@@ -690,9 +689,8 @@ export function Sidebar({
       }}
     >
       <header className="brand">
-        <CircleMark />
+        <span className="circle-logo" />
         <strong>circle</strong>
-        <small>{t('workbench')}</small>
       </header>
       <nav className="sidebar-primary" aria-label={t('navigation')}>
         <button className="sidebar-item" {...newSessionPress}>

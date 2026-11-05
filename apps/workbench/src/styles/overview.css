@@ -320,7 +320,7 @@ button.overview-row:hover .overview-name {
   height: 28px;
   padding: 0 11px;
   border: 1px solid var(--control-border);
-  border-radius: var(--radius);
+  border-radius: 7px;
   background: var(--surface);
   color: var(--fg);
   font: inherit;
