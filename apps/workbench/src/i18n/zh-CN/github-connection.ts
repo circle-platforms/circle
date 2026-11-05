@@ -1,6 +1,6 @@
 export const githubConnection: Record<string, string> = {
   'Repository access follows your GitHub account permissions.':
-    '仓库访问遵循你的 GitHub 账户权限。',
+    '仓库访问遵循 GitHub 账户权限。',
   'Circle uses your connected GitHub credentials for the current workspace repository. GitHub decides which actions are allowed.':
     'Circle 使用已连接的 GitHub 凭据操作当前工作区的仓库，允许的操作由 GitHub 权限决定。',
   'Review this account’s repository permissions on GitHub before retrying. Your edits are kept.':
