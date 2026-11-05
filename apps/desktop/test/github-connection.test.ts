@@ -894,10 +894,15 @@ test('connected account exposes repository tools without a local allowlist and d
     assert.equal('repositories' in state, false);
     assert.equal(state.account?.login, 'fixture');
     await runtime.harness.run('connected account');
-    assert(model.requests[0]!.tools.some((tool) => tool.name === 'github_publish'));
+    assert(
+      model.requests[0]!.tools.some((tool) => tool.name === 'github_publish'),
+    );
     f.connection.assertGrant(state.epoch, 'fixture/repo');
     f.connection.assertGrant(state.epoch, 'another/repo');
-    assert.throws(() => f.connection.assertGrant(state.epoch, '../invalid'), /permission changed/);
+    assert.throws(
+      () => f.connection.assertGrant(state.epoch, '../invalid'),
+      /permission changed/,
+    );
     const metadata = path.join(f.root, 'profile', 'github-connection.json');
     const saved = JSON.parse(await readFile(metadata, 'utf8'));
     assert.equal(saved.accessPolicy, 'github-account');
@@ -905,8 +910,13 @@ test('connected account exposes repository tools without a local allowlist and d
     const old = state.epoch;
     await backend.call('disconnect', { epoch: old });
     await runtime.harness.run('disconnected account');
-    assert(!model.requests[1]!.tools.some((tool) => tool.name === 'github_publish'));
-    assert.throws(() => f.connection.assertGrant(old, 'fixture/repo'), /permission changed/);
+    assert(
+      !model.requests[1]!.tools.some((tool) => tool.name === 'github_publish'),
+    );
+    assert.throws(
+      () => f.connection.assertGrant(old, 'fixture/repo'),
+      /permission changed/,
+    );
     assert.equal(f.helpers.length, 1);
     assert(f.calls.every((c) => c.args[0] === 'api'));
   } finally {

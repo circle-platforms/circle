@@ -2,7 +2,7 @@ import { openNativeProjectFile } from './helpers/native-project-file.mjs';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer as createHttpServer } from 'node:http';
@@ -606,7 +606,13 @@ try {
   );
   const info = await page.evaluate(() => window.circleDesktop.info());
   assert.equal(info.runtimeConnected, true);
-  assert.equal(info.dataPath, env.CIRCLE_WORKBENCH_DATA_DIR);
+  // The data path is canonicalised by the application (realpath), while the
+  // directory the test hands over may still be in its short 8.3 form on
+  // Windows, so compare the canonical forms rather than the spellings.
+  assert.equal(
+    realpathSync.native(info.dataPath),
+    realpathSync.native(env.CIRCLE_WORKBENCH_DATA_DIR),
+  );
 
   if (narrow) {
     // ---- a narrow window keeps the panel closed while Circle uses the browser: over the

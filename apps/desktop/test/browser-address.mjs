@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { realpathSync } from 'node:fs';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -60,7 +61,13 @@ try {
     .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
     .waitFor();
   const info = await page.evaluate(() => window.circleDesktop.info());
-  assert.equal(info.dataPath, env.CIRCLE_WORKBENCH_DATA_DIR);
+  // The data path is canonicalised by the application (realpath), while the
+  // directory the test hands over may still be in its short 8.3 form on
+  // Windows, so compare the canonical forms rather than the spellings.
+  assert.equal(
+    realpathSync.native(info.dataPath),
+    realpathSync.native(env.CIRCLE_WORKBENCH_DATA_DIR),
+  );
   assert.equal(info.frontendOnly, true);
   const route = async (path) => {
     await page.evaluate((path) => {
