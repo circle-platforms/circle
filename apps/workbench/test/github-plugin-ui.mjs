@@ -184,6 +184,7 @@ try {
         );
         assert.deepEqual(await overflow(), { page: 0, card: 0 });
         await detail.locator('#github-connection h2').click();
+        await page.evaluate(() => document.fonts.ready);
         await page.screenshot({
           animations: 'disabled',
           path: `${output}/${language}-${theme}-${width}-plugin-ready.png`,
@@ -268,6 +269,7 @@ try {
         );
         assert.deepEqual(await overflow(), { page: 0, card: 0 });
         await detail.locator('#github-connection h2').click();
+        await page.evaluate(() => document.fonts.ready);
         await page.screenshot({
           animations: 'disabled',
           path: `${output}/${language}-${theme}-${width}-plugin-account.png`,

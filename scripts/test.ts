@@ -11,6 +11,8 @@ import { flakyTests, reportFlakyTests } from './flaky-tests.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const tsx = join(root, 'node_modules/tsx/dist/cli.mjs');
+const metricsScript = new URL('./knowledge-test-metrics.mjs', import.meta.url)
+  .href;
 
 export function runTests({
   files,
@@ -34,6 +36,9 @@ export function runTests({
   const state = ci
     ? join(mkdtempSync(join(tmpdir(), 'circle-test-rerun-')), 'state.json')
     : undefined;
+  const ownMetricsDir = !env.CIRCLE_KNOWLEDGE_TEST_METRICS
+    ? mkdtempSync(join(tmpdir(), 'circle-knowledge-metrics-'))
+    : undefined;
   let status = 1;
   try {
     for (let attempt = 1; attempt <= (ci ? 2 : 1); attempt++) {
@@ -42,16 +47,26 @@ export function runTests({
       const result = spawnSync(
         process.execPath,
         [
+          '--import',
+          metricsScript,
           tsx,
           '--test',
-          // A test that never settles fails with its name instead of holding
-          // the job until the job's own limit.
           ...(ci ? ['--test-timeout=240000'] : []),
           ...(state ? [`--test-rerun-failures=${state}`] : []),
           ...extra,
           ...files,
         ],
-        { cwd, env, stdio },
+        {
+          cwd,
+          env: {
+            ...env,
+            CIRCLE_KNOWLEDGE_TEST_METRICS:
+              env.CIRCLE_KNOWLEDGE_TEST_METRICS ?? ownMetricsDir,
+            CIRCLE_KNOWLEDGE_TEST_STRICT_CLEANUP:
+              env.CIRCLE_KNOWLEDGE_TEST_STRICT_CLEANUP ?? '1',
+          },
+          stdio,
+        },
       );
       status = result.status ?? 1;
       if (status === 0) {
@@ -64,6 +79,7 @@ export function runTests({
     }
   } finally {
     if (state) rmSync(join(state, '..'), { recursive: true, force: true });
+    if (ownMetricsDir) rmSync(ownMetricsDir, { recursive: true, force: true });
   }
   return status;
 }

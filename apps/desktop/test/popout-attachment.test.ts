@@ -16,6 +16,16 @@ const screenshot = {
   content: PNG,
 };
 const text = 'CIRCLE_SELECTED 中文\n\n--- terminal capture source ---\n{}';
+const elementText =
+  'The user pointed at this element in the conversation’s browser.\n\n--- browser element source ---\n{}';
+const element = {
+  id: 'browser-element:0f9e8d7c-6b5a-4c3d-2e1f-0a9b8c7d6e5f',
+  name: '127.0.0.1 · element',
+  kind: 'file',
+  mime: 'text/plain',
+  size: Buffer.byteLength(elementText),
+  content: elementText,
+};
 const selection = {
   id: 'terminal-selection:0f9e8d7c-6b5a-4c3d-2e1f-0a9b8c7d6e5f',
   name: 'zsh · selection',
@@ -35,9 +45,27 @@ test('a browser window passes on a page screenshot, and a terminal window a sele
   );
 });
 
+test('a browser window passes on the element the person pointed at', () => {
+  assert.deepEqual(validPopoutAttachment('browser', element), element);
+  // Nothing else of what the window sent is passed on.
+  assert.deepEqual(
+    validPopoutAttachment('browser', { ...element, truncated: true, x: 1 }),
+    element,
+  );
+});
+
 test('each window passes on only its own kind of attachment', () => {
   assert.throws(
     () => validPopoutAttachment('browser', selection),
+    /invalid attachment/,
+  );
+  // A text file that is not one of the browser's own ids is not its element either.
+  assert.throws(
+    () =>
+      validPopoutAttachment('browser', {
+        ...element,
+        id: '0f9e8d7c-6b5a-4c3d-2e1f-0a9b8c7d6e5f',
+      }),
     /invalid attachment/,
   );
   assert.throws(
@@ -92,6 +120,24 @@ test('kind, name, type, size and content are checked', () => {
       'terminal',
     ],
     ['content that is not text', { ...selection, content: 5 }, 'terminal'],
+    ['a picture as an element', { ...element, kind: 'image' }, 'browser'],
+    ['a PNG as an element', { ...element, mime: 'image/png' }, 'browser'],
+    ['an element of no id of its kind', { ...element, id: 'x' }, 'browser'],
+    ['an empty element', { ...element, content: '', size: 0 }, 'browser'],
+    [
+      'a wrong element count',
+      { ...element, size: elementText.length },
+      'browser',
+    ],
+    [
+      'an element over 4 MB',
+      {
+        ...element,
+        content: 'x'.repeat(MAX_FILE_BYTES + 1),
+        size: MAX_FILE_BYTES + 1,
+      },
+      'browser',
+    ],
   ];
   for (const [what, value, from] of bad)
     assert.throws(

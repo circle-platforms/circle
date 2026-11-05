@@ -7,19 +7,21 @@ import {
   type SyncObject,
 } from './types.js';
 
-export interface KnowledgeGraph {
+export interface SnapshotGraph {
   snapshot: string;
   items: SyncItem[];
   objects: ReadonlyMap<string, SyncObject>;
-  /** null means that a conflicting/deleted ancestor has no selected path. */
   paths: Map<string, string | null>;
   conflicts: { item_id: string; heads: string[]; structural?: true }[];
 }
+export interface ValidateGraphOptions {
+  allowStructuralConflicts?: boolean;
+  trustedObjects?: ReadonlySet<string>;
+  cacheBytes?: number;
+}
 const MAX_GRAPH_OBJECTS = 100_000;
 const MAX_GRAPH_DEPTH = 512;
-/** Local resource bound, separate from the protocol envelope/chunk limits and a server's deployment limits. */
 export const MAX_LOCAL_SOURCE_BYTES = 32 * 1024 * 1024;
-/** Keep large source chunks and old revisions out of the resident graph; reads still verify their identities. */
 class GraphObjects implements ReadonlyMap<string, SyncObject> {
   private readonly ids = new Set<string>();
   private readonly cache = new Map<
@@ -27,7 +29,10 @@ class GraphObjects implements ReadonlyMap<string, SyncObject> {
     { object: SyncObject; bytes: number }
   >();
   private bytes = 0;
-  constructor(private readonly read: (id: string) => SyncObject) {}
+  constructor(
+    private readonly read: (id: string) => SyncObject,
+    private readonly maxCacheBytes = 8 * 1024 * 1024,
+  ) {}
   get size(): number {
     return this.ids.size;
   }
@@ -40,12 +45,12 @@ class GraphObjects implements ReadonlyMap<string, SyncObject> {
   }
   private remember(id: string, object: SyncObject): void {
     const bytes = Buffer.byteLength(JSON.stringify(object));
-    while (this.bytes + bytes > 8 * 1024 * 1024 && this.cache.size) {
+    while (this.bytes + bytes > this.maxCacheBytes && this.cache.size) {
       const oldest = this.cache.keys().next().value!;
       this.bytes -= this.cache.get(oldest)!.bytes;
       this.cache.delete(oldest);
     }
-    if (bytes <= 8 * 1024 * 1024) {
+    if (bytes <= this.maxCacheBytes) {
       this.cache.set(id, { object, bytes });
       this.bytes += bytes;
     }
@@ -170,9 +175,17 @@ function pathName(name: string): boolean {
 export function validateGraph(
   snapshotId: string,
   read: (id: string) => SyncObject,
-  allowStructuralConflicts = false,
-): KnowledgeGraph {
-  const objects = new GraphObjects(read),
+  options: boolean | ValidateGraphOptions = false,
+): SnapshotGraph {
+  const allowStructuralConflicts =
+    typeof options === 'boolean'
+      ? options
+      : (options.allowStructuralConflicts ?? false);
+  const trustedObjects =
+    typeof options === 'boolean' ? undefined : options.trustedObjects;
+  const cacheBytes =
+    typeof options === 'boolean' ? undefined : options.cacheBytes;
+  const objects = new GraphObjects(read, cacheBytes),
     active = new Set<string>();
   const visit = (id: string, depth: number): void => {
     if (active.has(id)) failure('object cycle');
@@ -189,26 +202,36 @@ export function validateGraph(
       failure('local source byte limit');
     for (const child of references(object)) visit(child, depth + 1);
     if (object.kind === 'source_revision') {
-      const hash = createHash('sha256');
-      let size = 0;
-      for (const chunk of object.body.chunks) {
-        visit(chunk, depth + 1);
-        const bytes = requireKind(
-          objects,
-          chunk,
-          'bytes',
-        ) as SyncObject<'bytes'>;
-        const raw = decodeBase64(bytes.body.bytes_base64);
-        size += raw.length;
-        if (size > object.body.size || size > MAX_LOCAL_SOURCE_BYTES)
-          failure('raw source size');
-        hash.update(raw);
-      }
       if (
-        size !== object.body.size ||
-        hash.digest('hex') !== object.body.raw_sha256
-      )
-        failure('raw source size or hash');
+        trustedObjects?.has(id) &&
+        object.body.chunks.every((chunk) => trustedObjects.has(chunk))
+      ) {
+        for (const chunk of object.body.chunks) {
+          visit(chunk, depth + 1);
+          requireKind(objects, chunk, 'bytes');
+        }
+      } else {
+        const hash = createHash('sha256');
+        let size = 0;
+        for (const chunk of object.body.chunks) {
+          visit(chunk, depth + 1);
+          const bytes = requireKind(
+            objects,
+            chunk,
+            'bytes',
+          ) as SyncObject<'bytes'>;
+          const raw = decodeBase64(bytes.body.bytes_base64);
+          size += raw.length;
+          if (size > object.body.size || size > MAX_LOCAL_SOURCE_BYTES)
+            failure('raw source size');
+          hash.update(raw);
+        }
+        if (
+          size !== object.body.size ||
+          hash.digest('hex') !== object.body.raw_sha256
+        )
+          failure('raw source size or hash');
+      }
     }
     active.delete(id);
   };
@@ -218,7 +241,6 @@ export function validateGraph(
     snapshotId,
     'snapshot',
   ) as SyncObject<'snapshot'>;
-  // Validate reachable historical revisions as well as current heads.
   for (const object of objects.values()) {
     for (const id of objectParents(object)) {
       const parent = objects.get(id)!;
@@ -265,7 +287,6 @@ export function validateGraph(
       )
         failure('directory parent or name');
     }
-  // An empty server space is the canonical snapshot with pages: []; pack-only inventories need no directory.
   if (
     (directories.size > 0 && roots.size !== 1) ||
     (directories.size === 0 &&
@@ -280,7 +301,6 @@ export function validateGraph(
     const item = directories.get(id);
     if (!item) return failure('directory missing');
     resolving.add(id);
-    // Inspect every branch for cycles, even when no conflict head is selected.
     let result: string | null = null;
     for (const head of item.heads) {
       const object = objects.get(head)!;
@@ -341,7 +361,6 @@ export function validateGraph(
       locations.set(path, [...(locations.get(path) ?? []), id]);
   for (const ids of locations.values())
     if (ids.length > 1) for (const id of ids) conflicted.add(id);
-  // Deleting an ancestor never deletes a concurrent child. Suppress the dependent projection.
   for (let n = 0; n < items.length; n++) {
     let changed = false;
     for (const item of items)
@@ -399,10 +418,54 @@ export function hasAncestor(
   }
   return false;
 }
-/** Omission is never a deletion; every previous head must survive or be an ancestor. */
+
+export function findLowestCommonAncestor(
+  objects: ReadonlyMap<string, SyncObject>,
+  heads: readonly string[],
+): string | null {
+  if (heads.length === 0) return null;
+  if (heads.length === 1) return heads[0]!;
+  const ancestorSets = heads.map((head) => {
+    const seen = new Set<string>(),
+      queue = [head];
+    while (queue.length) {
+      const id = queue.pop()!;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const object = objects.get(id);
+      if (object) queue.push(...objectParents(object));
+    }
+    return seen;
+  });
+  const common = [...ancestorSets[0]!].filter((id) =>
+    ancestorSets.every((set) => set.has(id)),
+  );
+  const maxima = common.filter(
+    (id) =>
+      !common.some((other) => other !== id && hasAncestor(objects, other, id)),
+  );
+  return maxima.length === 1 ? maxima[0]! : null;
+}
+
+export function resolveEffectiveHead(
+  graph: SnapshotGraph,
+  item: SyncItem,
+): { head: string | null; conflicted: boolean } {
+  if (
+    item.heads.length === 1 &&
+    !graph.conflicts.some((c) => c.item_id === item.item_id)
+  )
+    return { head: item.heads[0]!, conflicted: false };
+  const lca = findLowestCommonAncestor(graph.objects, item.heads);
+  return {
+    head: lca && graph.objects.get(lca)?.kind !== 'deletion' ? lca : null,
+    conflicted: true,
+  };
+}
+
 export function assertSuccessor(
-  previous: KnowledgeGraph,
-  next: KnowledgeGraph,
+  previous: SnapshotGraph,
+  next: SnapshotGraph,
 ): void {
   const candidates = new Map(next.items.map((item) => [itemKey(item), item]));
   for (const item of previous.items) {

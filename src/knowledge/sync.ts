@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { KnowledgeStore, KnowledgeVersionConflict } from './store.js';
 import { mergeSnapshots } from './merge.js';
-import { decodeSyncObject } from './canonical.js';
+import { decodeSyncObject, formatJcs } from './canonical.js';
 import {
   decodeBase64,
   SYNC_LIMITS,
@@ -10,7 +10,6 @@ import {
 } from './protocol.js';
 import {
   operationDigest,
-  requestJson,
   SyncHttpError,
   type PurgeConfirmation,
   type SyncTransport,
@@ -36,6 +35,7 @@ interface Pending {
 interface Journal {
   binding: string;
   epoch: string;
+  clientEpoch?: string;
   base: string | null;
   observedMode?: 'hub' | 'local';
   observedStatus?: string;
@@ -267,6 +267,15 @@ export class KnowledgeSync {
     return this.exclusive(() => this.cycle(force));
   }
 
+  private hasCompleteSnapshot(snapshot: string): boolean {
+    if (!this.store.has(snapshot)) return false;
+    try {
+      this.store.graph(snapshot);
+      return true;
+    } catch {
+      return false;
+    }
+  }
   private async observe(j: Journal, state: SyncState): Promise<boolean> {
     j.observedMode = state.mode;
     j.observedStatus = state.status;
@@ -353,15 +362,30 @@ export class KnowledgeSync {
         state.limits.batch_objects > SYNC_LIMITS.batchObjects
       )
         throw new RangeError('unsupported sync limits');
-      // The request is durable before dispatch. Recover its receipt before creating any new operation.
       if (j.pending) await this.recover(j);
-      await this.request('client', {
-        body: {
-          client_id: this.store.clientId,
-          name: this.options.name ?? 'Circle',
-        },
-        schema: 'personal-sync-client@1',
-      });
+      else if (
+        !j.session &&
+        j.base !== null &&
+        state.snapshot === j.base &&
+        state.state_version === j.state &&
+        this.store.head === j.base &&
+        j.condition === 'synced'
+      ) {
+        j.nextAt = this.now() + 15000;
+        j.failures = 0;
+        this.save(j);
+        return;
+      }
+      if (j.clientEpoch !== j.epoch) {
+        await this.request('client', {
+          body: {
+            client_id: this.store.clientId,
+            name: this.options.name ?? 'Circle',
+          },
+          schema: 'personal-sync-client@1',
+        });
+        j.clientEpoch = j.epoch;
+      }
       if (j.session && Date.parse(j.session.expires_at) <= this.now()) {
         delete j.session;
         delete j.inventory;
@@ -378,10 +402,13 @@ export class KnowledgeSync {
           schema: 'personal-sync-session-reply@1',
         });
         if (!(await this.observe(j, session.state))) return;
+        const hasRemote =
+          session.state.snapshot === null ||
+          this.hasCompleteSnapshot(session.state.snapshot);
         j.session = session;
         j.inventory = {
-          cursor: session.inventory_cursor,
-          done: session.state.snapshot === null,
+          cursor: hasRemote ? null : session.inventory_cursor,
+          done: hasRemote,
           objects: [],
         };
         this.save(j);
@@ -566,9 +593,10 @@ export class KnowledgeSync {
       });
       if (transfer.missing.length || transfer.objects.length !== batch.length)
         throw new TypeError('sync download incomplete');
+      const expected = new Map(batch.map((d) => [d.id, d]));
       const admitted = new Map<string, ReturnType<typeof decodeSyncObject>>();
       for (const o of transfer.objects) {
-        const d = batch.find((d) => d.id === o.id);
+        const d = expected.get(o.id);
         if (!d || admitted.has(o.id))
           throw new TypeError('unexpected sync object');
         const bytes = decodeBase64(o.bytes_base64);
@@ -584,7 +612,14 @@ export class KnowledgeSync {
   }
   private async upload(j: Journal, snapshot: string): Promise<void> {
     const limits = j.session!.state.limits,
-      ids = [...this.store.graph(snapshot).objects.keys()].sort();
+      remote = j.session!.state.snapshot,
+      remoteObjects =
+        remote && this.hasCompleteSnapshot(remote)
+          ? this.store.graph(remote).objects
+          : null,
+      ids = [...this.store.graph(snapshot).objects.keys()]
+        .filter((id) => !remoteObjects?.has(id))
+        .sort();
     for (let i = 0; i < ids.length; i += limits.batch_objects) {
       const offered = ids.slice(i, i + limits.batch_objects);
       const reply = await this.request<{ missing: string[] }>('missing', {
@@ -757,8 +792,8 @@ export class KnowledgeSync {
           schema: 'personal-sync-result@1',
         });
         if (
-          requestJson(page.receipt) !== requestJson(receipt) ||
-          requestJson(page.state) !== requestJson(result.state)
+          formatJcs(page.receipt) !== formatJcs(receipt) ||
+          formatJcs(page.state) !== formatJcs(result.state)
         )
           throw new TypeError('sync result changed');
         resultBytes += Buffer.byteLength(JSON.stringify(page));
@@ -796,8 +831,8 @@ export class KnowledgeSync {
         j.failures = 0;
         delete j.refusal;
         j.condition =
-          this.store.graph(snapshot).conflicts.length ||
-          resultPages.some((p) => p.conflicts.length)
+          resultPages.some((p) => p.conflicts.length) ||
+          this.store.graph(snapshot).conflicts.length
             ? 'conflicted'
             : snapshot === result.state.snapshot
               ? 'synced'

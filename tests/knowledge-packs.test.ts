@@ -7,6 +7,7 @@ import {
   existsSync,
   symlinkSync,
   readdirSync,
+  renameSync,
   rmSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -170,10 +171,17 @@ test('missing code and changed hashes never reach person confirmation or install
 });
 test('selected pack symlinks are refused without following them or changing existing skills', async (t) => {
   const p = pack(t);
-  rmSync(join(p.directory, 'SKILL.md'));
   const outside = join(p.root, 'outside');
   writeFileSync(outside, 'Use only synthetic inputs.');
-  symlinkSync(outside, join(p.directory, 'SKILL.md'));
+  try {
+    rmSync(join(p.directory, 'SKILL.md'));
+    symlinkSync(outside, join(p.directory, 'SKILL.md'));
+  } catch (error: any) {
+    if (process.platform !== 'win32' || error?.code !== 'EPERM') throw error;
+    const outsideDir = join(p.root, 'outside-dir');
+    renameSync(p.directory, outsideDir);
+    symlinkSync(outsideDir, p.directory, 'junction');
+  }
   await assert.rejects(installPersonalPack(p), /symlink/);
   assert.equal(readFileSync(outside, 'utf8'), 'Use only synthetic inputs.');
   assert.deepEqual(installedPersonalPacks(p.home), []);

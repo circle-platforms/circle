@@ -4,12 +4,14 @@ import { join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import { ensureHome } from './paths.js';
 
-// A lease outlives a turn: queued work, approvals and background jobs still own history.
-// proper-lockfile uses atomic mkdir and a heartbeat; no PID-based takeover is involved.
+const SLEEP_BUFFER = new Int32Array(new SharedArrayBuffer(4));
+export function sleepSync(ms: number): void {
+  Atomics.wait(SLEEP_BUFFER, 0, 0, ms);
+}
+
 export const SESSION_LEASE_STALE_MS = 30000;
 const STALE = SESSION_LEASE_STALE_MS;
 const UPDATE = 5000;
-/** What to say when another runtime holds the session. Names the copy command. */
 export function occupiedSessionMessage(sessionId: string): string {
   return `this session is open in another terminal. Close it there to continue, or copy it with circle --fork ${sessionId}`;
 }

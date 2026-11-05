@@ -1,13 +1,3 @@
-// Client-side installation and execution of the tools/ files a connected MCP server publishes
-// under its /local-tools contract: the manifest is the canonical pack.json (its SHA-256 is the
-// pack digest), every file is fetched and verified by size and SHA-256, and a failure leaves
-// nothing behind. Execution expands %NAME% placeholders from the configured variables and the
-// saved secrets, runs the script with the current Node binary, and redacts every secret value
-// from the output.
-//
-// The serving side stays the authority: what runs here is a client preview. A result becomes
-// evidence only when that side recomputes it.
-import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import {
   lstat,
@@ -19,13 +9,15 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { isRecord, type CircleSettings } from './settings.js';
 import { serverBaseUrl } from './server_resolution.js';
+import { expandVariables, redactSecrets } from './secrets.js';
+import { assertNoCaseCollisions, isSafePackPath } from './pack_files.js';
+import { sha256 } from './knowledge/canonical.js';
 
 export { serverBaseUrl };
 
-/** Limits of the local-tools contract, so the client refuses what the serving side refuses. */
 export const LIMITS = {
   maxFiles: 2000,
   maxFileBytes: 16 * 1024 * 1024,
@@ -34,7 +26,6 @@ export const LIMITS = {
   maxDepth: 16,
 } as const;
 
-/** The universal Agent Skills root: Circle and DeepSeek Harness both read it. */
 export const SKILLS_ROOT = join(homedir(), '.agents', 'skills');
 
 export interface LocalToolsFile {
@@ -61,9 +52,6 @@ export class LocalSkillsError extends Error {
   }
 }
 
-const sha256Hex = (bytes: Uint8Array): string =>
-  createHash('sha256').update(bytes).digest('hex');
-
 export function parsePackRef(
   ref: string,
 ): { id: string; version: string } | null {
@@ -76,11 +64,6 @@ export function parsePackRef(
   return { id, version };
 }
 
-/**
- * The URL and the bearer token of the MCP server entry named `name`: its `url`, and the token
- * its Authorization header gives, either literally or as a `${secret:NAME}` template filled from
- * the saved secrets. The caller passes the saved secrets so nothing here reads the vault.
- */
 export function resolveServer(
   settings: CircleSettings,
   secrets: Record<string, string>,
@@ -177,22 +160,6 @@ async function fetchBytes(
   }
 }
 
-/** A manifest path that is safe to write under the pack directory. */
-function safePath(path: string): boolean {
-  if (
-    path.length === 0 ||
-    isAbsolute(path) ||
-    path.includes('\\') ||
-    path.includes('\u0000')
-  )
-    return false;
-  const parts = path.split('/');
-  if (parts.some((part) => part === '' || part === '.' || part === '..'))
-    return false;
-  if (parts.length > LIMITS.maxDepth) return false;
-  return true;
-}
-
 interface Manifest {
   schema: string;
   id: string;
@@ -231,7 +198,7 @@ function parseManifest(bytes: Buffer): Manifest {
         '确认发布内容后再试',
       );
     }
-    if (!safePath(entry.path))
+    if (!isSafePackPath(entry.path, LIMITS.maxDepth))
       throw new LocalSkillsError(
         `清单里的路径不安全：${entry.path.slice(0, 120)}`,
         '要求包作者改正后重发',
@@ -250,6 +217,14 @@ function parseManifest(bytes: Buffer): Manifest {
     throw new LocalSkillsError('这个版本没有文件', '确认发布内容后再试');
   if (files.length > LIMITS.maxFiles)
     throw new LocalSkillsError('文件数超过上限', '要求包作者拆分后重发');
+  try {
+    assertNoCaseCollisions(files.map((f) => f.path));
+  } catch {
+    throw new LocalSkillsError(
+      '清单里的路径大小写冲突',
+      '要求包作者改正后重发',
+    );
+  }
   return {
     schema: 'pack@1',
     id: manifest.id,
@@ -276,24 +251,16 @@ async function readInstalled(
     return {
       pack: manifest.id,
       version: manifest.version,
-      digest: sha256Hex(bytes),
+      digest: sha256(bytes),
     };
   } catch {
     return null;
   }
 }
 
-/**
- * Install one pack version into `<root>/<pack>/`. The whole pack tree is written (tools/,
- * functions/, tables/, SKILL.md, pack.json) because tools import their package files.
- * An existing installation of the same digest is reported as installed; a different one
- * is refused unless `replace` is true, in which case the old tree is moved under the
- * backup directory first.
- */
 export async function installPack(options: {
   url: string;
   token: string;
-  /** The local-tools base the server declared (discovery `local_tools.base_url`). */
   toolsBase?: string;
   ref: string;
   digest?: string;
@@ -331,7 +298,7 @@ export async function installPack(options: {
     LIMITS.maxManifestBytes,
     timeoutMs,
   );
-  const computed = sha256Hex(manifestBytes);
+  const computed = sha256(manifestBytes);
   if (digest !== undefined && digest !== computed) {
     throw new LocalSkillsError(
       `清单的包号是 ${computed}，与预期的 ${digest} 不符`,
@@ -380,7 +347,7 @@ export async function installPack(options: {
         LIMITS.maxFileBytes,
         timeoutMs,
       );
-      if (bytes.length !== file.size || sha256Hex(bytes) !== file.sha256) {
+      if (bytes.length !== file.size || sha256(bytes) !== file.sha256) {
         throw new LocalSkillsError(
           `文件 ${file.path} 的大小或摘要不符`,
           '重新取这个版本后再试；连续出现时请管理员核对发布内容',
@@ -432,7 +399,6 @@ async function mkdtempIn(root: string): Promise<string> {
   return directory;
 }
 
-/** The installed packs under a skills root, one entry per pack directory with a pack.json. */
 export async function listInstalled(
   root: string = SKILLS_ROOT,
 ): Promise<
@@ -459,11 +425,6 @@ export async function listInstalled(
   return found;
 }
 
-/**
- * Verify one installed pack against the digest it was installed from: pack.json hashes to
- * the digest, every manifest file exists with its size and SHA-256, and no extra files
- * sit beside them. Symlinks are refused.
- */
 export async function verifyInstalled(
   directory: string,
   digest?: string,
@@ -477,7 +438,7 @@ export async function verifyInstalled(
   if (!stat.isDirectory() || stat.isSymbolicLink())
     throw new LocalSkillsError('目标不是普通目录', '删掉它后重新安装');
   const bytes = await readFile(join(directory, 'pack.json'));
-  const computed = sha256Hex(bytes);
+  const computed = sha256(bytes);
   if (digest !== undefined && digest !== computed) {
     throw new LocalSkillsError(
       `pack.json 的包号是 ${computed}，与预期的 ${digest} 不符`,
@@ -495,7 +456,7 @@ export async function verifyInstalled(
         '重新安装这个包',
       );
     const content = await readFile(path);
-    if (content.length !== file.size || sha256Hex(content) !== file.sha256)
+    if (content.length !== file.size || sha256(content) !== file.sha256)
       throw new LocalSkillsError(
         `文件的大小或摘要不符：${file.path}`,
         '重新安装这个包',
@@ -526,31 +487,6 @@ export async function verifyInstalled(
   };
 }
 
-function expand(text: string, values: Record<string, string>): string {
-  const names = Object.keys(values)
-    .filter((name) => values[name]!.length > 0)
-    .sort((a, b) => b.length - a.length);
-  if (names.length === 0) return text;
-  const pattern = new RegExp(`%(${names.join('|')})%`, 'g');
-  return text.replace(pattern, (_whole, name: string) => values[name]!);
-}
-
-function redact(text: string, values: Record<string, string>): string {
-  let shown = text;
-  for (const [name, value] of Object.entries(values).sort(
-    ([, a], [, b]) => b.length - a.length,
-  )) {
-    if (value.length > 0) shown = shown.split(value).join(`%${name}%`);
-  }
-  return shown;
-}
-
-/**
- * Run one tool script of an installed pack: `node <pack>/tools/<script> ...args`, with
- * %NAME% placeholders expanded from the configured `variables` and the saved `secrets`. The
- * variables are also in the child's environment, the secrets are not. The output has every
- * secret value written back as its %NAME%.
- */
 export async function runTool(options: {
   root?: string;
   pack: string;
@@ -583,7 +519,7 @@ export async function runTool(options: {
       `包名不合法：${pack.slice(0, 64)}`,
       '从服务器回答里的包引用照抄',
     );
-  if (!safePath(script) || !script.startsWith('tools/'))
+  if (!isSafePackPath(script, LIMITS.maxDepth) || !script.startsWith('tools/'))
     throw new LocalSkillsError(
       `脚本必须是 tools/ 下的相对路径：${script.slice(0, 120)}`,
       '从 SKILL.md 照抄脚本路径',
@@ -603,8 +539,8 @@ export async function runTool(options: {
     );
 
   const values = { ...variables, ...secrets };
-  const expandedArgs = args.map((arg) => expand(arg, values));
-  const expandedStdin = expand(stdin, values);
+  const expandedArgs = expandVariables(args, values);
+  const expandedStdin = expandVariables(stdin, values);
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? '',
     HOME: process.env.HOME ?? '',
@@ -659,8 +595,8 @@ export async function runTool(options: {
       clearTimeout(timer);
       resolvePromise({
         exit_code: code,
-        stdout: redact(stdout, secrets),
-        stderr: redact(stderr, secrets),
+        stdout: redactSecrets(stdout, secrets),
+        stderr: redactSecrets(stderr, secrets),
         truncated,
       });
     });

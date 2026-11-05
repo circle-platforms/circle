@@ -219,4 +219,10 @@ export const knowledge = {
   workflows: '工作流',
   '{n} item': '{n} 条内容',
   '{n} items': '{n} 条内容',
+  'moved to line {n}': '已移至第 {n} 行',
+  'file changed in workspace': '工作区文件已更改',
+  'showing last synced copy': '正在显示上次已同步副本',
+  'captured from command': '采集自命令运行',
+  'promote to structured memory…': '晋升为结构化记忆…',
+  'confirm source upload in console': '在控制台确认上传来源',
 };

@@ -25,7 +25,7 @@ import {
 } from '../src/settings.js';
 import { keptFor } from '../src/mcp_auth.js';
 import { KnowledgeService } from '../src/knowledge/service.js';
-import { sha256, syncObjectId } from '../src/knowledge/canonical.js';
+import { computeObjectDigest, sha256 } from '../src/knowledge/canonical.js';
 import {
   prepareKnowledgeShare,
   syncMapping,
@@ -311,7 +311,7 @@ try {
   const add = (kind: string, body: unknown) => {
     const object = { schema: 'personal-sync-object@1', kind, body };
     objects.push(object);
-    return syncObjectId(object);
+    return computeObjectDigest(object);
   };
   const raw = Buffer.from('SYNTHETIC_VERIFIABLE_KNOWLEDGE\n');
   const bytes = add('bytes', { bytes_base64: raw.toString('base64') });

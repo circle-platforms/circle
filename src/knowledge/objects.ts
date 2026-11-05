@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { decodeSyncObject } from './canonical.js';
 import { isObjectId, SYNC_LIMITS } from './protocol.js';
 import type { SyncObject } from './types.js';
+import { sleepSync } from '../session_lock.js';
 
 export function privateDirectory(path: string): void {
   mkdirSync(path, { recursive: true, mode: 0o700 });
@@ -35,14 +36,11 @@ function syncDirectory(path: string): void {
     closeSync(fd);
   }
 }
-/** Retry only filesystem sharing violations; no protocol operation or failed test is retried here. */
 export function renameObject(
   from: string,
   to: string,
   rename: (from: string, to: string) => void = renameSync,
-  pause: (ms: number) => void = (ms) => {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-  },
+  pause: (ms: number) => void = sleepSync,
 ): void {
   for (let attempt = 0; ; attempt++) {
     try {

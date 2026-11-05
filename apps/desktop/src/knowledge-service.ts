@@ -16,7 +16,10 @@ import type { AgentRuntime } from '../../../src/runtime.js';
 import { KnowledgeService } from '../../../src/knowledge/service.js';
 import { KnowledgeVersionConflict } from '../../../src/knowledge/store.js';
 import { decodeBase64, isObjectId } from '../../../src/knowledge/protocol.js';
-import { syncObjectId, sha256 } from '../../../src/knowledge/canonical.js';
+import {
+  computeObjectDigest,
+  sha256,
+} from '../../../src/knowledge/canonical.js';
 import { requireClean } from '../../../src/knowledge/verification.js';
 import {
   installPersonalPack,
@@ -108,7 +111,6 @@ const bounded = (value: string, maximum = 24000) => {
     truncated: end < bytes.length,
   };
 };
-/** A host-owned capability table. DTOs contain no disk paths, object hashes, credentials or HTTP dispatcher. */
 export class DesktopKnowledge {
   constructor(private readonly protectedRoots: () => string[] = () => []) {}
   private nativePath(runtime: AgentRuntime, path: string) {
@@ -1425,7 +1427,7 @@ export class DesktopKnowledge {
                   : 'text/plain',
             raw_sha256: sha256(bytes),
             size: bytes.length,
-            chunks: [syncObjectId(chunk)],
+            chunks: [computeObjectDigest(chunk)],
           },
         });
         const prepared = service.prepare({ expected_head: data.head, objects });
