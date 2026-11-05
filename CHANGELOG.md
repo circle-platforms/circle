@@ -4,17 +4,32 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+## 1.15.0 - 2026-11-05
+
 ### Added
 
 - **Local knowledge, personal memory and workflows.** Browse and verify local sources, confirm edits, resolve conflicts and explicitly install matching workflow files. Background sync reuses a selected MCP authorization, preserves offline revisions and conflicts, and checks the impact before removing the server's copies. Any server that implements knowledge-sync v1 can be used: Circle reads its sync base, local tools and team tools from its discovery document. Session preferences load team then personal memory before existing files; knowledge and memory sharing require an exact accepted mapping and confirmation. Every refusal the server explains keeps its original reason and remedy. Without a bound sync server, knowledge and memory show personal content only, with a direct sync-settings entry. Existing memory files and skills are unchanged.
 
 - **The welcome screen previews recent sessions.** Under each recent session, `last:` shows the last visible message of its current branch, so sessions that open alike can be told apart.
 - **A browser screenshot can be saved without being read.** `browser_screenshot` with `save_only` saves the image and returns its path, for a model that does not read images or a step that only keeps the picture.
+- **Use a ChatGPT plan in the terminal and the desktop.** Sign in with a ChatGPT plan and Circle connects through the OpenAI Responses API, offered as a connection kind on the first-run setup card. A plan connection shows like any other connection and shows no cost, in the terminal and the desktop. The composer no longer carries a usage line, a working label or a ring while the model works. (#429, #433)
+- **Point at a browser element from the desktop browser panel.** The browser panel's ⋮ menu offers picking an element: hovering rings and names it, and clicking it puts the element in the draft as text, with its page reference, role, name, tag, text, state and position. Elements in cross-origin frames are refused.
+- **Knowledge sync status shows in the terminal.** Sync status, notices and named approval cards appear in the terminal as they happen.
+- **Background commands have a mode of their own.** **background jobs** sits between subagents and terminal in the drawer, carries the count of running jobs on its button and has its own overview card. Running jobs list first, then finished ones under a folding heading, each named by the model's short description or else its command, with its time and, while it runs, a stop button; a card opens to `$ command` and the end of its output. The terminal button no longer carries the count.
+- **Each data folder has one desktop instance.** Opening Circle again restores that instance's window, including when the second launch comes from another build; to switch builds, quit the running application first. Distinct data folders can run side by side, and relative paths and symbolic links to the same folder share one instance.
 
 ### Changed
 
 - **The desktop uses the shared graphite palette.** Dark and light surfaces, text, controls and status colours now follow the Circle design tokens; terminal defaults stay unchanged.
 - **The Chinese desktop uses consistent wording.** Request and handoff states, progress labels and interface terms follow the shared design rules, including the preview connection hint; English interface keys and original content are preserved.
+- **Tool steps fold into one line.** Steps that follow each other with nothing to read between them share one folded line, such as `searched 4 times, ran 1 command`, and a step whose only content is its thinking joins them; opening the line lists the calls with each step's thinking. The thinking line shows the newest heading of the model's summary without its markdown marks, and a summary of headings alone, as a ChatGPT plan sends it, has nothing more to open. A finished turn shows its time, tokens and cost once, under its last message.
+- **The model's running updates lead the folded tool line.** When the model says what it is about to do before its calls, as GPT does on its commentary channel, those words lead the line. An assistant message keeps the channel it came on — a short update while the model works, or its answer — and Circle sends it back with that channel, since the model reads the channel on the next request.
+- **Running sessions keep their place.** Sessions are ordered by when you last wrote to them; replies, tool calls and notices do not move a row, so conversations that run at the same time keep their places.
+- **Desktop credentials live in an owner-only file.** The desktop no longer keeps credentials in the system keychain. They are stored in `desktop.secrets.json` in Circle's data folder, a file only the owner can read, as plain values rather than encrypted. Credentials saved before this version move over automatically the first time the new version runs; one the keychain will not decrypt is marked for re-entry instead.
+- **Approved commands run with full user rights.** An approved command runs with your full user rights and network access, as the security notes now say. For unattended runs, run Circle itself inside a container or a virtual machine.
+- **The GitHub status is hidden in the sidebar.** The sidebar no longer shows GitHub status; the model is told where GitHub is set up instead.
+- **A connected GitHub account reaches its repositories.** Repository access follows the connected account's credentials, without a local repository list: the per-repository list and its configuration are gone, and the model is told the account and the current workspace repository instead. A repository named with a dot segment is refused.
+- **Knowledge sync skips work it has already done.** A sync that finds nothing changed ends after one state request instead of opening a session, the client registers only when the server's epoch changed, and an inventory and download the local store already holds complete are not walked again. An upload sends only the objects the server's snapshot lacks, and commits skip re-checking objects already stored while the search projection updates only what changed. The local store's migrations are one schema now.
 
 ### Fixed
 
@@ -23,13 +38,17 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 - **A new desktop session opens when connecting takes long.** Waiting for the first message to be stored no longer fails the session after eight seconds.
 - **An MCP server sees the real client.** Circle tells it its own version and platform.
 - **The desktop sends a failed model request again.** In the desktop a request that got no answer within `CIRCLE_LLM_TIMEOUT`, lost its connection or met an error inside the stream ended the turn on the first try, with `Request timed out.` for a timeout, because bundling renamed the SDKs' error classes. It now retries as [Models](docs/models.md) describes.
-
 - **Desktop overlays keep their position and keyboard focus through animations.** Dialogs and notices stay centred, search can reopen while its previous dialog closes, and a terminal menu cannot steal input from a newly opened shell.
 - **Closing a desktop panel menu keeps the panel open.** Escape dismisses the menu without also closing its drawer or leaving full view.
 - **Long model identifiers stay usable in the desktop.** The model menu fits the window and reveals the complete identifier on hover.
 - **Moving between desktop composer menus preserves focus.** A menu finishing its exit animation cannot dismiss a menu or dialog opened after it.
 - **Desktop command answers stay where they were asked.** A command that answers with one line (`unknown command /name`, `/undo`, `/share`) said it only in a toast that passes in four seconds, and an answer that arrived after the window had moved to another conversation was dropped whole. The line now also stays in the conversation that asked for it, in its place in the transcript, and the toast is still said while that conversation is on screen. (#302)
-
+- **The desktop runtime restarts when its thread pool stalls.** When the desktop runtime's thread pool stops answering, the runtime restarts instead of hanging.
+- **Terminals stop leaking descriptors on macOS.** The desktop builds node-pty from patched source on macOS, so terminals no longer leak file descriptors.
+- **A changed sync configuration is picked up on every request.** After the sync configuration changed outside Circle, the sync client could keep using the old one; Circle now rechecks the configuration on every request. (#415)
+- **Circle says how to reach a file outside the workspace.** A file outside the session's workspace no longer fails with only a grant error: the message says to open its project as a workspace and start a session there, or grant that one file in settings → file access for the session.
+- **The interaction summary keeps its rounded corners.** Its rounding no longer depends on a rule it shared with the message queue.
+- **The narrow settings dialog stays on whole pixels.** The settings dialog is pinned to whole pixels instead of centred with a transform, so it no longer flips by half a pixel at odd widths such as 375.
 ## 1.14.0 - 2026-10-30
 
 ### Added
