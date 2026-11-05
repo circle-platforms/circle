@@ -486,14 +486,18 @@ export function FilesPanel({
             )}
           </div>
         )}
-      {(!native || (!listing && !(workspaceFiles.length || query))) && (
-        <PaneEmpty
-          icon={Folder}
-          title={
-            native ? t('trust this folder to browse files') : t('sample files')
-          }
-        />
-      )}
+      {/* Only an empty tree has an empty state; files listed need no note. */}
+      {!tree.rows.length &&
+        !query &&
+        (!native || (!listing && !workspaceFiles.length)) && (
+          <PaneEmpty icon={Folder} title={t('files')}>
+            <p>
+              {native
+                ? t('trust this folder to browse files')
+                : t('sample files')}
+            </p>
+          </PaneEmpty>
+        )}
       {native &&
         !query &&
         !tree.rows.length &&
