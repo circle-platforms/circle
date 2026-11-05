@@ -201,10 +201,12 @@ export async function runNativeGitHubSettingsJourney({
     await card
       .getByRole('heading', { name: 'GitHub account', exact: true })
       .waitFor();
-    const repositories = card.getByPlaceholder('owner/repository', {
-      exact: true,
-    });
-    assert.equal(await repositories.inputValue(), '');
+    // #441 removed the local repository allowlist from the connect card:
+    // access follows the GitHub account, so there is no repository input.
+    assert.equal(
+      await card.getByPlaceholder('owner/repository', { exact: true }).count(),
+      0,
+    );
     const storage = card.getByRole('radio');
     assert.equal(await storage.count(), 2);
     assert.deepEqual(
@@ -241,7 +243,7 @@ export async function runNativeGitHubSettingsJourney({
     assert.equal(
       await authorize.isEnabled(),
       true,
-      'an empty optional allowlist does not block the original authorization control',
+      'the authorization control is enabled with no repository allowlist',
     );
     await card
       .getByRole('radio', {
