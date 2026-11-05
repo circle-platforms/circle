@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from '../../extensions.js';
 import type { GitHubConnectionState } from '../../github_connection.js';
 const GITHUB_SETUP_HINT =
-  'GitHub is not ready for this task. Ask the user to open Settings → Capabilities → Extensions → GitHub (设置 → 能力 → 扩展 → GitHub), connect an account and allow this repository.';
+  'GitHub is not connected. Ask the user to open Settings → Capabilities → Extensions → GitHub (设置 → 能力 → 扩展 → GitHub) and connect an account.';
 export async function register(api: ExtensionAPI) {
   const backend = api.githubConnection;
   if (!backend) {
@@ -32,7 +32,7 @@ export async function register(api: ExtensionAPI) {
     clear();
     api.registerTool(
       'github_connection',
-      'Read the current GitHub connection account, allowed repositories and epoch. Only the user can connect or authorize, in Settings → Capabilities → Extensions → GitHub; when the result has setup, tell them that.',
+      'Read the current GitHub account, access policy and epoch. Repository access follows the connected GitHub credentials. Only the user can connect, in Settings → Capabilities → Extensions → GitHub; when the result has setup, tell them that.',
       { type: 'object', properties: {}, additionalProperties: false },
       async () => {
         const current = await backend.call(
@@ -49,9 +49,9 @@ export async function register(api: ExtensionAPI) {
           epoch: current.epoch,
           state: current.state,
           account: current.account,
-          repositories: current.repositories,
+          accessPolicy: current.accessPolicy,
           storage: current.storage,
-          ...(current.state === 'connected' && current.repositories.length
+          ...(current.state === 'connected' && current.account
             ? {}
             : { setup: GITHUB_SETUP_HINT }),
         };
@@ -59,12 +59,7 @@ export async function register(api: ExtensionAPI) {
       { readOnly: true },
     );
     registered.add('github_connection');
-    if (
-      state.state !== 'connected' ||
-      !state.account ||
-      !state.repositories.length
-    )
-      return;
+    if (state.state !== 'connected' || !state.account) return;
     for (const [method, description, properties, required, readOnly] of [
       [
         'candidate',
@@ -157,15 +152,15 @@ export async function register(api: ExtensionAPI) {
   );
   api.registerCommand(
     'github',
-    'GitHub connection: status, connect, configure, cancel or disconnect',
+    'GitHub connection: status, connect, cancel or disconnect',
     async (args, context) => {
       const match =
-        /^(status|connect|configure|cancel|disconnect)(?:\s+([\s\S]+))?$/.exec(
+        /^(status|connect|cancel|disconnect)(?:\s+([\s\S]+))?$/.exec(
           args.trim() || 'status',
         );
       if (!match)
         throw new api.ToolError(
-          'use github status, connect, configure, cancel or disconnect',
+          'use github status, connect, cancel or disconnect',
         );
       let params = {};
       try {

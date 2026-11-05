@@ -26,7 +26,12 @@ import {
   FileText,
   X,
   ArrowRight,
+  ChevronDown,
+  ChevronUp,
+  Pencil,
+  Trash2,
 } from 'lucide-react';
+import { Item, Menu } from '../components/SessionMenus';
 import { DropdownMenu } from 'radix-ui';
 import { BUILTIN_SLASH } from '../../../../src/tui/slash_commands';
 import { slashText } from '../model/slash-text';
@@ -56,7 +61,7 @@ import { useBrowserState } from './useBrowserState';
 import { InlineRequest } from './InlineRequest';
 import { useSources } from '../components/SourceNavigation';
 import { TaskReviewCard } from './TaskReviewCard';
-import { EffortMenu, ModeMenu, ModelMenu, MODE_TEXT } from './Composer';
+import { EffortMenu, ModeMenu, ModelMenu } from './Composer';
 import { nextMode, sessionMode } from '../model/state';
 import type { SessionMode } from '../model/types';
 import { t, tn } from '../i18n';
@@ -118,32 +123,43 @@ export type TranscriptItem =
   | { kind: 'message'; message: Message }
   | { kind: 'tools'; id: string; batchKey: string; rows: Message[] };
 /**
- * Fold tool rows (and empty assistant placeholders) into one group per model step.
- * A tool's `parentId` (or a quiet assistant's own id) is the batch key, so consecutive
- * tool rounds do not merge into one whole-turn summary. When thinking is shown, an
- * assistant step that only reasoned stays its own row so OpenAI `reasoning_content`
- * and Anthropic thinking blocks both appear between tool batches.
+ * Fold the steps of a turn that have nothing to read between them into one tool line:
+ * tool rows, assistant steps with only thinking, and the model's short updates on its
+ * commentary channel. Opened, the line lists them in order; each call opens to its
+ * command and output. Text the person should read (an answer, an update with no tool
+ * after it) and the step that carries the turn's usage keep their own rows.
  */
 export function groupMessages(
   messages: Message[],
   options: { showThinking?: boolean } = {},
 ): TranscriptItem[] {
+  void options;
   const items: TranscriptItem[] = [];
   const quiet = (message: Message) =>
     message.role === 'assistant' &&
     message.at !== 'streaming' &&
     !message.text.trim() &&
     !message.attachments?.length &&
-    !(options.showThinking && Boolean(message.thinking?.trim()));
+    !message.usage;
+  // An update while the model works goes with the calls it introduces.
+  const commentary = (message: Message) =>
+    message.role === 'assistant' &&
+    message.phase === 'commentary' &&
+    message.at !== 'streaming' &&
+    !message.attachments?.length &&
+    !message.usage;
   // Tools inherit the issuing assistant's id as parentId; a quiet assistant is that id.
   const batchKey = (message: Message) =>
     message.role === 'tool' ? (message.parentId ?? message.id) : message.id;
   for (const message of messages) {
     const last = items.at(-1);
-    if ((message.role === 'tool' && message.tool) || quiet(message)) {
+    if (
+      (message.role === 'tool' && message.tool) ||
+      quiet(message) ||
+      commentary(message)
+    ) {
       const key = batchKey(message);
-      if (last?.kind === 'tools' && last.batchKey === key)
-        last.rows.push(message);
+      if (last?.kind === 'tools') last.rows.push(message);
       else
         items.push({
           kind: 'tools',
@@ -153,7 +169,15 @@ export function groupMessages(
         });
     } else items.push({ kind: 'message', message });
   }
-  return items;
+  // Updates with no call after them are read as they are, not folded away.
+  return items.flatMap((item) => {
+    if (item.kind !== 'tools' || item.rows.some((row) => row.tool))
+      return [item];
+    const said = item.rows.filter((row) => row.text.trim());
+    return said.length
+      ? item.rows.map((message) => ({ kind: 'message' as const, message }))
+      : [item];
+  });
 }
 const transcriptKey = (item: TranscriptItem) =>
   item.kind === 'tools' ? item.id : item.message.id;
@@ -183,11 +207,6 @@ function TranscriptList({
     />
   );
 }
-// How a queued message goes: steering joins the running turn, a follow-up waits for its end.
-const QUEUE_KIND: Record<string, () => string> = {
-  steering: () => t('steering'),
-  'follow-up': () => t('follow-up'),
-};
 export function Conversation({
   focusComposer,
   onDialog,
@@ -221,6 +240,8 @@ export function Conversation({
   }, [focusComposer, session.id]);
   const scroller = useRef<HTMLDivElement>(null);
   const column = useRef<HTMLDivElement>(null);
+  // The queued messages are listed until folded, as Claude shows them.
+  const [queueOpen, setQueueOpen] = useState(true);
   const [editingQueue, setEditingQueue] = useState<{
     id: string;
     text: string;
@@ -687,8 +708,8 @@ export function Conversation({
   );
   const setMode = (mode: SessionMode) => {
     if (mode === sessionMode(session)) return;
+    // The mode button names the mode; switching raises no notice (owner's layout rules).
     act(() => runtime.command('mode', mode));
-    notify(MODE_TEXT[mode].detail());
   };
   // The turn's clock goes on the row of its latest tools, as Claude's does; before any, on
   // a row of its own. Waiting for you, it stops.
@@ -1065,127 +1086,161 @@ export function Conversation({
               </div>
             )}
           {session.queue.length > 0 && (
-            <div className="queue">
-              {session.queue.map((item) => (
-                <div key={item.id}>
-                  <span>{QUEUE_KIND[item.kind]?.() ?? item.kind}</span>
-                  {editingQueue?.id === item.id ? (
-                    <div className="queue-editor">
-                      <textarea
-                        aria-label={t('edit queued message')}
-                        value={editingQueue.text}
-                        onChange={(event) =>
-                          setEditingQueue({
-                            ...editingQueue,
-                            text: event.target.value,
-                          })
-                        }
-                        onKeyDown={(event) => {
-                          if (event.key === 'Escape') {
-                            event.stopPropagation();
-                            setEditingQueue(null);
-                          }
-                        }}
-                      />
-                      <div>
-                        <Button
-                          disabled={!editingQueue.text.trim()}
-                          onClick={() => {
-                            const text = editingQueue.text;
-                            void perform(async () => {
-                              if (runtime.mode === 'live')
-                                await runtime.request(
-                                  'edit-queued',
-                                  {
-                                    kind: item.kind,
-                                    index: Number(item.id.split('-').at(-1)),
-                                    text: editingQueue.original,
-                                    expectedQueueVersion: editingQueue.version,
-                                    updatedText: text,
-                                  },
-                                  session.id,
-                                );
-                              else
-                                runtime.change((state) => {
-                                  const target = state.sessions.find(
-                                    (value) => value.id === session.id,
-                                  );
-                                  const queued = target?.queue.find(
-                                    (entry) => entry.id === item.id,
-                                  );
-                                  if (
-                                    !queued ||
-                                    queued.text !== editingQueue.original
-                                  )
-                                    throw Error(
-                                      t('queued message changed before saving'),
-                                    );
-                                  queued.text = text;
-                                });
-                              setEditingQueue(null);
-                            });
-                          }}
-                        >
-                          {t('save queued message')}
-                        </Button>
-                        <Button onClick={() => setEditingQueue(null)}>
-                          {t('cancel')}
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <p>{item.text}</p>
-                      <Button
-                        onClick={() =>
-                          setEditingQueue({
-                            id: item.id,
-                            text: item.text,
-                            original: item.text,
-                            version: session.queueVersion,
-                          })
-                        }
-                      >
-                        {t('edit queued message')}
-                      </Button>
-                    </>
-                  )}
-                  <IconButton
-                    label={t('remove queued {kind}', {
-                      kind: QUEUE_KIND[item.kind]?.() ?? item.kind,
-                    })}
-                    onClick={() =>
-                      perform(() =>
-                        runtime.change((state) => {
-                          currentSession(state).queue = currentSession(
-                            state,
-                          ).queue.filter((queued) => queued.id !== item.id);
-                        }),
-                      )
-                    }
-                  >
-                    <X size={12} />
-                  </IconButton>
-                </div>
-              ))}
+            <section
+              className="queue"
+              aria-label={t('queued messages')}
+              data-open={queueOpen || undefined}
+            >
               <button
-                className="text-button"
-                onClick={() =>
-                  perform(() =>
-                    runtime.change((state) => {
-                      const target = currentSession(state);
-                      target.draft =
-                        target.queue.map((item) => item.text).join('\n') +
-                        '\n' +
-                        target.draft;
-                      target.queue = [];
-                    }),
-                  )
-                }
+                type="button"
+                className="queue-heading"
+                aria-expanded={queueOpen}
+                onClick={() => setQueueOpen((open) => !open)}
               >
-                {t('return queued messages to draft')}
+                <span>
+                  {tn(
+                    session.queue.length,
+                    '{n} message queued',
+                    '{n} messages queued',
+                  )}
+                </span>
+                {queueOpen ? (
+                  <ChevronUp size={15} />
+                ) : (
+                  <ChevronDown size={15} />
+                )}
               </button>
-            </div>
+              {queueOpen && (
+                <>
+                  <ul className="queue-list">
+                    {session.queue.map((item) => (
+                      <li key={item.id}>
+                        {editingQueue?.id === item.id ? (
+                          <div className="queue-editor">
+                            <textarea
+                              aria-label={t('edit queued message')}
+                              value={editingQueue.text}
+                              onChange={(event) =>
+                                setEditingQueue({
+                                  ...editingQueue,
+                                  text: event.target.value,
+                                })
+                              }
+                              onKeyDown={(event) => {
+                                if (event.key === 'Escape') {
+                                  event.stopPropagation();
+                                  setEditingQueue(null);
+                                }
+                              }}
+                            />
+                            <div>
+                              <Button
+                                disabled={!editingQueue.text.trim()}
+                                onClick={() => {
+                                  const text = editingQueue.text;
+                                  void perform(async () => {
+                                    if (runtime.mode === 'live')
+                                      await runtime.request(
+                                        'edit-queued',
+                                        {
+                                          kind: item.kind,
+                                          index: Number(
+                                            item.id.split('-').at(-1),
+                                          ),
+                                          text: editingQueue.original,
+                                          expectedQueueVersion:
+                                            editingQueue.version,
+                                          updatedText: text,
+                                        },
+                                        session.id,
+                                      );
+                                    else
+                                      runtime.change((state) => {
+                                        const target = state.sessions.find(
+                                          (value) => value.id === session.id,
+                                        );
+                                        const queued = target?.queue.find(
+                                          (entry) => entry.id === item.id,
+                                        );
+                                        if (
+                                          !queued ||
+                                          queued.text !== editingQueue.original
+                                        )
+                                          throw Error(
+                                            t(
+                                              'queued message changed before saving',
+                                            ),
+                                          );
+                                        queued.text = text;
+                                      });
+                                    setEditingQueue(null);
+                                  });
+                                }}
+                              >
+                                {t('save queued message')}
+                              </Button>
+                              <Button onClick={() => setEditingQueue(null)}>
+                                {t('cancel')}
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <p>{item.text}</p>
+                            <Menu
+                              side="top"
+                              label={t('queued message actions')}
+                            >
+                              <Item
+                                icon={Pencil}
+                                label={t('edit queued message')}
+                                onSelect={() =>
+                                  setEditingQueue({
+                                    id: item.id,
+                                    text: item.text,
+                                    original: item.text,
+                                    version: session.queueVersion,
+                                  })
+                                }
+                              />
+                              <Item
+                                icon={Trash2}
+                                label={t('remove queued message')}
+                                onSelect={() =>
+                                  perform(() =>
+                                    runtime.change((state) => {
+                                      currentSession(state).queue =
+                                        currentSession(state).queue.filter(
+                                          (queued) => queued.id !== item.id,
+                                        );
+                                    }),
+                                  )
+                                }
+                              />
+                            </Menu>
+                          </>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                  <footer>
+                    <button
+                      type="button"
+                      className="text-button danger"
+                      onClick={() =>
+                        perform(() =>
+                          runtime.change((state) => {
+                            currentSession(state).queue = [];
+                          }),
+                        )
+                      }
+                    >
+                      {t('clear all')}
+                    </button>
+                  </footer>
+                </>
+              )}
+            </section>
           )}
           <div
             className="composer"

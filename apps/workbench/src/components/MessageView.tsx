@@ -7,6 +7,11 @@ import { formatBusyElapsed } from '../model/format';
 import { fullTime, shownTime } from '../model/time';
 import { Button, FileChip, IconButton } from './common';
 import './runtime-notice.css';
+import {
+  cleanThinking,
+  thinkingHasBody,
+  thinkingHeadline,
+} from '../model/thinking';
 import { Markdown } from './Markdown';
 import { t } from '../i18n';
 import { useSources } from './SourceNavigation';
@@ -51,15 +56,21 @@ export function MessageView({
   const [thinkingOpen, setThinkingOpen] = useSessionDisclosure(
     'thinking:' + message.id,
   );
-  const preview = message.thinking?.trim().split('\n')[0]?.slice(0, 120);
+  const preview = thinkingHeadline(message.thinking);
+  const opens = thinkingHasBody(message.thinking);
   return (
     <article className={`message ${message.role}`}>
       {message.thinking && showThinking && (
-        <details className="thinking" open={thinkingOpen}>
+        <details
+          className="thinking"
+          open={opens && thinkingOpen}
+          data-heading-only={opens ? undefined : true}
+        >
           <summary
             onClick={(event) => {
               event.preventDefault();
-              setThinkingOpen(!thinkingOpen);
+              // Headings alone have nothing more to show.
+              if (opens) setThinkingOpen(!thinkingOpen);
             }}
           >
             <ChevronRight
@@ -77,7 +88,11 @@ export function MessageView({
             </span>
             <span className="thinking-preview">{preview}</span>
           </summary>
-          <p>{message.thinking}</p>
+          {opens && (
+            <div className="thinking-body">
+              <Markdown text={cleanThinking(message.thinking)} />
+            </div>
+          )}
         </details>
       )}
       {(message.shell ||

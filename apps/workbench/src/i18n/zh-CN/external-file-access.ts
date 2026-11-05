@@ -10,6 +10,8 @@ export const externalFileAccess: Record<string, string> = {
   'current session only': '仅当前会话',
   'Choose one exact file outside the workspace. Access expires when the app closes or the session is deleted or archived. Forks do not inherit it.':
     '选择工作区外的单个文件，应用关闭、会话删除或归档后授权失效，分叉不会继承',
+  'To work with a project folder, open it as a workspace from home and start a session there. This access does not cover folders or shell commands.':
+    '要处理项目文件夹，请从首页将其打开为工作区并在其中开始会话。此授权不适用于文件夹或 shell 命令',
   'choose read-only file': '选择只读文件',
   'choose read and write file': '选择可读写文件',
   'file access requires the connected desktop runtime':

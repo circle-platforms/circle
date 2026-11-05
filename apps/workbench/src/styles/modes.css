@@ -333,3 +333,91 @@
   min-height: 0;
   height: 100%;
 }
+
+/* Background jobs: running first, then the finished, folded; each a card that opens to
+   its command and the end of its output, as Claude's background tasks are. */
+.jobs-mode {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.jobs-list {
+  flex: 1;
+  min-height: 0;
+  padding: 8px 12px 16px;
+  overflow-y: auto;
+}
+.jobs-list > section + section {
+  margin-top: 14px;
+}
+.jobs-list h3 {
+  margin: 4px 4px 8px;
+  color: var(--muted);
+  font-size: var(--ui-small);
+  font-weight: 500;
+}
+.jobs-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.jobs-card {
+  margin-bottom: 6px;
+  border-radius: 10px;
+  background: var(--subtle);
+}
+.jobs-card-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 6px;
+}
+.jobs-card-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--ui-size);
+  text-align: left;
+  cursor: pointer;
+}
+.jobs-card-toggle > svg {
+  flex: none;
+  color: var(--muted);
+}
+.jobs-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.jobs-time {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--ui-small);
+  font-variant-numeric: tabular-nums;
+}
+.jobs-output {
+  max-height: 320px;
+  margin: 0;
+  padding: 0 14px 12px 30px;
+  overflow: auto;
+  color: var(--secondary);
+  font: 400 var(--mono-small) / 1.6 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

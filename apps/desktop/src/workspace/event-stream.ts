@@ -4,6 +4,7 @@ import { open, mkdir, chmod } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import type { FileHandle } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { DesktopDataInUseError } from '../runtime-failure.ts';
 import type { WorkspaceServiceEvent } from '../workspace-protocol.ts';
 
 export interface StreamCursor {
@@ -74,10 +75,9 @@ export class WorkspaceEventStream {
         const busy = /locked|busy/i.test(
           cause instanceof Error ? cause.message : String(cause),
         );
+        if (busy) throw new DesktopDataInUseError({ cause });
         throw new Error(
-          busy
-            ? 'workspace event journal already has an active writer; close the other application before retrying'
-            : 'workspace event journal writer lease could not be acquired',
+          'workspace event journal writer lease could not be acquired',
           { cause },
         );
       }

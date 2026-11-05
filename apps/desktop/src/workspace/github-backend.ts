@@ -105,13 +105,7 @@ export function githubWorkspaceBackend(options: {
       else if (method === 'connect')
         result = await connection.connect({
           storage: p.storage as 'encrypted' | 'session',
-          repositories: p.repositories as string[],
         });
-      else if (method === 'configure')
-        result = await connection.configure(
-          p.epoch as number,
-          p.repositories as string[],
-        );
       else if (method === 'cancel' || method === 'disconnect') {
         if (!Number.isSafeInteger(p.epoch))
           throw Error('invalid GitHub connection epoch');

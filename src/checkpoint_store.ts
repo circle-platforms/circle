@@ -108,7 +108,12 @@ function isDatabaseLocked(error: unknown): boolean {
 export function databaseOpenError(error: unknown): Error {
   if (!isDatabaseLocked(error))
     return error instanceof Error ? error : new Error(String(error));
-  const friendly = new Error(desktopText(DATABASE_BUSY_MESSAGE));
+  const friendly = Object.assign(
+    new Error(desktopText(DATABASE_BUSY_MESSAGE)),
+    {
+      code: 'CIRCLE_DATABASE_BUSY',
+    },
+  );
   friendly.cause = error;
   return friendly;
 }

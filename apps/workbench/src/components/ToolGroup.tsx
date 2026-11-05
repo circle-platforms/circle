@@ -1,3 +1,10 @@
+import { groupNote } from '../model/commentary';
+import {
+  cleanThinking,
+  thinkingHasBody,
+  thinkingHeadline,
+} from '../model/thinking';
+import { Markdown } from './Markdown';
 import { useId, type ReactNode } from 'react';
 import { useSessionDisclosure } from '../model/presentation';
 import { Brain, ChevronDown, ChevronRight, LoaderCircle } from 'lucide-react';
@@ -64,6 +71,7 @@ export function ToolGroup({
     expanded,
   );
   const summary = toolSummary(rows);
+  const note = groupNote(rows);
   const running = tools.find((tool) => tool.status === 'running');
   // A picture a tool brought back, such as the browser's screenshot, belongs to the
   // call that took it: the folded line only says how many there are.
@@ -87,6 +95,7 @@ export function ToolGroup({
         ) : runningTool || turn ? (
           <LoaderCircle size={13} className="spin" />
         ) : null}
+        {note && <span className="tool-note">{note}</span>}
         <span className="tool-summary-text">{summary.text}</span>
         {(summary.added > 0 || summary.removed > 0) && (
           <span className="diff-count">
@@ -144,6 +153,15 @@ export function ToolGroup({
                     onFile={onFile}
                   />
                 </div>
+              ) : row.phase === 'commentary' && row.text.trim() ? (
+                <div
+                  key={row.id}
+                  data-message-id={row.id}
+                  className="group-commentary"
+                >
+                  {row.thinking && <GroupThinking row={row} />}
+                  <Markdown text={row.text} />
+                </div>
               ) : row.thinking ? (
                 <GroupThinking key={row.id} row={row} />
               ) : null,
@@ -158,25 +176,31 @@ export function ToolGroup({
 
 function GroupThinking({ row }: { row: Message }) {
   const [open, setOpen] = useSessionDisclosure('thinking:' + row.id);
+  const opens = thinkingHasBody(row.thinking);
   return (
     <details
       data-message-id={row.id}
       className="thinking group-thinking"
-      open={open}
+      open={opens && open}
+      data-heading-only={opens ? undefined : true}
     >
       <summary
         onClick={(event) => {
           event.preventDefault();
-          setOpen(!open);
+          if (opens) setOpen(!open);
         }}
       >
         <Brain size={13} />
         <span>{t('thinking')}</span>
         <span className="thinking-preview">
-          {row.thinking?.trim().split('\n')[0]?.slice(0, 120)}
+          {thinkingHeadline(row.thinking)}
         </span>
       </summary>
-      <p>{row.thinking}</p>
+      {opens && (
+        <div className="thinking-body">
+          <Markdown text={cleanThinking(row.thinking)} />
+        </div>
+      )}
     </details>
   );
 }

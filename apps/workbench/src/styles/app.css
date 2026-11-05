@@ -1092,27 +1092,75 @@ pre {
   color: var(--secondary);
 }
 .queue {
-  font-size: var(--ui-small);
-  border-left: 2px solid var(--border);
-  padding-left: 10px;
+  /* Queued messages, as Claude lists them: a folding heading, one row per message
+     with its menu, and clear all at the foot. */
   margin-bottom: 10px;
-  max-height: 100px;
-  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--subtle);
+  font-size: var(--ui-size);
+  overflow: hidden;
 }
-.queue > div {
+.queue-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 14px;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.queue[data-open] > .queue-heading {
+  border-bottom: 1px solid var(--border);
+}
+.queue-heading > svg {
+  color: var(--muted);
+}
+.queue-list {
+  max-height: 180px;
+  margin: 0;
+  padding: 0 6px;
+  overflow: auto;
+  list-style: none;
+}
+.queue-list > li {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 36px;
+  padding: 4px 8px;
 }
-.queue > div > span {
-  color: var(--muted);
-  font-size: var(--ui-tiny);
+.queue-list > li + li {
+  border-top: 1px solid var(--border);
 }
-.queue p {
+.queue-list p {
   flex: 1;
+  min-width: 0;
+  margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.queue-list > li > .icon-button {
+  opacity: 0;
+}
+.queue-list > li:hover > .icon-button,
+.queue-list > li:focus-within > .icon-button,
+.queue-list > li > .icon-button[data-state='open'] {
+  opacity: 1;
+}
+.queue > footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 14px 8px;
+  border-top: 1px solid var(--border);
+}
+.queue .text-button.danger {
+  color: var(--negative-text);
 }
 .completion-list {
   position: absolute;
@@ -4370,11 +4418,9 @@ pre {
   box-shadow: 0 10px 30px color-mix(in srgb, var(--fg) 14%, transparent);
   font-size: var(--ui-small);
 }
-.interaction-summary,
-.queue {
+.interaction-summary {
   border-radius: 12px;
 }
-
 @media (max-width: 1200px) {
   .workbench {
     grid-template-columns: 220px minmax(0, 1fr);
@@ -5198,4 +5244,30 @@ button.sidebar-brand {
 .sidebar-brand strong {
   font-size: calc(var(--ui-size) + 3px);
   letter-spacing: -0.5px;
+}
+.thinking[data-heading-only] > summary {
+  cursor: default;
+}
+.thinking[data-heading-only] .thinking-chevron {
+  visibility: hidden;
+}
+.thinking-body {
+  color: var(--secondary);
+  font-size: var(--ui-small);
+}
+.tool-note {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-note + .tool-summary-text {
+  flex: none;
+  color: var(--muted);
+}
+.group-commentary {
+  padding: 4px 12px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
 }

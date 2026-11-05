@@ -385,6 +385,9 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
     schema(
       {
         command: text('Shell command'),
+        description: text(
+          'What the command does, in a few words; it names a background job',
+        ),
         timeout: integer(
           'Timeout in seconds; 0 disables a background deadline',
           0,
@@ -403,7 +406,10 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
           sessionId: context.sessionId,
           startedBy: 'model' as const,
         };
-        const rawCommand = context.rawArgs?.command;
+        // Raw arguments are kept only when a secret was put in; otherwise the arguments
+        // are the raw ones, and are shown after the same redaction.
+        const rawCommand = context.rawArgs?.command ?? args.command;
+        const rawDescription = context.rawArgs?.description ?? args.description;
         const owner = {
           ...notificationOwner,
           origin: {
@@ -411,6 +417,13 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
             toolCallId: context.callId,
             ...(typeof rawCommand === 'string' && hooks.displayCommand
               ? { displayCommand: hooks.displayCommand(rawCommand, context) }
+              : {}),
+            ...(typeof rawDescription === 'string' &&
+            rawDescription.trim() &&
+            hooks.displayCommand
+              ? {
+                  description: hooks.displayCommand(rawDescription, context),
+                }
               : {}),
             ...(context.secretNames
               ? { secretNames: [...context.secretNames] }

@@ -72,6 +72,12 @@ export interface Message {
    * Never shown and never sent to another connection; `thinking_scope` says whose they are.
    */
   reasoning_items?: unknown[];
+  /**
+   * The Responses API's channel for an assistant message: `commentary` for a short
+   * update while the model works (often before a tool call), `final_answer` for its
+   * answer. Sent back as it came, since the model reads it on the next request.
+   */
+  phase?: 'commentary' | 'final_answer';
   /** Opaque API/key/model identity for replaying signed thinking; never a credential. */
   thinking_scope?: string;
   usage?: Usage;

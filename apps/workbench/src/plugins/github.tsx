@@ -42,7 +42,7 @@ export function GitHubPluginDetails({
         runtime,
         origin.current,
         t(
-          'Check the GitHub connection and list the repositories Circle may access. Do not change any repository.',
+          'Check the GitHub account connection and the current workspace repository. Do not change any repository.',
         ),
         pending.current,
       );

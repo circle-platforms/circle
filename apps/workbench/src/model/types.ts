@@ -98,6 +98,8 @@ export interface ToolCall {
   diff?: DiffView;
 }
 export interface Message {
+  /** An update while the model works (`commentary`), or its answer (`final_answer`). */
+  phase?: 'commentary' | 'final_answer';
   id: string;
   parentId: string | null;
   role: 'user' | 'assistant' | 'tool' | 'notice';
@@ -318,7 +320,10 @@ export interface Job {
   id: string;
   sessionId: string;
   kind: 'command' | 'agent' | 'watch';
+  /** What the job does, in the model's words, or else its command. */
   title: string;
+  /** The command a background command runs, after secret redaction. */
+  command?: string;
   state:
     | 'running'
     | 'waiting'

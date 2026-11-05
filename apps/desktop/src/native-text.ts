@@ -51,6 +51,12 @@ const ZH_CN: Record<string, string> = {
   'session or text': '会话或文本',
   'supported files': '支持的文件',
   'Circle could not stop its runtime': 'Circle 无法停止运行时',
+  'Circle is already running from another build': 'Circle 已从另一构建启动',
+  'quit the running app before opening another build':
+    '请先正常退出正在运行的应用，再打开另一构建',
+  'Circle data is in use': 'Circle 数据正在使用中',
+  'quit the other app using this data folder and try again':
+    '请正常退出使用此数据目录的另一应用，然后重试',
   'Circle needs your approval': 'Circle 需要你的批准',
   'Circle needs a secret': 'Circle 需要一个密钥',
   'Circle has a question': 'Circle 有一个问题',

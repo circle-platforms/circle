@@ -139,6 +139,24 @@ export function sessionActivityAt(session: Session): string {
   return at || session.updatedAt;
 }
 
+/**
+ * Where a session sits in the sidebar: when the person last wrote to it. Replies, tool
+ * calls and notices do not move it, so conversations that run at the same time keep
+ * their places instead of passing each other with every streamed step. A session the
+ * person has not written to yet sits by its last activity.
+ */
+export function sessionOrderAt(session: Session): number {
+  let best = Number.NEGATIVE_INFINITY;
+  for (const message of session.messages) {
+    if (message.role !== 'user') continue;
+    const value = Date.parse(message.at);
+    if (Number.isFinite(value) && value > best) best = value;
+  }
+  return Number.isFinite(best)
+    ? best
+    : Date.parse(sessionActivityAt(session)) || 0;
+}
+
 export type ActivityAge =
   | { kind: 'raw'; text: string }
   | { kind: 'just now' }
@@ -326,8 +344,7 @@ export function sidebarTasks(
       known.agent = agent;
     }
   }
-  const activity = (task: SidebarTask) =>
-    Date.parse(sessionActivityAt(task.session)) || 0;
+  const activity = (task: SidebarTask) => sessionOrderAt(task.session);
   return new Map(
     [...tasks].map(([owner, group]) => [
       owner,
@@ -345,10 +362,7 @@ export function recentSessions(sessions: readonly Session[]): Session[] {
     (session) => !session.archivedAt,
   );
   const activity = new Map(
-    visible.map((session) => [
-      session,
-      Date.parse(sessionActivityAt(session)) || 0,
-    ]),
+    visible.map((session) => [session, sessionOrderAt(session)]),
   );
   return visible.sort(
     (a, b) => activity.get(b)! - activity.get(a)! || a.id.localeCompare(b.id),

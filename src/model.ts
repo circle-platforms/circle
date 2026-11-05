@@ -916,6 +916,8 @@ export class GatewayModel implements ChatModel {
             content: [
               { type: 'output_text', text: message.content, annotations: [] },
             ],
+            // The model reads its channel back; without it, updates read as answers.
+            ...(message.phase ? { phase: message.phase } : {}),
             // Replayed without an item id: the endpoint stored nothing to refer to.
           } as unknown as ResponseInputItem);
         for (const call of message.tool_calls ?? [])
@@ -1037,6 +1039,12 @@ export class GatewayModel implements ChatModel {
     let servedModel = this.model;
     const calls = new Map<number, { id: string; name: string; args: string }>();
     const reasoning: Record<string, unknown>[] = [];
+    // Which channels the response's messages came on (commentary, final answer).
+    const phases = new Set<string>();
+    const notePhase = (item: unknown) => {
+      const phase = (item as { phase?: unknown }).phase;
+      if (phase === 'commentary' || phase === 'final_answer') phases.add(phase);
+    };
     // Output items whose text streamed as deltas; an item that arrives whole is read at its end.
     const streamedText = new Set<number>();
     const usage = emptyUsage();
@@ -1073,6 +1081,7 @@ export class GatewayModel implements ChatModel {
             think(event.delta);
             break;
           case 'response.output_item.added':
+            if (event.item.type === 'message') notePhase(event.item);
             if (event.item.type === 'function_call')
               calls.set(event.output_index, {
                 id: event.item.call_id,
@@ -1118,10 +1127,12 @@ export class GatewayModel implements ChatModel {
                 kept.encrypted_content = item.encrypted_content;
               reasoning.push(kept);
               request.progress?.('keepalive');
-            } else if (
-              item.type === 'message' &&
-              !streamedText.has(event.output_index)
-            ) {
+            } else if (item.type === 'message') {
+              notePhase(item);
+              if (streamedText.has(event.output_index)) {
+                request.progress?.('keepalive');
+                break;
+              }
               const whole = item.content
                 .map((part) => (part.type === 'output_text' ? part.text : ''))
                 .join('');
@@ -1205,6 +1216,12 @@ export class GatewayModel implements ChatModel {
         thinking,
         tool_calls,
         ...(reasoning.length ? { reasoning_items: reasoning } : {}),
+        // An answer outranks an update when one response holds both.
+        ...(phases.has('final_answer')
+          ? { phase: 'final_answer' as const }
+          : phases.has('commentary')
+            ? { phase: 'commentary' as const }
+            : {}),
         thinking_scope: this.thinkingScope,
         ...(cacheReported ? {} : { cache_reported: false }),
         completion: ended,

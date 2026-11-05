@@ -153,6 +153,7 @@ import { TurnStatus } from '../../../src/tui/turn_status.js';
 import { currentNetworkStatus } from '../../../src/net.js';
 import { SessionMetadata } from './session-metadata';
 import { WorkspaceServices } from './workspace/workspace-services';
+import { isDesktopDataInUse } from './runtime-failure';
 import { OperationLedger } from './workspace/operation-ledger';
 import {
   TaskService,
@@ -186,11 +187,7 @@ import {
 import { formatMcpArguments, parseMcpArguments } from './mcp-arguments';
 import { PlanCompletionTracker } from '../../../src/plan_state.js';
 import { nextAgentActivity } from '../../../src/session_activity.js';
-import {
-  formatElapsed,
-  gapElapsed,
-  type TurnUsage,
-} from '../../../src/tui/status_rows.js';
+import { formatElapsed, type TurnUsage } from '../../../src/tui/status_rows.js';
 import {
   approvalPreview,
   fileChange,
@@ -324,6 +321,7 @@ interface Streaming {
 }
 export interface ControllerOptions {
   home: string;
+  onFatalError?: (error: Error) => void;
   emitWorkspaceEvent?: (event: WorkspaceServiceEvent) => void;
   emitTokenDelta?: (delta: RuntimeTokenDelta) => void;
   credentialStore?: RuntimeCredentialStore;
@@ -1010,6 +1008,7 @@ export class RuntimeController {
     const message = `workspace event persistence failed: ${String(error)}`;
     this.workspaceStreamFailures.set(workspace, message);
     this.error = message;
+    if (isDesktopDataInUse(error)) this.options.onFatalError?.(error as Error);
     const origin = this.taskWorkspaces.get(workspace) ?? workspace;
     void this.taskServices
       .get(origin)
@@ -1483,15 +1482,17 @@ export class RuntimeController {
     access: 'read' | 'write',
   ) {
     const sessionId = owner.session.id;
-    if (
-      this.externalOwner(sessionId, access) !== owner ||
-      this.externalGrantOwners.get(sessionId) !== owner
-    )
-      throw Error('external file requires a grant for this runtime owner');
-    owner.sandbox.checkCredentialPath(path);
-    if (!this.externalRegistry().allows(sessionId, path, access))
+    if (this.externalOwner(sessionId, access) !== owner)
+      throw Error('external file belongs to another session runtime');
+    const grantOwner = this.externalGrantOwners.get(sessionId);
+    if (grantOwner && grantOwner !== owner)
       throw Error(
-        'external file requires an explicit current grant for this session',
+        'external file grant belongs to an earlier session runtime; select the file again',
+      );
+    owner.sandbox.checkCredentialPath(path);
+    if (!grantOwner || !this.externalRegistry().allows(sessionId, path, access))
+      throw Error(
+        'file is outside this session workspace or lacks an exact-file grant; open a project folder as a workspace and start a session there, or grant one existing text file in settings → file access for this session',
       );
   }
   private fileRewinds = new WeakMap<AgentRuntime, FileRewindJournal>();
@@ -2524,7 +2525,6 @@ export class RuntimeController {
     const calls = new Map<string, Message>();
     // A stored reply has tokens but not the turn clock. Measure it from the prompt,
     // or from the previous reply, so an older footer shows a duration too.
-    let markedAt: number | undefined;
     for (const node of nodes) {
       const raw = node.message;
       if (!raw || raw.role === 'system') continue;
@@ -2606,6 +2606,7 @@ export class RuntimeController {
         ...(runtimeNotice ? { runtimeNotice } : {}),
         text: raw.display ?? raw.content,
         thinking: raw.thinking,
+        ...(raw.phase ? { phase: raw.phase } : {}),
         ...(typeof raw.thinking_seconds === 'number'
           ? { thinkingSeconds: raw.thinking_seconds }
           : {}),
@@ -2643,8 +2644,8 @@ export class RuntimeController {
         ...(raw.role === 'assistant' && raw.interrupted
           ? { interrupted: true }
           : {}),
-        // The last message of a finished turn shows the whole turn: its time and tokens.
-        // Any other reply with usage shows the time since the prompt or the previous reply.
+        // Only the last message of a finished turn shows usage: the whole turn's time,
+        // tokens and cost, once. The steps before it show none.
         usage: turns[raw.id]
           ? {
               input: turns[raw.id]!.input,
@@ -2655,29 +2656,11 @@ export class RuntimeController {
               ...(raw.interrupted ? { estimated: true } : {}),
               elapsed: formatElapsed(turns[raw.id]!.seconds),
             }
-          : raw.usage
-            ? {
-                input: raw.usage.input_tokens,
-                output: raw.usage.output_tokens,
-                // The workbench shows dollars; another currency is not converted
-                ...(priced
-                  ? {
-                      cost:
-                        raw.cost?.currency === 'USD'
-                          ? (raw.cost.amount ?? null)
-                          : null,
-                    }
-                  : {}),
-                ...(raw.interrupted ? { estimated: true } : {}),
-                elapsed: gapElapsed(markedAt, node.created),
-              }
-            : undefined,
+          : undefined,
       };
       const shown =
         raw.role !== 'assistant' ||
         Boolean(base.text || base.thinking || base.attachments?.length);
-      if (raw.role === 'user' || (shown && base.usage))
-        markedAt = new Date(node.created).getTime();
       if (shown) result.push(base);
       for (const call of raw.tool_calls ?? []) {
         const state = this.toolStates.get(`${id}:${call.id}`);
@@ -3167,6 +3150,7 @@ export class RuntimeController {
               ? ('command' as const)
               : job.kind,
           title: job.title,
+          ...(job.command ? { command: job.command } : {}),
           state:
             job.status === 'running'
               ? this.stoppedJobs.has(`${job.sessionId}:${job.id}`)

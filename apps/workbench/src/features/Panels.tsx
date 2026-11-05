@@ -6,6 +6,7 @@ import { sessionChangeRows, type ChangeRow } from '../model/changes';
 import { endedToolCalls, useGitChanges } from '../model/git-changes';
 import { useOwnerState } from '../model/owner-state';
 import type { CommandTerminalView } from '../model/command-terminal-client';
+import { JobsMode } from './JobsMode';
 import { TerminalMode } from './TerminalMode';
 import { AgentsMode } from './AgentsMode';
 import { ModeButtons, ModeChromeProvider, useModeChrome } from './mode-chrome';
@@ -24,6 +25,7 @@ import {
   type ReactNode,
 } from 'react';
 import {
+  Activity,
   ArrowUpRight,
   Bot,
   Folder,
@@ -127,12 +129,14 @@ export function PanelButtons({
       badge: 0,
     })),
     { id: 'agents', title: t('subagents'), icon: Bot, badge: subagents },
+    // Circle's own background commands, apart from the terminals the person opens.
     {
-      id: 'terminal',
-      title: t('terminal'),
-      icon: SquareTerminal,
+      id: 'jobs',
+      title: t('background jobs'),
+      icon: Activity,
       badge: commands,
     },
+    { id: 'terminal', title: t('terminal'), icon: SquareTerminal, badge: 0 },
   ];
   // The click that opens a panel must not leave that button focused. The next
   // Enter (the address bar's) would otherwise activate it and close the panel.
@@ -249,6 +253,8 @@ function InspectorResources(
                 sessionId={props.sessionId}
               />
             </PluginBoundary>
+          ) : id === 'jobs' ? (
+            <JobsMode selection={own} onDialog={props.onDialog} />
           ) : id === 'terminal' ? null : (
             <p className="panel-note">{t('plugin disabled')}</p>
           );

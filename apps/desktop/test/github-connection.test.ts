@@ -852,7 +852,7 @@ test('profile disable unloads only GitHub in two controller runtimes and freezes
   }
 });
 
-test('account connects without a repository and explicit repository configuration preserves the grant while advancing epoch', async () => {
+test('connected account exposes repository tools without a local allowlist and disconnect retires its epoch', async () => {
   const f = await fixture();
   let runtime: AgentRuntime | undefined;
   try {
@@ -890,59 +890,23 @@ test('account connects without a repository and explicit repository configuratio
       const state = await backend.call('status', {});
       return state.state === 'connected' ? state : false;
     });
-    assert.deepEqual(state.repositories, []);
+    assert.equal(state.accessPolicy, 'github-account');
+    assert.equal('repositories' in state, false);
     assert.equal(state.account?.login, 'fixture');
-    await runtime.harness.run('account without project');
-    assert.deepEqual(
-      model.requests[0]!.tools.filter((t) => t.name.startsWith('github_')).map(
-        (t) => t.name,
-      ),
-      ['github_connection'],
-    );
-    const old = state.epoch;
-    state = await backend.call('configure', {
-      epoch: old,
-      repositories: ['fixture/repo'],
-    });
-    assert(state.epoch > old);
-    assert.equal(f.helpers.length, 1);
-    assert.equal(f.puts, 0);
-    await assert.rejects(
-      backend.call('configure', { epoch: old, repositories: ['another/repo'] }),
-      /changed/,
-    );
-    await runtime.harness.run('configured project');
-    assert(model.requests[1]!.tools.some((t) => t.name === 'github_publish'));
-    state = await backend.call('configure', {
-      epoch: state.epoch,
-      repositories: [],
-    });
-    assert.equal(state.state, 'connected');
-    assert.equal(state.account?.login, 'fixture');
-    await runtime.harness.run('project removed');
-    assert(!model.requests[2]!.tools.some((t) => t.name === 'github_publish'));
-    assert.throws(
-      () => f.connection.assertGrant(state.epoch, 'fixture/repo'),
-      /permission changed/,
-    );
+    await runtime.harness.run('connected account');
+    assert(model.requests[0]!.tools.some((tool) => tool.name === 'github_publish'));
+    f.connection.assertGrant(state.epoch, 'fixture/repo');
+    f.connection.assertGrant(state.epoch, 'another/repo');
+    assert.throws(() => f.connection.assertGrant(state.epoch, '../invalid'), /permission changed/);
     const metadata = path.join(f.root, 'profile', 'github-connection.json');
-    await rm(metadata);
-    await mkdir(metadata);
-    await assert.rejects(
-      backend.call('configure', {
-        epoch: state.epoch,
-        repositories: ['unexpected/repo'],
-      }),
-      /could not be saved/,
-    );
-    const failed = await backend.call('status', {});
-    assert.deepEqual(failed.repositories, []);
-    assert.equal(failed.state, 'connected');
-    assert(failed.epoch > state.epoch);
-    assert.throws(
-      () => f.connection.assertGrant(failed.epoch, 'unexpected/repo'),
-      /permission changed/,
-    );
+    const saved = JSON.parse(await readFile(metadata, 'utf8'));
+    assert.equal(saved.accessPolicy, 'github-account');
+    assert.equal('repositories' in saved, false);
+    const old = state.epoch;
+    await backend.call('disconnect', { epoch: old });
+    await runtime.harness.run('disconnected account');
+    assert(!model.requests[1]!.tools.some((tool) => tool.name === 'github_publish'));
+    assert.throws(() => f.connection.assertGrant(old, 'fixture/repo'), /permission changed/);
     assert.equal(f.helpers.length, 1);
     assert(f.calls.every((c) => c.args[0] === 'api'));
   } finally {
@@ -1489,14 +1453,14 @@ test('one connection startup owns its helper and rejects competing storage choic
         release();
         const authorization = await first;
         assert.equal(authorization.storage, storage);
-        assert.deepEqual(authorization.repositories, ['fixture/first']);
+        assert.equal(authorization.accessPolicy, 'github-account');
         f.helpers[0]!.finish();
         const connected = await until(async () => {
           const state = await f.connection.status();
           return state.state === 'connected' ? state : false;
         });
         assert.equal(connected.storage, storage);
-        assert.deepEqual(connected.repositories, ['fixture/first']);
+        assert.equal(connected.accessPolicy, 'github-account');
         assert.equal(connected.account?.login, 'fixture');
         assert.equal(f.puts, storage === 'encrypted' ? 1 : 0);
       } finally {
@@ -1590,7 +1554,7 @@ test('cancellation drains a held connection startup and a failed startup release
       await until(
         async () => (await f.connection.status()).state === 'connected',
       );
-      assert.deepEqual(f.connection.snapshot().repositories, ['fixture/retry']);
+      assert.equal(f.connection.snapshot().accessPolicy, 'github-account');
     } finally {
       await f.close();
     }

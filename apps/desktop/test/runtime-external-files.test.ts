@@ -145,7 +145,11 @@ test('native exact-file grant connects real Read/Edit, isolates sessions and exp
     .sessions.find((s) => s.id === other)!.messages;
   assert.ok(
     otherHistory.some(
-      (m) => m.tool && /grant|another session/i.test(m.tool.output),
+      (m) =>
+        m.tool &&
+        /outside this session workspace or lacks an exact-file grant/i.test(
+          m.tool.output,
+        ),
     ),
     JSON.stringify(otherHistory),
   );
@@ -161,6 +165,86 @@ test('native exact-file grant connects real Read/Edit, isolates sessions and exp
     {
       revoked: false,
     },
+  );
+});
+
+test('an ungranted external read explains project workspaces and exact-file access', async (t) => {
+  let path = '';
+  const f = await fixture(t, [
+    async () => assistant('ungranted', 'read_file', { file_path: path }),
+    assistant('end'),
+  ]);
+  path = join(f.root, 'outside.txt');
+  await writeFile(path, 'still private\n');
+  const owner = f.controller.snapshot().activeSessionId;
+  assert.equal(
+    (await f.call('prompt', { text: 'read the external file' })).ok,
+    true,
+  );
+  await f.until(
+    () =>
+      f.model.requests.length >= 2 &&
+      f.controller.snapshot().sessions.find((s) => s.id === owner)?.state !==
+        'waiting',
+  );
+  const history = f.controller
+    .snapshot()
+    .sessions.find((s) => s.id === owner)!.messages;
+  assert.ok(
+    history.some(
+      (m) =>
+        m.tool &&
+        /open a project folder as a workspace and start a session there/.test(
+          m.tool.output,
+        ) &&
+        /grant one existing text file/.test(m.tool.output),
+    ),
+    JSON.stringify(history),
+  );
+  assert.equal(f.model.requests.length, 2);
+  assert.equal(await readFile(path, 'utf8'), 'still private\n');
+  await assert.rejects(
+    f.controller.grantExternalFile(owner, f.root, 'read'),
+    /regular non-linked file/,
+  );
+});
+
+test('opening a project folder starts a session whose file reads need no external grant', async (t) => {
+  let path = '';
+  const f = await fixture(t, [
+    async () => assistant('workspace-read', 'read_file', { file_path: path }),
+    assistant('end'),
+  ]);
+  const project = join(f.root, 'project');
+  await mkdir(project);
+  path = join(project, 'source.txt');
+  await writeFile(path, 'project content\n');
+  saveSettings(trustFolder(defaultSettings(), project), f.home);
+  const opened = await f.call('open-workspace', { path: project });
+  assert.equal(opened.ok, true, opened.error);
+  const workspaceId = (opened.data as { workspaceId: string }).workspaceId;
+  const started = await f.call('begin-session', {
+    workspaceId,
+    text: 'read the project file',
+  });
+  assert.equal(started.ok, true, started.error);
+  const owner = (started.data as { sessionId: string }).sessionId;
+  await f.until(
+    () =>
+      f.model.requests.length >= 2 &&
+      f.controller.snapshot().sessions.find((s) => s.id === owner)?.state !==
+        'waiting',
+  );
+  const history = f.controller
+    .snapshot()
+    .sessions.find((s) => s.id === owner)!.messages;
+  assert.ok(
+    history.some((m) => m.tool?.output.includes('project content')),
+    JSON.stringify(history),
+  );
+  assert.deepEqual(
+    (await f.call('list-external-file-grants', {}, owner)).data,
+    [],
   );
 });
 

@@ -40,7 +40,7 @@ import {
   RECENT_SHOWN,
   recentDetails,
   recentSessions,
-  sessionActivityAt,
+  sessionOrderAt,
   sidebarTasks,
   topLevelSessions,
   visibleSessions,
@@ -322,8 +322,8 @@ export function Sidebar({
     onNavigate?.();
   };
   const newSessionPress = usePressAction(() => newSession());
-  const activityAt = (session: Session) =>
-    Date.parse(sessionActivityAt(session)) || 0;
+  // The order follows what the person wrote, not what the agents stream back.
+  const activityAt = (session: Session) => sessionOrderAt(session);
   // A home composer open for a project is that project's pending new session:
   // its folder stays on the bar, and wears the highlight until the first
   // message creates the session, which then carries it.

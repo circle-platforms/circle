@@ -74,7 +74,7 @@ Several agents and people may work in this checkout at once.
 
 The graphical application lives in `apps/desktop`; `apps/workbench` is its shared renderer. Start the native app with `npm --prefix apps/desktop run dev`. The browser layout server is development tooling, not the application deliverable.
 
-Before you change the window, sidebar, composer, overview or drawer modes, read [the owner's layout rules](docs/development/workbench-unification.md#the-owners-layout-rules) and keep to them. A change to one drawer mode is made to all five.
+Before you change the window, sidebar, composer, overview or drawer modes, read [the owner's layout rules](docs/development/workbench-unification.md#the-owners-layout-rules) and keep to them. A change to one drawer mode is made to all six.
 
 The user has now authorized completing Circle's desktop frontend/backend integration first. Reuse the existing interactive AgentRuntime, connect its actual commands/events/interactions and verify isolated development and packaged execution. B/C/D/E production service integration remains a later phase. Use scripted models and isolated Circle home/workspaces; do not access real Circle data, production equipment or paid model endpoints for development verification.
 

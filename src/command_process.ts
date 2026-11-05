@@ -6,6 +6,8 @@ export interface CommandOrigin {
   userShellId?: string;
   /** Optional raw-argument display after the Runtime's known-secret redaction. */
   displayCommand?: string;
+  /** What the command does, in the model's few words, after the same redaction. */
+  description?: string;
   secretNames?: string[];
 }
 

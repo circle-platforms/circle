@@ -34,6 +34,7 @@ import {
   recentSessions,
   sessionActivityAt,
   sessionHasContent,
+  sessionOrderAt,
   sidebarProjects,
   trustListed,
   visibleSessions,
@@ -1070,6 +1071,77 @@ test('recent lists every context newest first, and its hover names only a projec
     projectFolders(workspaces, [older], scratch.id).map((item) => item.id),
     ['proj'],
   );
+});
+
+test('sessions that run at the same time keep their order; only writing to one moves it', () => {
+  const base = new PreviewRuntime()
+    .getSnapshot()
+    .sessions.find(sessionHasContent)!;
+  const message = (
+    id: string,
+    role: 'user' | 'assistant' | 'tool',
+    at: string,
+  ) =>
+    ({
+      ...base.messages[0]!,
+      id,
+      role,
+      at,
+      text: id,
+    }) as (typeof base.messages)[number];
+  const session = (id: string, messages: (typeof base.messages)[number][]) => ({
+    ...base,
+    id,
+    messages,
+    archivedAt: undefined,
+    updatedAt: '2026-11-05T10:00:00.000Z',
+  });
+  // A was written to first, B a minute later; both are now streaming.
+  let a = session('a', [message('a-ask', 'user', '2026-11-05T10:00:00.000Z')]);
+  let b = session('b', [message('b-ask', 'user', '2026-11-05T10:01:00.000Z')]);
+  assert.deepEqual(
+    recentSessions([a, b]).map((row) => row.id),
+    ['b', 'a'],
+  );
+  for (let step = 0; step < 6; step++) {
+    const at = (s: number) =>
+      new Date(Date.parse('2026-11-05T10:02:00.000Z') + s * 1000).toISOString();
+    // Each takes a turn to stream the newest step.
+    if (step % 2)
+      a = {
+        ...a,
+        messages: [...a.messages, message(`a${step}`, 'tool', at(step))],
+      };
+    else
+      b = {
+        ...b,
+        messages: [...b.messages, message(`b${step}`, 'assistant', at(step))],
+      };
+    assert.deepEqual(
+      recentSessions([a, b]).map((row) => row.id),
+      ['b', 'a'],
+      'a streamed reply or tool call does not move a row',
+    );
+  }
+  // The last activity still says how long ago something happened.
+  assert.notEqual(sessionActivityAt(a), a.messages[0]!.at);
+  a = {
+    ...a,
+    messages: [
+      ...a.messages,
+      message('a-again', 'user', '2026-11-05T10:05:00.000Z'),
+    ],
+  };
+  assert.deepEqual(
+    recentSessions([a, b]).map((row) => row.id),
+    ['a', 'b'],
+  );
+  assert.equal(sessionOrderAt(a), Date.parse('2026-11-05T10:05:00.000Z'));
+  // Nothing written yet: the row sits by its last activity.
+  const fresh = session('fresh', [
+    message('hello', 'assistant', '2026-11-05T09:00:00.000Z'),
+  ]);
+  assert.equal(sessionOrderAt(fresh), Date.parse('2026-11-05T09:00:00.000Z'));
 });
 
 test('a session whose deletion failed can be deleted again, one being deleted cannot (#195)', () => {
