@@ -396,7 +396,8 @@ export function createFixtures(): WorkbenchSnapshot {
         id: 'j1',
         sessionId: 'session1',
         kind: 'command',
-        title: 'npm run test -- reconnect',
+        title: 'Run the reconnect tests',
+        command: 'npm run test -- reconnect',
         state: 'running',
         elapsed: '14s',
         output:

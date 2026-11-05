@@ -318,7 +318,10 @@ export interface Job {
   id: string;
   sessionId: string;
   kind: 'command' | 'agent' | 'watch';
+  /** What the job does, in the model's words, or else its command. */
   title: string;
+  /** The command a background command runs, after secret redaction. */
+  command?: string;
   state:
     | 'running'
     | 'waiting'

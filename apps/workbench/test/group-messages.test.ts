@@ -27,7 +27,7 @@ const shape = (items: ReturnType<typeof groupMessages>) =>
       : { kind: 'message' as const, id: item.message.id },
   );
 
-test('thinking-only assistant steps stay visible when showThinking is on', () => {
+test('thinking-only steps fold in with their tools, even with thinking shown', () => {
   const messages = [
     row('think-1', 'assistant', { thinking: 'Check providers first.' }),
     row('tool-1', 'tool', {
@@ -54,16 +54,18 @@ test('thinking-only assistant steps stay visible when showThinking is on', () =>
     row('answer', 'assistant', { text: 'Done.' }),
   ];
 
+  // One folded line for the steps; opened, it shows each step's thinking and calls.
   assert.deepEqual(shape(groupMessages(messages, { showThinking: true })), [
-    { kind: 'message', id: 'think-1' },
-    { kind: 'tools', batchKey: 'think-1', ids: ['tool-1'] },
-    { kind: 'message', id: 'think-2' },
-    { kind: 'tools', batchKey: 'think-2', ids: ['tool-2'] },
+    {
+      kind: 'tools',
+      batchKey: 'think-1',
+      ids: ['think-1', 'tool-1', 'think-2', 'tool-2'],
+    },
     { kind: 'message', id: 'answer' },
   ]);
 });
 
-test('hidden thinking still splits ToolGroups per model step', () => {
+test('steps with hidden thinking share one ToolGroup', () => {
   const messages = [
     row('think-1', 'assistant', { thinking: 'Check providers first.' }),
     row('tool-1', 'tool', {
@@ -91,13 +93,16 @@ test('hidden thinking still splits ToolGroups per model step', () => {
   ];
 
   assert.deepEqual(shape(groupMessages(messages)), [
-    { kind: 'tools', batchKey: 'think-1', ids: ['think-1', 'tool-1'] },
-    { kind: 'tools', batchKey: 'think-2', ids: ['think-2', 'tool-2'] },
+    {
+      kind: 'tools',
+      batchKey: 'think-1',
+      ids: ['think-1', 'tool-1', 'think-2', 'tool-2'],
+    },
     { kind: 'message', id: 'answer' },
   ]);
 });
 
-test('tools-only rounds with different parentIds stay separate ToolGroups', () => {
+test('tools-only rounds with different parentIds share one ToolGroup', () => {
   const messages = [
     row('tool-a1', 'tool', {
       parentId: 'asst-a',
@@ -132,8 +137,11 @@ test('tools-only rounds with different parentIds stay separate ToolGroups', () =
   ];
 
   assert.deepEqual(shape(groupMessages(messages)), [
-    { kind: 'tools', batchKey: 'asst-a', ids: ['tool-a1', 'tool-a2'] },
-    { kind: 'tools', batchKey: 'asst-b', ids: ['tool-b1'] },
+    {
+      kind: 'tools',
+      batchKey: 'asst-a',
+      ids: ['tool-a1', 'tool-a2', 'tool-b1'],
+    },
   ]);
 });
 
@@ -157,7 +165,7 @@ test('empty assistant placeholders still fold into their own tool group', () => 
   ]);
 });
 
-test('empty placeholder does not glue onto a previous tool batch', () => {
+test('an empty placeholder joins the tool batch before it', () => {
   const messages = [
     row('tool-a', 'tool', {
       parentId: 'asst-a',
@@ -182,7 +190,35 @@ test('empty placeholder does not glue onto a previous tool batch', () => {
     }),
   ];
   assert.deepEqual(shape(groupMessages(messages)), [
-    { kind: 'tools', batchKey: 'asst-a', ids: ['tool-a'] },
-    { kind: 'tools', batchKey: 'empty', ids: ['empty', 'tool-b'] },
+    { kind: 'tools', batchKey: 'asst-a', ids: ['tool-a', 'empty', 'tool-b'] },
+  ]);
+});
+
+test('text between steps, and the step with the turn usage, keep their own lines', () => {
+  const tool = (id: string, parentId: string) =>
+    row(id, 'tool', {
+      parentId,
+      tool: {
+        id,
+        name: 'grep',
+        input: { pattern: 'x' },
+        output: 'ok',
+        status: 'success',
+      },
+    });
+  const messages = [
+    tool('t1', 'a1'),
+    tool('t2', 'a2'),
+    row('said', 'assistant', { text: 'Found it.' }),
+    tool('t3', 'a3'),
+    row('end', 'assistant', {
+      usage: { input: 10, output: 2, elapsed: '9s' },
+    }),
+  ];
+  assert.deepEqual(shape(groupMessages(messages)), [
+    { kind: 'tools', batchKey: 'a1', ids: ['t1', 't2'] },
+    { kind: 'message', id: 'said' },
+    { kind: 'tools', batchKey: 'a3', ids: ['t3'] },
+    { kind: 'message', id: 'end' },
   ]);
 });

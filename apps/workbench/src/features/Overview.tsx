@@ -10,6 +10,7 @@ import {
   MoreVertical,
   FileDiff,
   Users,
+  Activity,
   type LucideIcon,
 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
@@ -37,16 +38,19 @@ import type { PanelId, SessionMemoryDocument } from '../model/types';
 import { workspaceLabel } from '../model/workspace-label';
 import { SAMPLE_PULL_REQUESTS } from '../preview/pull-requests';
 import type { PullRequestSummary } from '../../../desktop/src/workspace/pulls-types';
+import { sessionJobs } from '../model/jobs';
 import '../styles/overview.css';
 
 const OUTPUTS_SHOWN = 3;
 const PULL_REQUESTS_SHOWN = 2;
 
-type CardId = 'environment' | 'context' | 'progress' | 'outputs' | 'changes';
+type CardId =
+  'environment' | 'context' | 'progress' | 'jobs' | 'outputs' | 'changes';
 const OPEN: Record<CardId, boolean> = {
   environment: true,
   context: false,
   progress: true,
+  jobs: true,
   outputs: true,
   changes: true,
 };
@@ -272,6 +276,8 @@ export function Overview({
     snapshot.sessions,
     snapshot.agents,
   );
+  // Circle's background commands have a card of their own; a row opens the mode.
+  const jobs = sessionJobs(session.id, snapshot.jobs).running;
   const outputs = outputRows(session.changes, workspace?.path);
   const { overview } = usePullRequests({
     sessionId: session.id,
@@ -525,6 +531,39 @@ export function Overview({
               </Row>
             );
           })}
+        </Card>
+      )}
+
+      {jobs.length > 0 && (
+        <Card
+          id="jobs"
+          title={t('background jobs')}
+          open={open.jobs ?? true}
+          onToggle={() => toggle('jobs')}
+          summary={jobs.length}
+        >
+          {jobs.map((job) => (
+            <Row
+              key={job.id}
+              icon={Activity}
+              title={job.command ?? job.title}
+              onClick={() => onPanel('jobs', job.id)}
+              end={
+                <>
+                  <Dot state={job.state === 'waiting' ? 'wait' : 'run'} />
+                  <EndText>
+                    {job.state === 'waiting'
+                      ? t('waiting for you')
+                      : job.state === 'stopping'
+                        ? t('stopping')
+                        : job.elapsed || t('running')}
+                  </EndText>
+                </>
+              }
+            >
+              <span className="overview-name">{job.title}</span>
+            </Row>
+          ))}
         </Card>
       )}
 

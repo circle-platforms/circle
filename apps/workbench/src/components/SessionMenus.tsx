@@ -33,7 +33,8 @@ import { t } from '../i18n';
 import { IconButton } from './common';
 import '../styles/session-management.css';
 
-function Menu({
+export function Menu({
+  side = 'right',
   label,
   children,
   tabIndex,
@@ -46,6 +47,7 @@ function Menu({
   onKeyDown,
   onCloseAutoFocus,
 }: {
+  side?: 'right' | 'bottom' | 'top';
   label: string;
   children: ReactNode;
   tabIndex?: number;
@@ -76,8 +78,8 @@ function Menu({
       <DropdownMenu.Portal>
         <DropdownMenu.Content
           className="dropdown session-menu"
-          side="right"
-          align="start"
+          side={side}
+          align={side === 'right' ? 'start' : 'end'}
           sideOffset={4}
           onCloseAutoFocus={onCloseAutoFocus}
         >
@@ -88,7 +90,7 @@ function Menu({
   );
 }
 
-function Item({
+export function Item({
   icon: Icon,
   label,
   hint,

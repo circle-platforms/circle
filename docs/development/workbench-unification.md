@@ -23,19 +23,25 @@ The owner set these rules on 2026-11-05, after the graphite restyle of #405 was 
 - The first row of the sidebar is left to the window's buttons. Circle's logo and name are at the left of the sidebar's foot, before search, settings and hide sidebar.
 - The foot shows no model and no connection state. The connection light is beside the model under the message box. When the runtime has stopped or is restarting, that button says so and restarts it. Without a model, the message box offers to connect one.
 - A session row's highlight covers the whole row, its ⋯ included. The ⋯ shows on hover and has no tooltip; its accessible name stays.
+- Sessions are ordered by when the person last wrote to them. Replies, tool calls and notices do not move a row, so conversations that run at the same time keep their places.
 
 **Composer**
 
 - The composer has no ring and no "waiting for Circle" line while a turn runs, and there is no usage line (tokens, context, cache) under it. Those figures are in the overview's context card.
 - A ChatGPT plan is not marked apart from other connections and shows no cost anywhere.
+- Tool calls of steps with nothing to read between them fold into one line; a thinking-only step joins them. Opened, the line lists the calls with each step's thinking; a call opens to its command and output.
+- The thinking line shows the newest heading of the summary without markdown marks; headings alone do not open.
+- A turn's time, tokens and cost show once, under its last message, as the turn's total.
+- Switching the mode raises no notice; the mode button names the mode and its menu explains each one.
+- Queued messages are one panel above the message box, as Claude shows them: a folding `N messages queued` heading, one row per message with a ⋯ menu (edit, remove) and **clear all** at the foot. The rows carry no steering or follow-up label, and the word 插话 is not used. They cannot be reordered, since the runtime keeps their order.
 
 **The overview**
 
 - The overview belongs with the conversation, not with the modes. There is no rule between the conversation and the overview, and its cards keep their own frames. It is not restyled with the modes.
 
-**The modes: files, changes, browser, subagents and terminal**
+**The modes: files, changes, browser, subagents, background jobs and terminal**
 
-They share one frame, and a change to one is made to all five:
+They share one frame, and a change to one is made to all six:
 
 - the same surface (`--bg`), with no tint of their own;
 - the same opening width, 380 pixels, the overview's width; an opened file or subagent widens to 760;
@@ -44,13 +50,16 @@ They share one frame, and a change to one is made to all five:
 
 An empty mode uses [PaneEmpty](../../apps/workbench/src/components/ui.tsx) and nothing else: the mode's icon, its name and one line saying what it is for, at the same height in every mode, whatever else the mode has. It has no buttons. A mode's own toolbar already has its actions; the terminal's **+** opens a terminal.
 
-| Mode      | Name (zh-CN) | Line (zh-CN)                   |
-| --------- | ------------ | ------------------------------ |
-| files     | 文件         | 显示当前工作文件夹中的文件     |
-| changes   | 改动         | 显示当前工作文件夹中的所有改动 |
-| browser   | 网页         | 使用内置浏览器进行控制和访问   |
-| terminal  | 终端         | 显示当前的后台任务或创建新终端 |
-| subagents | 子代理       | 控制和查看当前运行的所有子代理 |
+| Mode            | Name (zh-CN) | Line (zh-CN)                   |
+| --------------- | ------------ | ------------------------------ |
+| files           | 文件         | 显示当前工作文件夹中的文件     |
+| changes         | 改动         | 显示当前工作文件夹中的所有改动 |
+| browser         | 网页         | 使用内置浏览器进行控制和访问   |
+| terminal        | 终端         | 显示当前的后台任务或创建新终端 |
+| subagents       | 子代理       | 控制和查看当前运行的所有子代理 |
+| background jobs | 后台任务     | 显示 Circle 在后台运行的命令   |
+
+**Background jobs** are Circle's own background commands, apart from the terminals the person opens. They have their own mode and icon, between subagents and terminal, which carries the count of running jobs, and their own overview card; a row of the card opens the mode on that job. The mode lists running jobs, then finished ones under a folding heading, each a card named by the model's short `description` (or else its command), with its time and, while it runs, a stop button. A card opens to `$ command` and the end of its output. The terminal carries no count.
 
 Status lines that say nothing useful are not shown, such as a loaded-file count. A field shows its whole text; an input is as tall as its field.
 

@@ -186,11 +186,7 @@ import {
 import { formatMcpArguments, parseMcpArguments } from './mcp-arguments';
 import { PlanCompletionTracker } from '../../../src/plan_state.js';
 import { nextAgentActivity } from '../../../src/session_activity.js';
-import {
-  formatElapsed,
-  gapElapsed,
-  type TurnUsage,
-} from '../../../src/tui/status_rows.js';
+import { formatElapsed, type TurnUsage } from '../../../src/tui/status_rows.js';
 import {
   approvalPreview,
   fileChange,
@@ -2524,7 +2520,6 @@ export class RuntimeController {
     const calls = new Map<string, Message>();
     // A stored reply has tokens but not the turn clock. Measure it from the prompt,
     // or from the previous reply, so an older footer shows a duration too.
-    let markedAt: number | undefined;
     for (const node of nodes) {
       const raw = node.message;
       if (!raw || raw.role === 'system') continue;
@@ -2643,8 +2638,8 @@ export class RuntimeController {
         ...(raw.role === 'assistant' && raw.interrupted
           ? { interrupted: true }
           : {}),
-        // The last message of a finished turn shows the whole turn: its time and tokens.
-        // Any other reply with usage shows the time since the prompt or the previous reply.
+        // Only the last message of a finished turn shows usage: the whole turn's time,
+        // tokens and cost, once. The steps before it show none.
         usage: turns[raw.id]
           ? {
               input: turns[raw.id]!.input,
@@ -2655,29 +2650,11 @@ export class RuntimeController {
               ...(raw.interrupted ? { estimated: true } : {}),
               elapsed: formatElapsed(turns[raw.id]!.seconds),
             }
-          : raw.usage
-            ? {
-                input: raw.usage.input_tokens,
-                output: raw.usage.output_tokens,
-                // The workbench shows dollars; another currency is not converted
-                ...(priced
-                  ? {
-                      cost:
-                        raw.cost?.currency === 'USD'
-                          ? (raw.cost.amount ?? null)
-                          : null,
-                    }
-                  : {}),
-                ...(raw.interrupted ? { estimated: true } : {}),
-                elapsed: gapElapsed(markedAt, node.created),
-              }
-            : undefined,
+          : undefined,
       };
       const shown =
         raw.role !== 'assistant' ||
         Boolean(base.text || base.thinking || base.attachments?.length);
-      if (raw.role === 'user' || (shown && base.usage))
-        markedAt = new Date(node.created).getTime();
       if (shown) result.push(base);
       for (const call of raw.tool_calls ?? []) {
         const state = this.toolStates.get(`${id}:${call.id}`);
@@ -3167,6 +3144,7 @@ export class RuntimeController {
               ? ('command' as const)
               : job.kind,
           title: job.title,
+          ...(job.command ? { command: job.command } : {}),
           state:
             job.status === 'running'
               ? this.stoppedJobs.has(`${job.sessionId}:${job.id}`)

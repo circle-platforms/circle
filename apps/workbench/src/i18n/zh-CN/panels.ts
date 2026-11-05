@@ -117,6 +117,8 @@ export const panels: Record<string, string> = {
   'open a page': '打开一个页面',
   'browse the web': '浏览网页',
   web: '网页',
+  'background jobs': '后台任务',
+  'the commands Circle runs in the background': '显示 Circle 在后台运行的命令',
   'the files in the working folder': '显示当前工作文件夹中的文件',
   'every change in the working folder': '显示当前工作文件夹中的所有改动',
   'browse and control pages in the built-in browser':

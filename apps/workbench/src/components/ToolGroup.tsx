@@ -1,3 +1,9 @@
+import {
+  cleanThinking,
+  thinkingHasBody,
+  thinkingHeadline,
+} from '../model/thinking';
+import { Markdown } from './Markdown';
 import { useId, type ReactNode } from 'react';
 import { useSessionDisclosure } from '../model/presentation';
 import { Brain, ChevronDown, ChevronRight, LoaderCircle } from 'lucide-react';
@@ -158,25 +164,31 @@ export function ToolGroup({
 
 function GroupThinking({ row }: { row: Message }) {
   const [open, setOpen] = useSessionDisclosure('thinking:' + row.id);
+  const opens = thinkingHasBody(row.thinking);
   return (
     <details
       data-message-id={row.id}
       className="thinking group-thinking"
-      open={open}
+      open={opens && open}
+      data-heading-only={opens ? undefined : true}
     >
       <summary
         onClick={(event) => {
           event.preventDefault();
-          setOpen(!open);
+          if (opens) setOpen(!open);
         }}
       >
         <Brain size={13} />
         <span>{t('thinking')}</span>
         <span className="thinking-preview">
-          {row.thinking?.trim().split('\n')[0]?.slice(0, 120)}
+          {thinkingHeadline(row.thinking)}
         </span>
       </summary>
-      <p>{row.thinking}</p>
+      {opens && (
+        <div className="thinking-body">
+          <Markdown text={cleanThinking(row.thinking)} />
+        </div>
+      )}
     </details>
   );
 }

@@ -1,5 +1,11 @@
 // Simplified Chinese for the interface words in the conversation files. English is the key.
 export const conversation: Record<string, string> = {
+  'queued messages': '排队消息',
+  '{n} message queued': '{n} 条消息排队中',
+  '{n} messages queued': '{n} 条消息排队中',
+  'queued message actions': '排队消息操作',
+  'remove queued message': '移除这条消息',
+  'clear all': '全部清除',
   'waiting for runtime connection': '等待连接运行时中',
   'connection settings': '连接设置…',
   hook: '钩子',
@@ -118,10 +124,6 @@ export const conversation: Record<string, string> = {
   'title failed · {message}': '标题失败 · {message}',
   'archived conversation · read only': '已归档对话 · 只读',
   'restore conversation': '恢复对话',
-  steering: '插话',
-  'follow-up': '追加消息',
-  'remove queued {kind}': '移除排队中的 {kind}',
-  'return queued messages to draft': '把排队的消息放回草稿',
   // the composer
   'input completions': '输入补全',
   message: '消息',
