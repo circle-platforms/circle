@@ -37,7 +37,7 @@ import {
 } from '../src/tui/status_rows.js';
 import { agentRows, jobRows, stripHeader } from '../src/tui/strip_rows.js';
 import { TurnStatus } from '../src/tui/turn_status.js';
-import { WelcomeState } from '../src/tui/welcome_state.js';
+import { lastVisibleReply, WelcomeState } from '../src/tui/welcome_state.js';
 import { SessionApp } from '../src/tui/session_app.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { defaultSettings, trustFolder } from '../src/settings.js';
@@ -474,8 +474,12 @@ function welcomeInfo(over: Partial<WelcomeInfo> = {}): WelcomeInfo {
       { kind: 'settings', text: '.circle/settings.json', state: 'none' },
     ],
     recent: [
-      ['why does the export test fail on windows?', '2h'],
-      ['clean up', '3d'],
+      {
+        title: 'why does the export test fail on windows?',
+        age: '2h',
+        last: 'The path separator is the cause.',
+      },
+      { title: 'clean up', age: '3d', last: '' },
     ],
     more: 6,
     ...over,
@@ -509,6 +513,12 @@ test('the welcome block draws the ring in its own colours, lamps that follow the
     setPalette(p);
     const rows = welcomeRows(90, welcomeInfo());
     const plain = rows.map(stripAnsi);
+    assert.ok(
+      plain.some((row) =>
+        row.includes('last: The path separator is the cause.'),
+      ),
+    );
+    assert.equal(plain.filter((row) => row.includes('last:')).length, 1);
     // the version, the model and the folder beside the three rows of the ring
     assert.match(plain[0]!, /circle 1\.0\.0$/);
     assert.match(plain[1]!, /glm-5\.3 • high · open\.bigmodel\.cn$/);
@@ -686,7 +696,7 @@ test('the welcome lists a short title and an untitled session, including the new
     });
   const first = info('other');
   assert.deepEqual(
-    first.recent.map(([title]) => title),
+    first.recent.map(({ title }) => title),
     ['hi', '(untitled)', 'older task'],
   );
   assert.equal(first.more, 0);
@@ -694,18 +704,67 @@ test('the welcome lists a short title and an untitled session, including the new
     store.list(root).some((session) => session.id === blank.id),
     false,
   );
-  assert.equal(info(blank.id).recent[0]?.[0], 'hi');
+  assert.equal(info(blank.id).recent[0]?.title, 'hi');
   const open = info(hi);
   assert.equal(
-    open.recent.some(([title]) => title === 'hi'),
+    open.recent.some(({ title }) => title === 'hi'),
     false,
   );
-  assert.equal(open.recent[0]?.[0], '(untitled)');
+  assert.equal(open.recent[0]?.title, '(untitled)');
   await speak('just now', 'a newer request');
   const next = info(blank.id);
-  assert.equal(next.recent[0]?.[0], 'just now');
-  assert.ok(next.recent.some(([title]) => title === 'hi'));
+  assert.equal(next.recent[0]?.title, 'just now');
+  assert.ok(next.recent.some(({ title }) => title === 'hi'));
   assert.equal(next.more, 1);
+});
+
+test('a recent session previews the last visible message of its selected branch', (t) => {
+  assert.equal(
+    lastVisibleReply([
+      { id: 'u', role: 'user', content: 'raw', display: '**Shown** request' },
+      { id: 'hidden', role: 'assistant', content: 'hidden', internal: 'note' },
+      {
+        id: 'call',
+        role: 'assistant',
+        content: 'not a reply',
+        tool_calls: [{ id: 'c', name: 'read_file', args: {} }],
+      },
+      { id: 'tool', role: 'tool', content: 'tool result' },
+      { id: 'empty', role: 'assistant', content: '  ' },
+      {
+        id: 'a',
+        role: 'assistant',
+        content:
+          '## Result\nUse `path` and [the guide](https://example.com).\nNext line.',
+      },
+    ]),
+    'Result Use path and the guide. Next line.',
+  );
+  assert.equal(
+    lastVisibleReply([
+      { id: 'u', role: 'user', content: 'raw', display: '**Shown** request' },
+    ]),
+    'Shown request',
+  );
+  assert.equal(
+    lastVisibleReply([{ id: 'hidden', role: 'system', content: 'hidden' }]),
+    '',
+  );
+  const store = new CheckpointStore();
+  t.after(() => store.close());
+  const session = store.create('/project', 'test');
+  const root = store.append(session.id, [
+    { id: 'u', role: 'user', content: 'start' },
+  ]);
+  const selected = store.append(session.id, [
+    { id: 'a', role: 'assistant', content: 'selected branch' },
+  ]);
+  store.select(session.id, root);
+  store.append(session.id, [
+    { id: 'b', role: 'assistant', content: 'other branch' },
+  ]);
+  store.select(session.id, selected);
+  assert.equal(lastVisibleReply(store.messages(session.id)), 'selected branch');
 });
 
 test('shared recent titles show the first reply, or the short id when the reply matches', async (t) => {
@@ -740,12 +799,12 @@ test('shared recent titles show the first reply, or the short id when the reply 
       trusted: true,
     });
   assert.deepEqual(
-    info('other').recent.map(([title]) => title),
+    info('other').recent.map(({ title }) => title),
     ['hi · ready now', 'hi · hello there'],
   );
   const again = await speak('hi', 'ok');
   const twin = await speak('hi', 'ok');
-  const rows = info('other').recent.map(([title]) => title);
+  const rows = info('other').recent.map(({ title }) => title);
   assert.equal(rows[0], `hi · ${twin.slice('circle-'.length)}`);
   assert.equal(rows[1], `hi · ${again.slice('circle-'.length)}`);
   assert.equal(rows[2], 'hi · ready now');

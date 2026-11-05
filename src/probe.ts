@@ -47,6 +47,10 @@ export function probeSummary(found: ProbeResult): string {
     return `endpoint returned an empty model list (${found.protocol})`;
   return `discovered ${found.models.length} models (${found.protocol})`;
 }
+// Long enough for a distant endpoint on a slow network: a model list answered after 2.5 s
+// was reported as a failure. A request that runs out of it ends discovery, because the same
+// host does not answer the next candidate URL any sooner.
+export const DISCOVERY_TIMEOUT = 10_000;
 export function inferProtocolHint(base: string): string | undefined {
   if (/anthropic/i.test(base)) return 'anthropic';
   if (/openai|compatible-mode|openrouter|\/v1\/chat|azure/i.test(base))
@@ -85,7 +89,7 @@ export async function resolveEndpoint(
       status: 'failed',
       detail: desktopText('missing API key'),
     };
-  for (const protocol of options.protocol
+  search: for (const protocol of options.protocol
     ? [options.protocol]
     : [preferred, preferred === 'openai' ? 'anthropic' : 'openai']) {
     const bases =
@@ -115,7 +119,7 @@ export async function resolveEndpoint(
           }
           const response = await fetch(url, {
             headers,
-            signal: AbortSignal.timeout(options.timeout ?? 2500),
+            signal: AbortSignal.timeout(options.timeout ?? DISCOVERY_TIMEOUT),
           });
           if (!response.ok) {
             problem = `http ${response.status}`;
@@ -178,6 +182,8 @@ export async function resolveEndpoint(
             ? networkError(error, resolved).message
             : 'connection failed or invalid JSON',
         );
+        if ((error as { name?: unknown })?.name === 'TimeoutError')
+          break search;
       }
     }
   }

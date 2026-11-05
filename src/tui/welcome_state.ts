@@ -4,6 +4,7 @@
 // while it loads, green once loaded, red for an extension that failed. Recent sessions
 // include a short title and an untitled one that has a message.
 import type { AgentRuntime } from '../runtime.js';
+import type { Message } from '../types.js';
 import type { CircleSettings } from '../settings.js';
 import { isReady } from '../settings.js';
 import { currentBranch } from '../git_info.js';
@@ -12,6 +13,7 @@ import type { LampState } from '../ink/theme.js';
 import {
   age,
   type WelcomeInfo,
+  type WelcomeRecent,
   type WelcomeItem,
 } from '../ink/components/welcome.js';
 import {
@@ -20,6 +22,7 @@ import {
   type FolderItem,
 } from './folder_inventory.js';
 import { displayPath } from './status_rows.js';
+import { rowText } from './conversation_tree.js';
 import { sessionRowLabel } from './session_label.js';
 
 export interface WelcomeInput {
@@ -33,10 +36,33 @@ export interface WelcomeInput {
   settingUp?: boolean;
 }
 
+/**
+ * The last thing said in a session, as one row: what tells apart sessions that open alike.
+ * A tool's result, an internal note and a reply that only called a tool are not shown.
+ */
+export function lastVisibleReply(messages: readonly Message[]): string {
+  let last = '';
+  for (const message of messages) {
+    if (
+      message.internal ||
+      (message.role !== 'assistant' && message.role !== 'user') ||
+      (message.role === 'assistant' && message.tool_calls?.length)
+    )
+      continue;
+    const text = rowText(
+      message.role === 'user'
+        ? message.display || message.content
+        : message.content,
+    );
+    if (text) last = text;
+  }
+  return last;
+}
+
 export class WelcomeState {
   private key?: string;
   private items: FolderItem[] = [];
-  private recent: [string, string][] = [];
+  private recent: WelcomeRecent[] = [];
   private more = 0;
   private branchAt = 0;
   private branchName = '';
@@ -76,10 +102,11 @@ export class WelcomeState {
       .list(this.workspace)
       .filter((session) => session.id !== runtime.session.id);
     const shown = saved.slice(0, 3);
-    this.recent = shown.map((session) => [
-      sessionRowLabel(session, saved, runtime.store),
-      age(session.activity ?? session.updated, now),
-    ]);
+    this.recent = shown.map((session) => ({
+      title: sessionRowLabel(session, saved, runtime.store),
+      age: age(session.activity ?? session.updated, now),
+      last: lastVisibleReply(runtime.store.messages(session.id)),
+    }));
     this.more = Math.max(0, saved.length - 3);
   }
 

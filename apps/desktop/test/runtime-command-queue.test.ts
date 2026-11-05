@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { RuntimeController } from '../src/runtime-controller.ts';
+import { AgentRuntime } from '../../../src/runtime.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
 import {
   defaultSettings,
@@ -127,3 +128,56 @@ test(
     await next;
   },
 );
+
+test('begin-session opens the session when connecting outlasts the wait for its first message', async (t) => {
+  const f = await setup(t, [
+    {
+      message: {
+        id: randomUUID(),
+        role: 'assistant',
+        content: 'answered',
+        tool_calls: [],
+      },
+    },
+  ]);
+  const opened = await f.call('open-workspace', { path: f.workspace });
+  assert.equal(opened.ok, true, String(opened.error));
+  let hold = true;
+  let reached = false;
+  let connected!: () => void;
+  const connecting = new Promise<void>((resolve) => {
+    connected = resolve;
+  });
+  const initialize = AgentRuntime.prototype.initialize;
+  t.mock.method(
+    AgentRuntime.prototype,
+    'initialize',
+    async function (this: AgentRuntime, signal?: AbortSignal) {
+      if (hold) {
+        reached = true;
+        await connecting;
+      }
+      return initialize.call(this, signal);
+    },
+  );
+  // Only the clock moves: the wait itself keeps polling on real timers.
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const begun = f.call('begin-session', {
+    workspaceId: (opened.data as { workspaceId: string }).workspaceId,
+    text: 'first message',
+  });
+  await wait(() => reached, 'the turn reaches the connection');
+  t.mock.timers.tick(8001);
+  const reply = await begun;
+  t.mock.timers.reset();
+  // The turn was never abandoned: once connected it stores the message and answers.
+  hold = false;
+  connected();
+  assert.equal(reply.ok, true, String(reply.error));
+  const { sessionId } = reply.data as { sessionId: string };
+  assert.equal(f.controller.snapshot().activeSessionId, sessionId);
+  await wait(
+    () => f.model.requests.length === 1,
+    'the turn goes on after the connection',
+  );
+});

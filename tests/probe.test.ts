@@ -181,3 +181,35 @@ test('an online provider failure remains a failure and never falls back to prese
     /unknown provider/,
   );
 });
+test('a model list that takes longer than 2.5 s is still found, and a timeout ends discovery', async (t) => {
+  // api.kimi.com answered after the old 2.5 s limit on a user's network
+  const slow = createServer((req, res) => {
+    const timer = setTimeout(
+      () =>
+        res
+          .setHeader('Content-Type', 'application/json')
+          .end(JSON.stringify({ data: [{ id: 'kimi-for-coding' }] })),
+      3000,
+    );
+    res.on('close', () => clearTimeout(timer));
+  });
+  const seen: string[] = [];
+  const silent = createServer((req) => void seen.push(req.url ?? ''));
+  for (const server of [slow, silent]) {
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    t.after(() => {
+      server.closeAllConnections();
+      return new Promise<void>((done) => server.close(() => done()));
+    });
+  }
+  const at = (server: typeof slow) =>
+    `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const found = await resolveEndpoint(at(slow) + '/coding/v1', 'key');
+  assert.equal(found.status, 'discovered');
+  assert.deepEqual(found.models, ['kimi-for-coding']);
+  // Without a version or a protocol there are four URLs to try; after a timeout, none
+  const failed = await resolveEndpoint(at(silent), 'key', { timeout: 200 });
+  assert.equal(failed.status, 'failed');
+  assert.match(failed.detail, /^timeout failure on 127\.0\.0\.1:\d+:/);
+  assert.deepEqual(seen, ['/models']);
+});

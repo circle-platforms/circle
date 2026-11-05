@@ -228,9 +228,7 @@ export class DesktopKnowledge {
     }[];
   };
   /** The memory documents this session's model was given, and whether each is whole. */
-  sessionMemory(
-    runtime: AgentRuntime,
-  ):
+  sessionMemory(runtime: AgentRuntime):
     | {
         scope: 'team' | 'personal';
         title: string;
