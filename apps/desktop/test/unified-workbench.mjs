@@ -306,16 +306,13 @@ try {
   phase = 'file-drawer';
   await open('files');
   // Renderer completion comes from its actual paged native list, not a test runtime.
+  // A complete listing shows no status line: no count, no loading or incomplete note.
   await drawer
-    .locator('.file-listing-status')
-    .getByText(`${catalogCount} files loaded`, { exact: true })
+    .locator('.virtual-file-tree [role="treeitem"]')
+    .first()
     .waitFor();
-  assert.equal(
-    await drawer
-      .locator('.file-listing-status')
-      .getByText('loading file list…', { exact: true })
-      .count(),
-    0,
+  await page.waitForFunction(
+    () => !document.querySelector('.work-drawer .file-listing-status'),
   );
   assert.equal(
     await drawer

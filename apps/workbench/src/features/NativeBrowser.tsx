@@ -52,7 +52,7 @@ import {
   browserShortcut,
   type BrowserKeyAction,
 } from '../../../desktop/src/browser-controls';
-import { Button, IconButton } from '../components/common';
+import { Button, IconButton, PaneEmpty } from '../components/common';
 import { BrowserDialogPanel, CertificateChoicePanel } from './BrowserDialog';
 import { t } from '../i18n';
 import { ModeButtons, useModeChrome } from './mode-chrome';
@@ -1088,10 +1088,9 @@ export function NativeBrowser({
               </Button>
             </div>
           ) : !opened ? (
-            <div className="browser-empty">
-              <Globe size={22} strokeWidth={1.5} />
-              <h3>{t('browse the web')}</h3>
-            </div>
+            <PaneEmpty icon={Globe} className="browser-empty" title={t('web')}>
+              <p>{t('browse and control pages in the built-in browser')}</p>
+            </PaneEmpty>
           ) : frozen ? (
             <img className="browser-frozen" src={frozen} alt="" />
           ) : null}

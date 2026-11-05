@@ -130,7 +130,8 @@ try {
       .getByRole('button', { name: 'partial listing', exact: true })
       .click();
     await page.getByText('file list is incomplete', { exact: true }).waitFor();
-    await page.getByText('2000 files loaded', { exact: true }).waitFor();
+    // The status line says what is wrong; it shows no loaded count.
+    assert.equal(await page.getByText(/files? loaded/).count(), 0);
     assert.deepEqual(errors, []);
     await page.close();
   }

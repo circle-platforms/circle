@@ -248,8 +248,11 @@ try {
   assert.equal(info.frontendOnly, false);
   assert.equal(info.name, 'Circle');
   assert.equal(await page.title(), 'Circle');
-  assert.equal(await page.locator('.brand strong').innerText(), 'circle');
-  assert.equal(await page.locator('.brand small').innerText(), 'workbench');
+  // Circle's name is at the foot of the sidebar; the first row is the window's.
+  assert.equal(
+    await page.locator('.sidebar-brand strong').innerText(),
+    'circle',
+  );
   assert.equal(info.runtimeConnected, true);
   const initial = await state();
   assert.equal(initial.sessions.length, 1);

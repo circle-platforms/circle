@@ -33,7 +33,8 @@ test('files and subagents open as a list and widen when one is opened', () => {
       'terminal',
       'browser',
     ].map(openingWidth),
-    [300, 760, 300, 760, 536, 536, 536],
+    // Every list mode opens at one width; an opened file or subagent widens it.
+    [380, 760, 380, 760, 380, 380, 380],
   );
 });
 

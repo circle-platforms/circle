@@ -296,7 +296,7 @@ try {
 
   // The application menu may open settings over an existing dialog. Closing it must
   // leave that lower dialog open and able to receive the keyboard again.
-  await page.locator('.sidebar-footer .connection-status').click();
+  await page.locator('.sidebar-footer .sidebar-brand').click();
   const underneath = page.getByRole('dialog', {
     name: 'frontend preview',
     exact: true,
@@ -470,9 +470,10 @@ try {
   await page.waitForFunction(() => {
     const tips = document.querySelectorAll('.tooltip');
     return (
+      // The ⋯ shows no tip (owner's layout rules); its name is still read out.
       document.activeElement?.getAttribute('aria-label') ===
         'session actions for Fix the reconnect race' &&
-      tips.length === 1 &&
+      tips.length === 0 &&
       !document.querySelector('.session-hover')
     );
   });
@@ -484,12 +485,10 @@ try {
     const tips = [...document.querySelectorAll('.tooltip')];
     return (
       document.activeElement?.getAttribute('aria-label') ===
-        'session actions for Fix the reconnect race' &&
-      tips.length === 1 &&
-      !tips[0].classList.contains('session-hover')
+        'session actions for Fix the reconnect race' && tips.length === 0
     );
   });
-  checks.push('right arrow replaces the hover card with the menu tip');
+  checks.push('right arrow closes the hover card and the ⋯ shows no tip');
   await page.keyboard.press('ArrowLeft');
   await page.waitForFunction(() =>
     document.activeElement?.classList.contains('session-link'),
@@ -563,8 +562,7 @@ try {
   await page.waitForFunction(() => {
     const tips = [...document.querySelectorAll('.tooltip')];
     return (
-      tips.length === 1 &&
-      !tips[0].classList.contains('session-hover') &&
+      tips.length === 0 &&
       document.activeElement?.getAttribute('aria-label') ===
         'session actions for Extra recent 0'
     );
@@ -632,10 +630,13 @@ try {
   await page.mouse.move(700, 400);
   await recentRows.nth(0).locator('a.session-link').focus();
   await page.keyboard.press('ArrowRight');
-  await page.waitForFunction(() => {
-    const tips = [...document.querySelectorAll('.tooltip')];
-    return tips.length === 1 && !tips[0].classList.contains('session-hover');
-  });
+  await page.waitForFunction(
+    () =>
+      document.activeElement
+        ?.getAttribute('aria-label')
+        ?.startsWith('session actions') &&
+      document.querySelectorAll('.tooltip').length === 0,
+  );
   await recentRows.nth(0).locator('a.session-link').hover();
   await page.mouse.wheel(0, 240);
   await page.waitForFunction(() => {
@@ -647,7 +648,7 @@ try {
     );
   });
   checks.push('the sidebar list scrolls');
-  checks.push('scrolling the sidebar closes a menu tip');
+  checks.push('scrolling the sidebar leaves no tip or card open');
   await list.evaluate((node) => {
     // Hold the next scroll notification until after the session reorders. The
     // actual position has already changed, even though React has not heard it.

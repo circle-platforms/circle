@@ -57,7 +57,6 @@ import {
   pointerOnSidebarChrome,
   selectRenameText,
   sessionCardVisible,
-  sessionMenuTipOpen,
   shouldOpenSession,
 } from '../model/session-row';
 import { IconButton, usePressAction } from './common';
@@ -644,16 +643,6 @@ export function Sidebar({
         </div>
       );
     });
-  const connection =
-    runtime.mode !== 'live'
-      ? 'preview'
-      : !snapshot.runtime?.connected
-        ? snapshot.runtime?.stopped?.restarting
-          ? 'restarting'
-          : 'stopped'
-        : snapshot.runtime.configured
-          ? 'ready'
-          : 'not-configured';
   return (
     <aside
       ref={asideRef}
@@ -688,10 +677,8 @@ export function Sidebar({
         }
       }}
     >
-      <header className="brand">
-        <span className="circle-logo" />
-        <strong>circle</strong>
-      </header>
+      {/* The first row is left to the window's own buttons; the name is at the foot. */}
+      <header className="brand" aria-hidden="true" />
       <nav className="sidebar-primary" aria-label={t('navigation')}>
         <button className="sidebar-item" {...newSessionPress}>
           <Plus size={15} />
@@ -893,6 +880,27 @@ export function Sidebar({
         </div>
       )}
       <footer className="sidebar-footer">
+        {runtime.mode === 'live' ? (
+          <span className="sidebar-brand">
+            <span className="circle-logo" />
+            <strong>circle</strong>
+          </span>
+        ) : (
+          // The browser layout server's preview looks the same; its name opens what
+          // the preview is.
+          <button
+            className="sidebar-brand"
+            aria-label={t('frontend preview')}
+            title={t('frontend preview')}
+            onClick={() => {
+              onDialog?.('preview');
+              onNavigate?.();
+            }}
+          >
+            <span className="circle-logo" />
+            <strong>circle</strong>
+          </button>
+        )}
         {/* Only a bound sync server has a line; without one, settings → sync connects it. */}
         {snapshot.knowledgeSync &&
           knowledgeServerBound(snapshot.knowledgeSync) && (
@@ -901,36 +909,6 @@ export function Sidebar({
               onClick={() => navigate('/page/sync')}
             />
           )}
-        <button
-          className="connection-status"
-          data-state={connection}
-          disabled={connection === 'restarting'}
-          onClick={() => {
-            // A stopped runtime kept its connection: start it again.
-            if (connection === 'stopped' && runtime.restartRuntime) {
-              void perform(() => runtime.restartRuntime!());
-              return;
-            }
-            if (connection === 'ready') navigate('/page/models');
-            else onDialog?.(connection === 'preview' ? 'preview' : 'connect');
-            onNavigate?.();
-          }}
-        >
-          <i />
-          <span>
-            {connection === 'preview'
-              ? t('frontend preview')
-              : connection === 'restarting'
-                ? t('runtime restarting…')
-                : connection === 'stopped'
-                  ? runtime.restartRuntime
-                    ? t('runtime stopped · restart')
-                    : t('runtime stopped')
-                  : connection === 'not-configured'
-                    ? t('connect a model')
-                    : current.model}
-          </span>
-        </button>
         {/* App-wide controls: search everything, settings, and folding the sidebar. */}
         <span className="sidebar-footer-actions">
           <IconButton label={t('search')} onClick={onSearch}>
@@ -1029,12 +1007,6 @@ function SessionRow({
   const pressed = useRef(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [linkFocused, setLinkFocused] = useState(false);
-  const [inView, setInView] = useState(true);
-  useLayoutEffect(() => {
-    const row = menuButton.current?.closest('.session-row') ?? null;
-    const visible = rowInView(row, listRef.current);
-    setInView((current) => (current === visible ? current : visible));
-  });
   const aim = (event: { clientX: number; clientY: number }) =>
     onPoint({ x: event.clientX, y: event.clientY });
   // The card follows the pointer. The tooltip library drops the hover that
@@ -1072,14 +1044,6 @@ function SessionRow({
         event.currentTarget.contains(event.target),
       rect: event.currentTarget.getBoundingClientRect(),
     });
-  const tipOpen = sessionMenuTipOpen({
-    keyboardOwns,
-    menuFocused: menuFocus === rowKey,
-    editing,
-    menuOpen,
-    scrollClosed,
-    inView,
-  });
   const row = (
     <div
       className={task ? 'session-row task-row' : 'session-row'}
@@ -1168,7 +1132,8 @@ function SessionRow({
             buttonRef={menuButton}
             open={menuOpen}
             onOpenChange={setMenuOpen}
-            tipOpen={tipOpen}
+            // The ⋯ shows on hover with no tip; its name is still read out.
+            tipOpen={false}
             onFocus={() => onMenuFocus(rowKey)}
             onBlur={() => onMenuFocus(null)}
             onKeyDown={(event) => {
@@ -1217,13 +1182,6 @@ function listAnchor(list: HTMLElement) {
   }
   const key = chosen?.dataset.rowKey;
   return key ? { key, delta } : null;
-}
-
-function rowInView(row: Element | null, list: HTMLElement | null) {
-  if (!row || !list) return false;
-  const listBox = list.getBoundingClientRect();
-  const rowBox = row.getBoundingClientRect();
-  return rowBox.bottom > listBox.top + 1 && rowBox.top < listBox.bottom - 1;
 }
 
 function menuKey(event: { key: string; shiftKey: boolean }) {

@@ -15,12 +15,11 @@ export const RESTORE_MARGIN = 24;
 
 /** Widths a mode opens at, before the person has moved them. */
 const OPENING_WIDTH: Record<string, number> = {
-  files: 300,
   'files:open': 760,
-  agents: 300,
   'agents:open': 760,
 };
-const OTHER_WIDTH = 536;
+/** Every mode opens as wide as the overview, until the person moves it. */
+const OTHER_WIDTH = OVERVIEW_WIDTH;
 
 /** Files and subagents are a list until one is opened, then a document beside the list. */
 export function drawerKey(mode: string, opened: boolean): string {

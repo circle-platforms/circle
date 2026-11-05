@@ -205,7 +205,10 @@ try {
       .getByRole('button', { name: 'send message', exact: true })
       .click();
   };
-  const status = page.locator('.connection-status');
+  // The connection's light and words are under the message box, where the model is.
+  const status = page
+    .locator('.composer-footbar .footbar-button')
+    .filter({ has: page.locator('.model-status') });
   // The first start opens the connection form; save the connection directly.
   await page.getByRole('textbox', { name: 'base url', exact: true }).waitFor();
   const configured = await command('configure', {
@@ -251,7 +254,7 @@ try {
   assert.equal(cut.turn, undefined);
   await until(
     async () => (await status.innerText()).trim() === 'runtime restarting…',
-    'sidebar says restarting',
+    'the composer says restarting',
   );
   assert.equal(
     await page
@@ -298,7 +301,7 @@ try {
   );
   await until(
     async () => (await status.innerText()).trim() === model,
-    'sidebar shows the model again',
+    'the composer shows the model again',
   );
   checks.push(
     'the runtime restarts once by itself into the same session, idle, with the cut-off turn marked interrupted',
@@ -343,7 +346,7 @@ try {
   await until(
     async () =>
       (await status.innerText()).trim() === 'runtime stopped · restart',
-    'sidebar offers restart',
+    'the composer offers restart',
   );
   await page.getByRole('button', { name: 'settings', exact: true }).click();
   // The connection is kept with the models, in settings.

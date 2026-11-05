@@ -590,12 +590,19 @@ pre {
   gap: 8px;
 }
 .resize-handle {
-  width: 5px;
+  /* Drawn as the same 1px rule as the overview's edge; the grip is wider than the line. */
+  position: relative;
+  z-index: 1;
+  width: 1px;
   flex-shrink: 0;
-  background: var(--subtle);
-  border-left: 1px solid var(--border);
+  background: var(--border);
   cursor: col-resize;
   transition: background 0.1s;
+}
+.resize-handle::before {
+  content: '';
+  position: absolute;
+  inset: 0 -3px;
 }
 .resize-handle:hover,
 .resize-handle[data-separator='active'] {
@@ -1240,7 +1247,7 @@ pre {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: var(--drawer);
+  background: var(--bg);
 }
 .inspector-tabs {
   height: 44px;
@@ -3036,9 +3043,38 @@ pre {
   }
 }
 :root[data-desktop='darwin'] .workbench {
-  padding-top: 28px;
+  padding-top: 0;
+}
+/* On macOS the window's buttons sit in the first row with the brand and the top bar,
+   with no empty strip above them. The rows themselves move the window. */
+:root[data-desktop='darwin'] .workbench .brand,
+:root[data-desktop='darwin'] .workbench .topbar {
+  -webkit-app-region: drag;
+}
+:root[data-desktop='darwin']
+  .workbench
+  :is(.brand, .topbar)
+  :is(button, a, input, select, textarea, [role='button'], [tabindex]) {
+  -webkit-app-region: no-drag;
+}
+:root[data-desktop='darwin'] .workbench .brand {
+  /* Only the window's buttons are in this row. */
+  height: 52px;
+}
+:root[data-desktop='darwin'] .workbench .topbar {
+  height: 52px;
+}
+/* With the sidebar folded or hidden, the top bar starts after the window's buttons. */
+:root[data-desktop='darwin'] .workbench.sidebar-collapsed .topbar {
+  padding-left: 84px;
+}
+@media (max-width: 760px) {
+  :root[data-desktop='darwin'] .workbench .topbar {
+    padding-left: 84px;
+  }
 }
 :root[data-host='desktop'] .desktop-drag-region {
+  display: none;
   position: fixed;
   top: 0;
   left: 0;
@@ -3892,46 +3928,10 @@ pre {
   padding: 0 2px;
   border-top: 1px solid var(--border);
 }
-.connection-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 6px 8px;
-  border-radius: 7px;
-  color: var(--secondary);
-  font-size: var(--ui-small);
-}
-.connection-status:hover {
-  background: var(--hover);
-}
-.connection-status span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.connection-status i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  background: var(--status-muted);
-}
-.connection-status[data-state='ready'] i {
-  background: var(--status-pass);
-}
-.connection-status[data-state='not-configured'] i {
-  background: var(--status-warn);
-}
-.connection-status[data-state='stopped'] i {
-  background: var(--negative);
-}
-.connection-status[data-state='restarting'] i {
-  background: var(--status-warn);
-}
 /* Search and settings: icons at the right end, named by their tips. */
 .sidebar-footer .sidebar-footer-actions {
   flex-shrink: 0;
+  margin-left: auto;
   gap: 2px;
 }
 .sidebar-footer .sidebar-footer-actions .icon-button {
@@ -3947,7 +3947,7 @@ pre {
 .topbar {
   height: 52px;
   padding: 0 14px 0 22px;
-  border-bottom: 0;
+  border-bottom: 1px solid var(--border);
 }
 .topbar-title {
   display: flex;
@@ -4405,7 +4405,6 @@ pre {
     animation: none;
   }
 }
-.sidebar-footer button.connection-status,
 .sidebar-footer .icon-button {
   width: auto;
   height: auto;
@@ -5149,4 +5148,54 @@ pre {
   .pattern-add {
     flex-wrap: wrap;
   }
+}
+/* Long model identifiers stay inside the window and show whole on hover. */
+.model-menu {
+  max-width: min(480px, calc(100vw - 16px));
+}
+.model-menu [role='menuitem'] > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The connection light beside the model under the message box. */
+.model-status {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--status-muted);
+}
+.model-status[data-state='ready'] {
+  background: var(--status-pass);
+}
+.model-status[data-state='not-configured'],
+.model-status[data-state='restarting'] {
+  background: var(--status-warn);
+}
+.model-status[data-state='stopped'] {
+  background: var(--negative);
+}
+/* Circle's name at the foot of the sidebar, left of search and settings. */
+.brand:empty {
+  height: 12px;
+}
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 0 8px;
+  color: var(--fg);
+}
+button.sidebar-brand {
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+.sidebar-brand strong {
+  font-size: calc(var(--ui-size) + 3px);
+  letter-spacing: -0.5px;
 }

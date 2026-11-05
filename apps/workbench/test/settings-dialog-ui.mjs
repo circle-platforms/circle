@@ -196,7 +196,21 @@ async function dialogMotionInsideWindow(page) {
       dialog.style.animationPlayState = 'paused';
       dialog.style.animationName = name;
       const animation = dialog.getAnimations()[0];
-      if (!animation) throw Error('expected dialog motion');
+      // Without an entry or exit animation, the dialog's resting place is what is seen.
+      if (!animation) {
+        const box = dialog.getBoundingClientRect();
+        samples.push({
+          state,
+          progress: 'still',
+          x: box.x,
+          y: box.y,
+          right: box.right,
+          bottom: box.bottom,
+          width: innerWidth,
+          height: innerHeight,
+        });
+        continue;
+      }
       const duration = Number(animation.effect.getTiming().duration);
       for (const progress of [0, 0.25, 0.5, 0.75, 0.99]) {
         animation.currentTime = duration * progress;
@@ -718,7 +732,7 @@ try {
     });
     await page.goto(base + '#/session/session1');
     await page.locator('.composer textarea').waitFor();
-    await page.locator('.sidebar-footer .connection-status').click();
+    await page.locator('.sidebar-footer .sidebar-brand').click();
     const underneath = page.getByRole('dialog', {
       name: 'frontend preview',
       exact: true,
