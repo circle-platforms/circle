@@ -4418,7 +4418,9 @@ pre {
   box-shadow: 0 10px 30px color-mix(in srgb, var(--fg) 14%, transparent);
   font-size: var(--ui-small);
 }
-.interaction-summary,
+.interaction-summary {
+  border-radius: 12px;
+}
 @media (max-width: 1200px) {
   .workbench {
     grid-template-columns: 220px minmax(0, 1fr);
