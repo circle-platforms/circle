@@ -157,9 +157,13 @@
   min-height: 360px;
 }
 @media (max-width: 720px) {
+  /* Fixed side edges: centring an odd width would need a half-pixel transform. */
   .dialog-content.settings-dialog {
-    width: calc(100vw - 16px);
+    left: 8px;
+    right: 8px;
+    width: auto;
     height: calc(100dvh - 24px);
+    transform: translateY(-50%);
   }
   .settings-dialog .settings-layout {
     grid-template-columns: minmax(0, 1fr);
