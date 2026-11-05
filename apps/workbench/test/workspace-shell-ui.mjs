@@ -60,6 +60,16 @@ async function actualTheme(page, theme) {
 }
 // The column takes its width over a frame or two after a mode opens: a picture waits for it.
 async function settled(page) {
+  // Entry intentionally slides 6px: the edges are read once that animation has finished.
+  await page
+    .locator('.inspector-overlay')
+    .evaluateAll((nodes) =>
+      Promise.all(
+        nodes
+          .flatMap((node) => node.getAnimations())
+          .map((animation) => animation.finished.catch(() => {})),
+      ),
+    );
   let last = '';
   for (let i = 0; i < 40; i++) {
     const geometry = await page.evaluate(

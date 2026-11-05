@@ -8,6 +8,9 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 - **Local knowledge, personal memory and workflows.** Browse and verify local sources, confirm edits, resolve conflicts and explicitly install matching workflow files. Background sync reuses a selected MCP authorization, preserves offline revisions and conflicts, and checks the impact before removing the server's copies. Any server that implements knowledge-sync v1 can be used: Circle reads its sync base, local tools and team tools from its discovery document. Session preferences load team then personal memory before existing files; knowledge and memory sharing require an exact accepted mapping and confirmation. Every refusal the server explains keeps its original reason and remedy. Without a bound sync server, knowledge and memory show personal content only, with a direct sync-settings entry. Existing memory files and skills are unchanged.
 
+- **The welcome screen previews recent sessions.** Under each recent session, `last:` shows the last visible message of its current branch, so sessions that open alike can be told apart.
+- **A browser screenshot can be saved without being read.** `browser_screenshot` with `save_only` saves the image and returns its path, for a model that does not read images or a step that only keeps the picture.
+
 ### Changed
 
 - **The desktop uses the shared graphite palette.** Dark and light surfaces, text, controls and status colours now follow the Circle design tokens; terminal defaults stay unchanged.
@@ -16,6 +19,11 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ### Fixed
 
+- **A distant model endpoint is found.** Listing an endpoint's models now waits 10 seconds instead of 2.5, so an endpoint that answers slowly is not reported as failed, and a timeout ends the search instead of trying each address in turn.
+- **A long connection error stays readable.** The connection banner wraps at every window width.
+- **A new desktop session opens when connecting takes long.** Waiting for the first message to be stored no longer fails the session after eight seconds.
+- **An MCP server sees the real client.** Circle tells it its own version and platform.
+- **The desktop sends a failed model request again.** In the desktop a request that got no answer within `CIRCLE_LLM_TIMEOUT`, lost its connection or met an error inside the stream ended the turn on the first try, with `Request timed out.` for a timeout, because bundling renamed the SDKs' error classes. It now retries as [Models](docs/models.md) describes.
 - **The browser address stays editable in a compact drawer.** Its own row keeps security and takeover controls from squeezing the field away with wider system fonts or larger text.
 
 - **Desktop overlays keep their position and keyboard focus through animations.** Dialogs and notices stay centred, search can reopen while its previous dialog closes, and a terminal menu cannot steal input from a newly opened shell.

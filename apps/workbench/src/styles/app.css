@@ -1849,6 +1849,7 @@ pre {
 }
 .connection-banner {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 14px 16px;
@@ -1873,7 +1874,7 @@ pre {
 .connection-banner code {
   font-size: var(--ui-tiny);
   color: var(--muted);
-  flex: 1;
+  flex: 1 1 18em;
 }
 .connection-banner small {
   margin-left: auto;
@@ -2956,9 +2957,6 @@ pre {
   }
   .approval-diff {
     grid-template-columns: 1fr;
-  }
-  .connection-banner {
-    flex-wrap: wrap;
   }
   .connection-banner code {
     flex-basis: 100%;

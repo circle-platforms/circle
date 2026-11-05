@@ -14,6 +14,7 @@ import { saveSecret } from '../src/secrets.js';
 import { defaultSettings } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import type { Message } from '../src/types.js';
+import { VERSION } from '../src/version.js';
 import { scratch, cleanup } from './helpers.js';
 import { mcpStub } from './mcp-stub.js';
 
@@ -79,6 +80,24 @@ test('header values fill in environment variables and refuse what cannot be sent
     { name: 'docs', url: 'https://x.test/mcp', headers: { 'X-Team': 'lab' } },
   ]);
   assert.deepEqual(connections[0]!.headers, { 'X-Team': 'lab' });
+});
+
+test('a server is told the real version and platform of the client', async (t) => {
+  const stub = await mcpStub(t);
+  const manager = new McpManager(scratch(t));
+  cleanup(t, () => manager.close());
+  await manager.load([
+    { name: 'docs', url: stub.url, transport: 'streamable_http' },
+  ]);
+  assert.equal(manager.status[0]?.error, '', manager.describe());
+  const initialize = stub.requests.find(
+    (request) => request.message?.method === 'initialize',
+  );
+  assert.deepEqual(initialize?.message?.params?.clientInfo, {
+    name: 'circle',
+    version: VERSION,
+    platform: process.platform,
+  });
 });
 
 test('streamable HTTP and SSE servers receive the configured headers on every request, and websocket refuses them', async (t) => {

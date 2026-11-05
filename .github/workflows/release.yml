@@ -69,7 +69,7 @@ permissions:
 # needs the release workflow to have passed on the commit the release goes on, and only main and
 # tags build macOS. A tag's run finishes, and a newer run for the same tag waits for it.
 concurrency:
-  group: release-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event_name == 'push' && github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

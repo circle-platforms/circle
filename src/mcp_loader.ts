@@ -6,6 +6,7 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
+import type { Implementation } from '@modelcontextprotocol/sdk/types.js';
 import type {
   FetchLike,
   Transport,
@@ -33,6 +34,7 @@ import {
   currentDirectMcpGrant,
 } from './mcp_auth.js';
 import { openInBrowser } from './open_url.js';
+import { VERSION } from './version.js';
 
 export interface McpConnection {
   name: string;
@@ -944,10 +946,12 @@ export class McpManager {
       ...(headerNames.length ? { headers: headerNames } : {}),
       ...(connection.notSent ? { notSent: connection.notSent } : {}),
     };
+    // The platform is an extra member of clientInfo, a declaration a server may read or ignore.
     const client = new Client({
       name: 'circle',
-      version: '0.1.0-dev',
-    });
+      version: VERSION,
+      platform: process.platform,
+    } as Implementation);
     let transport: Transport | undefined;
     let provider: McpAuthProvider | undefined;
     const timeout = AbortSignal.timeout(this.timeout);
