@@ -35,6 +35,9 @@ import {
 } from './mcp_auth.js';
 import { openInBrowser } from './open_url.js';
 import { VERSION } from './version.js';
+import { formatJcs } from './knowledge/canonical.js';
+import { replaceLongest } from './secrets.js';
+export { replaceLongest };
 
 export interface McpConnection {
   name: string;
@@ -375,46 +378,6 @@ function fillHeaders(
   }
   return { headers: resolved, filled };
 }
-/**
- * Each occurrence of a needle in `text` replaced, the longest needles first, and none looked
- * for inside the occurrence of a longer one or in what replaced it: a file's base64 that holds
- * a hidden value is swapped whole for its label, and of two files whose encodings start alike
- * each is shown as itself.
- */
-export function replaceLongest(
-  text: string,
-  pairs: Iterable<readonly [string, string]>,
-): string {
-  const needles = [...pairs]
-    .filter(([needle]) => needle && text.includes(needle))
-    .sort(([a], [b]) => b.length - a.length);
-  if (!needles.length) return text;
-  const taken = new Uint8Array(text.length);
-  const found: [number, number, string][] = [];
-  for (const [needle, replacement] of needles)
-    for (let at = text.indexOf(needle); at !== -1;) {
-      const end = at + needle.length;
-      if (taken.subarray(at, end).includes(1)) {
-        at = text.indexOf(needle, at + 1);
-        continue;
-      }
-      taken.fill(1, at, end);
-      found.push([at, end, replacement]);
-      at = text.indexOf(needle, end);
-    }
-  found.sort(([a], [b]) => a - b);
-  let shown = '';
-  let from = 0;
-  for (const [start, end, replacement] of found) {
-    shown += text.slice(from, start) + replacement;
-    from = end;
-  }
-  return shown + text.slice(from);
-}
-/**
- * Shows the name in place of each secret value Circle filled into a header: what a server
- * answers can quote the request it got.
- */
 function hideFilled(filled: Map<string, string>): (text: string) => string {
   return (text) => replaceLongest(text, filled);
 }
@@ -568,16 +531,6 @@ function toolHints(
     idempotent: hints.idempotentHint === true,
   };
 }
-/** JSON with every object's keys in order, so equal arguments read the same. */
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
-  if (isRecord(value))
-    return `{${Object.keys(value)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
-      .join(',')}}`;
-  return JSON.stringify(value) ?? 'null';
-}
 type ToolResult = Awaited<ReturnType<Client['callTool']>>;
 /** At most this many results of calls that sent files are kept, and this much of them. */
 export const MAX_CACHED_RESULTS = 64;
@@ -714,8 +667,8 @@ export class McpManager {
       );
       return createHash('sha256')
         .update(
-          canonicalJson([
-            this.services.sessionId?.() ?? context.sessionId,
+          formatJcs([
+            this.services.sessionId?.() ?? context.sessionId ?? null,
             connection.name,
             spec.name,
             Object.fromEntries(sent.map((file) => [file.name, file.sha256])),

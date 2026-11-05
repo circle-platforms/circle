@@ -406,7 +406,7 @@
     },
     {
       "path": "tests/knowledge-scan.test.ts",
-      "sha256": "d3ceb287e78b0fa8cf65f3d5f6101474ad008dcbf5b2d3154099e432a0914760",
+      "sha256": "0e6889700b3cfd934611faca5d76ae55f37ed5e8fa6ab7a9f29f3108a164609d",
       "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
     },
     {

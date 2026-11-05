@@ -7,7 +7,7 @@ import {
   decodeSyncObject,
   encodeSyncObject,
   sha256,
-  syncObjectId,
+  computeObjectDigest,
 } from '../src/knowledge/canonical.js';
 import {
   decodeBase64,
@@ -48,7 +48,7 @@ test('the unchanged shared vectors pin canonical bytes, identities and original-
       vector.canonical,
       vector.name,
     );
-    assert.equal(syncObjectId(vector.input), vector.sha256, vector.name);
+    assert.equal(computeObjectDigest(vector.input), vector.sha256, vector.name);
     assert.deepEqual(
       decodeSyncObject(Buffer.from(vector.canonical), vector.sha256),
       JSON.parse(vector.canonical),

@@ -1,20 +1,25 @@
 import {
   lstatSync,
-  readFileSync,
   mkdirSync,
   writeFileSync,
   renameSync,
   rmSync,
-  realpathSync,
 } from 'node:fs';
-import { join, resolve, relative, isAbsolute } from 'node:path';
+import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { KnowledgeStore, KnowledgeVersionConflict } from './store.js';
-import { sha256 } from './canonical.js';
+import {
+  decodeSyncObject,
+  encodeSyncObject,
+  formatJcs,
+  sha256,
+} from './canonical.js';
 import { requireClean } from './verification.js';
 import type { PackManifest } from './types.js';
 import { privateDirectory } from './objects.js';
 import { parseStrictJson } from './strict-json.js';
+import { assertNoCaseCollisions, readSafePackFileSync } from '../pack_files.js';
+
 export interface InstalledPersonalPack {
   object: string;
   name: string;
@@ -32,47 +37,17 @@ export type PackApproval = (
   signal: AbortSignal,
 ) => Promise<'approve' | 'reject'>;
 const MAX_PACK_BYTES = 32 * 1024 * 1024;
-function fileAt(root: string, path: string): Buffer {
-  if (lstatSync(root).isSymbolicLink())
-    throw Error('pack root symlink refused');
-  const directory = realpathSync(root),
-    target = resolve(directory, path),
-    rel = relative(directory, target);
-  if (rel.startsWith('..') || isAbsolute(rel))
-    throw Error('pack path escapes installation');
-  let current = directory;
-  for (const part of path.split('/')) {
-    current = join(current, part);
-    const stat = lstatSync(current);
-    if (stat.isSymbolicLink()) throw Error('pack symlinks are not installed');
-  }
-  const stat = lstatSync(target);
-  if (!stat.isFile() || stat.size > MAX_PACK_BYTES)
-    throw Error('pack file unavailable or oversized');
-  return readFileSync(target);
-}
 function takeFiles(
   directory: string,
   manifest: PackManifest,
 ): Map<string, Buffer> {
   let total = 0;
   const files = new Map<string, Buffer>();
-  const prefixes = new Map<string, string>();
-  for (const file of manifest.files) {
-    const parts = file.path.split('/');
-    for (let i = 1; i <= parts.length; i++) {
-      const prefix = parts.slice(0, i).join('/'),
-        key = prefix.toLowerCase();
-      if (prefixes.has(key) && prefixes.get(key) !== prefix)
-        throw Error('personal pack path component case collision');
-      prefixes.set(key, prefix);
-    }
-  }
-  // The manifest is data, and is checked against the exact immutable revision by the caller.
+  assertNoCaseCollisions(manifest.files.map((file) => file.path));
   for (const file of manifest.files) {
     total += file.size;
     if (total > MAX_PACK_BYTES) throw Error('personal pack byte limit');
-    const bytes = fileAt(directory, file.path);
+    const bytes = readSafePackFileSync(directory, file.path, MAX_PACK_BYTES);
     if (bytes.length !== file.size || sha256(bytes) !== file.sha256)
       throw Error('personal pack size or digest mismatch');
     requireClean(bytes);
@@ -99,14 +74,14 @@ function manifestAt(
     throw Error('personal pack is unavailable or conflicted');
   return revision.body.manifest;
 }
-/** Read a native-selected pack folder without importing code or changing its files. */
 export async function inspectPersonalPackFolder(
   directory: string,
 ): Promise<PackManifest> {
   const manifest = parseStrictJson(
-    fileAt(directory, 'pack.json').toString('utf8'),
+    readSafePackFileSync(directory, 'pack.json', MAX_PACK_BYTES).toString(
+      'utf8',
+    ),
   ) as unknown as PackManifest;
-  const { encodeSyncObject, decodeSyncObject } = await import('./canonical.js');
   const bytes = encodeSyncObject({
     schema: 'personal-sync-object@1',
     kind: 'pack_manifest',
@@ -121,7 +96,49 @@ export async function inspectPersonalPackFolder(
   takeFiles(directory, object.body.manifest);
   return object.body.manifest;
 }
-/** Native previews validate selected bytes before presenting the person confirmation; install rechecks them. */
+async function verifyPersonalPackCandidate(
+  store: KnowledgeStore,
+  options: {
+    home: string;
+    snapshot: string;
+    object: string;
+    directory: string;
+    workspace: string;
+    userHome: string;
+    existingNames?: readonly string[];
+  },
+) {
+  const manifest = manifestAt(store, options.snapshot, options.object);
+  const { discoverSkills } = await import('../skills.js');
+  const existingNames = [
+    ...(options.existingNames ?? []),
+    ...discoverSkills(options.workspace, options.home, options.userHome).map(
+      (skill) => skill.name,
+    ),
+  ];
+  if (
+    existingNames.some(
+      (name) => name.toLowerCase() === manifest.id.toLowerCase(),
+    )
+  )
+    throw Error(
+      'a skill with this name already exists; choose explicitly before replacing it',
+    );
+  const supplied = parseStrictJson(
+    readSafePackFileSync(
+      options.directory,
+      'pack.json',
+      MAX_PACK_BYTES,
+    ).toString('utf8'),
+  );
+  if (
+    formatJcs(supplied, { normalizeText: true }) !==
+    formatJcs(manifest, { normalizeText: true })
+  )
+    throw Error('personal pack manifest differs from revision');
+  const files = takeFiles(options.directory, manifest);
+  return { manifest, files, discoverSkills };
+}
 export async function inspectPersonalPack(options: {
   home: string;
   snapshot: string;
@@ -132,38 +149,11 @@ export async function inspectPersonalPack(options: {
 }): Promise<PackManifest> {
   const store = new KnowledgeStore(options.home);
   try {
-    const manifest = manifestAt(store, options.snapshot, options.object);
-    const { discoverSkills } = await import('../skills.js');
-    if (
-      discoverSkills(options.workspace, options.home, options.userHome).some(
-        (s) => s.name.toLowerCase() === manifest.id.toLowerCase(),
-      )
-    )
-      throw Error('a skill with this name already exists');
-    const supplied = parseStrictJson(
-      fileAt(options.directory, 'pack.json').toString('utf8'),
-    );
-    const { encodeSyncObject } = await import('./canonical.js');
-    const wrap = (m: unknown) => ({
-      schema: 'personal-sync-object@1',
-      kind: 'pack_manifest',
-      body: {
-        item_id: '00000000-0000-4000-8000-000000000000',
-        parents: [],
-        manifest: m,
-      },
-    });
-    if (
-      !encodeSyncObject(wrap(supplied)).equals(encodeSyncObject(wrap(manifest)))
-    )
-      throw Error('personal pack manifest differs from revision');
-    takeFiles(options.directory, manifest);
-    return manifest;
+    return (await verifyPersonalPackCandidate(store, options)).manifest;
   } finally {
     store.close();
   }
 }
-/** Explicit installation only. A synced manifest alone never installs executable files. */
 export async function installPersonalPack(options: {
   home: string;
   snapshot: string;
@@ -178,41 +168,8 @@ export async function installPersonalPack(options: {
   const store = new KnowledgeStore(options.home);
   let temporary: string | undefined;
   try {
-    const manifest = manifestAt(store, options.snapshot, options.object);
-    const { discoverSkills } = await import('../skills.js');
-    const existingNames = [
-      ...(options.existingNames ?? []),
-      ...discoverSkills(options.workspace, options.home, options.userHome).map(
-        (skill) => skill.name,
-      ),
-    ];
-    if (
-      existingNames.some(
-        (name) => name.toLowerCase() === manifest.id.toLowerCase(),
-      )
-    )
-      throw Error(
-        'a skill with this name already exists; choose explicitly before replacing it',
-      );
-    const supplied = parseStrictJson(
-      fileAt(options.directory, 'pack.json').toString('utf8'),
-    );
-    // Compare JSON data, using the pinned object codec rather than member insertion order.
-    const { encodeSyncObject } = await import('./canonical.js');
-    const wrap = (m: unknown) => ({
-      schema: 'personal-sync-object@1',
-      kind: 'pack_manifest',
-      body: {
-        item_id: '00000000-0000-4000-8000-000000000000',
-        parents: [],
-        manifest: m,
-      },
-    });
-    if (
-      !encodeSyncObject(wrap(supplied)).equals(encodeSyncObject(wrap(manifest)))
-    )
-      throw Error('personal pack manifest differs from revision');
-    const files = takeFiles(options.directory, manifest);
+    const { manifest, files, discoverSkills } =
+      await verifyPersonalPackCandidate(store, options);
     options.signal.throwIfAborted();
     if (
       (await options.approve(
@@ -248,8 +205,6 @@ export async function installPersonalPack(options: {
       mode: 0o600,
       flag: 'wx',
     });
-    // No hooks.json is in the protocol manifest. It is never copied from a selected skills folder.
-    // The snapshot check and registration hold the database write lock during the atomic directory publication.
     store.installPack(options.snapshot, options.object, destination, () =>
       renameSync(temporary!, destination),
     );
@@ -301,7 +256,6 @@ export async function setPersonalPackEnabled(options: {
   }
 }
 export function installedPersonalPacks(home: string): InstalledPersonalPack[] {
-  // Discovery must not create a store just to build a prompt.
   try {
     if (!lstatSync(join(home, 'knowledge', 'knowledge.sqlite')).isFile())
       return [];

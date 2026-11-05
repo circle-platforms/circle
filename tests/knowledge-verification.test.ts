@@ -7,10 +7,15 @@ import { KnowledgeService } from '../src/knowledge/service.js';
 import { KnowledgeStore } from '../src/knowledge/store.js';
 import {
   sha256,
-  syncObjectId,
+  computeObjectDigest,
   encodeSyncObject,
 } from '../src/knowledge/canonical.js';
-import { exactQuotation } from '../src/knowledge/verification.js';
+import {
+  matchTextQuote,
+  refineSelectorWithQuote,
+} from '../src/knowledge/verification.js';
+import { textParser } from '../src/knowledge/portable/parsers/text.js';
+import { markdownParser } from '../src/knowledge/portable/parsers/markdown.js';
 import { scratch } from './helpers.js';
 const signal = () => new AbortController().signal;
 const object = (kind: string, body: unknown) => ({
@@ -31,7 +36,7 @@ function proposal(
   const add = (kind: string, body: unknown) => {
     const o = object(kind, body);
     objects.push(o);
-    return syncObjectId(o);
+    return computeObjectDigest(o);
   };
   add('directory_revision', {
     item_id: root,
@@ -86,7 +91,7 @@ test('all committed native-link vectors retain canonical bytes and exact identit
   for (const c of fixture.cases) {
     if (!c.input) continue;
     assert.equal(encodeSyncObject(c.input).toString(), c.canonical, c.name);
-    assert.equal(syncObjectId(c.input), c.sha256, c.name);
+    assert.equal(computeObjectDigest(c.input), c.sha256, c.name);
   }
 });
 test('local qualification survives reopen and search rebuild without mutating immutable objects', (t) => {
@@ -108,7 +113,7 @@ test('local qualification survives reopen and search rebuild without mutating im
       store.search('synthetic', { status: 'verified' }).items.length,
       1,
     );
-    assert.equal(syncObjectId(store.read(p.id)), p.id);
+    assert.equal(computeObjectDigest(store.read(p.id)), p.id);
   } finally {
     store.close();
   }
@@ -120,7 +125,8 @@ test('local qualification survives reopen and search rebuild without mutating im
 for (const [name, raw, quote, parser, selector, outcome] of [
   ['wrong quote', 'hello\n', 'HELLO', 'text@1', 'l/1', 'mismatch'],
   ['unknown parser', 'hello\n', 'hello', 'text@9', 'l/1', 'incomplete'],
-  ['wrong selector', 'hello\n', 'hello', 'text@1', 'l/2', 'mismatch'],
+  ['wrong selector', 'hello\nhello\n', 'hello', 'text@1', 'l/3', 'mismatch'],
+  ['relocated selector', 'first\nhello\n', 'hello', 'text@1', 'l/1', 'matched'],
   ['decomposed Unicode', 'cafe\u0301\n', 'café', 'text@1', 'l/1', 'mismatch'],
   ['raw CRLF quote', 'a\r\nb\r\n', 'a\r\nb', 'text@1', 'l/1-2', 'mismatch'],
   [
@@ -156,16 +162,45 @@ for (const [name, raw, quote, parser, selector, outcome] of [
       }
     }
   });
-test('whitespace, case and Unicode are significant and empty quotations cannot qualify', () => {
+test('whitespace, case, Unicode and ASCII word boundaries are significant and empty quotations cannot qualify', () => {
   for (const [a, b] of [
     ['Ab', 'ab'],
     ['a b', 'a  b'],
     ['é', 'e\u0301'],
     ['x', ''],
     ['  ', ' '],
+    ['no_timeout_flag', 'timeout'],
+    ['prefix_token', 'token'],
+    ['token_suffix', 'token'],
   ])
-    assert.equal(exactQuotation(a!, b!), false);
-  assert.equal(exactQuotation(' a\r\nb ', 'a\r\nb'), true);
+    assert.equal(matchTextQuote(a!, b!), false);
+  assert.equal(matchTextQuote(' a\r\nb ', 'a\r\nb'), true);
+  assert.equal(matchTextQuote('timeout = 30', 'timeout'), true);
+  assert.equal(matchTextQuote('no_timeout_flag or timeout', 'timeout'), true);
+});
+test('refineSelectorWithQuote relocates a shifted text or Markdown quotation when unique', () => {
+  const textDoc = textParser.parse(
+    Buffer.from('inserted header\nshifted quote line\n'),
+  );
+  assert.deepEqual(
+    refineSelectorWithQuote(textDoc, 'l/1', 'shifted quote line'),
+    {
+      fragment: { selector: 'l/2', text: 'shifted quote line' },
+      relocated: true,
+    },
+  );
+  const mdDoc = markdownParser.parse(
+    Buffer.from(
+      '# Intro\n\nparagraph\n\n# Target\n\nrelocated markdown quote\n',
+    ),
+  );
+  assert.deepEqual(
+    refineSelectorWithQuote(mdDoc, 'b/0/Intro', 'relocated markdown quote'),
+    {
+      fragment: { selector: 'b/0/Target', text: 'relocated markdown quote' },
+      relocated: true,
+    },
+  );
 });
 test('native remote references are preserved as incomplete; the client does not fabricate authorization', (t) => {
   const home = scratch(t),
@@ -178,7 +213,7 @@ test('native remote references are preserved as incomplete; the client does not 
       quotation: e.body.grounds[0].quotation,
     },
   ];
-  const id = syncObjectId(e);
+  const id = computeObjectDigest(e);
   s.prepare({ expected_head: null, objects: p.objects }).commit(signal());
   assert.equal(observe(home, id).outcome, 'incomplete');
   assert.match(observe(home, id).reasons[0]!.code, /resolver/);
@@ -382,10 +417,11 @@ test('rejected multi-chunk credentials never publish any original or quotation b
     Buffer.from(secret.slice(0, 4)),
     Buffer.from(secret.slice(4)),
   ].map((bytes) => object('bytes', { bytes_base64: bytes.toString('base64') }));
-  source.body.chunks = chunks.map(syncObjectId);
+  source.body.chunks = chunks.map(computeObjectDigest);
   source.body.raw_sha256 = sha256(secret);
   source.body.size = Buffer.byteLength(secret);
-  (p.objects.at(-1) as any).body.grounds[0].source = syncObjectId(source);
+  (p.objects.at(-1) as any).body.grounds[0].source =
+    computeObjectDigest(source);
   p.objects.push(...chunks);
   assert.throws(
     () => s.prepare({ expected_head: null, objects: p.objects }),

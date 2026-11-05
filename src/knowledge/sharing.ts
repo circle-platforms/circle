@@ -2,11 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { KnowledgeService } from './service.js';
 import type { KnowledgeConnection } from './connection.js';
 import { isObjectId } from './protocol.js';
+import { confirmationOf } from './sync-http.js';
 import { requireClean } from './verification.js';
 import { wellFormedText } from './unicode.js';
 import type { KnowledgeShareRefusal } from './desktop-contract.js';
 
-/** The server refused, and said why: its text is shown as it came, never rewritten. */
 export class KnowledgeShareRefused extends Error {
   constructor(readonly refusal: KnowledgeShareRefusal) {
     super(`refused: ${refusal.message}${refusal.fix ? ' ' + refusal.fix : ''}`);
@@ -27,13 +27,13 @@ const text = (value: unknown): string | undefined =>
   wellFormedText(value)
     ? value
     : undefined;
-/** The first explanation among the server's errors, of any code, or nothing. */
 function refusalOf(candidates: unknown[]): KnowledgeShareRefusal | undefined {
   for (const error of candidates as any[]) {
     const message = text(error?.message);
     if (!message) continue;
     const fix = text(error?.fix) ?? '';
     requireClean(Buffer.from(message + '\n' + fix));
+    const confirmation = confirmationOf(error);
     return {
       code:
         typeof error.code === 'string' &&
@@ -42,6 +42,7 @@ function refusalOf(candidates: unknown[]): KnowledgeShareRefusal | undefined {
           : 'REFUSED',
       message,
       fix,
+      ...(confirmation ? { confirmation } : {}),
     };
   }
   return undefined;
@@ -156,8 +157,6 @@ export async function prepareKnowledgeShare(options: {
   const binding = options.binding(),
     mapping = syncMapping(service, binding, selected.row.item_id, object);
   if (!mapping) return fail('knowledge-share-waiting');
-  // The server says which tool shares what (discovery `mcp.capabilities`); a server with
-  // no discovery document gets the shapes earlier servers used.
   const discovery = await connection.discovery(signal);
   let operation: 'entry-share' | 'memory-share',
     members: Record<string, unknown>,
@@ -169,23 +168,6 @@ export async function prepareKnowledgeShare(options: {
     if (!match) return fail('knowledge-share-waiting');
     operation = 'entry-share';
     if (!discovery.mcp[operation]) return fail('knowledge-share-unavailable');
-    // Without a declared read, the share call itself is where the server rechecks the entry.
-    if (discovery.source === 'fallback') {
-      const read = payload(
-        await connection.callForPerson(
-          'get_nodes',
-          { root: match[1], paths: [match[2]], depth: 0 },
-          signal,
-        ),
-      );
-      if (
-        read.root !== match[1] ||
-        !read.nodes
-          ?.flatMap((n: any) => n.entries)
-          .some((e: any) => e.entry === match[3] && e.status === 'verified')
-      )
-        return fail('knowledge-share-unverified');
-    }
     members = {
       root: match[1],
       path: match[2],

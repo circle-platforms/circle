@@ -1,24 +1,15 @@
-// What the terminal says about knowledge and its sync server, in one place: the status
-// lines of /knowledge, the footer lamp, the notices a sync change leaves, the approval card
-// of a knowledge action and the transcript row of a knowledge tool. Words follow the shared
-// wording table (circle-hub docs/hub-r4-tasks/knowledge-ui-phase2.md section 1): the peer is
-// a "sync server" or its connection name, the modes are `synced` and `local only`, and no
-// hash, reference or account number is ever shown.
 import type { LampState } from '../ink/theme.js';
 import type { CardLine } from '../ink/components/dialog_card.js';
 import type { KnowledgeConnectionStatus } from '../knowledge/connection.js';
 import { terminalText } from '../ink/components/markdown_renderer.js';
 
-/** The wire value `hub` names the mode, not a product; the terminal says `synced`. */
 export const modeWord = (mode: 'hub' | 'local' | null | undefined): string =>
   mode === 'hub' ? 'synced' : mode === 'local' ? 'local only' : 'unknown';
-/** The person types `synced` or `local`; the protocol keeps `hub`. */
 export function modeArgument(word: string): 'hub' | 'local' | null {
   return word === 'synced' ? 'hub' : word === 'local' ? 'local' : null;
 }
 
 const two = (n: number) => String(n).padStart(2, '0');
-/** `11-03 14:20` in local time, as the wording table writes a moment. */
 export function shortTime(iso: string): string {
   const at = new Date(iso);
   return `${two(at.getMonth() + 1)}-${two(at.getDate())} ${two(at.getHours())}:${two(at.getMinutes())}`;
@@ -33,7 +24,6 @@ const oneLine = (text: string) =>
   terminalText(text).replace(/\s+/g, ' ').trim();
 const HASH = /\b[0-9a-f]{64}\b/;
 
-/** One word, or a few, for where sync stands. */
 export function conditionWord(status: KnowledgeConnectionStatus): string {
   if (status.confirmation) return 'paused · purge waits for you';
   if (status.syncing && ['pending', 'synced'].includes(status.condition))

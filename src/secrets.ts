@@ -8,9 +8,6 @@ import {
   writePrivateJson,
 } from './settings.js';
 
-// Variables are written as Windows writes environment variables: %NAME% in a tool's arguments
-// takes the value when the tool runs. A secret is a variable whose value the model never sees:
-// it knows the name, and outputs show %NAME% again where the value appears.
 export const SECRETS_FILE = 'secrets.json';
 export const MAX_SECRET = 4096;
 export const secretsPath = (home = circleHome()): string =>
@@ -57,7 +54,6 @@ export function removeSecret(home: string, name: string): boolean {
   return true;
 }
 
-// Only names that are set are matched, so %X% before %NAME% leaves the second one whole.
 const reference = (names: string[]): RegExp | undefined =>
   names.length
     ? new RegExp(
@@ -65,15 +61,13 @@ const reference = (names: string[]): RegExp | undefined =>
         'g',
       )
     : undefined;
-/**
- * Puts each variable's value in place of its %NAME% in strings, at any depth. A name that is
- * not set stays as written, as %PATH% does in a command when no such variable is kept.
- */
 export function expandVariables<T>(
   value: T,
   values: Record<string, string>,
   used = new Set<string>(),
-  pattern = reference(Object.keys(values)),
+  pattern = reference(
+    Object.keys(values).filter((name) => values[name]!.length > 0),
+  ),
 ): T {
   if (!pattern) return value;
   if (typeof value === 'string')
@@ -94,27 +88,48 @@ export function expandVariables<T>(
     ) as T;
   return value;
 }
-/**
- * Shows %NAME% wherever a secret's value appears; the longest values go first. A name can
- * come with more than one value, as a secret changed while a tool used the old one.
- */
+export function replaceLongest(
+  text: string,
+  pairs: Iterable<readonly [string, string]>,
+): string {
+  const needles = [...pairs]
+    .filter(([needle]) => needle && text.includes(needle))
+    .sort(([a], [b]) => b.length - a.length);
+  if (!needles.length) return text;
+  const taken = new Uint8Array(text.length);
+  const found: [number, number, string][] = [];
+  for (const [needle, replacement] of needles)
+    for (let at = text.indexOf(needle); at !== -1;) {
+      const end = at + needle.length;
+      if (taken.subarray(at, end).includes(1)) {
+        at = text.indexOf(needle, at + 1);
+        continue;
+      }
+      taken.fill(1, at, end);
+      found.push([at, end, replacement]);
+      at = text.indexOf(needle, end);
+    }
+  found.sort(([a], [b]) => a - b);
+  let shown = '';
+  let from = 0;
+  for (const [start, end, replacement] of found) {
+    shown += text.slice(from, start) + replacement;
+    from = end;
+  }
+  return shown + text.slice(from);
+}
 export function redactSecrets(
   text: string,
   secrets: Record<string, string> | [string, string][],
 ): string {
-  let shown = text;
-  for (const [name, value] of (Array.isArray(secrets)
-    ? [...secrets]
-    : Object.entries(secrets)
-  ).sort(([, a], [, b]) => b.length - a.length))
-    if (value) shown = shown.split(value).join(`%${name}%`);
-  return shown;
+  return replaceLongest(
+    text,
+    (Array.isArray(secrets) ? secrets : Object.entries(secrets)).map(
+      ([name, value]) => [value, `%${name}%`] as const,
+    ),
+  );
 }
 const WORD = /[\p{L}\p{N}\p{M}_]/u;
-/**
- * Whether `value` stands on its own in `text`, not as part of a longer word or number:
- * `admin` stands in "log in as admin" but not in "administrator".
- */
 export function standsIn(text: string, value: string): boolean {
   if (!value) return false;
   for (
@@ -134,11 +149,6 @@ function strings(value: unknown, into: string[]): void {
   else if (value && typeof value === 'object')
     for (const item of Object.values(value)) strings(item, into);
 }
-/**
- * What the person and the model wrote in a conversation: the person's prompts, and the
- * model's answers and the arguments of its calls as it wrote them. Notices Circle adds and
- * the output of the person's own commands are not in it.
- */
 export function written(messages: readonly Message[]): string[] {
   const lines: string[] = [];
   for (const message of messages) {
@@ -151,14 +161,6 @@ export function written(messages: readonly Message[]): string[] {
   }
   return lines;
 }
-/**
- * Hides secrets' values in text the model will read: the values given, the ones saved now,
- * and every value a secret had while this ran, for text made with an older one (a job's
- * output after the token changed). A value the model knows already stays: hiding it would
- * only rename text the model has, as a user name that is also the password, and tell the
- * model the secret. That is a plain variable's value, and a value that stands on its own in
- * what the person or the model wrote (`known`, read only when a value is in the text).
- */
 export type Redactor = ReturnType<typeof secretRedactor>;
 export function secretRedactor(
   secrets: () => Record<string, string>,
@@ -190,7 +192,6 @@ export function secretRedactor(
     return redactSecrets(text, hidden);
   };
 }
-/** Whether a string is made only of %NAME% for the given names, as a password typed from secrets is. */
 export const onlyReferences = (text: string, names: string[]): boolean => {
   const pattern = reference(names);
   return !!text && !!pattern && text.replace(pattern, '') === '';

@@ -84,6 +84,7 @@ export interface KnowledgeShareRefusal {
   code: string;
   message: string;
   fix: string;
+  confirmation?: { url: string; expiresAt: string } | null;
 }
 export interface KnowledgePreview {
   ticket: string;

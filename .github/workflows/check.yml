@@ -82,6 +82,8 @@ jobs:
       # Formatting does not depend on the system
       - if: runner.os == 'Linux'
         run: npm run format:check
+      - if: runner.os == 'Linux'
+        run: npx tsx scripts/verify-knowledge-sync.ts
       - run: node dist/cli.js --version
         working-directory: ${{ env.DEV_DRIVE_WORKSPACE || github.workspace }}
       # The slowest test files, so that one file holding up the suite shows (on CI a failing

@@ -16,6 +16,8 @@ import {
   modeWord,
   truncationLine,
 } from '../src/tui/knowledge_view.js';
+import { refusalLines } from '../src/tui/knowledge_commands.js';
+import { KnowledgeShareRefused } from '../src/knowledge/sharing.js';
 import type { KnowledgeConnectionStatus } from '../src/knowledge/connection.js';
 import { ApprovalCard } from '../src/ink/components/approval_card.js';
 import { dialogRows } from '../src/ink/components/dialog_card.js';
@@ -505,6 +507,23 @@ test('knowledge results read as words; a refused share shows the server text', (
     true,
   );
   assert.match(refused.join('\n'), /refused: 上传原文需上传人署名/);
+  assert.deepEqual(
+    refusalLines(
+      new KnowledgeShareRefused({
+        code: 'SHARE_UPLOAD_UNSIGNED',
+        message: '上传原文需上传人署名',
+        fix: '请上传人署名后重试',
+        confirmation: {
+          url: 'https://192.0.2.10/console/upload',
+          expiresAt: '2026-11-03T14:30:00.000Z',
+        },
+      }),
+    ),
+    [
+      'refused: 上传原文需上传人署名 请上传人署名后重试',
+      "confirm the source upload in the server's console before 14:30: https://192.0.2.10/console/upload",
+    ],
+  );
   assert.deepEqual(
     rows(
       'knowledge_search',

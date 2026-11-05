@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -8,7 +8,30 @@ interface FilePin {
   path: string;
   sha256: string;
 }
-/** An explicit upstream checkout is required to establish upstream equality; offline mode checks only the mirror. */
+export function refreshDerivedKnowledgeSync(root: string): {
+  refreshed: number;
+} {
+  const manifestPath = resolve(
+    root,
+    'src/data/knowledge-sync/v1/provenance.json',
+  );
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+    files: FilePin[];
+    derived: { path: string; sha256: string }[];
+    references: { source: string; sha256: string }[];
+  };
+  let refreshed = 0;
+  for (const pin of manifest.derived) {
+    const path = resolve(root, pin.path),
+      rel = relative(resolve(root), path);
+    if (rel.startsWith('..') || isAbsolute(rel))
+      throw Error('provenance path escapes checkout');
+    pin.sha256 = createHash('sha256').update(readFileSync(path)).digest('hex');
+    refreshed++;
+  }
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  return { refreshed };
+}
 export function verifyKnowledgeSync(
   root: string,
   upstream?: string,
@@ -52,15 +75,21 @@ if (
   process.argv[1] &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
+  const root = fileURLToPath(new URL('..', import.meta.url));
   const args = process.argv.slice(2);
-  if (args.length && (args.length !== 2 || args[0] !== '--upstream'))
-    throw Error('usage: verify-knowledge-sync.ts [--upstream <checkout>]');
-  console.log(
-    JSON.stringify(
-      verifyKnowledgeSync(
-        fileURLToPath(new URL('..', import.meta.url)),
-        args[1],
-      ),
-    ),
-  );
+  let refreshDerived = false;
+  let upstream: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--refresh-derived') {
+      refreshDerived = true;
+    } else if (args[i] === '--upstream' && i + 1 < args.length) {
+      upstream = args[++i];
+    } else {
+      throw Error(
+        'usage: verify-knowledge-sync.ts [--refresh-derived] [--upstream <checkout>]',
+      );
+    }
+  }
+  if (refreshDerived) refreshDerivedKnowledgeSync(root);
+  console.log(JSON.stringify(verifyKnowledgeSync(root, upstream)));
 }

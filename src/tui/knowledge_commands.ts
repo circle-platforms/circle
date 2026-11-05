@@ -2,7 +2,7 @@ import { basename, relative, sep, extname } from 'node:path';
 import { readFileBytes } from '../file_access.js';
 import { secretLookingName } from '../sandbox.js';
 import { protectedWorkspaceName } from '../file_patterns.js';
-import { syncObjectId, sha256 } from '../knowledge/canonical.js';
+import { computeObjectDigest, sha256 } from '../knowledge/canonical.js';
 import { randomUUID } from 'node:crypto';
 import { terminalText } from '../ink/components/markdown_renderer.js';
 import type { CommandHost } from './slash_handlers.js';
@@ -10,6 +10,7 @@ import {
   KnowledgeService,
   type PreparedKnowledgeChange,
 } from '../knowledge/service.js';
+import { KnowledgeShareRefused } from '../knowledge/sharing.js';
 import type { SyncItem, SyncObject } from '../knowledge/types.js';
 import { forgetAuthorization } from '../mcp_auth.js';
 import { buildMcpConnections } from '../mcp_loader.js';
@@ -32,17 +33,33 @@ const clock = (iso: string): string => {
   const two = (n: number) => String(n).padStart(2, '0');
   return `${two(at.getHours())}:${two(at.getMinutes())}`;
 };
-/**
- * What the person reads when the server refused: its own words, and for a purge it will
- * only run once they confirm, where to confirm it. Null for an error the server did not explain.
- */
+const confirmationLines = (
+  confirmation: { url: string; expiresAt: string } | null | undefined,
+  action: string,
+): string =>
+  confirmation
+    ? `${action} before ${clock(confirmation.expiresAt)}: ${confirmation.url}`
+    : action;
 export function refusalLines(error: unknown): string[] | null {
+  if (error instanceof KnowledgeShareRefused)
+    return [
+      error.message,
+      ...(error.refusal.confirmation
+        ? [
+            confirmationLines(
+              error.refusal.confirmation,
+              "confirm the source upload in the server's console",
+            ),
+          ]
+        : []),
+    ];
   if (!(error instanceof SyncHttpError)) return null;
   if (error.code === 'SYNC_PURGE_CONFIRMATION_REQUIRED')
     return [
-      error.confirmation
-        ? `confirm the purge in the server's console before ${clock(error.confirmation.expiresAt)}: ${error.confirmation.url}`
-        : "confirm the purge in the server's console",
+      confirmationLines(
+        error.confirmation,
+        "confirm the purge in the server's console",
+      ),
       ...(error.detail ? [`refused: ${error.detail}`] : []),
       'the local copy stays · /knowledge sync after confirming',
     ];
@@ -58,10 +75,6 @@ async function explained(host: CommandHost, work: () => Promise<void>) {
     notice(host, lines.join('\n'));
   }
 }
-/**
- * Asks the person through the approval card. `name` says which action it is (the card's
- * title and policy follow it); `extra` are the call's own members beside the change.
- */
 export async function personKnowledgeAction(
   host: CommandHost,
   change: unknown,
@@ -314,7 +327,6 @@ export async function knowledgeCommand(
     return;
   }
   if (verb === 'mode') {
-    // The person says synced or local; the protocol's value for synced stays `hub`.
     const mode = modeArgument(rest);
     if (!mode) throw Error('usage: /knowledge mode synced|local');
     const preview = await connection.checkMode(
@@ -423,7 +435,7 @@ export async function knowledgeCommand(
       objects: SyncObject[] = [],
       add = (object: SyncObject) => {
         objects.push(object);
-        return syncObjectId(object);
+        return computeObjectDigest(object);
       };
     const root = current.items.find(
       (i) =>

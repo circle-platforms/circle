@@ -5,7 +5,8 @@
     "outDir": "dist",
     "declaration": true,
     "sourceMap": true,
-    "noEmitOnError": true
+    "noEmitOnError": true,
+    "incremental": false
   },
   "include": ["src/**/*.ts"],
   "exclude": ["tests", "scripts", "src/extensions"]

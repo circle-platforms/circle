@@ -11,7 +11,10 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { KnowledgeService } from '../../../src/knowledge/service.ts';
-import { sha256, syncObjectId } from '../../../src/knowledge/canonical.ts';
+import {
+  sha256,
+  computeObjectDigest,
+} from '../../../src/knowledge/canonical.ts';
 import { installedPersonalPacks } from '../../../src/knowledge/packs.ts';
 import {
   defaultSettings,
@@ -91,7 +94,7 @@ const objects = [];
 const add = (kind, body) => {
   const object = { schema: 'personal-sync-object@1', kind, body };
   objects.push(object);
-  return syncObjectId(object);
+  return computeObjectDigest(object);
 };
 const directory = randomUUID();
 add('directory_revision', {

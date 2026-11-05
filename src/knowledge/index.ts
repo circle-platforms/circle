@@ -7,11 +7,19 @@ export {
 export {
   encodeSyncObject,
   decodeSyncObject,
-  syncObjectId,
+  computeObjectDigest,
+  formatJcs,
   normalizeSyncText,
 } from './canonical.js';
 export { validateSync, SYNC_LIMITS, SYNC_PROTOCOL } from './protocol.js';
 export { knowledgeTokens } from './search.js';
+export {
+  validateGraph,
+  findLowestCommonAncestor,
+  resolveEffectiveHead,
+  type SnapshotGraph,
+  type ValidateGraphOptions,
+} from './graph.js';
 export type {
   SyncObject,
   SyncItem,
@@ -25,7 +33,15 @@ export {
   type KnowledgeAccess,
   type PreparedKnowledgeChange,
 } from './service.js';
-export { verifyLocal, LOCAL_VERIFIER, exactQuotation } from './verification.js';
+export {
+  verifyLocal,
+  LOCAL_VERIFIER,
+  WORKSPACE_VERIFIER,
+  matchTextQuote,
+  refineSelectorWithQuote,
+  checkWorkspaceFreshness,
+  type Verification,
+} from './verification.js';
 export {
   installPersonalPack,
   setPersonalPackEnabled,

@@ -317,8 +317,13 @@ test('terminal source import requires person approval, preserves BOM and CRLF, a
   assert.equal(!!w.ui.state.dialog, false);
   const outside = join(scratch(t), 'outside.txt');
   writeFileSync(outside, 'outside');
-  symlinkSync(outside, join(w.workspace, 'outside.txt'));
-  await w.app.submit('/knowledge import outside.txt');
+  try {
+    symlinkSync(outside, join(w.workspace, 'outside.txt'));
+    await w.app.submit('/knowledge import outside.txt');
+  } catch (error: any) {
+    if (process.platform !== 'win32' || error?.code !== 'EPERM') throw error;
+    await w.app.submit(`/knowledge import ${outside}`);
+  }
   assert.equal(w.stored().head, head);
   assert.equal(!!w.ui.state.dialog, false);
 });

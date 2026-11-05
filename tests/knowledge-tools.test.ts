@@ -434,7 +434,7 @@ test('an empty greeting keeps one address/schema discovery tool and promotes the
 });
 
 test('the knowledge write tool publishes a confirmed revision and the next model request reads its exact effect', async (t) => {
-  const { syncObjectId } = await import('../src/knowledge/canonical.js');
+  const { computeObjectDigest } = await import('../src/knowledge/canonical.js');
   const { randomUUID } = await import('node:crypto');
   const root = scratch(t),
     service = new KnowledgeService(join(root, 'personal')),
@@ -475,7 +475,7 @@ test('the knowledge write tool publishes a confirmed revision and the next model
         },
       },
     ];
-  const id = syncObjectId(objects[1]);
+  const id = computeObjectDigest(objects[1]);
   let asked = 0;
   const model = new ScriptedModel([
     {
