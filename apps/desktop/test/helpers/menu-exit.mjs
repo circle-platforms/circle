@@ -24,8 +24,25 @@ export async function holdMenuExit(page, selector) {
     return key;
   });
   return async () => {
-    // With an exit animation the menu stays while it plays: finish it. Without one the
-    // menu has already unmounted, and only where the focus went is left to check.
+    // Without an exit animation the menu unmounted on select, before the input began,
+    // and nothing is left to return the focus later: where it is now is what counts.
+    const early = await page.evaluate(
+      (key) => !!window.menuExitProbes?.[key]?.closed,
+      key,
+    );
+    if (early)
+      return page.evaluate((key) => {
+        delete window.menuExitProbes[key];
+        return {
+          closed: true,
+          animated: false,
+          terminal: document.activeElement?.closest('.native-terminal-surface')
+            ?.id,
+          tag: document.activeElement?.tagName,
+          label: document.activeElement?.getAttribute('aria-label'),
+        };
+      }, key);
+    // With an exit animation the menu stays while it plays: finish it.
     await page.waitForFunction(
       (key) =>
         window.menuExitProbes?.[key]?.closed ||
