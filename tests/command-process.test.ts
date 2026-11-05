@@ -1286,3 +1286,59 @@ test('a real scripted child tool keeps its execution session separate from the o
     ),
   );
 });
+
+test("a background command is named by the model's description, or else by its command", async (t) => {
+  const root = scratch(t),
+    transport = pipeLauncher();
+  const run = (body: string) => command(root, body);
+  const model = new ScriptedModel([
+    {
+      message: {
+        id: 'two-background-calls',
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'described',
+            name: 'execute',
+            args: {
+              command: run('setTimeout(() => {}, 200);'),
+              description: 'Wait until the build is ready',
+              background: true,
+            },
+          },
+          {
+            id: 'plain',
+            name: 'execute',
+            args: {
+              command: run('setTimeout(() => {}, 200);'),
+              background: true,
+            },
+          },
+        ],
+      },
+    },
+    { message: { id: 'done', role: 'assistant', content: 'done' } },
+  ]);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model,
+    headless: true,
+    commandLauncher: transport.launcher,
+  });
+  cleanup(t, () => runtime.close());
+  runtime.policy.setYolo(runtime.session.id, true);
+  await runtime.harness.run('start two background commands');
+  const jobs = runtime.jobs.list(runtime.session.id);
+  const described = jobs.find((job) => job.title.startsWith('Wait until'));
+  assert.ok(described, JSON.stringify(jobs.map((job) => job.title)));
+  assert.equal(described.title, 'Wait until the build is ready');
+  assert.match(described.command ?? '', /program\.cjs/);
+  const plain = jobs.find((job) => job !== described)!;
+  // No description: the command names it, never the bare word "command".
+  assert.notEqual(plain.title, 'command');
+  assert.match(plain.title, /program\.cjs/);
+  assert.equal(plain.command, plain.title);
+});

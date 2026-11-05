@@ -63,6 +63,8 @@ export interface Job extends JobOwner {
   outputPath: string;
   virtualPath: string;
   detail?: string;
+  /** The command a shell job runs, as shown: after the Runtime's known-secret redaction. */
+  command?: string;
   source?: string;
   execution?: CommandExecution;
   /** The session a background subagent runs in. The job keeps it after the subagent ends. */
@@ -386,12 +388,23 @@ export class JobRegistry {
       ...entry.owner,
       id,
       kind,
-      title: (entry.ready
-        ? (entry.owner.origin?.displayCommand ?? 'command')
-        : entry.command
+      // The model's few words name a job; without them, the command it runs does.
+      title: (
+        entry.owner.origin?.description?.trim() ||
+        (entry.ready
+          ? (entry.owner.origin?.displayCommand ?? 'command')
+          : entry.command)
       )
         .replace(/\s+/g, ' ')
         .slice(0, 160),
+      ...((entry.ready ? entry.owner.origin?.displayCommand : entry.command)
+        ? {
+            command: (entry.ready
+              ? entry.owner.origin!.displayCommand!
+              : entry.command
+            ).slice(0, 4000),
+          }
+        : {}),
       status: 'running',
       reason: '',
       started: entry.started,
