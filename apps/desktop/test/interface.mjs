@@ -975,7 +975,7 @@ try {
   // A request waiting for the person is a card in the conversation, counted by the bar
   // above the input box
   await page
-    .getByRole('button', { name: /^\d+ requests? waiting for you view$/ })
+    .getByRole('button', { name: /^\d+ requests? waiting for you$/ })
     .waitFor();
   await page
     .getByRole('region', { name: 'execute', exact: true })
