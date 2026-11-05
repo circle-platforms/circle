@@ -1796,7 +1796,7 @@ if ($result -eq 0 -or $result -ge $buffer.Capacity) { throw "GetShortPathName fa
           ],
           signal,
         ),
-      /external file requires a grant/i,
+      /outside this session workspace or lacks an exact-file grant/i,
     );
     await assert.rejects(readFile(join(f.root, 'outside.ts')), {
       code: 'ENOENT',

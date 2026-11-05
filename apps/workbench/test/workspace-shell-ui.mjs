@@ -418,6 +418,7 @@ try {
         'changes panel',
         'browser panel',
         'subagents panel',
+        'background jobs panel',
         'terminal panel',
       ]);
       assert.deepEqual(bar.badges, ['1', '1']);

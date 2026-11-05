@@ -74,15 +74,23 @@ try {
       'npm run test -- reconnect',
       'rack-pdu · Telnet',
     ]);
-    // A command Circle runs in the foreground has a terminal and no tab; the terminal
-    // button counts the commands that run in the background.
+    // A command Circle runs in the foreground has a terminal and no tab; the
+    // background jobs button counts the commands that run in the background,
+    // and the terminal button carries no count.
     assert.equal((await names(page)).includes('ls -la'), false);
+    assert.equal(
+      await page
+        .getByRole('button', { name: 'background jobs panel', exact: true })
+        .locator('.drawer-mode-badge')
+        .textContent(),
+      '1',
+    );
     assert.equal(
       await page
         .getByRole('button', { name: 'terminal panel', exact: true })
         .locator('.drawer-mode-badge')
-        .textContent(),
-      '1',
+        .count(),
+      0,
     );
     // A command Circle runs in the background: in front, ringed in blue, with its dot and
     // its stop, and no way to close it while it runs.

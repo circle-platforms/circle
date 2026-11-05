@@ -409,7 +409,11 @@ export function GitHubConnectionCard({
           aria-labelledby="github-permissions-title"
         >
           <h3 id="github-permissions-title">{t('permissions')}</h3>
-          <p className="github-section-note">{t('Circle uses your connected GitHub credentials for the current workspace repository. GitHub decides which actions are allowed.')}</p>
+          <p className="github-section-note">
+            {t(
+              'Circle uses your connected GitHub credentials for the current workspace repository. GitHub decides which actions are allowed.',
+            )}
+          </p>
           {usable.length > 0 && (
             <>
               <p className="github-section-note">{t('what Circle can do')}</p>
