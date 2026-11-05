@@ -60,6 +60,7 @@ export const DEFAULT_CREDENTIAL_FILES = [
   '*.secrets.json',
   'token.json',
   'mcp-auth.json',
+  'chatgpt-accounts.json',
   'id_rsa',
   'id_dsa',
   'id_ecdsa',

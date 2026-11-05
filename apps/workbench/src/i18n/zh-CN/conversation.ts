@@ -1,10 +1,5 @@
 // Simplified Chinese for the interface words in the conversation files. English is the key.
 export const conversation: Record<string, string> = {
-  workbench: '工作台',
-  'waiting for Circle to finish': '等待 Circle 完成中',
-  'stop conversation': '停止当前回合',
-  usage: '用量',
-  'background jobs': '后台任务',
   'waiting for runtime connection': '等待连接运行时中',
   'connection settings': '连接设置…',
   hook: '钩子',

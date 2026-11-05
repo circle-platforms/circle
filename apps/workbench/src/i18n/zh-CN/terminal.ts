@@ -48,8 +48,6 @@ export const terminal: Record<string, string> = {
   'copy complete output': '复制完整输出',
   'complete terminal output copied': '已复制完整终端输出',
   'find in terminal': '在终端中查找',
-  'run commands here while agents keep working':
-    '代理继续工作时，也能在这里运行命令',
   'retry output': '重新加载输出',
   'ended by signal {signal}': '因信号 {signal} 结束',
   'service starting': '服务正在启动',

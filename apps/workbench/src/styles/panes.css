@@ -82,13 +82,10 @@
 }
 .inspector .native-terminal-empty {
   flex: 1;
-  gap: 10px;
-  font-size: var(--ui-small);
 }
 
 /* The browser */
 .inspector .native-browser {
-  container: circle-browser / inline-size;
   height: 100%;
   min-height: 0;
   background: var(--bg);
@@ -192,24 +189,6 @@
   border: 1px solid var(--control-border);
   border-radius: 8px;
   background: var(--bg);
-}
-/* Reserve an address row in a compact pane. System-font metrics, the security
-   label and take over must not compete the editable field down to zero width.
-   This depends on pane width, and stays two rows while control changes hands. */
-@container circle-browser (max-width: 480px) {
-  .inspector .native-browser .browser-address {
-    flex-wrap: wrap;
-    row-gap: 4px;
-  }
-  /* Keep this row as tall as the 28px takeover button, including while idle. */
-  .inspector .native-browser .browser-address > .icon-button {
-    margin-block: 1px;
-  }
-  .inspector .browser-url {
-    order: 1;
-    flex-basis: 100%;
-    margin-left: 0;
-  }
 }
 .inspector .browser-url:focus-within {
   border-color: color-mix(
@@ -403,6 +382,44 @@
   font-size: var(--ui-small);
   line-height: 1.5;
 }
+/* A mode with nothing to show yet: its icon and one line in the middle of the pane, the
+   way the browser looks before a page is opened. */
+.pane-empty {
+  /* Centred in the whole pane, whatever else the mode lays out around it. */
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+}
+.pane-empty > svg {
+  margin-bottom: 8px;
+  color: var(--muted);
+}
+.pane-empty > h3,
+.inspector .pane-empty > h3 {
+  margin: 0;
+  padding: 0;
+  color: var(--fg);
+  font-size: var(--ui-size);
+  font-weight: 500;
+}
+.pane-empty > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--ui-small);
+  line-height: 1.5;
+}
+.pane-empty > .button {
+  margin-top: 10px;
+  pointer-events: auto;
+}
 /* Files: the filter in the toolbar every mode starts with, and the tree under it. As in
    the changes and subagents modes, a row's background starts 8px in from the edge and
    what is in it 16px in, the filter's edge too. */
@@ -421,7 +438,12 @@
   font-weight: 400;
 }
 .inspector .files-panel > .mode-toolbar .search-field input {
+  /* The whole field's height, so no line of the text or the placeholder is cut. */
+  align-self: stretch;
+  height: auto;
+  min-width: 0;
   padding: 0;
+  line-height: 20px;
 }
 .inspector .files-panel > .virtual-file-tree {
   margin: 0 8px;
@@ -435,4 +457,46 @@
 }
 .inspector .files-panel > .panel-note {
   margin: 10px 16px;
+}
+
+/* Files, changes, browser, subagents and terminal share one frame: the same surface,
+   and a first row of the same height with the same 1px rule under it. The overview
+   belongs with the conversation and keeps its own. */
+.inspector .mode-toolbar,
+.inspector .browser-address,
+.inspector .term-tabbar {
+  box-sizing: border-box;
+  flex: none;
+  height: 44px;
+  min-height: 44px;
+  border-bottom: 1px solid var(--border);
+}
+.inspector .browser-address,
+.inspector .term-tabbar {
+  display: flex;
+  align-items: center;
+}
+.inspector .mode-toolbar {
+  width: 100%;
+}
+.inspector .mode-toolbar .search-field {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+/* Every empty mode starts its icon at the same height and spaces its lines the same,
+   whatever comes after them (the terminal's button) and whatever box holds them (the
+   browser's viewport starts under its address row). */
+.inspector .pane-empty {
+  justify-content: flex-start;
+  gap: 6px;
+  padding: calc(50vh - 120px) 24px 24px;
+}
+.inspector .pane-empty > svg {
+  margin-bottom: 8px;
+}
+.inspector .native-browser-viewport > .pane-empty.browser-empty {
+  inset: -48px 0 0 0;
+  gap: 6px;
+  padding: calc(50vh - 120px) 24px 24px;
 }

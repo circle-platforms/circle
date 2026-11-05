@@ -14,7 +14,6 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 ### Changed
 
 - **The desktop uses the shared graphite palette.** Dark and light surfaces, text, controls and status colours now follow the Circle design tokens; terminal defaults stay unchanged.
-- **The desktop shares one three-pane layout.** Overview and drawer modes share the right pane, conversation elements follow the graphite design, and the composer distinguishes idle, plan, working and response states with text and frames.
 - **The Chinese desktop uses consistent wording.** Request and handoff states, progress labels and interface terms follow the shared design rules, including the preview connection hint; English interface keys and original content are preserved.
 
 ### Fixed
@@ -24,7 +23,6 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 - **A new desktop session opens when connecting takes long.** Waiting for the first message to be stored no longer fails the session after eight seconds.
 - **An MCP server sees the real client.** Circle tells it its own version and platform.
 - **The desktop sends a failed model request again.** In the desktop a request that got no answer within `CIRCLE_LLM_TIMEOUT`, lost its connection or met an error inside the stream ended the turn on the first try, with `Request timed out.` for a timeout, because bundling renamed the SDKs' error classes. It now retries as [Models](docs/models.md) describes.
-- **The browser address stays editable in a compact drawer.** Its own row keeps security and takeover controls from squeezing the field away with wider system fonts or larger text.
 
 - **Desktop overlays keep their position and keyboard focus through animations.** Dialogs and notices stay centred, search can reopen while its previous dialog closes, and a terminal menu cannot steal input from a newly opened shell.
 - **Closing a desktop panel menu keeps the panel open.** Escape dismisses the menu without also closing its drawer or leaving full view.

@@ -5,7 +5,6 @@ import { LiveRuntime } from '../src/model/live';
 import type { DesktopBridge } from '../../desktop/src/contracts';
 import type { RuntimeUpdate } from '../../desktop/src/runtime-protocol';
 import '../src/styles/app.css';
-import '../src/styles/graphite.css';
 
 // The window's notices over a live session whose host fails one command: the message box
 // sends as the composer does, and the notice shows as the window shows it.

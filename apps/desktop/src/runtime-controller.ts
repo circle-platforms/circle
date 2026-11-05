@@ -1,3 +1,11 @@
+import {
+  activeChatGPTAccount,
+  CHATGPT_RESOURCE,
+  chatgptModels,
+  connectionKey,
+  signInWithChatGPT,
+  signOutOfChatGPT,
+} from '../../../src/chatgpt_plan.js';
 import { DesktopKnowledge } from './knowledge-service';
 import { FileRewindJournal } from '../../../src/file_rewind.js';
 import { ExternalFileGrants } from './workspace/external-file-grants';
@@ -128,6 +136,7 @@ import {
   secretNames,
 } from '../../../src/secrets.js';
 import { normalizeBaseUrl, resolveEndpoint } from '../../../src/probe.js';
+import { isProtocol } from '../../../src/protocols.js';
 import { availableUpdate } from '../../../src/update.js';
 import { BUILTIN_SLASH } from '../../../src/tui/slash_commands.js';
 import { ModelCatalog } from '../../../src/model_catalog.js';
@@ -335,6 +344,13 @@ export interface ControllerOptions {
   /** A link an extension asked for: the window opens it in its browser panel; with no
    * window the main process opens it in the system browser. */
   openUrl?: (url: string) => void;
+  /**
+   * Where this machine's ChatGPT agent host ID is kept; `~/.circle/agent-host-id`, shared
+   * with the terminal, when not given. Test profiles keep theirs in their data folder.
+   */
+  agentHostFile?: string;
+  /** The ChatGPT plan's Responses base; only checks point it at a local gateway. */
+  chatgptBaseUrl?: string;
   /** The conversation browsers in the main process; without it there are no browser tools. */
   browser?: BrowserPort;
   /** The conversation device terminals in the main process. */
@@ -487,6 +503,14 @@ export class RuntimeController {
   private probed?: { baseUrl: string; protocol: string; models: string[] };
   // Whether a key is saved, read once and again after configure or logout.
   private keySaved?: boolean;
+  /** The model list the last ChatGPT sign-in read from the account. */
+  private chatgptModelList: string[] = [];
+  /** A Sign in with ChatGPT waiting for the browser, started from the connection form. */
+  private chatgptSignIn?: {
+    abort: AbortController;
+    paste: (text: string) => void;
+    done: Promise<{ email: string; models: string[] }>;
+  };
   // A workspace's git branch, read at most every two seconds: snapshots follow tokens.
   private branches = new Map<string, { branch: string; at: number }>();
   // Folders chosen on home before a message is sent. Remembering one does not
@@ -2494,6 +2518,8 @@ export class RuntimeController {
   ): Message[] {
     const labels = this.store.labels(id);
     const turns = this.turnUsage.get(id) ?? {};
+    // A ChatGPT plan is not billed per token: its replies show no cost at all.
+    const priced = runtime.options.settings.auth.protocol !== 'chatgpt';
     const result: Message[] = [];
     const calls = new Map<string, Message>();
     // A stored reply has tokens but not the turn clock. Measure it from the prompt,
@@ -2624,7 +2650,7 @@ export class RuntimeController {
               input: turns[raw.id]!.input,
               output: turns[raw.id]!.output,
               ...(turns[raw.id]!.unreported ? { unreported: true } : {}),
-              cost: turns[raw.id]!.cost ?? null,
+              ...(priced ? { cost: turns[raw.id]!.cost ?? null } : {}),
               // A stop prices an estimate. The mark follows the amount (`$0.0182~`).
               ...(raw.interrupted ? { estimated: true } : {}),
               elapsed: formatElapsed(turns[raw.id]!.seconds),
@@ -2634,10 +2660,14 @@ export class RuntimeController {
                 input: raw.usage.input_tokens,
                 output: raw.usage.output_tokens,
                 // The workbench shows dollars; another currency is not converted
-                cost:
-                  raw.cost?.currency === 'USD'
-                    ? (raw.cost.amount ?? null)
-                    : null,
+                ...(priced
+                  ? {
+                      cost:
+                        raw.cost?.currency === 'USD'
+                          ? (raw.cost.amount ?? null)
+                          : null,
+                    }
+                  : {}),
                 ...(raw.interrupted ? { estimated: true } : {}),
                 elapsed: gapElapsed(markedAt, node.created),
               }
@@ -3307,7 +3337,9 @@ export class RuntimeController {
         enabledModels: savedSettings.enabled_models,
         doubleEscape: savedSettings.double_escape,
         endpoint: settings.auth.base_url,
-        protocol: settings.auth.protocol as 'openai' | 'anthropic',
+        protocol: isProtocol(settings.auth.protocol)
+          ? settings.auth.protocol
+          : 'openai',
         credentialFiles: savedSettings.credential_files,
         variables: { ...savedSettings.variables },
         // Names only: a saved value never leaves the runtime
@@ -3360,10 +3392,15 @@ export class RuntimeController {
       cacheRead: stats.usage.cache_read_tokens,
       cache: unreported ? 'N/A' : cacheRateLabel(stats.usage),
       inputUnknown: unreported,
-      cost: formatCosts(
-        [stats.costs],
-        facts.rates?.input !== undefined && facts.rates.output !== undefined,
-      ),
+      // Empty for a ChatGPT plan: nothing is shown, not even `N/A`.
+      cost:
+        runtime.options.settings.auth.protocol === 'chatgpt'
+          ? ''
+          : formatCosts(
+              [stats.costs],
+              facts.rates?.input !== undefined &&
+                facts.rates.output !== undefined,
+            ),
       contextInput: context.input ?? null,
       contextWindow: context.window ?? null,
       contextEstimated: context.estimated,
@@ -4250,6 +4287,8 @@ export class RuntimeController {
       'select-session',
       'list-external-file-grants',
       'revoke-external-file-grant',
+      // A sign-in waits on the browser; pasting or cancelling must reach it meanwhile.
+      'chatgpt-sign-in',
     ].includes(command.name);
     const result = immediate ? operation() : this.mutation.then(operation);
     if (!immediate) this.mutation = result.then(() => {});
@@ -5120,7 +5159,8 @@ export class RuntimeController {
           throw Error('finish the current turn before changing connection');
         const endpoint = this.endpointOf(p.endpoint);
         const protocol = text(p.protocol, 'protocol', 20);
-        if (!['openai', 'anthropic'].includes(protocol))
+        // A ChatGPT plan signs in; it is never configured with a key here.
+        if (!isProtocol(protocol) || protocol === 'chatgpt')
           throw Error('invalid protocol');
         const baseUrl = normalizeBaseUrl(endpoint, protocol);
         const model = text(p.model, 'model', 500);
@@ -5191,6 +5231,135 @@ export class RuntimeController {
           detail: found.detail,
         };
       }
+      case 'chatgpt-sign-in': {
+        // The renderer opens the returned address in the system browser; the browser
+        // comes back to the loopback callback, or the person pastes where it ended.
+        const action = text(p.action, 'action', 20);
+        const current = this.chatgptSignIn;
+        if (action === 'paste') {
+          if (!current) throw Error('no ChatGPT sign-in is waiting');
+          const pasted = text(p.url, 'address', 8000);
+          let url: URL;
+          try {
+            url = new URL(pasted.trim());
+          } catch {
+            throw Error('paste the whole address the browser ended on');
+          }
+          if (url.pathname !== '/auth/callback')
+            throw Error('paste the whole address the browser ended on');
+          current.paste(url.href);
+          return {};
+        }
+        if (action === 'cancel') {
+          current?.abort.abort();
+          this.chatgptSignIn = undefined;
+          return {};
+        }
+        if (action === 'wait') {
+          if (!current) throw Error('no ChatGPT sign-in is waiting');
+          // A command must end well inside the supervisor's limit, and a person may take
+          // minutes in the browser: answer `pending` after a while and let the form ask again.
+          const limit = Math.min(
+            Math.max(Number(p.timeoutMs) || 30_000, 0),
+            30_000,
+          );
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const outcome = await Promise.race([
+            current.done.then(
+              (value) => ({ value }),
+              (error: unknown) => ({ error }),
+            ),
+            new Promise<'pending'>((resolve) => {
+              timer = setTimeout(() => resolve('pending'), limit);
+            }),
+          ]).finally(() => clearTimeout(timer));
+          if (outcome === 'pending') return { pending: true };
+          if (this.chatgptSignIn === current) this.chatgptSignIn = undefined;
+          if ('error' in outcome) throw outcome.error;
+          return outcome.value;
+        }
+        if (action !== 'start') throw Error('invalid sign-in action');
+        current?.abort.abort();
+        const abort = new AbortController();
+        let paste: (text: string) => void = () => {};
+        const pasted = new Promise<string>((resolve) => (paste = resolve));
+        let shown: (url: string) => void = () => {};
+        const address = new Promise<string>((resolve) => (shown = resolve));
+        const base = this.options.chatgptBaseUrl ?? CHATGPT_RESOURCE;
+        const done = signInWithChatGPT({
+          home: this.home,
+          pasted,
+          signal: abort.signal,
+          progress: ({ url }) => shown(url),
+          env: this.options.agentHostFile
+            ? {
+                ...process.env,
+                CIRCLE_AGENT_HOST_FILE: this.options.agentHostFile,
+              }
+            : process.env,
+        }).then(async (account) => {
+          // A model list that cannot be read leaves a typed model id.
+          const models = await chatgptModels(base, account.access_token!).catch(
+            () => [] as string[],
+          );
+          this.chatgptModelList = models;
+          return { email: account.email, models };
+        });
+        // Settled here too, so a sign-in nobody waits for is not an unhandled rejection.
+        done.catch(() => {});
+        this.chatgptSignIn = { abort, paste, done };
+        const url = await Promise.race([
+          address,
+          done.then(() => {
+            throw Error('ChatGPT sign-in ended before it began');
+          }),
+        ]);
+        return { url };
+      }
+      case 'chatgpt-connect': {
+        if (
+          [...this.runtimes.values()].some(
+            (owner) =>
+              owner.isClosing ||
+              owner.busy ||
+              owner.jobs.list().some((job) => job.status === 'running'),
+          )
+        )
+          throw Error('finish the current turn before changing connection');
+        const model = text(p.model, 'model', 500);
+        if (!model.trim()) throw Error('model required');
+        if (!activeChatGPTAccount(this.home)?.refresh_token)
+          throw Error('sign in with ChatGPT first');
+        const base = this.options.chatgptBaseUrl ?? CHATGPT_RESOURCE;
+        const settings = withConnectionLock(this.home, () =>
+          // No key is written: the plan's tokens are in the account file.
+          saveSettingsChange(this.home, (saved) => {
+            Object.assign(
+              saved,
+              withConnection(
+                {
+                  protocol: 'chatgpt',
+                  base_url: base,
+                  model,
+                  api_key_ref: 'api_key',
+                },
+                this.home,
+              ),
+            );
+          }),
+        );
+        // The models listed are the ones this sign-in read from the account.
+        this.discoveredModels = [...this.chatgptModelList];
+        for (const owner of this.runtimes.values()) {
+          owner.refreshConnection({
+            ...owner.options.settings,
+            auth: structuredClone(settings.auth),
+            initialized: settings.initialized,
+            enabled_models: [...settings.enabled_models],
+          });
+        }
+        return {};
+      }
       case 'logout': {
         this.keySaved = undefined;
         if (
@@ -5202,6 +5371,10 @@ export class RuntimeController {
           )
         )
           throw Error('stop the current turn before signing out');
+        // A ChatGPT plan's renewable session is revoked before its tokens are cleared.
+        let revoked: boolean | undefined;
+        if (loadSettings(this.home).auth.protocol === 'chatgpt')
+          ({ revoked } = await signOutOfChatGPT(this.home));
         const settings = withConnectionLock(this.home, () => {
           clearCredentials(this.home);
           return saveSettingsChange(this.home, (saved) => {
@@ -5216,7 +5389,7 @@ export class RuntimeController {
             initialized: settings.initialized,
           });
         }
-        return {};
+        return revoked === undefined ? {} : { revoked };
       }
       case 'trust': {
         // Both answers are a deliberate click: trusting loads a folder's code,
@@ -5906,7 +6079,7 @@ export class RuntimeController {
         if (!isReady(settings)) throw Error('connect an endpoint first');
         const found = await resolveEndpoint(
           settings.auth.base_url,
-          loadCredentials(this.home)[settings.auth.api_key_ref] ?? '',
+          await connectionKey(settings, this.home),
           { protocol: settings.auth.protocol },
         );
         // An endpoint that does not list its models (an Anthropic-style path without

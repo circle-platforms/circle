@@ -268,10 +268,13 @@ try {
     JSON.stringify(focusedRowViewport, null, 2) + '\n',
   );
   await menu().focus();
-  await page
-    .getByRole('tooltip')
-    .filter({ hasText: 'session actions for managed fixture A' })
-    .waitFor();
+  // The ⋯ shows no tip (owner's layout rules); it holds the focus by its name.
+  await page.waitForFunction(
+    () =>
+      document.activeElement?.getAttribute('aria-label') ===
+      'session actions for managed fixture A',
+  );
+  assert.equal(await page.getByRole('tooltip').count(), 0);
   assert.equal(
     (await command('archive-session', { id: a, archived: true })).ok,
     true,

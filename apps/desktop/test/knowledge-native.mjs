@@ -1206,11 +1206,13 @@ try {
   await route('knowledge');
   await rows().filter({ hasText: 'Pagination sample 000' }).waitFor();
   await shot('zh-CN-light-1440-no-hub-knowledge');
-  await page
-    .locator('.desktop-sidebar .knowledge-sync-line')
-    .getByText('未连接同步服务器', { exact: true })
-    .click();
-  await page.locator('.knowledge-sync-settings').waitFor();
+  // Without a bound sync server the sidebar has no sync line (#433); settings → sync
+  // still connects one.
+  assert.equal(
+    await page.locator('.desktop-sidebar .knowledge-sync-line').count(),
+    0,
+  );
+  await route('sync');
   await route('settings');
   await page
     .locator('.settings-dialog')
@@ -1228,13 +1230,13 @@ try {
     'mine',
   );
   await shot('en-dark-1440-no-hub-knowledge');
-  await page
-    .locator('.desktop-sidebar .knowledge-sync-line')
-    .getByText('sync server not connected', { exact: true })
-    .click();
-  await page.locator('.knowledge-sync-settings').waitFor();
+  assert.equal(
+    await page.locator('.desktop-sidebar .knowledge-sync-line').count(),
+    0,
+  );
+  await route('sync');
   checks.push(
-    'unbound sync server status opens sync settings from the sidebar in Chinese and English',
+    'without a bound sync server the sidebar shows no sync line in Chinese or English, and sync settings still open',
   );
   assert.equal(loadSettings(home).knowledge_sync.binding, '');
   assert.deepEqual(errors, []);

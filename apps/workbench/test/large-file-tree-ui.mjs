@@ -210,8 +210,8 @@ try {
       .getByText('source.ts', { exact: true })
       .first()
       .waitFor();
-    // The graphite overlay caps a document at 760px. At 800px the sidebar folds and
-    // the tree still fits beside the file, while 40px of the conversation remains visible.
+    // At 800 pixels the drawer lies over the conversation, and the sidebar folds for the
+    // file, which then has the room for the tree beside it.
     await page.waitForFunction(() => {
       const drawer = document.querySelector('.work-drawer');
       const index = document.querySelector(
@@ -220,9 +220,7 @@ try {
       return (
         !!document.querySelector('.workbench.sidebar-collapsed') &&
         !!drawer &&
-        Math.abs(
-          drawer.getBoundingClientRect().width - Math.min(innerWidth, 760),
-        ) <= 1 &&
+        drawer.getBoundingClientRect().width >= 790 &&
         !!index &&
         !index.hidden
       );

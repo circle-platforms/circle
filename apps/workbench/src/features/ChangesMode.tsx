@@ -1,7 +1,7 @@
-import { FileText } from 'lucide-react';
+import { FileDiff, FileText } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useRuntime } from '../app/context';
-import { Button } from '../components/common';
+import { Button, PaneEmpty } from '../components/common';
 import { DiffBlock } from '../components/DiffBlock';
 import { t } from '../i18n';
 import {
@@ -98,8 +98,6 @@ export function ChangesMode({
     : sessionRows;
   const rows: ChangeRow[] =
     scope === 'session' ? sessionLive : live ? (git.files ?? []) : previewRows;
-  const waitingForGit =
-    live && !git.files && (scope === 'all' || sessionRows.length === 0);
 
   // Sent here for a file: show it, in the list that has it.
   useEffect(() => {
@@ -168,13 +166,13 @@ export function ChangesMode({
         </span>
       </header>
       {rows.length === 0 ? (
-        <p className="panel-note changes-empty" role="status">
-          {(scope === 'all' || sessionRows.length === 0) && git.error
-            ? t('could not read the changes')
-            : waitingForGit
-              ? t('reading the changes…')
-              : t('no files changed')}
-        </p>
+        <PaneEmpty
+          icon={FileDiff}
+          className="changes-empty"
+          title={t('changes')}
+        >
+          <p>{t('every change in the working folder')}</p>
+        </PaneEmpty>
       ) : (
         <>
           <ul className="changes-list" aria-label={t('changed files')}>

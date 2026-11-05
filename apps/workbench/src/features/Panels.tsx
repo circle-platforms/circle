@@ -26,15 +26,16 @@ import {
 import {
   ArrowUpRight,
   Bot,
+  Folder,
   Globe,
   LayoutDashboard,
   SquareTerminal,
 } from 'lucide-react';
 import { useRuntime } from '../app/context';
 import { currentSession } from '../model/state';
-import { t, tn } from '../i18n';
+import { t } from '../i18n';
 import type { PanelId, Interaction, DialogId } from '../model/types';
-import { IconButton, SearchInput } from '../components/common';
+import { IconButton, PaneEmpty, SearchInput } from '../components/common';
 
 /** The narrowest a drawer can be and show a file with the tree beside it. */
 const DOCUMENT_AND_TREE = 620;
@@ -470,28 +471,42 @@ export function FilesPanel({
           ) : null;
         }}
       />
-      {listing && (
-        <div
-          className="file-listing-status"
-          role={listing.error ? 'alert' : 'status'}
-        >
-          <span>
-            {tn(listing.loaded, '{n} file loaded', '{n} files loaded')}
-          </span>
-          {!listing.complete && !listing.error && (
-            <span>{t('loading file list…')}</span>
-          )}
-          {listing.truncated && <span>{t('file list is incomplete')}</span>}
-          {listing.error && (
-            <span title={listing.error}>{t('could not load file list')}</span>
-          )}
-        </div>
-      )}
-      {(!native || (!listing && !(workspaceFiles.length || query))) && (
-        <p className="panel-note">
-          {native ? t('trust this folder to browse files') : t('sample files')}
-        </p>
-      )}
+      {listing &&
+        (!listing.complete || listing.truncated || !!listing.error) && (
+          <div
+            className="file-listing-status"
+            role={listing.error ? 'alert' : 'status'}
+          >
+            {!listing.complete && !listing.error && (
+              <span>{t('loading file list…')}</span>
+            )}
+            {listing.truncated && <span>{t('file list is incomplete')}</span>}
+            {listing.error && (
+              <span title={listing.error}>{t('could not load file list')}</span>
+            )}
+          </div>
+        )}
+      {/* Only an empty tree has an empty state; files listed need no note. */}
+      {!tree.rows.length &&
+        !query &&
+        (!native || (!listing && !workspaceFiles.length)) && (
+          <PaneEmpty icon={Folder} title={t('files')}>
+            <p>
+              {native
+                ? t('trust this folder to browse files')
+                : t('sample files')}
+            </p>
+          </PaneEmpty>
+        )}
+      {native &&
+        !query &&
+        !tree.rows.length &&
+        !!listing?.complete &&
+        !listing.error && (
+          <PaneEmpty icon={Folder} title={t('files')}>
+            <p>{t('the files in the working folder')}</p>
+          </PaneEmpty>
+        )}
       {!!query && !tree.matchedCount && (!listing || listing.complete) && (
         <p className="panel-note">{t('no matching files')}</p>
       )}

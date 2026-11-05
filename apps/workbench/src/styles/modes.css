@@ -186,6 +186,9 @@
   padding: 4px 8px;
   overflow-y: auto;
 }
+.agents-mode:not(.open) {
+  flex-direction: column;
+}
 .agents-mode.open > .agent-list {
   width: 300px;
   border-left: 1px solid var(--border);

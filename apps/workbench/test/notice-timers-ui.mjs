@@ -74,8 +74,14 @@ try {
     toast.style.animationPlayState = 'paused';
     toast.style.animationName = name;
     const animation = toast.getAnimations()[0];
-    if (!animation) throw Error('expected notice entry motion');
     const samples = [];
+    // Without an entry animation, where the notice rests is all that is seen.
+    if (!animation) {
+      const box = toast.getBoundingClientRect();
+      toast.style.animationName = '';
+      toast.style.animationPlayState = '';
+      return [{ left: box.left, right: box.right, width: innerWidth }];
+    }
     for (const progress of [0, 0.5, 0.99]) {
       animation.currentTime =
         Number(animation.effect.getTiming().duration) * progress;

@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type ButtonHTMLAttributes,
+  type ComponentType,
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
@@ -331,6 +332,32 @@ export function Badge({
       <span />
       {children}
     </span>
+  );
+}
+/**
+ * What a drawer mode shows while it has nothing yet: its icon and one line in the middle,
+ * as the browser shows before a page is opened, so every mode starts the same way.
+ */
+export function PaneEmpty({
+  icon: Icon,
+  title,
+  className,
+  children,
+}: {
+  icon: ComponentType<{ size?: number; strokeWidth?: number }>;
+  title?: string;
+  className?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div
+      className={`pane-empty${className ? ` ${className}` : ''}`}
+      role="status"
+    >
+      <Icon size={22} strokeWidth={1.5} />
+      {title && <h3>{title}</h3>}
+      {children}
+    </div>
   );
 }
 export function EmptyState({

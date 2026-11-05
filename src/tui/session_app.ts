@@ -1,3 +1,4 @@
+import { connectionKey } from '../chatgpt_plan.js';
 import { QuestionCard } from '../ink/components/question_card.js';
 import { flushTerminalWrite, settleTerminalInput } from './terminal_write.js';
 import { completionFailure } from '../model_completion.js';
@@ -41,7 +42,6 @@ import {
   applyProjectSettings,
   saveCredentials,
   saveSettingsChange,
-  loadCredentials,
   trustFolder,
   isFolderTrusted,
   isReady,
@@ -144,6 +144,7 @@ import type { TerminalApproval } from '../terminal/protocol.js';
 import { loadSecrets } from '../secrets.js';
 import { KnowledgeService } from '../knowledge/service.js';
 import { knowledgeLamp, knowledgeSyncNotice } from './knowledge_view.js';
+import { PROTOCOLS } from '../protocols.js';
 export { VERSION } from '../version.js';
 interface DialogPending {
   complete: (answer: unknown) => void;
@@ -715,7 +716,11 @@ export class SessionApp {
           USD: (costs.estimated_amounts?.USD ?? 0) + extra,
         };
       }
-      this.state.costText = formatCosts([costs], priced);
+      // A ChatGPT plan has no cost to show, not even an unknown one.
+      this.state.costText =
+        this.settings.auth.protocol === 'chatgpt'
+          ? ''
+          : formatCosts([costs], priced);
       this.state.jobs = this.runtime.jobs.list();
       const terminals = this.terminalManager;
       this.state.terminals = terminals?.views(this.runtime.session.id) ?? [];
@@ -1160,7 +1165,7 @@ export class SessionApp {
   private saveConnection(flow: SetupFlow): void {
     const auth = flow.auth();
     withConnectionLock(this.home, () => {
-      saveCredentials({ api_key: flow.apiKey }, this.home);
+      if (flow.savesKey) saveCredentials({ api_key: flow.apiKey }, this.home);
       this.settings = saveSettingsChange(this.home, (saved) => {
         if (
           saved.auth.base_url.replace(/\/+$/, '') !==
@@ -3644,10 +3649,9 @@ export class SessionApp {
   }
   private async loadModels(runtime = this.runtime!): Promise<string[]> {
     const settings = runtime.options.settings;
-    const credentials = loadCredentials(this.home);
     const result = await resolveEndpoint(
       settings.auth.base_url,
-      credentials[settings.auth.api_key_ref] || '',
+      await connectionKey(settings, this.home),
       { protocol: settings.auth.protocol },
     );
     if (result.status === 'failed') throw new Error(result.detail);
@@ -3982,7 +3986,9 @@ export class SessionApp {
           this.settings.auth.model = this.state.model = chosen;
           this.refreshConnections();
           this.notice(
-            `Signed in to ${endpointName(this.settings.auth.base_url)} · model ${this.settings.auth.model}`,
+            this.settings.auth.protocol === 'chatgpt'
+              ? `Signed in with ChatGPT · model ${this.settings.auth.model}`
+              : `Signed in to ${endpointName(this.settings.auth.base_url)} · model ${this.settings.auth.model}`,
           );
         } else if (flow.step === 'probing') {
           this.picker(
@@ -4002,14 +4008,17 @@ export class SessionApp {
             [
               { key: 'openai', label: 'OpenAI-style API' },
               { key: 'anthropic', label: 'Anthropic-style API' },
+              { key: 'responses', label: 'OpenAI Responses API' },
             ],
             (item) => {
-              flow.chooseProtocol(item.key === 'anthropic' ? 1 : 0);
+              flow.chooseProtocol(
+                PROTOCOLS.indexOf(item.key as (typeof PROTOCOLS)[number]),
+              );
               next();
             },
             {
               hint: `${flow.status} · which kind of API is it?`,
-              focusKey: flow.focus ? 'anthropic' : 'openai',
+              focusKey: PROTOCOLS[flow.focus] ?? 'openai',
             },
             leave,
           );
@@ -4049,11 +4058,46 @@ export class SessionApp {
             })),
             (item) => {
               flow.chooseProvider(item.key);
-              ask();
+              if (flow.step === 'signin') {
+                void flow.runSignIn(() => next()).then(() => next());
+                next();
+              } else ask();
             },
-            { hint: 'which provider?' },
+            { hint: flow.error || 'which provider?' },
             leave,
           );
+        } else if (flow.step === 'signin') {
+          // The browser signs in; the address it ends on can be pasted here instead.
+          const list = this.picker(
+            'Continue with ChatGPT' + (flow.error ? ` · ${flow.error}` : ''),
+            [],
+            () => {},
+            {
+              empty: flow.signInUrl
+                ? `Sign in in your browser. If it did not open: ${flow.signInUrl}`
+                : 'Opening your browser…',
+            },
+            () => {
+              flow.cancelSignIn();
+              leave();
+            },
+          );
+          list.ask(
+            'or paste the address the browser ends on',
+            '',
+            (typed) => {
+              flow.submitRedirect(typed);
+              if (flow.error) next();
+            },
+            {
+              keys: 'enter continues · esc closes',
+              cancel: () => {
+                flow.cancelSignIn();
+                list.close();
+              },
+            },
+          );
+          this.repaint();
         } else ask();
       });
     next();

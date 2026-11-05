@@ -1,4 +1,5 @@
 import type { ChatCompletionContentPart } from 'openai/resources/chat/completions';
+import type { ResponseInputContent } from 'openai/resources/responses/responses';
 import type {
   ImageBlockParam,
   DocumentBlockParam,
@@ -105,6 +106,28 @@ export function openAIContent(
               filename: item.filename,
               file_data: `data:application/pdf;base64,${item.data}`,
             },
+          },
+    ),
+  ];
+}
+/** The same parts as `openAIContent`, in the Responses API's input shape. */
+export function responsesContent(
+  text: string,
+  attachments: MediaAttachment[] = [],
+): ResponseInputContent[] {
+  return [
+    ...(text ? [{ type: 'input_text' as const, text }] : []),
+    ...attachments.map((item): ResponseInputContent =>
+      item.kind === 'image'
+        ? {
+            type: 'input_image',
+            image_url: `data:${item.mime_type};base64,${item.data}`,
+            detail: 'auto',
+          }
+        : {
+            type: 'input_file',
+            filename: item.filename,
+            file_data: `data:application/pdf;base64,${item.data}`,
           },
     ),
   ];

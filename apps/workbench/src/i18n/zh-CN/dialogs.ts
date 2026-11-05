@@ -50,6 +50,7 @@ export const dialogs: Record<string, string> = {
   'kind of API': 'API 类型',
   'openai-style': 'OpenAI 风格',
   'anthropic-style': 'Anthropic 风格',
+  'responses api': 'Responses API',
   'The endpoint did not list its models, so the id is not checked: type the one your provider documents.':
     '端点没有列出它的模型，所以不会检查这个 ID：请填写服务商文档中的 ID。',
   'choose a model or type its id': '请选择一个模型，或输入它的 ID',
@@ -204,4 +205,13 @@ export const dialogs: Record<string, string> = {
   tool: '工具',
   notice: '提示',
   'trust this device key for good': '永久信任这台设备的这个密钥',
+  // Sign in with ChatGPT, in OpenAI's wording (the owner's decision, 2026-11-04)
+  'Continue with ChatGPT': '使用 ChatGPT 继续',
+  'Use your ChatGPT plan: complete eligible AI requests in Circle with usage included in your ChatGPT plan.':
+    '使用 ChatGPT 套餐：Circle 中符合条件的 AI 请求计入 ChatGPT 套餐用量。',
+  'Sign in in your browser. If it did not open, open this address:':
+    '在浏览器中登录。浏览器没有打开时，打开这个地址：',
+  'If the browser cannot reach this machine, paste the address it ends on':
+    '浏览器无法访问这台机器时，粘贴浏览器最后停留的地址',
+  'address the browser ended on': '浏览器最后停留的地址',
 };

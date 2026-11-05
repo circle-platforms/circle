@@ -1118,6 +1118,8 @@ export class LiveRuntime implements RuntimePort {
         'revoke-external-file-grant': 'revoke-external-file-grant',
         'configure-connection': 'configure',
         'probe-connection': 'probe-connection',
+        'chatgpt-sign-in': 'chatgpt-sign-in',
+        'chatgpt-connect': 'chatgpt-connect',
         'cancel-interaction': 'answer',
         'run-in-terminal': 'terminal-tab-run',
         'import-native-session': 'import',

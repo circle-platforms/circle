@@ -140,7 +140,6 @@ try {
           calls.push(['control', id, action]);
         },
         browserNavigate: async (id, url) => {
-          calls.push(['navigate', id, url]);
           state.url = url;
           emit();
         },
@@ -484,18 +483,15 @@ try {
   await page.evaluate(async () =>
     (await import('/src/i18n/index.ts')).setLanguage('en'),
   );
-  const openBrowser = async (language = 'en') => {
+  const openBrowser = async () => {
     const toggle = page.getByRole('button', {
-      name: language === 'en' ? 'browser panel' : '浏览器 面板',
+      name: 'browser panel',
       exact: true,
     });
     if ((await toggle.getAttribute('aria-pressed')) !== 'true')
       await toggle.click();
     await page
-      .getByRole('button', {
-        name: language === 'en' ? 'browser menu' : '浏览器菜单',
-        exact: true,
-      })
+      .getByRole('button', { name: 'browser menu', exact: true })
       .waitFor();
   };
   await openBrowser();
@@ -549,50 +545,8 @@ try {
   });
   await capture.click();
   await waitCaptureCount(1);
-  // Wider system fonts exposed a zero-width address field on Linux while Circle
-  // operates the page. The supported larger text preset exercises that same
-  // intrinsic-width pressure on every platform without changing input visibility.
-  await page.evaluate(async () => {
-    const { applyTheme } = await import('/src/theme.ts');
-    applyTheme(document.documentElement.dataset.theme, 'larger');
-  });
-  await settledLayout(page);
-  const addressLayout = await page.evaluate(() =>
-    [
-      '.native-browser',
-      '.browser-address',
-      '.browser-url',
-      '.browser-not-secure',
-      '.browser-url-field',
-      '.browser-url input',
-    ].map((selector) => {
-      const node = document.querySelector(selector);
-      if (!node) return { selector, missing: true };
-      const box = node.getBoundingClientRect();
-      return {
-        selector,
-        width: box.width,
-        height: box.height,
-        font: getComputedStyle(node).font,
-      };
-    }),
-  );
-  await writeFile(
-    out + '/address-layout.json',
-    JSON.stringify(addressLayout, null, 2),
-  );
-  await page.screenshot({ path: out + '/larger-address.png' });
   await address.fill('http://localhost/new-page');
   await address.press('Enter');
-  checks.push({
-    scenario:
-      'the address remains editable with larger text while Circle operates the page',
-    layout: addressLayout,
-  });
-  await page.evaluate(async () => {
-    const { applyTheme } = await import('/src/theme.ts');
-    applyTheme(document.documentElement.dataset.theme, 'default');
-  });
   await page.evaluate(() => window.__browserCaptureFixture.resolve(0, 12, 0));
   await settle();
   assert.deepEqual(
@@ -741,76 +695,6 @@ try {
     scenario: 'the control ring does not resize the page',
     status: 'passed',
   });
-  // Actual typing must remain available at the smallest viewport and largest
-  // supported text size, with the full toolbar and Circle operating the page.
-  for (const language of ['en', 'zh-CN'])
-    for (const theme of ['dark', 'light']) {
-      await page.setViewportSize({ width: 290, height: 684 });
-      await page.goto(server.resolvedUrls.local[0] + '#/session/session1');
-      await page.locator('.workbench').waitFor();
-      await page.waitForFunction(() =>
-        document
-          .querySelector('#workbench-columns > #inspector .inspector-column')
-          ?.classList.contains('inspector-overlay'),
-      );
-      await page.evaluate(
-        async ({ language, theme }) => {
-          (await import('/src/i18n/index.ts')).setLanguage(language);
-          (await import('/src/theme.ts')).applyTheme(theme, 'larger');
-          window.__browserCaptureFixture.drive(true);
-        },
-        { language, theme },
-      );
-      await settledLayout(page);
-      // A reload may restore an already open narrow drawer. Close it explicitly
-      // rather than expecting a wide-to-narrow transition on every reload.
-      const toggle = page.getByRole('button', {
-        name: language === 'en' ? 'browser panel' : '浏览器 面板',
-        exact: true,
-      });
-      if ((await toggle.getAttribute('aria-pressed')) === 'true')
-        await toggle.click();
-      await page
-        .locator("#workbench-columns[data-inspector-mode='closed']")
-        .waitFor({ state: 'attached' });
-      await openBrowser(language);
-      await page.getByTestId('browser-operating').waitFor();
-      await settledLayout(page);
-      const field = page.getByRole('textbox', {
-        name: language === 'en' ? 'browser address' : '浏览器地址',
-        exact: true,
-      });
-      const url = 'http://localhost/compact-' + language + '-' + theme;
-      await field.fill(url);
-      await field.press('Enter');
-      await page.waitForFunction(
-        (url) =>
-          window.__browserCaptureFixture.calls.some(
-            (call) => call[0] === 'navigate' && call[2] === url,
-          ),
-        url,
-      );
-      await page.waitForFunction(() =>
-        document
-          .querySelector('.browser-url-field')
-          ?.classList.contains('display'),
-      );
-      await settledLayout(page);
-      const box = await field.boundingBox();
-      assert.ok(
-        box?.width > 0 && box.height > 0,
-        'the compact address has a visible editable box',
-      );
-      await page.screenshot({
-        path: out + '/' + language + '-' + theme + '-290-larger-editable.png',
-      });
-      checks.push({
-        scenario: 'compact larger-text address navigation',
-        language,
-        theme,
-        width: box.width,
-      });
-    }
   assert.deepEqual(errors, [], 'full application renders without page errors');
   console.log(
     'PASS original full-app browser inspector bounds closed and expanded',

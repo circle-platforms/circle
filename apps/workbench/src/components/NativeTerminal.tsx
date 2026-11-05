@@ -18,6 +18,7 @@ import {
   Ellipsis,
   Plus,
   Square,
+  SquareTerminal,
   X,
 } from 'lucide-react';
 import stripAnsi from 'strip-ansi';
@@ -47,7 +48,7 @@ import {
   type TerminalRequest,
 } from '../model/command-terminal-client';
 import type { TerminalSelectionCapture } from '../model/terminal-context';
-import { Button, IconButton, Modal } from './common';
+import { Button, IconButton, Modal, PaneEmpty } from './common';
 import type {
   LocalTerminalRow,
   TerminalSessionRow,
@@ -1425,15 +1426,13 @@ export function NativeTerminal({
         />
       )}
       {!selected && !deviceRows.length && !error && (
-        <div className="native-terminal-empty">
-          <p>{t('run commands here while agents keep working')}</p>
-          <Button
-            disabled={busy || !sessionId || !!commandTerminal}
-            onClick={create}
-          >
-            {t('new terminal')}
-          </Button>
-        </div>
+        <PaneEmpty
+          icon={SquareTerminal}
+          className="native-terminal-empty"
+          title={t('terminal')}
+        >
+          <p>{t('background jobs, or a new terminal')}</p>
+        </PaneEmpty>
       )}
       <div className="term-frame" data-frame={frame}>
         <div className="native-terminal-surfaces">

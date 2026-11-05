@@ -116,6 +116,13 @@ export const panels: Record<string, string> = {
   'browser address': '浏览器地址',
   'open a page': '打开一个页面',
   'browse the web': '浏览网页',
+  web: '网页',
+  'the files in the working folder': '显示当前工作文件夹中的文件',
+  'every change in the working folder': '显示当前工作文件夹中的所有改动',
+  'browse and control pages in the built-in browser':
+    '使用内置浏览器进行控制和访问',
+  'watch and control the running subagents': '控制和查看当前运行的所有子代理',
+  'background jobs, or a new terminal': '显示当前的后台任务或创建新终端',
   'type a URL': '输入网址',
   'not secure': '不安全',
   'valid until': '有效期截止',

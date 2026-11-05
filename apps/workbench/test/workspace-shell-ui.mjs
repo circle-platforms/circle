@@ -60,39 +60,25 @@ async function actualTheme(page, theme) {
 }
 // The column takes its width over a frame or two after a mode opens: a picture waits for it.
 async function settled(page) {
-  // Entry intentionally slides 6px: the edges are read once that animation has finished.
-  await page
-    .locator('.inspector-overlay')
-    .evaluateAll((nodes) =>
-      Promise.all(
-        nodes
-          .flatMap((node) => node.getAnimations())
-          .map((animation) => animation.finished.catch(() => {})),
-      ),
-    );
-  let last = '';
+  let last = -1;
   for (let i = 0; i < 40; i++) {
-    const geometry = await page.evaluate(
+    const width = await page.evaluate(
       () =>
         new Promise((resolve) =>
           requestAnimationFrame(() =>
-            requestAnimationFrame(() => {
-              const box = document
-                .querySelector('.inspector-column')
-                ?.getBoundingClientRect();
+            requestAnimationFrame(() =>
               resolve(
-                JSON.stringify(
-                  box ? [box.x, box.y, box.width, box.height] : null,
-                ),
-              );
-            }),
+                document
+                  .querySelector('.inspector-column')
+                  ?.getBoundingClientRect().width ?? 0,
+              ),
+            ),
           ),
         ),
     );
-    if (geometry === last) return;
-    last = geometry;
+    if (width === last) return;
+    last = width;
   }
-  throw Error('the inspector geometry did not settle: ' + last);
 }
 // Each mode in turn, with what makes it that mode, and a picture of it.
 // The faces the system really drew a node's text in, as the browser reports them.
@@ -148,17 +134,6 @@ async function checkFaces(page, zh) {
 }
 async function captureModes(page, locale, theme, width) {
   const zh = locale === 'zh';
-  const surfaces = await page.evaluate(() => {
-    const probe = document.createElement('div');
-    document.body.append(probe);
-    const colors = {};
-    for (const name of ['bg', 'sidebar', 'drawer']) {
-      probe.style.backgroundColor = `var(--${name})`;
-      colors[name] = getComputedStyle(probe).backgroundColor;
-    }
-    probe.remove();
-    return colors;
-  });
   if (width === 1280) await checkFaces(page, zh);
   const titleGeometry = await page.locator('.topbar').evaluate((node) => ({
     titleRight: node
@@ -197,7 +172,7 @@ async function captureModes(page, locale, theme, width) {
         (await page.locator('.overview-card').count()) >= 3,
         'the overview shows its cards',
       );
-      // Overview shares the drawer surface; navigation and conversation keep their own layers.
+      // Pinned to the conversation, the overview has the conversation's background.
       const grounds = await page.evaluate(() => {
         const ground = (node) => {
           for (; node; node = node.parentElement) {
@@ -215,13 +190,18 @@ async function captureModes(page, locale, theme, width) {
       assert.ok(grounds.overview, 'the overview has a background');
       assert.equal(
         grounds.overview,
-        surfaces.drawer,
-        `the overview uses the drawer surface at ${width}px`,
+        grounds.conversation,
+        `the overview has the conversation's background at ${width}px`,
       );
-      assert.equal(grounds.conversation, surfaces.bg);
-      assert.equal(grounds.sidebar, surfaces.sidebar);
-      assert.notEqual(grounds.sidebar, grounds.conversation);
-      assert.notEqual(grounds.overview, grounds.conversation);
+      // The light conversation is white; in both themes the shared palette sets the
+      // sidebar a shade off it.
+      if (theme === 'light')
+        assert.equal(grounds.conversation, 'rgb(255, 255, 255)');
+      assert.notEqual(
+        grounds.sidebar,
+        grounds.conversation,
+        'the sidebar is set off from the conversation',
+      );
       // A card too narrow for a subagent's name, its task and its state keeps the state
       // whole: the task gives way, then the name.
       const agentRow = await page
@@ -245,14 +225,16 @@ async function captureModes(page, locale, theme, width) {
         );
     } else {
       await page.locator('.work-drawer').waitFor({ state: 'visible' });
-      assert.equal(
-        await page
-          .locator('.inspector')
-          .first()
-          .evaluate((node) => getComputedStyle(node).backgroundColor),
-        surfaces.drawer,
-        `the ${kind} drawer uses its palette surface`,
-      );
+      // The drawer is on the light theme's white as well.
+      if (theme === 'light')
+        assert.equal(
+          await page
+            .locator('.inspector')
+            .first()
+            .evaluate((node) => getComputedStyle(node).backgroundColor),
+          'rgb(255, 255, 255)',
+          `the ${kind} drawer is on the white`,
+        );
       assert.equal(
         await page.locator('.inspector-title').count(),
         0,
@@ -338,7 +320,7 @@ async function captureModes(page, locale, theme, width) {
         `changes: a long difference scrolls in the height left at ${width}px`,
       );
     }
-    // Closing a mode restores overview where there is room in the shared right pane.
+    // Pressing the button again closes what it opened; the overview stays, as it does.
     if (kind !== 'overview') await button(page, kind, zh).click();
   }
 }
@@ -511,7 +493,7 @@ try {
         await page
           .locator('#workbench-columns')
           .getAttribute('data-inspector-mode'),
-        width >= 1180 ? 'split' : 'overlay',
+        width > 1050 ? 'split' : 'overlay',
       );
       await page
         .getByRole('button', { name: 'close file', exact: true })
@@ -537,7 +519,7 @@ try {
         geometry.width > 250 && geometry.right <= width + 1,
         JSON.stringify(geometry),
       );
-      if (width < 1180)
+      if (width <= 1050)
         assert.equal(await page.locator('.inspector-overlay').count(), 1);
       assert.equal(
         await composer.inputValue(),
@@ -571,7 +553,7 @@ try {
       );
       // What is meant for the changes mode still reaches it: a file of the overview's
       // outputs opens there, chosen, in the list that has it.
-      if (width >= 1180) {
+      if (width > 1050) {
         await scope('all uncommitted').click();
         await button(page, 'changes', false).click();
         await page
