@@ -161,7 +161,9 @@ export async function runNativeGitHubSettingsJourney({
     const github = extension(enabled);
     assert.equal(github.view.client, 'GitHub CLI');
     assert.equal(github.view.state, 'disconnected');
-    assert.deepEqual(github.view.repositories, []);
+    // #441 removed the local repository list: access follows the GitHub
+    // account, so the disconnected view carries no repositories field.
+    assert.equal(github.view.repositories, undefined);
     assert.equal(github.view.account, undefined);
     assert.equal(github.view.authorization, undefined);
     assert(github.tools.includes('github_connection'));
