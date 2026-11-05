@@ -45,6 +45,7 @@ import { safeExternalUrl } from './policy';
 import { captureFrame } from './capture';
 import type {
   BrowserBounds,
+  BrowserPick,
   BrowserCertificate,
   BrowserCertificateChoice,
   BrowserControl,
@@ -2293,9 +2294,51 @@ export class BrowserSessions {
           x: Number(point.x),
           y: Number(point.y),
         });
-    } else throw Error('invalid browser page action');
+    } else if (action === 'pick')
+      // The panel is showing a picture of the page and the person points at it. A look
+      // as the cursor moves only names what is under it; the click that commits is
+      // checked the way a coordinate click of Circle's is, against that same picture.
+      return this.pick(tab, value);
+    else throw Error('invalid browser page action');
     this.publish(id);
     return this.state(id);
+  }
+  /**
+   * What the person points at in the panel's picture of the page. The picture comes from
+   * `capture`, so a committed pick is checked against the page as it was then, the way a
+   * coordinate click of Circle's is; a look as the cursor moves is not, and asks for
+   * nothing to be kept.
+   */
+  private async pick(tab: Tab, value: unknown): Promise<BrowserPick> {
+    const request = (value ?? {}) as {
+      x?: unknown;
+      y?: unknown;
+      screenshotId?: unknown;
+      preview?: unknown;
+    };
+    const x = Number(request.x),
+      y = Number(request.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y))
+      throw Error('invalid pick point');
+    if (request.preview === true)
+      return {
+        ...(await this.js<BrowserPick>(tab, 'pick', { x, y })),
+        preview: true,
+      };
+    const capture = tab.screenshot;
+    if (
+      !capture ||
+      typeof request.screenshotId !== 'string' ||
+      request.screenshotId !== capture.id
+    )
+      throw Error('the page picture is no longer the page; take a new one');
+    const found = await this.js<BrowserPick>(tab, 'point', {
+      x,
+      y,
+      capture: capture.state,
+      describe: true,
+    });
+    return { ...found, preview: false, screenshotId: capture.id };
   }
   /** The person zooms a page in or out a step, or back to 100%, as Chrome does. */
   private zoom(

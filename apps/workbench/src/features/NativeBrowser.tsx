@@ -10,6 +10,7 @@ import {
   ArrowRight,
   ChevronDown,
   ChevronUp,
+  Crosshair,
   Download,
   EllipsisVertical,
   FileUp,
@@ -46,8 +47,19 @@ import { useBrowserState } from './useBrowserState';
 import type {
   BrowserCapture,
   BrowserPermission,
+  BrowserPick,
   BrowserTab,
 } from '../../../desktop/src/contracts';
+import {
+  canPick,
+  elementAttachment,
+  isBrowserPick,
+  pickBox,
+  pickFailure,
+  pickLabel,
+  pickPoint,
+  type BrowserPickPicture,
+} from '../model/browser-pick';
 import {
   browserShortcut,
   type BrowserKeyAction,
@@ -142,6 +154,19 @@ export function NativeBrowser({
   // tab has an address of its own
   const [navigating, setNavigating] = useState(0);
   const [findText, setFindText] = useState('');
+  // Pointing at an element of the page: the picture of the page it is done on, what the
+  // last look under the cursor found, and the point that look was asked for
+  const [pick, setPick] = useState<BrowserPickPicture | null>(null);
+  const [hover, setHover] = useState<{
+    x: number;
+    y: number;
+    element: BrowserPick;
+  } | null>(null);
+  const pickRef = useRef<BrowserPickPicture | null>(null);
+  pickRef.current = pick;
+  const hoverPoint = useRef<{ x: number; y: number } | null>(null);
+  const hovering = useRef(false);
+  const pickLayer = useRef<HTMLDivElement | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const address = useRef<HTMLInputElement>(null);
@@ -244,7 +269,9 @@ export function NativeBrowser({
         active.current &&
         !blockingDialog &&
         ownDialog?.getAttribute('data-state') !== 'closed';
-      const visible = shown && !menuOpen;
+      // Pointing at the page steps it aside too: the cursor is over a still picture of
+      // it, so every point can be checked against the page as the picture showed it.
+      const visible = shown && !menuOpen && !pickRef.current;
       // One picture per menu: taken while the page still shows, before it steps aside
       if (shown && menuOpen && freezing) return;
       if (shown && menuOpen && !froze && !frozenRef.current) {
@@ -367,6 +394,25 @@ export function NativeBrowser({
     const frame = requestAnimationFrame(() => updateBounds.current());
     return () => cancelAnimationFrame(frame);
   }, [whole]);
+  // Pointing starts and stops the same way a menu does: the page leaves the window for
+  // its picture, and comes back when the picture goes. Esc stops the pointing whatever
+  // has the keyboard meanwhile: the menu's own focus, the page's, none of it matters.
+  useEffect(() => {
+    updateBounds.current();
+    if (!pick) {
+      pickLayer.current?.blur();
+      return;
+    }
+    requestAnimationFrame(() => pickLayer.current?.focus());
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      stopPick();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [pick]);
   // A picture of the page you took goes into the message box as an attachment, for you to
   // send or take back: nothing is shown in the panel for it. From a window of its own it
   // goes to the main window's message box, and the window says so.
@@ -408,6 +454,134 @@ export function NativeBrowser({
       },
     );
   };
+  /**
+   * What the page pointed at goes into the message box the way a picture of it does: the
+   * person sends it, or takes it back. The page itself is not touched, so the element
+   * stays where they saw it.
+   */
+  const attachElement = (picture: BrowserPickPicture, element: BrowserPick) => {
+    const target = runtime
+      .getSnapshot()
+      .sessions.find((item) => item.id === id);
+    if (!target || target.lifecycle === 'deleting') return;
+    void addToDraft(
+      id,
+      elementAttachment({ sessionId: id, picture, element }),
+    ).then(
+      (saved) =>
+        notify(
+          saved
+            ? t('element added to draft')
+            : t('element could not be added to the message box'),
+        ),
+      () => notify(t('element could not be added to the message box')),
+    );
+  };
+  const stopPick = () => {
+    hoverPoint.current = null;
+    hovering.current = false;
+    setHover(null);
+    setPick(null);
+  };
+  /** The page as a picture the panel can point at, with the page's own CSS size. */
+  const startPick = () => {
+    if (pickRef.current || !state) return;
+    const identity = currentIdentity.current;
+    const navigation = navigationVersion.current;
+    const generation = ++captureGeneration.current;
+    void host.browserCapture(id).then(
+      (value) => {
+        const same =
+          generation === captureGeneration.current &&
+          navigation === navigationVersion.current &&
+          identity.session === currentIdentity.current.session &&
+          identity.tab === currentIdentity.current.tab &&
+          identity.url === currentIdentity.current.url;
+        // The page moved while its picture was being taken: point at it again.
+        if (!same || !value.screenshot) {
+          notify(t('the page changed; point again'));
+          return;
+        }
+        setHover(null);
+        hoverPoint.current = null;
+        setPick({
+          dataUrl: value.dataUrl,
+          screenshotId: value.screenshot.id,
+          width: value.screenshot.width,
+          height: value.screenshot.height,
+          url: value.url,
+          title: value.title,
+          observedAt: value.observedAt,
+        });
+      },
+      () => notify(t('browser capture failed')),
+    );
+  };
+  /**
+   * What is under the cursor, asked of the page: one look at a time and always the newest
+   * point, so a fast move costs one round trip and no answer is used for the wrong place.
+   */
+  const lookAt = (point: { x: number; y: number }) => {
+    hoverPoint.current = point;
+    if (hovering.current) return;
+    hovering.current = true;
+    const next = () => {
+      const wanted = hoverPoint.current;
+      if (!wanted || !pickRef.current) {
+        hovering.current = false;
+        return;
+      }
+      hoverPoint.current = null;
+      void Promise.resolve(
+        host.browserPage?.(id, 'pick', { ...wanted, preview: true }),
+      ).then(
+        (found) => {
+          if (pickRef.current && isBrowserPick(found) && found.preview)
+            setHover({ x: wanted.x, y: wanted.y, element: found });
+          next();
+        },
+        () => {
+          if (pickRef.current) setHover(null);
+          next();
+        },
+      );
+    };
+    next();
+  };
+  /** The point that commits: the page answers with the element it was checked against. */
+  const pickHere = (point: { x: number; y: number }) => {
+    const picture = pickRef.current;
+    if (!picture) return;
+    void Promise.resolve(
+      host.browserPage?.(id, 'pick', {
+        ...point,
+        screenshotId: picture.screenshotId,
+      }),
+    ).then(
+      (found) => {
+        if (!isBrowserPick(found) || found.preview) {
+          notify(t('nothing to point at there'));
+          return;
+        }
+        attachElement(picture, found);
+        stopPick();
+      },
+      (error: unknown) => notify(pickFailure(error)),
+    );
+  };
+  /** A cursor point in the picture, in the page's own CSS pixels. */
+  const pointInPage = (clientX: number, clientY: number) => {
+    const picture = pickRef.current;
+    const node = pickLayer.current;
+    if (!picture || !node) return null;
+    const box = node.getBoundingClientRect();
+    return pickPoint(
+      { left: box.left, top: box.top, width: box.width, height: box.height },
+      { width: picture.width, height: picture.height },
+      clientX,
+      clientY,
+    );
+  };
   // The page's own view shows once a page is open; it follows the shown tab.
   useEffect(() => {
     if (!state) return;
@@ -417,6 +591,20 @@ export function NativeBrowser({
       wasOpened.current = false;
       setFinding(false);
     }
+    // Anything that moves the page away, or gives Circle the browser again, ends the
+    // pointing: the picture in the panel is no longer the page.
+    if (
+      pickRef.current &&
+      (tabChanged ||
+        !browserOpened(state) ||
+        !!state.failure ||
+        !!state.warning ||
+        !!shownDialog(state) ||
+        !!state.chooser ||
+        state.operating ||
+        state.control === 'agent')
+    )
+      stopPick();
     addressTab.current = state.tab;
     if (opened !== active.current) {
       active.current = opened;
@@ -434,6 +622,8 @@ export function NativeBrowser({
   const navigate = async (target: string) => {
     const identity = currentIdentity.current;
     const version = ++navigationVersion.current;
+    // The page goes somewhere else: the picture to point at is gone with it.
+    stopPick();
     editingAddress.current = false;
     setNavigating((count) => count + 1);
     try {
@@ -514,6 +704,8 @@ export function NativeBrowser({
   // `tab`: the tab captured by the native process when it received the key.
   // For a key handled here without one, the native process closes its active tab.
   const run = (action: BrowserKeyAction, tab?: string) => {
+    // A browser key moves the page or its tabs, so pointing at its picture stops.
+    stopPick();
     if (action === 'address') focusAddress();
     else if (action === 'new-tab') void tabs('new').then(focusAddress);
     else if (action === 'close-tab') {
@@ -696,6 +888,29 @@ export function NativeBrowser({
     turnStarted: session.turn !== undefined,
     tools: currentTurnTools(visibleMessages(session)),
   });
+  // Pointing at the page is the person's turn to give it: not while Circle works in it,
+  // not on a page that is not there, and not while Chromium holds its debugger.
+  const pickable = canPick({
+    ring,
+    opened,
+    failure,
+    warning: state?.warning,
+    dialog,
+    chooser: state?.chooser,
+    devTools: state?.devTools,
+  });
+  // The picture fills the box it is drawn in, so the page's own CSS pixels are that box's
+  // percentages: the ring stays on its element as the panel is resized.
+  const hoverBox = pickBox(hover?.element);
+  const hoverStyle =
+    hoverBox && pick && pick.width >= 1 && pick.height >= 1
+      ? {
+          left: `${(hoverBox.left / pick.width) * 100}%`,
+          top: `${(hoverBox.top / pick.height) * 100}%`,
+          width: `${(hoverBox.width / pick.width) * 100}%`,
+          height: `${(hoverBox.height / pick.height) * 100}%`,
+        }
+      : undefined;
   const controlLabel =
     ring === 'user'
       ? t('you have the browser')
@@ -1022,6 +1237,9 @@ export function NativeBrowser({
               >
                 {t('take page screenshot')}
               </DropdownMenu.Item>
+              <DropdownMenu.Item disabled={!pickable} onSelect={startPick}>
+                {t('pick element')}
+              </DropdownMenu.Item>
               <DropdownMenu.Item
                 disabled={!opened}
                 onSelect={() => void page('devtools')}
@@ -1091,6 +1309,60 @@ export function NativeBrowser({
             <PaneEmpty icon={Globe} className="browser-empty" title={t('web')}>
               <p>{t('browse and control pages in the built-in browser')}</p>
             </PaneEmpty>
+          ) : pick ? (
+            // The page, as a picture the person points at: what is under the cursor is
+            // ringed, and the click that commits asks the page what it really is.
+            <div
+              ref={pickLayer}
+              className="browser-pick"
+              data-testid="browser-pick"
+              role="application"
+              aria-label={t('pick an element')}
+              tabIndex={-1}
+            >
+              {/* The picture takes the pointing, so the bar over it stays clickable. */}
+              <img
+                className="browser-pick-picture"
+                src={pick.dataUrl}
+                alt=""
+                draggable={false}
+                onMouseDown={(event) => {
+                  // Pointing keeps the picture's keyboard, so esc keeps stopping it.
+                  event.preventDefault();
+                  pickLayer.current?.focus();
+                }}
+                onMouseMove={(event) => {
+                  const point = pointInPage(event.clientX, event.clientY);
+                  if (point) lookAt(point);
+                }}
+                onMouseLeave={() => {
+                  hoverPoint.current = null;
+                  setHover(null);
+                }}
+                onClick={(event) => {
+                  const point = pointInPage(event.clientX, event.clientY);
+                  if (point) pickHere(point);
+                }}
+              />
+              {hoverStyle && (
+                <div
+                  className="browser-pick-box"
+                  data-testid="browser-pick-box"
+                  style={hoverStyle}
+                />
+              )}
+              <div className="browser-pick-hint">
+                <Crosshair size={13} />
+                <span data-testid="browser-pick-label">
+                  {hover
+                    ? pickLabel(hover.element)
+                    : t('click an element to add it to your message')}
+                </span>
+                <IconButton label={t('stop picking')} onClick={stopPick}>
+                  <X size={13} />
+                </IconButton>
+              </div>
+            </div>
           ) : frozen ? (
             <img className="browser-frozen" src={frozen} alt="" />
           ) : null}

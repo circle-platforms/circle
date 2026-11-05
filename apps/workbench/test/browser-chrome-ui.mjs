@@ -124,6 +124,7 @@ try {
             return {
               ...JSON.parse(JSON.stringify(state)),
               dataUrl: ICON,
+              screenshot: { id: 'shot-1', width: 1200, height: 700 },
               sha256: 'capture-hash',
               observedAt: new Date(2026, 9, 17, 9, 30).toISOString(),
               attempts: 1,
@@ -145,6 +146,27 @@ try {
           browserPage: async (id, action, value) => {
             calls.push(['page', action, value ?? null]);
             if (action === 'snapshot') return ICON;
+            // The page's answer to a point: a look names what is there and claims no
+            // ref; the click that commits takes the ref the snapshot map holds.
+            if (action === 'pick') {
+              const commit = value?.preview !== true;
+              return {
+                ref: commit ? 'e7' : null,
+                role: 'button',
+                name: 'Apply changes',
+                known: true,
+                tag: 'button',
+                text: 'Apply changes',
+                disabled: false,
+                box: { left: 100, top: 100, width: 220, height: 60 },
+                framed: false,
+                origin: 'https://docs.example.test',
+                x: value.x,
+                y: value.y,
+                preview: !commit,
+                ...(commit ? { screenshotId: value.screenshotId } : {}),
+              };
+            }
             if (action === 'find')
               state.find = value.text
                 ? {
@@ -385,6 +407,7 @@ try {
     'zoom in',
     'find…⌘+F',
     'take page screenshot',
+    'pick element',
     'developer tools⌥+⌘+I',
     'close tab⌘+W',
   ]);
@@ -458,6 +481,144 @@ try {
     [['session1', shotName, 'image', 'image/png', ICON]],
   );
   assert.equal(await page.locator('.browser-diagnostics').count(), 0);
+  // Pointing at an element: the page gives its place to a picture of itself, the cursor
+  // names what it is over and rings it, escape adds nothing, and the click that commits
+  // puts the page's own ref where the message is typed.
+  const chips = () => page.locator('.composer .attachment-strip .file-chip');
+  await clearCalls();
+  const openPick = async () => {
+    await page
+      .getByRole('button', { name: 'browser menu', exact: true })
+      .click();
+    await page
+      .getByRole('menuitem', { name: 'pick element', exact: true })
+      .click();
+    const layer = page.getByTestId('browser-pick');
+    await layer.waitFor();
+    return layer;
+  };
+  const layer = await openPick();
+  const picture = await layer.boundingBox();
+  const atCss = (x, y) => [
+    picture.x + (x / 1200) * picture.width,
+    picture.y + (y / 700) * picture.height,
+  ];
+  const [overX, overY] = atCss(210, 130);
+  const label = page.getByTestId('browser-pick-label');
+  // The first move may land before the picture's handlers are attached: point again
+  // until the overlay names what is under the cursor.
+  const pointUntilNamed = async (wanted) => {
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      await page.mouse.move(overX, overY);
+      await page.mouse.move(overX + 1, overY + 1);
+      try {
+        await label
+          .getByText(wanted, { exact: true })
+          .waitFor({ timeout: 400 });
+        return;
+      } catch {
+        if (Date.now() > deadline)
+          throw Error(`the overlay never says ${wanted}`);
+      }
+    }
+  };
+  await pointUntilNamed('button “Apply changes”');
+  const ring = await page.getByTestId('browser-pick-box').boundingBox();
+  const [ringLeft, ringTop] = atCss(100, 100);
+  const [ringRight, ringBottom] = atCss(320, 160);
+  assert.ok(
+    Math.abs(ring.x - ringLeft) <= 2 &&
+      Math.abs(ring.y - ringTop) <= 2 &&
+      Math.abs(ring.x + ring.width - ringRight) <= 2 &&
+      Math.abs(ring.y + ring.height - ringBottom) <= 2,
+    `the ring is the element's own box: ${JSON.stringify(ring)} at ${ringLeft},${ringTop}`,
+  );
+  // The panel is narrower than the page, so a cursor pixel is a few CSS pixels: the
+  // point must still land on the element it was taken from.
+  const looked = (await calls()).filter(
+    (call) =>
+      call[0] === 'page' && call[1] === 'pick' && call[2].preview === true,
+  );
+  assert.ok(looked.length, 'the cursor asks the page what is under it');
+  const asked = looked.at(-1)[2];
+  assert.ok(
+    Math.abs(asked.x - 210) <= 3 && Math.abs(asked.y - 130) <= 3,
+    `the point is in the page's own CSS pixels: ${JSON.stringify(asked)}`,
+  );
+  assert.equal(
+    asked.screenshotId,
+    undefined,
+    'a look claims nothing about the picture',
+  );
+  await page.screenshot({ path: out + '/pick-en-light-1400.png' });
+  const chipsBefore = await chips().count();
+  await page.keyboard.press('Escape');
+  await layer.waitFor({ state: 'detached' });
+  assert.equal(
+    await chips().count(),
+    chipsBefore,
+    'a look at the page adds nothing until it is clicked',
+  );
+  await openPick();
+  await pointUntilNamed('button “Apply changes”');
+  await page.mouse.click(overX, overY);
+  await layer.waitFor({ state: 'detached' });
+  await chips().filter({ hasText: 'docs.example.test · element' }).waitFor();
+  assert.deepEqual(
+    (await calls())
+      .filter(
+        (call) =>
+          call[0] === 'page' && call[1] === 'pick' && call[2].preview !== true,
+      )
+      .map((call) => [
+        call[2].screenshotId,
+        Math.abs(call[2].x - 210) <= 3 && Math.abs(call[2].y - 130) <= 3,
+      ]),
+    [['shot-1', true]],
+    'the click is checked against the picture it was made on',
+  );
+  const stored = await page.evaluate(() =>
+    JSON.parse(
+      localStorage.getItem('circle.workbench.preview.v1'),
+    ).sessions.flatMap((session) =>
+      session.attachments.map((file) => [
+        file.name,
+        file.kind,
+        file.mime,
+        file.content,
+      ]),
+    ),
+  );
+  const picked = stored.find(
+    ([name]) => name === 'docs.example.test · element',
+  );
+  assert.ok(
+    picked,
+    'the element is kept with the draft: ' + JSON.stringify(stored),
+  );
+  assert.deepEqual(picked.slice(0, 3), [
+    'docs.example.test · element',
+    'file',
+    'text/plain',
+  ]);
+  assert.match(picked[3], /circle\.browser-element/);
+  assert.match(picked[3], /element: \[e7\] button "Apply changes"/);
+  assert.match(picked[3], /tag: <button>/);
+  // The panel is narrower than the page, so the point is recorded within a few of them.
+  const point = /^point: (\d+), (\d+) of 1200 × 700 CSS pixels$/m.exec(
+    picked[3],
+  );
+  assert.ok(point, 'the point is in the page’s own pixels: ' + picked[3]);
+  assert.ok(
+    Math.abs(Number(point[1]) - 210) <= 3 &&
+      Math.abs(Number(point[2]) - 130) <= 3,
+    JSON.stringify(point.slice(1)),
+  );
+  assert.match(picked[3], /"screenshotId": "shot-1"/);
+  checks.push(
+    'pointing at an element names it, rings its box, adds it to the message box, and escape adds nothing',
+  );
   const closedTools = await viewportRect();
   await page.getByRole('button', { name: 'browser menu', exact: true }).click();
   await page.getByRole('menuitem', { name: 'developer tools' }).click();

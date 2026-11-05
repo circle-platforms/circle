@@ -12,6 +12,19 @@ export function browserPage(command: string, args: Record<string, any>) {
     bottom: number,
     shown: boolean,
   ];
+  // What an element under the cursor is, as the panel shows it and the message records it
+  type PickDescription = {
+    ref: string | null;
+    role: string;
+    name: string;
+    known: boolean;
+    tag: string;
+    text: string;
+    disabled: boolean;
+    box: { left: number; top: number; width: number; height: number } | null;
+    framed: boolean;
+    origin: string;
+  };
   type State = {
     refs: Map<string, Target>;
     // A ref stays with its element for the life of the document; numbers are never reused.
@@ -802,6 +815,99 @@ export function browserPage(command: string, args: Record<string, any>) {
           : el.closest('#details-button')
             ? 'advanced'
             : '';
+  // The documents and frames a point of the shown viewport goes through, and what is
+  // there: the composed hit-test a click uses, which a pick of yours uses too.
+  const through = (
+    x: number,
+    y: number,
+  ): {
+    doc: Document;
+    el: Element | null;
+    frames: Element[];
+    at: Map<Document, [number, number]>;
+  } => {
+    let doc = document,
+      localX = x,
+      localY = y;
+    // The point in each document the pointer goes through, and the frames on the way
+    const at = new Map<Document, [number, number]>([[document, [x, y]]]);
+    const frames: Element[] = [];
+    let el = hit(doc, localX, localY);
+    for (
+      let depth = 0;
+      el && ['iframe', 'frame'].includes(el.localName) && depth < 20;
+      depth++
+    ) {
+      const frame = el as HTMLIFrameElement;
+      const child = frame.contentDocument;
+      if (!child)
+        throw Error(
+          'a cross-origin frame at these coordinates cannot be read; open its address as a page first',
+        );
+      const rect = frame.getBoundingClientRect();
+      localX =
+        (localX - rect.left) /
+          (rect.width / (frame.offsetWidth || rect.width)) -
+        frame.clientLeft;
+      localY =
+        (localY - rect.top) /
+          (rect.height / (frame.offsetHeight || rect.height)) -
+        frame.clientTop;
+      frames.push(frame);
+      doc = child;
+      at.set(doc, [localX, localY]);
+      el = hit(doc, localX, localY);
+    }
+    return { doc, el, frames, at };
+  };
+  /** The control a point acts on: what is there, or the control it is part of. */
+  const controlAt = (doc: Document, el: Element): Element => {
+    let target = el;
+    for (
+      let node: Element | null = el;
+      node && node.ownerDocument === doc;
+      node = parent(node)
+    ) {
+      if (actionable(node)) {
+        target = node;
+        break;
+      }
+    }
+    return target;
+  };
+  /** What an element is, in words a person reads and a model matches, and where it sits
+   * in the picture of the page. `framed` is the point being inside a frame, whose own
+   * coordinates are not the picture's, so it gets no box. */
+  const described = (
+    target: Element,
+    el: Element,
+    framed: boolean,
+  ): PickDescription => {
+    const area = framed ? null : shown(target);
+    return {
+      // Only a pick the person commits to takes a ref: a look under the cursor does not
+      ref: state.ids.get(target) ?? null,
+      role: role(target),
+      name: name(target),
+      known: actionable(target),
+      tag: target.localName,
+      text: (target.textContent ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 160),
+      disabled: target.matches(':disabled') || !!target.closest('[inert]'),
+      box: area
+        ? {
+            left: Math.round(area[0]),
+            top: Math.round(area[1]),
+            width: Math.round(area[2] - area[0]),
+            height: Math.round(area[3] - area[1]),
+          }
+        : null,
+      framed,
+      origin: target.ownerDocument.location.origin,
+    };
+  };
   if (command === 'snapshot') {
     const fresh = state.snapshots++ > 0;
     // Elements that got their ref in this snapshot
@@ -1064,51 +1170,10 @@ export function browserPage(command: string, args: Record<string, any>) {
       y >= innerHeight
     )
       throw Error('click coordinates are outside the viewport');
-    let doc = document,
-      localX = x,
-      localY = y;
-    // The point in each document the click goes through, and the frames on the way
-    const at = new Map<Document, [number, number]>([[document, [x, y]]]);
-    const frames: Element[] = [];
-    let el = hit(doc, localX, localY);
-    for (
-      let depth = 0;
-      el && ['iframe', 'frame'].includes(el.localName) && depth < 20;
-      depth++
-    ) {
-      const frame = el as HTMLIFrameElement;
-      const child = frame.contentDocument;
-      if (!child)
-        throw Error(
-          'coordinate clicks cannot inspect a cross-origin frame; open its address as a page first',
-        );
-      const rect = frame.getBoundingClientRect();
-      localX =
-        (localX - rect.left) /
-          (rect.width / (frame.offsetWidth || rect.width)) -
-        frame.clientLeft;
-      localY =
-        (localY - rect.top) /
-          (rect.height / (frame.offsetHeight || rect.height)) -
-        frame.clientTop;
-      frames.push(frame);
-      doc = child;
-      at.set(doc, [localX, localY]);
-      el = hit(doc, localX, localY);
-    }
+    const { doc, el, frames, at } = through(x, y);
     if (!el || hidden(el))
       throw Error('there is no visible element at these coordinates');
-    let target = el;
-    for (
-      let node: Element | null = el;
-      node && node.ownerDocument === doc;
-      node = parent(node)
-    ) {
-      if (actionable(node)) {
-        target = node;
-        break;
-      }
-    }
+    const target = controlAt(doc, el);
     // What the screenshot showed at the point is still there as it was: the element hit and
     // the control it is part of, in place and unchanged, and what lay over the point not
     // gone. Changes elsewhere on the page (a list that refreshes, a tooltip, a clock) do not
@@ -1179,7 +1244,10 @@ export function browserPage(command: string, args: Record<string, any>) {
         gone = changed(up);
       if (gone) throw stale(': what lay over these coordinates changed');
     }
-    if (target.matches(':disabled') || target.closest('[inert]'))
+    // The person commits to a pick with this. A control that cannot take input is
+    // still the element they meant, so a pick names it; a click of Circle's is not.
+    const found = described(target, el, doc !== document);
+    if (found.disabled && !args.describe)
       throw Error('the element is disabled');
     let ref = state.ids.get(target);
     if (!ref) {
@@ -1188,16 +1256,34 @@ export function browserPage(command: string, args: Record<string, any>) {
     }
     state.refs.set(ref, target);
     return {
+      ...found,
       ref,
       x,
       y,
       width: 1,
       height: 1,
-      role: role(target),
-      name: name(target),
-      known: actionable(target),
       origin: target.ownerDocument.location.origin,
     };
+  }
+  if (command === 'pick') {
+    // What the person is pointing at in the panel's picture of the page, asked as the
+    // cursor moves: the same composed hit-test as a click, with nothing kept of it. A
+    // committed pick goes through `point`, which checks the picture it was taken from.
+    const x = Number(args.x),
+      y = Number(args.y);
+    if (
+      !Number.isFinite(x) ||
+      !Number.isFinite(y) ||
+      x < 0 ||
+      y < 0 ||
+      x >= innerWidth ||
+      y >= innerHeight
+    )
+      throw Error('this point is outside the page');
+    const { doc, el } = through(x, y);
+    if (!el || hidden(el))
+      throw Error('there is no visible element at this point');
+    return { ...described(controlAt(doc, el), el, doc !== document), x, y };
   }
   if (command === 'prepare') {
     const el = field();

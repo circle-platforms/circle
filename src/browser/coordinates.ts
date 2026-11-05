@@ -31,6 +31,13 @@ export interface CoordinateTarget extends PageElement {
   height: number;
   known: boolean;
   origin: string;
+  /** What the element is, for the person pointing at it in the panel's picture. */
+  tag?: string;
+  text?: string;
+  disabled?: boolean;
+  box?: { left: number; top: number; width: number; height: number } | null;
+  /** The point is inside a frame, so `box` is not in the picture's coordinates. */
+  framed?: boolean;
 }
 export interface ScreenshotCapture {
   id: string;
