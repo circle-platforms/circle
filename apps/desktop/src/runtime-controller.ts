@@ -1479,15 +1479,17 @@ export class RuntimeController {
     access: 'read' | 'write',
   ) {
     const sessionId = owner.session.id;
-    if (
-      this.externalOwner(sessionId, access) !== owner ||
-      this.externalGrantOwners.get(sessionId) !== owner
-    )
-      throw Error('external file requires a grant for this runtime owner');
-    owner.sandbox.checkCredentialPath(path);
-    if (!this.externalRegistry().allows(sessionId, path, access))
+    if (this.externalOwner(sessionId, access) !== owner)
+      throw Error('external file belongs to another session runtime');
+    const grantOwner = this.externalGrantOwners.get(sessionId);
+    if (grantOwner && grantOwner !== owner)
       throw Error(
-        'external file requires an explicit current grant for this session',
+        'external file grant belongs to an earlier session runtime; select the file again',
+      );
+    owner.sandbox.checkCredentialPath(path);
+    if (!grantOwner || !this.externalRegistry().allows(sessionId, path, access))
+      throw Error(
+        'file is outside this session workspace or lacks an exact-file grant; open a project folder as a workspace and start a session there, or grant one existing text file in settings → file access for this session',
       );
   }
   private fileRewinds = new WeakMap<AgentRuntime, FileRewindJournal>();
