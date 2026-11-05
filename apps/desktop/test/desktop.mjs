@@ -11,6 +11,7 @@ import { createServer } from 'node:http';
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -768,7 +769,13 @@ try {
   assert.equal(info.kind, 'desktop');
   assert.equal(info.frontendOnly, true);
   assert.equal(info.runtimeConnected, false);
-  assert.equal(info.dataPath, env.CIRCLE_WORKBENCH_DATA_DIR);
+  // The data path is canonicalised by the application (realpath), while the
+  // directory the test hands over may still be in its short 8.3 form on
+  // Windows, so compare the canonical forms rather than the spellings.
+  assert.equal(
+    realpathSync.native(info.dataPath),
+    realpathSync.native(env.CIRCLE_WORKBENCH_DATA_DIR),
+  );
   const isolation = await page.evaluate(() => ({
     node: typeof window.require,
     process: typeof window.process,
