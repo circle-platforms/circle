@@ -5,6 +5,8 @@ import {
   credentialsAfter,
 } from './private-credentials';
 import { nativeHttpsUrl } from './native-links';
+import { appendDiagnosticLog } from './diagnostic-log';
+import { createWindowDiagnostics } from './window-diagnostics';
 import { BrowserSessions } from './browser';
 import {
   devToolsMenuShortcut,
@@ -133,6 +135,16 @@ const dataPath = (() => {
 })();
 app.setPath('userData', dataPath);
 const circleVersion = circleAppVersion(app.isPackaged, app.getVersion());
+const windowDiagnostics = createWindowDiagnostics({
+  log: (text) =>
+    appendDiagnosticLog(
+      join(dataPath, 'logs', 'runtime.log'),
+      circleVersion,
+      text,
+    ),
+  windowPids: () => appWindows().map((one) => one.webContents.getOSProcessId()),
+  metrics: () => app.getAppMetrics(),
+});
 const instanceIdentity: InstanceIdentity = {
   protocol: 'circle-instance/1',
   build: app.getAppPath(),
@@ -237,7 +249,11 @@ function appWindows(): BrowserWindow[] {
 }
 /** What the runtime, the browser and the terminals tell the window, told to every window. */
 function broadcast(channel: string, ...args: unknown[]) {
-  for (const one of appWindows()) one.webContents.send(channel, ...args);
+  windowDiagnostics.sent(channel, args);
+  for (const one of appWindows()) {
+    // A crashed renderer takes nothing until the window reloads: each send would only print an error.
+    if (!one.webContents.isCrashed()) one.webContents.send(channel, ...args);
+  }
 }
 /** The application's window that sent a message, or a throw for anything else. */
 function checkSender(event: {
@@ -515,6 +531,7 @@ function showAttention(update: Parameters<typeof attention>[0]) {
  * main window and for one a mode of the drawer was popped out into.
  */
 function installWindowChrome(target: BrowserWindow) {
+  windowDiagnostics.watch(target === window ? 'main' : 'popout', target);
   // Electron gives the window no right-click menu of its own. A text field gets the
   // system's editing commands, selected text gets Copy; the page asks nothing of the
   // main process for it, so the preload bridge stays as it is.
@@ -1629,6 +1646,9 @@ app
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
+app.on('child-process-gone', (_event, details) =>
+  windowDiagnostics.childGone(details),
+);
 let quitting = false;
 let quitPending = false;
 // Quitting always ends the process. A runtime that cannot stop is ended by the bounded
