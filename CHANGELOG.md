@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+## 1.15.0 - 2026-11-05
+
 ### Added
 
 - **Local knowledge, personal memory and workflows.** Browse and verify local sources, confirm edits, resolve conflicts and explicitly install matching workflow files. Background sync reuses a selected MCP authorization, preserves offline revisions and conflicts, and checks the impact before removing the server's copies. Any server that implements knowledge-sync v1 can be used: Circle reads its sync base, local tools and team tools from its discovery document. Session preferences load team then personal memory before existing files; knowledge and memory sharing require an exact accepted mapping and confirmation. Every refusal the server explains keeps its original reason and remedy. Without a bound sync server, knowledge and memory show personal content only, with a direct sync-settings entry. Existing memory files and skills are unchanged.
