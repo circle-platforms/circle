@@ -312,7 +312,7 @@ try {
           .getByText(
             label(
               'Repository access follows your GitHub account permissions.',
-              '仓库访问遵循你的 GitHub 账户权限。',
+              '仓库访问遵循 GitHub 账户权限。',
             ),
             { exact: true },
           )
