@@ -90,6 +90,13 @@ import {
   validPopoutTitle,
 } from './popouts';
 import { validPopoutAttachment } from './popout-attachment';
+import {
+  differentInstanceBuild,
+  instanceDataPath,
+  InstanceActivation,
+  type InstanceIdentity,
+} from './instance';
+import { isDesktopDataInUse } from './runtime-failure';
 // A release, or a beta that package:beta wrote into the packaged package.json
 const channel = channelOf(
   (() => {
@@ -109,14 +116,29 @@ if (process.platform === 'linux')
   app.commandLine.appendSwitch('xdg-portal-required-version', '4');
 // Windows shows notifications for the id the installer's Start menu shortcut carries.
 if (process.platform === 'win32') app.setAppUserModelId(channel.id);
-const dataPath =
-  process.env.CIRCLE_WORKBENCH_DATA_DIR ??
-  (channel.beta
-    ? join(app.getPath('appData'), channel.folder)
-    : existsSync(join(app.getPath('appData'), 'Circle Workbench'))
-      ? join(app.getPath('appData'), 'Circle Workbench')
-      : join(app.getPath('appData'), channel.folder));
+const dataPath = (() => {
+  try {
+    return instanceDataPath(
+      process.env.CIRCLE_WORKBENCH_DATA_DIR ??
+        (channel.beta
+          ? join(app.getPath('appData'), channel.folder)
+          : existsSync(join(app.getPath('appData'), 'Circle Workbench'))
+            ? join(app.getPath('appData'), 'Circle Workbench')
+            : join(app.getPath('appData'), channel.folder)),
+    );
+  } catch (error) {
+    process.stderr.write('desktop startup failed: ' + String(error) + '\n');
+    process.exit(1);
+  }
+})();
 app.setPath('userData', dataPath);
+const circleVersion = circleAppVersion(app.isPackaged, app.getVersion());
+const instanceIdentity: InstanceIdentity = {
+  protocol: 'circle-instance/1',
+  build: app.getAppPath(),
+  version: circleVersion,
+};
+if (!app.requestSingleInstanceLock(instanceIdentity)) app.exit(0);
 // --no-sandbox contradicts enableSandbox(): the main process then crashes
 // with an access violation when the first child process starts
 // (https://github.com/electron/electron/issues/54838).
@@ -400,7 +422,6 @@ function redirectTarget(url: string): Promise<string> {
 // The about page shows Circle's version. app.getVersion() is 0.1.0 in a
 // checkout, which is older than every release, so a check would offer the
 // version already installed. A packaged copy uses the version it was built as.
-const circleVersion = circleAppVersion(app.isPackaged, app.getVersion());
 const updater = new Updater({
   version: circleVersion,
   home: join(dataPath, 'runtime-home'),
@@ -609,8 +630,9 @@ async function createPopoutWindow(
 }
 /** Back from the tray: the window and the windows that were open beside it. */
 function showFromTray(): void {
+  if (quitting || quitPending) return;
   if (!window || window.isDestroyed()) {
-    void createWindow();
+    void createWindow().catch(failStartup);
     return;
   }
   if (window.isMinimized()) window.restore();
@@ -675,7 +697,17 @@ function makeTray(): void {
   tray.on('double-click', showFromTray);
 }
 
-async function createWindow() {
+let windowCreation: Promise<void> | undefined;
+function createWindow(): Promise<void> {
+  if (quitting || quitPending) return Promise.resolve();
+  if (windowCreation) return windowCreation;
+  windowCreation = openWindow().finally(() => {
+    windowCreation = undefined;
+  });
+  return windowCreation;
+}
+
+async function openWindow() {
   window = new BrowserWindow({
     width: 1440,
     height: 960,
@@ -791,6 +823,53 @@ async function createWindow() {
   });
   await window.loadURL('circle://workbench/index.html');
 }
+const activation = new InstanceActivation(
+  async () => {
+    await createWindowIfMissing();
+    if (quitting || quitPending) return;
+    showFromTray();
+  },
+  async () => {
+    await dialog.showMessageBox({
+      type: 'info',
+      message: text('Circle is already running from another build'),
+      detail:
+        text('quit the running app before opening another build') +
+        `\n\n${circleVersion}\n${app.getAppPath()}`,
+    });
+  },
+  (error) =>
+    process.stderr.write('circle: activation failed: ' + String(error) + '\n'),
+);
+async function createWindowIfMissing(): Promise<void> {
+  if (windowCreation) await windowCreation;
+  if (!window || window.isDestroyed()) await createWindow();
+}
+app.on('second-instance', (_event, _arguments, _directory, additionalData) => {
+  activation.request(differentInstanceBuild(instanceIdentity, additionalData));
+});
+app.on('activate', () => activation.request());
+let startupFailure: Promise<void> | undefined;
+function failStartup(error: unknown): Promise<void> {
+  if (startupFailure) return startupFailure;
+  activation.stop();
+  quitPending = true;
+  startupFailure = (async () => {
+    process.stderr.write('desktop startup failed: ' + String(error) + '\n');
+    await runtime?.close().catch(() => {});
+    if (isDesktopDataInUse(error))
+      await dialog.showMessageBox({
+        type: 'error',
+        message: nativeText(startupLocale())('Circle data is in use'),
+        detail:
+          nativeText(startupLocale())(
+            'quit the other app using this data folder and try again',
+          ) + `\n\n${dataPath}`,
+      });
+    app.exit(1);
+  })();
+  return startupFailure;
+}
 app
   .whenReady()
   .then(async () => {
@@ -851,6 +930,7 @@ app
         {
           logFile: join(dataPath, 'logs', 'runtime.log'),
           version: circleVersion,
+          onFailure: (error) => void failStartup(error),
         },
       );
       // Private credentials are an owner-only file in the runtime home, as in the
@@ -1540,23 +1620,17 @@ app
     );
     await createWindow();
     makeTray();
+    activation.start();
     // Started by the installer, which macOS does not bring to the front by itself
     if (updated) app.focus({ steal: true });
     dailyUpdateCheck();
-    app.on('activate', () => {
-      if (!BrowserWindow.getAllWindows().length) void createWindow();
-    });
   })
-  .catch(async (error) => {
-    process.stderr.write('desktop startup failed: ' + String(error) + '\n');
-    // A failed start exits with an error, after the runtime it may have started has stopped
-    await runtime?.close().catch(() => {});
-    app.exit(1);
-  });
+  .catch(failStartup);
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 let quitting = false;
+let quitPending = false;
 // Quitting always ends the process. A runtime that cannot stop is ended by the bounded
 // close; a browser close that stalls must not hold the application either: the update's
 // installer waits for this process, and a copy that cannot quit can never be replaced.
@@ -1567,6 +1641,12 @@ app.on('will-quit', () => {
 });
 app.on('before-quit', (event) => {
   if (quitting) return;
+  if (quitPending) {
+    event.preventDefault();
+    return;
+  }
+  quitPending = true;
+  activation.stop();
   if (!runtime) {
     // A real quit, with no runtime to stop. Say so before the windows close, or
     // the tray would take the hide and the application could never leave.

@@ -17,6 +17,10 @@ npm --prefix apps/desktop run dev
 
 The default desktop data folder is `Circle` under the operating system's application-data directory. Runtime settings, credentials and SQLite history live in its `runtime-home` subfolder, separate from `~/.circle`. Development or tests can select a dedicated folder with `CIRCLE_WORKBENCH_DATA_DIR`. The default workspace is `runtime-home/workspace`; settings → workspace → default workspace saves another folder as `workspace_folder` in `runtime-home/settings.json`, chosen through the native folder dialog and its grant indirection, never a renderer-supplied path. Open a folder and explicitly trust it before Circle loads project context or runs tools. Saving API configuration does not by itself verify an endpoint response.
 
+Each actual data folder has one desktop instance. Opening Circle again restores that instance's window, including when the second launch comes from another build. To switch builds, quit the running application first. Distinct `CIRCLE_WORKBENCH_DATA_DIR` folders can run side by side; relative paths and symbolic links to the same folder share one instance. Older builds that do not participate in this coordination are still subject to the runtime's database and event-journal writer locks.
+
+`npm --prefix apps/desktop run test:instance` checks real duplicate processes, window restoration, directory aliases, independent data folders and an uninterrupted scripted turn. It accepts `CIRCLE_DESKTOP_APP_PATH` and `CIRCLE_DESKTOP_EXECUTABLE` for checking a package.
+
 ## Build an application
 
 ```sh
