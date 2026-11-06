@@ -268,10 +268,12 @@ try {
     (await command('prompt', { text: 'Continue the synthetic task.' })).ok,
     true,
   );
-  await until(
-    async () => (await selected()).compaction?.liveTokens > 0,
-    'native summary progress',
-  );
+  // The overflowed attempt reports its tokens just before it counts as a recovery, so
+  // wait for the state of the attempt after it.
+  await until(async () => {
+    const { compaction } = await selected();
+    return compaction?.liveTokens > 0 && compaction.recoveries >= 1;
+  }, 'native summary progress after the recovery');
   const first = (await selected()).compaction;
   assert.equal(first.status, 'running');
   assert.notEqual(first.trigger, 'tool');

@@ -168,7 +168,11 @@ try {
     0,
     'the view of one command is not a tab of the row',
   );
-  // The overview stays beside the drawer: the row is still in view for what follows.
+  // A narrow window has no room for the overview beside the drawer: bring it back.
+  if (!(await row.isVisible()))
+    await page
+      .getByRole('button', { name: 'overview panel', exact: true })
+      .click();
   await row.waitFor();
 
   await writeFile(gate, '');

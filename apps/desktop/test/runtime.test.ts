@@ -4100,14 +4100,19 @@ test('a background job that ends while nothing runs starts a turn that reads its
     1,
     'no message of the person is made up',
   );
+  // Closed here: on Windows its folder cannot be removed while the store is open.
   const history = new CheckpointStore(f.home);
-  t.after(() => history.close());
-  assert.equal(
-    history.messages(id).filter((message) => message.internal === 'job_notice')
-      .length,
-    1,
-    'the notice is in the history',
-  );
+  try {
+    assert.equal(
+      history
+        .messages(id)
+        .filter((message) => message.internal === 'job_notice').length,
+      1,
+      'the notice is in the history',
+    );
+  } finally {
+    history.close();
+  }
   assert.deepEqual(
     session()
       .messages.filter((message) => message.role === 'user')
