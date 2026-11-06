@@ -209,8 +209,8 @@ const expected = {
   mcp: ['heading', 'mcp servers'],
   extensions: ['heading', 'extensions'],
   approvals: ['heading', 'approvals'],
-  // Background commands and device consoles are tabs of the terminal mode
-  jobs: ['region', 'interactive terminal'],
+  // Background commands have their own mode; device consoles are tabs of the terminal.
+  jobs: ['region', 'background jobs panel'],
   terminals: ['region', 'interactive terminal'],
   new: ['heading', 'new session'],
   resume: ['heading', 'sessions'],

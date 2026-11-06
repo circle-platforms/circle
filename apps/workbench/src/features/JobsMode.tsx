@@ -133,7 +133,10 @@ export function JobsMode({
     );
   };
   return (
-    <section className="jobs-mode">
+    <section
+      className="jobs-mode"
+      aria-label={t('{title} panel', { title: t('background jobs') })}
+    >
       <header className="mode-toolbar">
         <span>{t('background jobs')}</span>
         <span className="mode-toolbar-end">
