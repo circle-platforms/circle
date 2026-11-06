@@ -1291,6 +1291,9 @@ test("a background command is named by the model's description, or else by its c
   const root = scratch(t),
     transport = pipeLauncher();
   const run = (body: string) => command(root, body);
+  // A title is cut to a fixed length, so this command holds no paths: one that
+  // did would be named in full only where the Node and temp paths are short.
+  const plainCommand = 'echo named by its command';
   const model = new ScriptedModel([
     {
       message: {
@@ -1311,7 +1314,7 @@ test("a background command is named by the model's description, or else by its c
             id: 'plain',
             name: 'execute',
             args: {
-              command: run('setTimeout(() => {}, 200);'),
+              command: plainCommand,
               background: true,
             },
           },
@@ -1339,6 +1342,6 @@ test("a background command is named by the model's description, or else by its c
   const plain = jobs.find((job) => job !== described)!;
   // No description: the command names it, never the bare word "command".
   assert.notEqual(plain.title, 'command');
-  assert.match(plain.title, /program\.cjs/);
+  assert.equal(plain.title, plainCommand);
   assert.equal(plain.command, plain.title);
 });
