@@ -5,6 +5,7 @@ import path from 'node:path';
 import { CREDENTIAL_REENTRY } from '../runtime-private-channel';
 import {
   GITHUB_ADDITIONAL_SCOPES,
+  isGitHubRepository,
   type GitHubConnectionState,
 } from '../../../../src/github_connection.js';
 import {
@@ -32,7 +33,7 @@ export class NativeGitHubConnection {
     scopeVerification: 'not-reported',
     epoch: 0,
     state: 'disconnected',
-    repositories: [],
+    accessPolicy: 'github-account',
     remoteRevocation: 'not-requested',
   };
   private listeners = new Set<(state: GitHubConnectionState) => void>();
@@ -121,8 +122,6 @@ export class NativeGitHubConnection {
       const data = JSON.parse(await readFile(this.metadata, 'utf8'));
       if (Number.isSafeInteger(data.epoch) && data.epoch >= 0)
         this.state.epoch = data.epoch;
-      if (Array.isArray(data.repositories))
-        this.state.repositories = this.repositories(data.repositories);
       if (data.resume === true) {
         this.state.state = 'authorizing';
         this.state.storage = 'encrypted';
@@ -169,22 +168,11 @@ export class NativeGitHubConnection {
       }
     }
   }
-  private repositories(value: unknown): string[] {
-    if (
-      !Array.isArray(value) ||
-      value.length > 100 ||
-      value.some(
-        (item) => typeof item !== 'string' || !/^[-\w.]+\/[-\w.]+$/.test(item),
-      )
-    )
-      throw Error('explicit GitHub repositories are required');
-    return [...new Set(value as string[])];
-  }
   private persist(resume: boolean) {
     const epoch = this.state.epoch,
       payload = JSON.stringify({
         epoch,
-        repositories: this.state.repositories,
+        accessPolicy: this.state.accessPolicy,
         resume,
       });
     const work = this.persistence
@@ -434,7 +422,10 @@ export class NativeGitHubConnection {
     await this.ready;
     return this.snapshot();
   }
-  connect(input: { storage: 'encrypted' | 'session'; repositories: string[] }) {
+  connect(input: {
+    storage: 'encrypted' | 'session';
+    repositories?: string[];
+  }) {
     if (this.connecting)
       return Promise.reject(Error('GitHub authorization is already starting'));
     const work = this.beginConnect(input);
@@ -448,18 +439,16 @@ export class NativeGitHubConnection {
   }
   private async beginConnect(input: {
     storage: 'encrypted' | 'session';
-    repositories: string[];
+    repositories?: string[];
   }) {
     await this.ready;
     if (this.disposed) throw Error('GitHub connection is closed');
     if (!['encrypted', 'session'].includes(input.storage))
       throw Error('choose encrypted or session-only GitHub storage');
-    const repositories = this.repositories(input.repositories);
     if (this.state.state === 'connected')
       throw Error('disconnect the current GitHub connection first');
     const epoch = ++this.state.epoch;
     this.active = false;
-    this.state.repositories = repositories;
     delete this.state.account;
     delete this.state.grantedScopes;
     this.state.scopeVerification = 'not-reported';
@@ -620,30 +609,6 @@ export class NativeGitHubConnection {
     verification?.controller.abort();
     if (attempt) await this.login.cancel(attempt.id);
   }
-  async configure(epoch: number, repositories: string[]) {
-    await this.ready;
-    this.assertEpoch(epoch);
-    const next = this.repositories(repositories);
-    const previous = this.state.repositories;
-    this.state.epoch++;
-    const attempt = this.state.epoch;
-    this.state.repositories = next;
-    try {
-      await this.persist(this.state.storage === 'encrypted');
-    } catch {
-      if (this.state.epoch === attempt) {
-        this.state.epoch++;
-        this.state.repositories = previous;
-        this.state.error = 'GitHub repository settings could not be saved';
-        this.emit();
-      }
-      throw Error('GitHub repository settings could not be saved');
-    }
-    this.assertEpoch(attempt);
-    delete this.state.error;
-    this.emit();
-    return this.snapshot();
-  }
   async disconnect(epoch: number) {
     await this.ready;
     if (epoch !== this.state.epoch) throw Error('GitHub connection changed');
@@ -712,7 +677,7 @@ export class NativeGitHubConnection {
       epoch !== this.state.epoch ||
       this.state.state !== 'connected' ||
       !this.active ||
-      !this.state.repositories.includes(repository)
+      !isGitHubRepository(repository)
     )
       throw Error('GitHub connection or repository permission changed');
   }

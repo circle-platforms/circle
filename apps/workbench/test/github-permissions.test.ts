@@ -7,7 +7,7 @@ const base: GitHubConnectionState = {
   client: 'GitHub CLI',
   epoch: 1,
   state: 'connected',
-  repositories: [],
+  accessPolicy: 'github-account',
   remoteRevocation: 'not-requested',
 };
 test('missing, unreported and malformed scope metadata never implies CLI permissions', () => {

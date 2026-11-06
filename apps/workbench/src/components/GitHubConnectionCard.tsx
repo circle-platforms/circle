@@ -1,15 +1,13 @@
 import './GitHubConnectionCard.css';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { NavLink } from 'react-router-dom';
-import { Check, X } from 'lucide-react';
+import { Check } from 'lucide-react';
 import type { GitHubConnectionState } from '../../../../src/github_connection';
 import { useRuntime } from '../app/context';
 import { copyText, desktopHost } from '../host';
 import { t } from '../i18n';
 import { Badge, Button, Switch } from './common';
 import { githubPermissions } from '../model/github-permissions';
-
-const repositoryPattern = /^[\w.-]+\/[\w.-]+$/;
 
 /** What each GitHub tool lets Circle do, in plain words. */
 const capabilities = [
@@ -72,28 +70,6 @@ export function GitHubConnectionCard({
   const loadFailed =
     runtime.mode === 'live' && extension?.enabled && !!extension.error && !view;
   const [storage, setStorage] = useState<'encrypted' | 'session'>('encrypted');
-  const [repositories, setRepositories] = useState<string[]>([]);
-  const [newRepository, setNewRepository] = useState('');
-  const [repositoryEpoch, setRepositoryEpoch] = useState<number>();
-  const [repositoryDirty, setRepositoryDirty] = useState(false);
-  const pendingRepositories = useRef<string[] | undefined>(undefined);
-  useEffect(() => {
-    if (
-      repositoryDirty &&
-      pendingRepositories.current &&
-      JSON.stringify(view?.repositories) ===
-        JSON.stringify(pendingRepositories.current) &&
-      view?.epoch !== repositoryEpoch
-    ) {
-      pendingRepositories.current = undefined;
-      setRepositoryDirty(false);
-      setNewRepository('');
-    }
-    if (!repositoryDirty) {
-      setRepositories(view?.repositories ?? []);
-      setRepositoryEpoch(view?.epoch);
-    }
-  }, [view?.epoch, repositoryDirty]);
   const [busyAction, setBusyAction] = useState('');
   const busy = !!busyAction;
   const commandRevision = useRef(0);
@@ -130,31 +106,10 @@ export function GitHubConnectionCard({
         throw Error(String(result.error));
     } catch (reason) {
       if (revision !== commandRevision.current) return;
-      if (verb === 'configure' || verb === 'connect')
-        pendingRepositories.current = undefined;
       setError(String(reason));
     } finally {
       if (revision === commandRevision.current) setBusyAction('');
     }
-  }
-  function edit(next: string[], typing = newRepository) {
-    if (!repositoryDirty) setRepositoryEpoch(view?.epoch);
-    setRepositoryDirty(true);
-    setRepositories(next);
-    setNewRepository(typing);
-  }
-  const typed = newRepository.trim();
-  const typedValid = !typed || repositoryPattern.test(typed);
-  // A repository typed but not added yet still counts, so a save or a
-  // connection never drops what the person wrote.
-  const allowed = [...new Set(typed ? [...repositories, typed] : repositories)];
-  const valid = allowed.every((item) => repositoryPattern.test(item));
-  function addRepository() {
-    if (!typed || !typedValid) return;
-    edit(
-      repositories.includes(typed) ? repositories : [...repositories, typed],
-      '',
-    );
   }
   const attention = loadFailed || view?.state === 'error' || !!view?.error;
   const connected = view?.state === 'connected' && !!view.account;
@@ -201,7 +156,7 @@ export function GitHubConnectionCard({
       : connected
         ? view.storage === 'session'
           ? t('GitHub connection lasts only for this Circle session.')
-          : t('Circle uses this account only for the repositories you allow.')
+          : t('Repository access follows your GitHub account permissions.')
         : t(
             'Connect your GitHub account to read pull request checks and CI, and to publish reviewed changes after your approval.',
           );
@@ -282,7 +237,7 @@ export function GitHubConnectionCard({
                       )
                     : denied
                       ? t(
-                          'Review the account permissions and allowed repositories before retrying. Your edits are kept.',
+                          'Review this account’s repository permissions on GitHub before retrying. Your edits are kept.',
                         )
                       : requestFailed
                         ? t(
@@ -356,11 +311,8 @@ export function GitHubConnectionCard({
               <>
                 <Button
                   className="primary"
-                  disabled={busy || !valid}
-                  onClick={() => {
-                    pendingRepositories.current = allowed;
-                    void command('connect', { storage, repositories: allowed });
-                  }}
+                  disabled={busy}
+                  onClick={() => void command('connect', { storage })}
                 >
                   {t('connect GitHub')}
                 </Button>
@@ -399,101 +351,6 @@ export function GitHubConnectionCard({
             </p>
           )}
       </div>
-      {available && view.state !== 'authorizing' && (
-        <section
-          className="github-section"
-          aria-labelledby="github-repositories-title"
-        >
-          <h3 id="github-repositories-title">{t('repositories')}</h3>
-          <p className="github-section-note">
-            {t(
-              'Circle works only with the repositories listed here. This does not change what your GitHub account allows.',
-            )}
-          </p>
-          {repositories.length ? (
-            <ul className="github-repositories">
-              {repositories.map((repository) => (
-                <li key={repository}>
-                  <span>{repository}</span>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label={t('remove {name}', { name: repository })}
-                    disabled={busy}
-                    onClick={() =>
-                      edit(repositories.filter((item) => item !== repository))
-                    }
-                  >
-                    <X size={14} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="github-empty">
-              {t(
-                'No repositories selected; repository actions are unavailable.',
-              )}
-            </p>
-          )}
-          <div className="github-add-repository">
-            <input
-              className="input"
-              aria-label={t('add repository')}
-              aria-invalid={!typedValid || undefined}
-              value={newRepository}
-              placeholder="owner/repository"
-              spellCheck={false}
-              autoCapitalize="off"
-              onChange={(event) => edit(repositories, event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== 'Enter') return;
-                event.preventDefault();
-                addRepository();
-              }}
-            />
-            <Button disabled={!typed || !typedValid} onClick={addRepository}>
-              {t('add')}
-            </Button>
-          </div>
-          {!typedValid && (
-            <p className="github-field-error">
-              {t('Write it as owner/repository, for example octo-org/app.')}
-            </p>
-          )}
-          {view.state === 'connected' && (
-            <div className="github-actions end">
-              {repositoryDirty && (
-                <Button
-                  disabled={busy}
-                  onClick={() => {
-                    pendingRepositories.current = undefined;
-                    setRepositories(view.repositories);
-                    setNewRepository('');
-                    setRepositoryEpoch(view.epoch);
-                    setRepositoryDirty(false);
-                  }}
-                >
-                  {t('reset')}
-                </Button>
-              )}
-              <Button
-                className="primary"
-                disabled={busy || !valid || !repositoryDirty}
-                onClick={() => {
-                  pendingRepositories.current = allowed;
-                  void command('configure', {
-                    epoch: repositoryEpoch,
-                    repositories: allowed,
-                  });
-                }}
-              >
-                {t('save')}
-              </Button>
-            </div>
-          )}
-        </section>
-      )}
       {available &&
         view.state !== 'connected' &&
         view.state !== 'authorizing' && (
@@ -552,6 +409,11 @@ export function GitHubConnectionCard({
           aria-labelledby="github-permissions-title"
         >
           <h3 id="github-permissions-title">{t('permissions')}</h3>
+          <p className="github-section-note">
+            {t(
+              'Circle uses your connected GitHub credentials for the current workspace repository. GitHub decides which actions are allowed.',
+            )}
+          </p>
           {usable.length > 0 && (
             <>
               <p className="github-section-note">{t('what Circle can do')}</p>
@@ -568,7 +430,7 @@ export function GitHubConnectionCard({
           {!connected && (
             <p className="github-section-note">
               {t(
-                'Repository tools appear after connecting an account and allowing specific repositories. Writes require approval; merging remains your decision.',
+                'Repository tools appear after connecting an account. Writes require approval; merging remains your decision.',
               )}
             </p>
           )}

@@ -57,8 +57,6 @@ try {
           name: label('add repository', '添加仓库'),
           exact: true,
         });
-        const listed = () =>
-          card.locator('.github-repositories li > span').allInnerTexts();
         const primaries = () =>
           card
             .locator('.github-summary button.primary')
@@ -78,12 +76,7 @@ try {
           label('connect GitHub', '连接 GitHub'),
         ]);
         assert.deepEqual(await overflow(), { page: 0, card: 0 });
-        // A repository that is not owner/repository blocks both adding and connecting.
-        await addField.fill('not a repository');
-        assert.equal(await button('add', '添加').isDisabled(), true);
-        assert.equal(await connect.isDisabled(), true);
-        await card.locator('.github-field-error').waitFor();
-        await addField.fill('');
+        assert.equal(await addField.count(), 0);
         assert.equal(await connect.isEnabled(), true);
         assert.equal(await card.locator('.github-field-error').count(), 0);
         assert.deepEqual(
@@ -190,8 +183,8 @@ try {
         await card
           .getByText(
             label(
-              'No repositories selected; repository actions are unavailable.',
-              '尚未选择仓库，暂不能执行仓库操作。',
+              'Circle uses your connected GitHub credentials for the current workspace repository. GitHub decides which actions are allowed.',
+              'Circle 使用已连接的 GitHub 凭据操作当前工作区的仓库，允许的操作由 GitHub 权限决定。',
             ),
             { exact: true },
           )
@@ -205,76 +198,22 @@ try {
           ),
           true,
         );
-        const save = button('save', '保存');
-        assert.equal(await save.isDisabled(), true);
-        await addField.fill('circle-platforms/circle');
-        await addField.press('Enter');
-        assert.deepEqual(await listed(), ['circle-platforms/circle']);
-        assert.equal(await addField.inputValue(), '');
-        await page.evaluate(() => window.githubFixture.failNextConfigure());
-        await save.click();
-        await alert.waitFor();
-        assert.deepEqual(await listed(), ['circle-platforms/circle']);
-        assert.match(
-          await alert.innerText(),
-          language === 'en'
-            ? /GitHub action could not be completed\./
-            : /未能完成 GitHub 操作。/,
-        );
-        assert.doesNotMatch(
-          await alert.innerText(),
-          /configuration write failed/,
-        );
-        await save.click();
-        await page.waitForFunction(
-          () =>
-            window.githubFixture.state().repositories[0] ===
-            'circle-platforms/circle',
-        );
-        await page.waitForFunction(
-          () =>
-            [
-              ...document.querySelectorAll(
-                '#github-connection .github-repositories li > span',
-              ),
-            ]
-              .map((node) => node.textContent)
-              .join() === 'circle-platforms/circle',
-        );
-        assert.equal(await card.getByRole('alert').count(), 0);
+        assert.equal(await button('save', '保存').count(), 0);
         assert.equal(
-          await save.isDisabled(),
-          true,
-          'actual successful epoch clears dirty form',
+          (await page.evaluate(() => window.githubFixture.state()))
+            .accessPolicy,
+          'github-account',
+        );
+        const connectCalls = (
+          await page.evaluate(() => window.githubFixture.calls)
+        ).filter((call) => call.args.startsWith('connect '));
+        assert(
+          connectCalls.every((call) => !call.args.includes('repositories')),
         );
         assert.deepEqual(await overflow(), { page: 0, card: 0 });
         await page.screenshot({
           path: `${out}/${language}-${theme}-${width}-connected.png`,
         });
-        const editEpoch = await page.evaluate(
-          () => window.githubFixture.state().epoch,
-        );
-        await card
-          .getByRole('button', {
-            name: label(
-              'remove circle-platforms/circle',
-              '移除 circle-platforms/circle',
-            ),
-            exact: true,
-          })
-          .click();
-        await addField.fill('circle-platforms/other');
-        await button('add', '添加').click();
-        await page.evaluate(() => window.githubFixture.advanceEpoch());
-        await save.click();
-        await alert.waitFor();
-        assert.equal(
-          (await page.evaluate(() => window.githubFixture.calls)).at(-1).args,
-          `configure {"epoch":${editEpoch},"repositories":["circle-platforms/other"]}`,
-        );
-        assert.deepEqual(await listed(), ['circle-platforms/other']);
-        await button('reset', '重置').click();
-        assert.deepEqual(await listed(), ['circle-platforms/circle']);
         const disconnectEpoch = await page.evaluate(
           () => window.githubFixture.state().epoch,
         );

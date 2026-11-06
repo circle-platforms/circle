@@ -161,7 +161,8 @@ export async function runNativeGitHubSettingsJourney({
     const github = extension(enabled);
     assert.equal(github.view.client, 'GitHub CLI');
     assert.equal(github.view.state, 'disconnected');
-    assert.deepEqual(github.view.repositories, []);
+    assert.equal(github.view.accessPolicy, 'github-account');
+    assert.equal('repositories' in github.view, false);
     assert.equal(github.view.account, undefined);
     assert.equal(github.view.authorization, undefined);
     assert(github.tools.includes('github_connection'));
@@ -202,7 +203,7 @@ export async function runNativeGitHubSettingsJourney({
     const repositories = card.getByPlaceholder('owner/repository', {
       exact: true,
     });
-    assert.equal(await repositories.inputValue(), '');
+    assert.equal(await repositories.count(), 0);
     const storage = card.getByRole('radio');
     assert.equal(await storage.count(), 2);
     assert.deepEqual(
@@ -239,7 +240,7 @@ export async function runNativeGitHubSettingsJourney({
     assert.equal(
       await authorize.isEnabled(),
       true,
-      'an empty optional allowlist does not block the original authorization control',
+      'connecting an account does not require a local repository allowlist',
     );
     await card
       .getByRole('radio', {

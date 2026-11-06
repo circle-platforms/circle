@@ -18,14 +18,13 @@ const calls: Array<{ name: string; args?: string }> = [],
   opened: string[] = [];
 let holdConnect = false;
 let heldConnectReject: ((reason: Error) => void) | undefined;
-let failEncrypted = true,
-  failConfigure = false;
+let failEncrypted = true;
 let state: GitHubConnectionState = {
   provider: 'github',
   client: 'GitHub CLI',
   epoch: 7,
   state: 'disconnected',
-  repositories: [],
+  accessPolicy: 'github-account',
   remoteRevocation: 'not-requested',
 };
 function publish() {
@@ -72,7 +71,6 @@ runtime.command = (name, args = '') => {
       authorizationPhase: 'waiting-for-user',
       lastAuthorizationOutcome: undefined,
       storage: params.storage,
-      repositories: params.repositories,
       authorization: {
         id: 'fixture-authorization',
         code: 'CODE-TEST',
@@ -89,17 +87,6 @@ runtime.command = (name, args = '') => {
         heldConnectReject = reject;
       });
     }
-  } else if (verb === 'configure') {
-    if (params.epoch !== state.epoch) throw Error('GitHub connection changed');
-    if (failConfigure) {
-      failConfigure = false;
-      throw Error('configuration write failed\noriginal failure detail');
-    }
-    state = {
-      ...state,
-      epoch: state.epoch + 1,
-      repositories: params.repositories,
-    };
   } else if (verb === 'cancel' || verb === 'disconnect') {
     const outcome =
       verb === 'disconnect'
@@ -113,7 +100,7 @@ runtime.command = (name, args = '') => {
       client: 'GitHub CLI',
       epoch: state.epoch + 1,
       state: 'disconnected',
-      repositories: [],
+      accessPolicy: 'github-account',
       remoteRevocation: verb === 'cancel' ? 'not-requested' : 'unconfirmed',
       lastAuthorizationOutcome: outcome,
     };
@@ -193,9 +180,6 @@ Object.assign(window, {
     verifyingAuthorization: () => {
       state = { ...state, authorizationPhase: 'verifying-account' };
       publish();
-    },
-    failNextConfigure: () => {
-      failConfigure = true;
     },
     advanceEpoch: () => {
       state = { ...state, epoch: state.epoch + 1 };

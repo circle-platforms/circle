@@ -1,5 +1,11 @@
 /** Explicit additions to the bundled GitHub CLI device grant, not its default scope set. */
 export const GITHUB_ADDITIONAL_SCOPES = ['workflow'] as const;
+export function isGitHubRepository(value: string): boolean {
+  return (
+    /^[a-z\d](?:[a-z\d-]{0,37}[a-z\d])?\/[\w.-]{1,100}$/i.test(value) &&
+    !['.', '..'].includes(value.split('/')[1] ?? '')
+  );
+}
 /** Sanitized native capability injected only into Circle's bundled GitHub extension. */
 export interface GitHubConnectionState {
   provider: 'github';
@@ -10,7 +16,7 @@ export interface GitHubConnectionState {
   epoch: number;
   state: 'disconnected' | 'authorizing' | 'connected' | 'error';
   account?: { login: string; id: number };
-  repositories: string[];
+  accessPolicy: 'github-account';
   storage?: 'encrypted' | 'session';
   authorizationPhase?:
     'preparing-code' | 'waiting-for-user' | 'verifying-account';
@@ -52,11 +58,7 @@ export interface GitHubPublishInput {
 export interface GitHubConnectionMethods {
   status: { params: Record<string, never>; result: GitHubConnectionState };
   connect: {
-    params: { storage: 'encrypted' | 'session'; repositories: string[] };
-    result: GitHubConnectionState;
-  };
-  configure: {
-    params: { epoch: number; repositories: string[] };
+    params: { storage: 'encrypted' | 'session'; repositories?: string[] };
     result: GitHubConnectionState;
   };
   cancel: { params: { epoch: number }; result: GitHubConnectionState };

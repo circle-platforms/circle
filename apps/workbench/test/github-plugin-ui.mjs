@@ -171,7 +171,7 @@ try {
           name: label('add repository', '添加仓库'),
           exact: true,
         });
-        assert.equal(await addField.inputValue(), '');
+        assert.equal(await addField.count(), 0);
         assert.equal(
           await detail
             .getByRole('button', {
