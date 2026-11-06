@@ -4123,6 +4123,35 @@ test('a background job that ends while nothing runs starts a turn that reads its
   assert.ok(session().messages.at(-1)?.usage, 'the turn shows its own usage');
 });
 
+test("an ended job's output is read once and carries no terminal control codes", async (t) => {
+  let command = '';
+  const f = await setup(t, [
+    async () => startedJob(command),
+    { message: assistant('waiting'), usage: emptyUsage() },
+    { message: assistant('read it'), usage: emptyUsage() },
+  ]);
+  const gate = join(f.workspace, 'gate');
+  command = gatedCommand(gate, '\u28d9\u001b[1G\u001b[0Ksuite passed');
+  const id = f.controller.snapshot().activeSessionId;
+  await startGatedJob(f, id);
+  await writeFile(gate, '');
+  await wait(
+    () =>
+      f.model.requests.length === 3 &&
+      f.controller.snapshot().sessions.find((row) => row.id === id)?.state ===
+        'idle',
+    'the turn the job starts ends',
+  );
+  const job = () =>
+    f.controller.snapshot().jobs.find((row) => row.sessionId === id)!;
+  assert.equal(job().output, 'suite passed');
+  const owner = (
+    f.controller as unknown as { runtimes: Map<string, AgentRuntime> }
+  ).runtimes.get(id)!;
+  await rm(owner.jobs.list(id)[0]!.outputPath);
+  assert.equal(job().output, 'suite passed', 'no read after it ended');
+});
+
 test("file changes of a turn a job starts belong to the person's turn, not to a notice", async (t) => {
   let first = '';
   let second = '';

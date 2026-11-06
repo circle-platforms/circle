@@ -38,7 +38,14 @@ export function plainJobOutput(text: string): string {
   return text
     .split('\n')
     .map((line) =>
-      stripAnsi(line.replace(/\r+$/, '').split('\r').at(-1) ?? '')
+      // A progress bar goes back with `\r`, or with a jump to the first column.
+      stripAnsi(
+        line
+          .replace(/\x1b\[1?G/g, '\r')
+          .replace(/\r+$/, '')
+          .split('\r')
+          .at(-1) ?? '',
+      )
         .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
         .replaceAll('\t', '    '),
     )

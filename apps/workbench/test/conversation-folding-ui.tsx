@@ -97,7 +97,7 @@ Object.assign(window, {
         );
         const row = call('grep', { pattern: 'joined' });
         session.messages.splice(after + 1, 0, row);
-        session.branchIds.splice(after + 1, 0, row.id);
+        session.branchIds!.splice(after + 1, 0, row.id);
       }),
     work: () =>
       runtime.change((state) => {

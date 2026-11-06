@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useRuntime } from '../app/context';
 import { IconButton, PaneEmpty } from '../components/common';
 import { t } from '../i18n';
-import { sessionJobs } from '../model/jobs';
+import { jobDot, sessionJobs } from '../model/jobs';
 import { currentSession } from '../model/state';
 import type { DialogId, Job } from '../model/types';
 import { ModeButtons } from './mode-chrome';
@@ -11,7 +11,7 @@ import { ModeButtons } from './mode-chrome';
 /**
  * The background jobs mode: the commands Circle runs in the background for this
  * conversation, apart from the terminals the person opens. Running ones first, then the
- * finished, folded. A card opens to the command and the end of its output; a running
+ * finished, folded. A row opens to the command and the end of its output; a running
  * one can be stopped.
  */
 export function JobsMode({
@@ -60,6 +60,7 @@ export function JobsMode({
             onClick={() => toggle(job.id)}
           >
             {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            <i className="overview-dot" data-state={jobDot(job)} aria-hidden />
             <span className="jobs-title">{job.title}</span>
             <span className="jobs-time">{job.elapsed}</span>
           </button>
@@ -73,10 +74,14 @@ export function JobsMode({
           )}
         </div>
         {expanded && (
-          <pre className="jobs-output">
-            {job.command && `$ ${job.command}\n`}
-            {job.output || (going ? '' : t('no output'))}
-          </pre>
+          <div className="jobs-detail">
+            {job.command && <pre className="jobs-command">$ {job.command}</pre>}
+            {job.output ? (
+              <pre className="jobs-output">{job.output}</pre>
+            ) : (
+              !going && <p className="jobs-empty">{t('no output')}</p>
+            )}
+          </div>
         )}
       </article>
     );

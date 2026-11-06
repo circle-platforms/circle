@@ -38,7 +38,7 @@ import type { Job, PanelId, SessionMemoryDocument } from '../model/types';
 import { workspaceLabel } from '../model/workspace-label';
 import { SAMPLE_PULL_REQUESTS } from '../preview/pull-requests';
 import type { PullRequestSummary } from '../../../desktop/src/workspace/pulls-types';
-import { sessionJobs } from '../model/jobs';
+import { jobDot, sessionJobs } from '../model/jobs';
 import '../styles/overview.css';
 
 const OUTPUTS_SHOWN = 3;
@@ -136,29 +136,27 @@ function Row({
   );
 }
 
-type DotState = 'run' | 'wait' | 'fail' | 'done' | 'idle';
-
-function Dot({ state }: { state: DotState }) {
+function Dot({ state }: { state: 'run' | 'wait' | 'fail' | 'done' | 'idle' }) {
   return <i className="overview-dot" data-state={state} aria-hidden />;
 }
 
-/** How a background job's row ends: its time while it runs, then how it ended. */
-function jobEnd(job: Job): { dot: DotState; word: string; title?: string } {
+/** The words a background job's row ends with: its time while it runs, then how it ended. */
+function jobEnd(job: Job): { word: string; title?: string } {
   switch (job.state) {
     case 'waiting':
-      return { dot: 'wait', word: t('waiting for you') };
+      return { word: t('waiting for you') };
     case 'stopping':
-      return { dot: 'run', word: t('stopping') };
+      return { word: t('stopping') };
     case 'running':
-      return { dot: 'run', word: job.elapsed || t('running') };
+      return { word: job.elapsed || t('running') };
     case 'completed':
-      return { dot: 'done', word: t('done'), title: job.elapsed };
+      return { word: t('done'), title: job.elapsed };
     case 'failed':
-      return { dot: 'fail', word: t('failed'), title: job.elapsed };
+      return { word: t('failed'), title: job.elapsed };
     case 'cancelled':
-      return { dot: 'idle', word: t('stopped'), title: job.elapsed };
+      return { word: t('stopped'), title: job.elapsed };
     case 'interrupted':
-      return { dot: 'idle', word: t('interrupted'), title: job.elapsed };
+      return { word: t('interrupted'), title: job.elapsed };
   }
 }
 
@@ -584,7 +582,7 @@ export function Overview({
                 onClick={() => onPanel('jobs', job.id)}
                 end={
                   <>
-                    <Dot state={end.dot} />
+                    <Dot state={jobDot(job)} />
                     <EndText title={end.title}>{end.word}</EndText>
                   </>
                 }

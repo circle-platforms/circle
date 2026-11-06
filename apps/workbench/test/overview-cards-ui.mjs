@@ -176,6 +176,38 @@ try {
     await jobsCard.getByRole('button', { name: words.twoMore }).click();
     await jobsCard.getByText('Verify one', { exact: true }).waitFor();
     assert.equal((await jobEnds()).length, 6);
+    // A row opens the mode, where the job's text is small and monospaced.
+    await setJobs([
+      {
+        id: 'suite',
+        state: 'completed',
+        output: 'suite output',
+      },
+    ]);
+    await jobsCard.locator('.overview-row').click();
+    const jobOutput = page.locator('.jobs-output');
+    await jobOutput.waitFor();
+    const jobText = await page.evaluate(() => {
+      const font = (selector) => {
+        const style = getComputedStyle(document.querySelector(selector));
+        return { size: parseFloat(style.fontSize), family: style.fontFamily };
+      };
+      return {
+        title: font('.jobs-card .jobs-title'),
+        command: font('.jobs-command'),
+        output: font('.jobs-output'),
+      };
+    });
+    assert.equal(
+      await page.locator('.jobs-command').innerText(),
+      '$ npm run suite',
+    );
+    assert.match(jobText.output.family, /mono/i);
+    assert.match(jobText.command.family, /mono/i);
+    assert(jobText.output.size < jobText.title.size, JSON.stringify(jobText));
+    assert.deepEqual(errors, []);
+    await page.reload();
+    await page.locator('.overview-column .overview-card').first().waitFor();
     await setJobs([]);
     await jobsCard.waitFor({ state: 'detached' });
 

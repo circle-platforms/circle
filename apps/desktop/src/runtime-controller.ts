@@ -204,7 +204,12 @@ import {
   cancelRequest,
   type SecretRequest,
 } from '../../../src/secret_prompt.js';
-import { elapsed, outputTail } from '../../../src/jobs.js';
+import {
+  elapsed,
+  outputTail,
+  plainJobOutput,
+  type Job as BackgroundJob,
+} from '../../../src/jobs.js';
 import { JobWake } from './job-wake.js';
 import type { CircleEvent } from '../../../src/events.js';
 import type {
@@ -307,6 +312,11 @@ function readText(path: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+interface JobOutput {
+  size: number;
+  text: string;
+  final: boolean;
 }
 interface Pending {
   row: Interaction;
@@ -485,6 +495,8 @@ export class RuntimeController {
   >();
   private taskRuntimes = new Map<string, AgentRuntime>();
   private jobWakes = new WeakMap<AgentRuntime, JobWake>();
+  private jobOutputs = new Map<string, JobOutput>();
+  private persistedLocation?: string;
   private workspaceEventPending = new Set<Promise<unknown>>();
   private workspaceStreamFailures = new Map<string, string>();
   private workspaceEpoch = randomUUID();
@@ -2513,10 +2525,75 @@ export class RuntimeController {
     return runtime;
   }
   private persistLocation() {
-    writePrivateJson(join(this.home, 'desktop-session.json'), {
+    const location = {
       workspace: this.selectedWorkspace,
       sessionId: this.selectedSessionId,
+    };
+    const written = JSON.stringify(location);
+    if (written === this.persistedLocation) return;
+    writePrivateJson(join(this.home, 'desktop-session.json'), location);
+    this.persistedLocation = written;
+  }
+  private projectJobs() {
+    const outputs = new Map<string, JobOutput>();
+    const jobs = [...this.runtimes.values()].flatMap((owner) =>
+      owner.jobs.list().map((job) => ({
+        id: `${job.sessionId}:${job.id}`,
+        sessionId: job.sessionId,
+        kind:
+          job.kind === 'shell' || job.kind === 'adopted'
+            ? ('command' as const)
+            : job.kind,
+        title: job.title,
+        ...(job.command ? { command: job.command } : {}),
+        state:
+          job.status === 'running'
+            ? this.stoppedJobs.has(`${job.sessionId}:${job.id}`)
+              ? ('stopping' as const)
+              : ('running' as const)
+            : job.status === 'done'
+              ? ('completed' as const)
+              : job.status === 'stopped'
+                ? ('cancelled' as const)
+                : ('failed' as const),
+        elapsed: elapsed(job),
+        ...(job.ended ? { endedAt: job.ended } : {}),
+        output: this.jobOutput(job, outputs),
+        outputPath: job.virtualPath,
+        stopRequested: this.stoppedJobs.has(`${job.sessionId}:${job.id}`),
+        // A background subagent's job, by the session its record is: its stop and its
+        // time in the subagents mode, while it works and after it has ended.
+        ...(job.kind === 'agent' && job.agent ? { agentId: job.agent } : {}),
+        ...(job.execution?.terminal
+          ? { terminal: job.execution.terminal }
+          : {}),
+      })),
+    );
+    this.jobOutputs = outputs;
+    return jobs;
+  }
+  /** A job's tail, read again only when its file has grown. An ended job's never changes. */
+  private jobOutput(
+    job: Pick<BackgroundJob, 'outputPath' | 'status'>,
+    outputs: Map<string, JobOutput>,
+  ): string {
+    const known = this.jobOutputs.get(job.outputPath);
+    if (known?.final) {
+      outputs.set(job.outputPath, known);
+      return known.text;
+    }
+    if (!existsSync(job.outputPath)) return '';
+    const size = statSync(job.outputPath).size;
+    const text =
+      known?.size === size
+        ? known.text
+        : plainJobOutput(outputTail(job.outputPath));
+    outputs.set(job.outputPath, {
+      size,
+      text,
+      final: job.status !== 'running',
     });
+    return text;
   }
   private compactionStates(id: string): CompactionSnapshot[] {
     const owner =
@@ -3176,39 +3253,7 @@ export class RuntimeController {
           ),
         ...nativeAgents,
       ],
-      jobs: [...this.runtimes.values()].flatMap((owner) =>
-        owner.jobs.list().map((job) => ({
-          id: `${job.sessionId}:${job.id}`,
-          sessionId: job.sessionId,
-          kind:
-            job.kind === 'shell' || job.kind === 'adopted'
-              ? ('command' as const)
-              : job.kind,
-          title: job.title,
-          ...(job.command ? { command: job.command } : {}),
-          state:
-            job.status === 'running'
-              ? this.stoppedJobs.has(`${job.sessionId}:${job.id}`)
-                ? ('stopping' as const)
-                : ('running' as const)
-              : job.status === 'done'
-                ? ('completed' as const)
-                : job.status === 'stopped'
-                  ? ('cancelled' as const)
-                  : ('failed' as const),
-          elapsed: elapsed(job),
-          ...(job.ended ? { endedAt: job.ended } : {}),
-          output: existsSync(job.outputPath) ? outputTail(job.outputPath) : '',
-          outputPath: job.virtualPath,
-          stopRequested: this.stoppedJobs.has(`${job.sessionId}:${job.id}`),
-          // A background subagent's job, by the session its record is: its stop and its
-          // time in the subagents mode, while it works and after it has ended.
-          ...(job.kind === 'agent' && job.agent ? { agentId: job.agent } : {}),
-          ...(job.execution?.terminal
-            ? { terminal: job.execution.terminal }
-            : {}),
-        })),
-      ),
+      jobs: this.projectJobs(),
       interactions: [
         ...this.history,
         ...[...this.pending.values()].map((pending) => pending.row),

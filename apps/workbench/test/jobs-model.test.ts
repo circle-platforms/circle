@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { sessionJobs } from '../src/model/jobs.ts';
+import { jobDot, sessionJobs } from '../src/model/jobs.ts';
 import type { Job } from '../src/model/types.ts';
 
 const job = (id: string, extra: Partial<Job> = {}): Job =>
@@ -46,5 +46,22 @@ test("the background jobs mode lists this conversation's commands, going ones fi
       job('other', { state: 'failed', endedAt: 200 }),
     ]).ended.map((item) => item.id),
     ['long', 'other', 'short'],
+  );
+});
+
+test("a job's dot says its state", () => {
+  assert.deepEqual(
+    (
+      [
+        'running',
+        'stopping',
+        'waiting',
+        'completed',
+        'failed',
+        'cancelled',
+        'interrupted',
+      ] as const
+    ).map((state) => jobDot({ state })),
+    ['run', 'run', 'wait', 'done', 'fail', 'idle', 'idle'],
   );
 });

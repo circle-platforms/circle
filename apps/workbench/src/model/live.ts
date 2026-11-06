@@ -1480,9 +1480,8 @@ export class LiveRuntime implements RuntimePort {
       await native('reload');
       return { notice: t('Circle integrations reloaded') };
     }
-    // Background commands are tabs of the terminal, beside its shells and device consoles.
-    if (name === 'jobs' || name === 'terminals')
-      return { panel: 'terminal', selection: args };
+    if (name === 'jobs') return { panel: 'jobs', selection: args };
+    if (name === 'terminals') return { panel: 'terminal', selection: args };
     // The bridge is Circle's own listener in the terminal: the window has no
     // editor of that kind to open or close.
     if (name === 'bridge')

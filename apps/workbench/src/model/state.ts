@@ -98,7 +98,7 @@ export const COMMAND_UI: Record<string, string> = {
   knowledge: 'knowledge',
   extensions: 'extensions',
   approvals: 'approvals',
-  jobs: 'terminal',
+  jobs: 'jobs',
   terminals: 'terminal',
   new: 'sessions',
   resume: 'sessions',
@@ -904,8 +904,7 @@ export class PreviewRuntime implements RuntimePort {
         notice: 'connection draft cleared; real credentials were not accessed',
       };
     }
-    // Background commands are tabs of the terminal, beside its shells and device consoles.
-    if (name === 'jobs') return { panel: 'terminal', selection: args };
+    if (name === 'jobs') return { panel: 'jobs', selection: args };
     if (name === 'terminals') return { panel: 'terminal', selection: args };
     if (
       ['reload', 'init'].includes(name) ||

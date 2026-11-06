@@ -454,21 +454,6 @@ Object.assign(window, {
       });
     },
     /** The running command ends, with an exit code. */
-    endCommand: (exitCode: number) => {
-      const item = items.find((one) => one.id === 'terminal-3')!;
-      Object.assign(item, {
-        status: 'exited',
-        exitCode,
-        managedCommand: {
-          ...item.managedCommand,
-          completion: {
-            ...item.managedCommand.completion,
-            rootExit: { exitCode },
-          },
-        },
-      });
-      publish(item);
-    },
   },
 });
 setLanguage(query.get('locale') === 'zh-CN' ? 'zh-CN' : 'en');

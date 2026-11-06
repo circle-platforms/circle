@@ -683,6 +683,13 @@ fs.writeFileSync('human-pid', String(process.pid));
             !['running', 'stopping'].includes(reply.value[0].status)
           );
         }, 'Registry stop closes original managed terminal');
+        // The ended command keeps its process ids in its tooltip, each named for what it is.
+        const childExit = terminal.locator('.native-terminal-exit');
+        await childExit.waitFor();
+        assert.match(
+          await childExit.getAttribute('title'),
+          /\ncommand pid \d+ · pty pid \d+$/,
+        );
         assert.equal(
           await f.read(child.workspace, f.files.starts),
           childStarts,

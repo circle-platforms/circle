@@ -59,11 +59,11 @@ An empty mode uses [PaneEmpty](../../apps/workbench/src/components/ui.tsx) and n
 | files           | 文件         | 显示当前工作文件夹中的文件     |
 | changes         | 改动         | 显示当前工作文件夹中的所有改动 |
 | browser         | 网页         | 使用内置浏览器进行控制和访问   |
-| terminal        | 终端         | 显示当前的后台任务或创建新终端 |
+| terminal        | 终端         | 创建新终端或连接设备           |
 | subagents       | 子代理       | 控制和查看当前运行的所有子代理 |
 | background jobs | 后台任务     | 显示 Circle 在后台运行的命令   |
 
-**Background jobs** are Circle's own background commands, apart from the terminals the person opens. They have their own mode and icon, between subagents and terminal, which carries the count of running jobs, and their own overview card, which lists the running jobs, then the three that ended last, each saying how it ended; a row of the card opens the mode on that job. The mode lists running jobs, then finished ones under a folding heading, each a card named by the model's short `description` (or else its command), with its time and, while it runs, a stop button. A card opens to `$ command` and the end of its output. The terminal carries no count.
+**Background jobs** are Circle's own background commands, apart from the terminals the person opens. They have their own mode and icon, between subagents and terminal, which carries the count of running jobs, and their own overview card, which lists the running jobs, then the three that ended last, each saying how it ended; a row of the card opens the mode on that job. The mode lists running jobs, then finished ones under a folding heading, each a row named by the model's short `description` (or else its command), with its state's dot, its time and, while it runs, a stop button, as a subagent's row. A row opens to `$ command` over the end of its output, in small monospaced text without terminal control codes. The terminal carries no count.
 
 Status lines that say nothing useful are not shown, such as a loaded-file count. A field shows its whole text; an input is as tall as its field.
 

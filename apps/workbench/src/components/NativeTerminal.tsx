@@ -407,14 +407,6 @@ export function NativeTerminal({
     null,
   );
   const [renameValue, setRenameValue] = useState('');
-  // Every command Circle runs has a terminal; only a command that runs in the background,
-  // which has a row of its own in the jobs, is a tab. A foreground one is seen from its
-  // tool row, and in the view of one command.
-  const backgroundTerminals = new Set(
-    appSnapshot.jobs.flatMap((job) =>
-      job.kind === 'command' && job.terminal ? [job.terminal.id] : [],
-    ),
-  );
   // A command's tab is named by its command: the terminal knows it when Circle wrote it
   // with variables, and the job always does.
   const jobTitles = new Map(
@@ -424,14 +416,14 @@ export function NativeTerminal({
         : [],
     ),
   );
+  // Every command Circle runs has a terminal and no tab: a background one has its row in
+  // the background jobs, and either is seen from its tool row, in the view of one command.
   const visible = terminals.filter(
     (item) =>
       item.sessionId === sessionId &&
       !item.hidden &&
       !dismissed.has(item.id) &&
-      (!item.managedCommand ||
-        !!commandTerminal ||
-        backgroundTerminals.has(item.id)) &&
+      (!item.managedCommand || !!commandTerminal) &&
       (!commandTerminal ||
         (item.id === commandTerminal.resolved.target.terminal.id &&
           item.epoch === commandTerminal.resolved.target.terminal.epoch)),
@@ -1431,7 +1423,7 @@ export function NativeTerminal({
           className="native-terminal-empty"
           title={t('terminal')}
         >
-          <p>{t('background jobs, or a new terminal')}</p>
+          <p>{t('a new terminal, or a device console')}</p>
         </PaneEmpty>
       )}
       <div className="term-frame" data-frame={frame}>
