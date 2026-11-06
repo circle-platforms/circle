@@ -3,7 +3,14 @@ import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  readFile,
+  realpath,
+  rm,
+} from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
@@ -33,7 +40,9 @@ const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const output = join(root, 'artifacts/browser-live');
 await mkdir(output, { recursive: true });
-const temp = await mkdtemp(join(tmpdir(), 'circle-browser-live-'));
+const temp = await realpath(
+  await mkdtemp(join(tmpdir(), 'circle-browser-live-')),
+);
 const keyPath = join(temp, 'key.pem');
 const certificatePath = join(temp, 'certificate.pem');
 const fixturePath = join(temp, 'model.json');
