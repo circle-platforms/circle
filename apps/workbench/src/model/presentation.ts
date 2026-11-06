@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useRuntime } from '../app/context';
+import { useRuntimeActions, useRuntimeSelector } from '../app/context';
 import { currentSession } from './state';
 import type { RuntimePort, Session } from './types';
 
@@ -99,23 +99,38 @@ export function saveSessionScroll(
 }
 
 /** Explicit session ownership keeps a late UI callback out of the newly selected view. */
-export function useSessionPresentation() {
-  const { snapshot, runtime } = useRuntime();
-  const session = currentSession(snapshot);
-  const update = (change: (view: Presentation) => void) => {
-    const target = runtime
-      .getSnapshot()
-      .sessions.find((item) => item.id === session.id);
-    if (!target) return;
-    const presentation = structuredClone(target.presentation ?? {});
-    change(presentation);
-    runtime.updateSessionView(session.id, { presentation });
-  };
-  return { view: session.presentation ?? {}, update };
+function updatePresentation(
+  runtime: RuntimePort,
+  sessionId: string,
+  change: (view: Presentation) => void,
+) {
+  const target = runtime
+    .getSnapshot()
+    .sessions.find((item) => item.id === sessionId);
+  if (!target) return;
+  const presentation = structuredClone(target.presentation ?? {});
+  change(presentation);
+  runtime.updateSessionView(sessionId, { presentation });
 }
-
 export function useSessionDisclosure(id: string, defaultOpen = false) {
-  const { view, update } = useSessionPresentation();
+  const { runtime } = useRuntimeActions();
+  // This row's own entry: every transcript row calls this, and a publication about anything
+  // else must not render it.
+  const { sessionId, saved } = useRuntimeSelector(
+    (snapshot) => {
+      const session = currentSession(snapshot);
+      return {
+        sessionId: session.id,
+        saved: session.presentation?.disclosures?.[id],
+      };
+    },
+    (one, other) =>
+      one.sessionId === other.sessionId &&
+      one.saved?.open === other.saved?.open &&
+      one.saved?.defaultOpen === other.saved?.defaultOpen,
+  );
+  const update = (change: (view: Presentation) => void) =>
+    updatePresentation(runtime, sessionId, change);
   const previousDefault = useRef(defaultOpen);
   useEffect(() => {
     if (previousDefault.current === defaultOpen) return;
@@ -124,7 +139,6 @@ export function useSessionDisclosure(id: string, defaultOpen = false) {
       (target.disclosures ??= {})[id] = { open: defaultOpen, defaultOpen };
     });
   }, [id, defaultOpen]);
-  const saved = view.disclosures?.[id];
   const open = saved?.defaultOpen === defaultOpen ? saved.open : defaultOpen;
   return [
     open,

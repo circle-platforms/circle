@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Markdown } from '../src/components/Markdown';
 import { SourceNavigation } from '../src/components/SourceNavigation';
+import { setLanguage } from '../src/i18n';
 
 declare global {
   interface Window {
@@ -10,8 +11,10 @@ declare global {
     opened: { path: string; render: number }[];
     renderAgain: () => void;
     setText: (text: string) => void;
+    setLanguage: typeof setLanguage;
   }
 }
+window.setLanguage = setLanguage;
 window.markdownParses = 0;
 window.opened = [];
 // A window's own render, as every publication makes one: a new `onFile` each time.

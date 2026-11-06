@@ -64,6 +64,12 @@ try {
   await page.evaluate(() => window.setText('**changed** words'));
   await page.locator('.markdown strong').getByText('changed').waitFor();
   assert.ok((await parses()) > first, 'changed words are parsed');
+
+  // What the row says in the interface's own words follows the language.
+  await page.evaluate(() => window.setText('| a |\n| - |\n| b |'));
+  await page.getByRole('region', { name: 'response table' }).waitFor();
+  await page.evaluate(() => window.setLanguage('zh-CN'));
+  await page.getByRole('region', { name: '回答表格' }).waitFor();
   assert.deepEqual(errors, []);
   console.log('markdown renders only when its words change');
 } finally {

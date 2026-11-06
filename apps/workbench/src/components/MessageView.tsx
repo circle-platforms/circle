@@ -1,6 +1,6 @@
 import { formatRuntimeNotice } from '../model/runtime-notice';
 import { Brain, ChevronRight, Copy } from 'lucide-react';
-import { useRuntime } from '../app/context';
+import { useRuntime, useRuntimeActions } from '../app/context';
 import { copyText } from '../host';
 import type { Message } from '../model/types';
 import { formatBusyElapsed } from '../model/format';
@@ -13,9 +13,9 @@ import {
   thinkingHeadline,
 } from '../model/thinking';
 import { Markdown } from './Markdown';
-import { t } from '../i18n';
+import { t, useLocale } from '../i18n';
 import { useSources } from './SourceNavigation';
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import { interruptedLabel } from '../model/completion';
 import { useSessionDisclosure } from '../model/presentation';
 import { ToolMessage } from './ToolMessage';
@@ -41,8 +41,9 @@ export function shownMessageText(message: Message): string {
 /**
  * A message as Claude shows one: yours in a bubble on the right, Circle's as plain text
  * with its thinking folded. The time, the usage and a copy button sit on one row under it.
+ * It renders when the message changes, not with each publication.
  */
-export function MessageView({
+export const MessageView = memo(function MessageView({
   message,
   showThinking,
   interim,
@@ -57,8 +58,11 @@ export function MessageView({
   footer?: ReactNode;
   /** Used where no preview window is provided. */
   onAttachment?: () => void;
+  /** Today, so that a time written as today's gains its date after midnight. */
+  day?: string;
 }) {
-  const { notify } = useRuntime();
+  useLocale();
+  const { notify } = useRuntimeActions();
   const sources = useSources();
   const [thinkingOpen, setThinkingOpen] = useSessionDisclosure(
     'thinking:' + message.id,
@@ -191,7 +195,7 @@ export function MessageView({
       )}
     </article>
   );
-}
+});
 
 const usageText = (usage: NonNullable<Message['usage']>) =>
   [

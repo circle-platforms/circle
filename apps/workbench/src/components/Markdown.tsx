@@ -1,7 +1,7 @@
 import { memo, useState } from 'react';
 import { Code } from 'lucide-react';
 import { splitAutolink } from '../../../../src/autolink.ts';
-import { t } from '../i18n';
+import { t, useLocale } from '../i18n';
 import './markdown.css';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -125,8 +125,9 @@ function remarkFullwidthAutolinks() {
   };
   return (tree: MarkdownNode) => walk(tree);
 }
-// Parsed again only when its text changes: every publication renders the rows on screen.
+// Parsed again only when its text or the language changes, not with every publication.
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
+  useLocale();
   const sources = useSources();
   return (
     <div className="markdown">

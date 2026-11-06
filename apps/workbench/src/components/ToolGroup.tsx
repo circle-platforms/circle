@@ -4,17 +4,28 @@ import {
   thinkingHeadline,
 } from '../model/thinking';
 import { Markdown } from './Markdown';
-import { useId, useState, type ComponentProps, type ReactNode } from 'react';
+import {
+  memo,
+  useId,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from 'react';
 import { useSessionDisclosure } from '../model/presentation';
 import { Brain, ChevronDown, ChevronRight, LoaderCircle } from 'lucide-react';
 import type { Message, Session } from '../model/types';
 import { toolSummary } from '../model/tool-summary';
 import { TurnClock } from './TurnClock';
-import { AgentToolLinks, mappedToolAgents, ToolMessage } from './ToolMessage';
-import { useRuntime } from '../app/context';
+import {
+  AgentToolLinks,
+  mappedToolAgents,
+  sameToolAgents,
+  ToolMessage,
+} from './ToolMessage';
+import { useRuntimeSelector } from '../app/context';
 import { currentSession } from '../model/state';
 import { ImageThumb } from './ImageThumb';
-import { locale, t, tn } from '../i18n';
+import { locale, t, tn, useLocale } from '../i18n';
 import '../features/conversation-requests.css';
 
 export { toolSummary };
@@ -37,16 +48,7 @@ function GroupCall({
   return <ToolMessage {...call} expanded={expanded || opensAlone} />;
 }
 
-export function ToolGroup({
-  rows,
-  ownerSessionId,
-  expanded,
-  showThinking = true,
-  onFile,
-  onAgent,
-  turn,
-  children,
-}: {
+interface ToolGroupProps {
   rows: Message[];
   ownerSessionId?: string;
   expanded: boolean;
@@ -56,7 +58,18 @@ export function ToolGroup({
   /** The turn under way, when these are its latest tools: its clock goes on their row. */
   turn?: NonNullable<Session['turn']>;
   children?: ReactNode;
-}) {
+}
+function ToolGroupRow({
+  rows,
+  ownerSessionId,
+  expanded,
+  showThinking = true,
+  onFile,
+  onAgent,
+  turn,
+  children,
+}: ToolGroupProps) {
+  useLocale();
   const tools = rows.flatMap((row) => (row.tool ? [row.tool] : []));
   // A call with no result in an old session stays 'unknown'; only these are live.
   const runningTool = tools.some((tool) => tool.status === 'running');
@@ -86,22 +99,24 @@ export function ToolGroup({
     'group:' + rows[0]?.id,
     expanded,
   );
-  const { snapshot } = useRuntime();
   const summary = toolSummary(rows);
   // The way into a subagent stays in view however the line is folded.
-  const agents = [
-    ...new Map(
-      tools
-        .flatMap((tool) =>
-          mappedToolAgents(
-            tool,
-            snapshot.agents,
-            ownerSessionId ?? currentSession(snapshot).id,
-          ),
-        )
-        .map((agent) => [agent.id, agent]),
-    ).values(),
-  ];
+  const agents = useRuntimeSelector(
+    (snapshot) => [
+      ...new Map(
+        tools
+          .flatMap((tool) =>
+            mappedToolAgents(
+              tool,
+              snapshot.agents,
+              ownerSessionId ?? currentSession(snapshot).id,
+            ),
+          )
+          .map((agent) => [agent.id, agent]),
+      ).values(),
+    ],
+    sameToolAgents,
+  );
   const separator = locale() === 'zh-CN' ? '，' : ', ';
   const running = tools.find((tool) => tool.status === 'running');
   // A picture a tool brought back, such as the browser's screenshot, belongs to the
@@ -212,6 +227,24 @@ export function ToolGroup({
     </div>
   );
 }
+
+/**
+ * It renders when its rows change, not with each publication. The list of rows is built
+ * again whenever the transcript changes; the rows in it are the same objects.
+ */
+export const ToolGroup = memo(
+  ToolGroupRow,
+  (one, other) =>
+    one.rows.length === other.rows.length &&
+    one.rows.every((row, index) => row === other.rows[index]) &&
+    one.ownerSessionId === other.ownerSessionId &&
+    one.expanded === other.expanded &&
+    one.showThinking === other.showThinking &&
+    one.onFile === other.onFile &&
+    one.onAgent === other.onAgent &&
+    one.turn === other.turn &&
+    one.children === other.children,
+);
 
 function GroupThinking({ row }: { row: Message }) {
   const [open, setOpen] = useSessionDisclosure('thinking:' + row.id);

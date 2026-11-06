@@ -22,7 +22,7 @@ import {
 import type { AgentRecord, ToolCall } from '../model/types';
 import { agentState } from '../model/activity';
 import { internalToolTitle } from '../model/tool-summary';
-import { useRuntime } from '../app/context';
+import { useRuntimeActions, useRuntimeSelector } from '../app/context';
 import { DataBlock, IconButton, Status } from './common';
 import { DiffBlock } from './DiffBlock';
 import { t } from '../i18n';
@@ -79,8 +79,23 @@ export function mappedToolAgents(
     ...(tool.agentIds ?? []),
     ...(tool.agentId ? [tool.agentId] : []),
   ]);
+  if (!ids.size) return [];
   return agents.filter(
     (agent) => agent.sessionId === ownerSessionId && ids.has(agent.id),
+  );
+}
+/** Whether two lists read the same in AgentToolLinks: rows are rebuilt each publication. */
+export function sameToolAgents(one: AgentRecord[], other: AgentRecord[]) {
+  return (
+    one.length === other.length &&
+    one.every((agent, index) => {
+      const next = other[index]!;
+      return (
+        agent.id === next.id &&
+        agent.name === next.name &&
+        agentState(agent) === agentState(next)
+      );
+    })
   );
 }
 export function AgentToolLinks({
@@ -150,7 +165,7 @@ function KnowledgeToolMessage({
   expanded,
 }: Pick<ToolMessageProps, 'tool' | 'expanded'>) {
   const [open, setOpen] = useSessionDisclosure('tool:' + tool.id, expanded);
-  const { notify } = useRuntime();
+  const { notify } = useRuntimeActions();
   const shownOutput = shownToolOutput(tool.output);
   const target = knowledgeToolTarget(tool.name, tool.input, tool.output);
   const result = knowledgeToolResult(tool.name, tool.output, tool.status);
@@ -247,15 +262,22 @@ function GenericToolMessage({
     () => structuredTextOutput(withoutHookAllowedLine(tool.output)),
     [tool.output],
   );
-  const { notify, runtime, snapshot } = useRuntime();
-  const childAgents = mappedToolAgents(
-    tool,
-    snapshot.agents,
-    ownerSessionId ?? currentSession(snapshot).id,
+  const { notify, runtime } = useRuntimeActions();
+  const childAgents = useRuntimeSelector(
+    (snapshot) =>
+      mappedToolAgents(
+        tool,
+        snapshot.agents,
+        ownerSessionId ?? currentSession(snapshot).id,
+      ),
+    sameToolAgents,
   );
-  const root = snapshot.workspaces.find(
-    (workspace) => workspace.id === currentSession(snapshot).workspaceId,
-  )?.path;
+  const root = useRuntimeSelector(
+    (snapshot) =>
+      snapshot.workspaces.find(
+        (workspace) => workspace.id === currentSession(snapshot).workspaceId,
+      )?.path,
+  );
   const Icon = AGENT_TOOLS.has(tool.name)
     ? Users
     : ['execute', '!', '!!'].includes(tool.name)
@@ -341,7 +363,8 @@ function GenericToolMessage({
                   setTerminalError('');
                   try {
                     const source =
-                      ownerSessionId ?? currentSession(snapshot).id;
+                      ownerSessionId ??
+                      currentSession(runtime.getSnapshot()).id;
                     if (userShellId)
                       await openUserShellTerminal!(
                         source,

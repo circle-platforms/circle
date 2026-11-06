@@ -20,6 +20,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'safe-file-undo-ui.mjs',
   'conversation-folding-ui.mjs',
   'markdown-render-ui.mjs',
+  'transcript-rows-ui.mjs',
   'large-file-tree-ui.mjs',
   'recovered-input-ui.mjs',
   'child-terminal-rendered-match-ui.mjs',

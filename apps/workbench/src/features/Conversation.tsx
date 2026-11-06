@@ -46,6 +46,7 @@ import { Markdown } from '../components/Markdown';
 import { ToolGroup, TurnRow } from '../components/ToolGroup';
 import { RecoveredInputs } from './RecoveredInputs';
 import { WindowedList } from '../components/WindowedList';
+import { useStableCallback } from '../app/stable-callback';
 import type { ReactNode, RefObject } from 'react';
 import { MessageView, RuntimeNotice } from '../components/MessageView';
 import {
@@ -221,6 +222,10 @@ export function Conversation({
   setFinding,
 }: Props) {
   const { snapshot, runtime, perform, act, notify } = useRuntime();
+  // What the rows are given stays the same object, so that they can skip a publication.
+  const openAgent = useStableCallback(onAgent);
+  const openFile = useStableCallback(onFile);
+  const today = new Date().toDateString();
   const sources = useSources();
   const session = currentSession(snapshot);
   const { registry, enabled } = usePlugins();
@@ -752,6 +757,30 @@ export function Conversation({
       )
     );
   };
+  // None, in nearly every row: no new empty list to tell the row it has changed.
+  const requestsOf = (rows: Message[]) => {
+    const asking = pending.filter(
+      (request) =>
+        request.kind === 'approval' &&
+        !!request.callId &&
+        rows.some((row) => row.tool?.id === request.callId),
+    );
+    return asking.length
+      ? asking.map((request) => (
+          <InlineRequest
+            key={request.id}
+            item={request}
+            onFile={onFile}
+            onSecret={() => onDialog('secret')}
+            onSettled={() =>
+              requestAnimationFrame(() =>
+                input.current?.focus({ preventScroll: true }),
+              )
+            }
+          />
+        ))
+      : undefined;
+  };
   const clock =
     session.compaction?.status !== 'running' &&
     showTurnClock(messages, pending.length, session.turn)
@@ -877,32 +906,11 @@ export function Conversation({
                           ))
                       }
                       showThinking={session.showThinking}
-                      onAgent={onAgent}
-                      onFile={onFile}
+                      onAgent={openAgent}
+                      onFile={openFile}
                       turn={index === clockAt ? clock : undefined}
                     >
-                      {pending
-                        .filter(
-                          (request) =>
-                            request.kind === 'approval' &&
-                            !!request.callId &&
-                            item.rows.some(
-                              (row) => row.tool?.id === request.callId,
-                            ),
-                        )
-                        .map((request) => (
-                          <InlineRequest
-                            key={request.id}
-                            item={request}
-                            onFile={onFile}
-                            onSecret={() => onDialog('secret')}
-                            onSettled={() =>
-                              requestAnimationFrame(() =>
-                                input.current?.focus({ preventScroll: true }),
-                              )
-                            }
-                          />
-                        ))}
+                      {requestsOf(item.rows)}
                     </ToolGroup>
                     {fileUndo(index) && (
                       <div className="message-meta turn-foot">
@@ -949,6 +957,7 @@ export function Conversation({
                             items[index + 1]?.kind === 'tools')
                         }
                         footer={fileUndo(index)}
+                        day={today}
                       />
                     )}
                   </div>

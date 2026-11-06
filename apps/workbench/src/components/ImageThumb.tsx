@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Copy, Download } from 'lucide-react';
 import { copyImage, saveImage } from '../host';
 import { t } from '../i18n';
-import { useRuntime } from '../app/context';
+import { useRuntimeActions } from '../app/context';
 import type { Attachment } from '../model/types';
 import { Button, Modal } from './common';
 import '../styles/image-thumb.css';
@@ -27,7 +27,7 @@ export function ImageThumb({
   /** What the picture is of, shown beside its name in the window. */
   caption?: string;
 }) {
-  const { notify } = useRuntime();
+  const { notify } = useRuntimeActions();
   const [open, setOpen] = useState(false);
   const source = imageSource(attachment);
   const name = attachment.name || t('screenshot');
