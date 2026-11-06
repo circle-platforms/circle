@@ -345,14 +345,14 @@
 .jobs-list {
   flex: 1;
   min-height: 0;
-  padding: 8px 12px 16px;
+  padding: 4px 8px 16px;
   overflow-y: auto;
 }
 .jobs-list > section + section {
-  margin-top: 14px;
+  margin-top: 12px;
 }
 .jobs-list h3 {
-  margin: 4px 4px 8px;
+  margin: 6px 8px 4px;
   color: var(--muted);
   font-size: var(--ui-small);
   font-weight: 500;
@@ -369,15 +369,21 @@
   cursor: pointer;
 }
 .jobs-card {
-  margin-bottom: 6px;
-  border-radius: 10px;
+  border-radius: 6px;
+}
+.jobs-card[data-open] {
+  margin-block: 2px;
   background: var(--subtle);
 }
 .jobs-card-head {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding-right: 6px;
+  padding-right: 4px;
+  border-radius: 6px;
+}
+.jobs-card-head:hover {
+  background: var(--hover);
 }
 .jobs-card-toggle {
   display: flex;
@@ -385,7 +391,7 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  padding: 9px 10px;
+  padding: 6px 8px;
   border: 0;
   background: none;
   color: var(--fg);
@@ -408,16 +414,39 @@
 .jobs-time {
   flex: none;
   color: var(--muted);
-  font-size: var(--ui-small);
+  font-size: var(--ui-tiny);
   font-variant-numeric: tabular-nums;
 }
+/* Under the title, past the chevron and the dot. */
+.jobs-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 10px 10px 39px;
+}
+.jobs-command,
 .jobs-output {
-  max-height: 320px;
   margin: 0;
-  padding: 0 14px 12px 30px;
   overflow: auto;
-  color: var(--secondary);
-  font: 400 var(--mono-small) / 1.6 var(--mono);
+  font: 400 var(--ui-tiny) / 1.5 var(--mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.jobs-command {
+  max-height: 72px;
+  color: var(--muted);
+}
+.jobs-output {
+  max-height: 280px;
+  color: var(--secondary);
+}
+.jobs-open-terminal {
+  align-self: flex-start;
+  padding: 0;
+  font-size: var(--ui-tiny);
+}
+.jobs-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
 }

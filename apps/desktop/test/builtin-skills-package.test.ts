@@ -45,7 +45,7 @@ const nativeBinaries: Plugin = {
   },
 };
 // The worker as a utility process runs it: process.parentPort carries the commands. One
-// prompt, then close once the scripted answer is in the snapshot.
+// prompt, then close once the scripted answer has been published.
 const wrapper = `
 let listener, prompted = false;
 setTimeout(() => { console.log('WORKER_TIMEOUT'); process.exit(3); }, 60000).unref();
@@ -57,7 +57,7 @@ Object.defineProperty(process, 'parentPort', { value: {
       console.log('SKILLS=' + JSON.stringify(message.update.snapshot.skills.map(({ name, scope, path }) => ({ name, scope, path }))));
       queueMicrotask(() => listener({ data: { id: 'prompt', name: 'prompt', sessionId: message.update.snapshot.activeSessionId, payload: { text: 'open a pull request' } } }));
     }
-    if (message.type === 'update' && message.update.snapshot.sessions.some((session) => session.messages.some((item) => item.text === 'packaged skill answered')))
+    if (message.type === 'update' && (message.update.history?.deltas ?? []).some((delta) => delta.messages.some((item) => item.text === 'packaged skill answered')))
       queueMicrotask(() => listener({ data: { id: 'finish', name: 'close', payload: {} } }));
     if (message.type === 'reply' && message.reply.id === 'finish') { console.log('WORKER_DONE'); process.exit(0); }
   },

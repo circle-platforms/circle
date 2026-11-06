@@ -257,10 +257,20 @@ test(
         resolution.target.executionSessionId,
         child!.runtimeSessionId,
       );
-      const listing = await call<
-        CommandTerminalCommandReply<TerminalSnapshot[]>
-      >('terminal', 'command', { target: resolution.target, action: 'list' });
-      assert.equal(listing.available, true);
+      // The command writes its pid file before its supervisor has reported the pid, so
+      // the terminal learns it a moment later: wait for that state, not for the file.
+      let listing!: CommandTerminalCommandReply<TerminalSnapshot[]>;
+      await until(async () => {
+        listing = await call<CommandTerminalCommandReply<TerminalSnapshot[]>>(
+          'terminal',
+          'command',
+          { target: resolution.target, action: 'list' },
+        );
+        return (
+          listing.available &&
+          listing.value[0]!.managedCommand!.commandPid !== undefined
+        );
+      }, 'the terminal records the process of the command');
       if (!listing.available) throw Error('missing original command');
       assert.equal(listing.value[0]!.managedCommand!.commandPid, pid);
       assert.equal(listing.value[0]!.id, resolution.target.terminal.id);

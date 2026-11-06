@@ -1,6 +1,6 @@
 import { formatRuntimeNotice } from '../model/runtime-notice';
 import { Brain, ChevronRight, Copy } from 'lucide-react';
-import { useRuntime } from '../app/context';
+import { useRuntime, useRuntimeActions } from '../app/context';
 import { copyText } from '../host';
 import type { Message } from '../model/types';
 import { formatBusyElapsed } from '../model/format';
@@ -13,8 +13,9 @@ import {
   thinkingHeadline,
 } from '../model/thinking';
 import { Markdown } from './Markdown';
-import { t } from '../i18n';
+import { t, useLocale } from '../i18n';
 import { useSources } from './SourceNavigation';
+import { memo, type ReactNode } from 'react';
 import { interruptedLabel } from '../model/completion';
 import { useSessionDisclosure } from '../model/presentation';
 import { ToolMessage } from './ToolMessage';
@@ -40,18 +41,28 @@ export function shownMessageText(message: Message): string {
 /**
  * A message as Claude shows one: yours in a bubble on the right, Circle's as plain text
  * with its thinking folded. The time, the usage and a copy button sit on one row under it.
+ * It renders when the message changes, not with each publication.
  */
-export function MessageView({
+export const MessageView = memo(function MessageView({
   message,
   showThinking,
+  interim,
+  footer,
   onAttachment,
 }: {
   message: Message;
   showThinking: boolean;
+  /** Words on the way to more work: they read with what follows, the row shows on hover. */
+  interim?: boolean;
+  /** An action for the turn that ends here, on the row of its time and usage. */
+  footer?: ReactNode;
   /** Used where no preview window is provided. */
   onAttachment?: () => void;
+  /** Today, so that a time written as today's gains its date after midnight. */
+  day?: string;
 }) {
-  const { notify } = useRuntime();
+  useLocale();
+  const { notify } = useRuntimeActions();
   const sources = useSources();
   const [thinkingOpen, setThinkingOpen] = useSessionDisclosure(
     'thinking:' + message.id,
@@ -59,7 +70,10 @@ export function MessageView({
   const preview = thinkingHeadline(message.thinking);
   const opens = thinkingHasBody(message.thinking);
   return (
-    <article className={`message ${message.role}`}>
+    <article
+      className={`message ${message.role}`}
+      data-interim={interim || undefined}
+    >
       {message.thinking && showThinking && (
         <details
           className="thinking"
@@ -174,13 +188,14 @@ export function MessageView({
             <Copy size={12} />
           </IconButton>
         )}
+        {footer}
       </div>
       {message.interrupted && (
         <div className="transcript-notice">{interruptedLabel()}</div>
       )}
     </article>
   );
-}
+});
 
 const usageText = (usage: NonNullable<Message['usage']>) =>
   [

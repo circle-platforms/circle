@@ -21,6 +21,10 @@ const WORDS = {
     cache: 'cache',
     waitingApproval: 'needs approval',
     waiting: 'waiting for you',
+    done: 'done',
+    failed: 'failed',
+    stopped: 'stopped',
+    twoMore: 'show 2 more',
   },
   'zh-CN': {
     plan: '计划',
@@ -32,6 +36,10 @@ const WORDS = {
     // The words of the design's overview board.
     waitingApproval: '等待批准中',
     waiting: '等待回应中',
+    done: '完成',
+    failed: '失败',
+    stopped: '已停止',
+    twoMore: '再显示 2 个',
   },
 };
 // How a row of the in progress card fits: anything past the row's or the card's right
@@ -93,6 +101,115 @@ try {
         exact: true,
       }),
     });
+
+    // The background jobs card: a job that ends keeps its row and says how it ended.
+    const jobsCard = page.locator(
+      'section.overview-card[aria-labelledby="overview-jobs"]',
+    );
+    const setJobs = (jobs) =>
+      page.evaluate((rows) => {
+        window.readabilityFixture.runtime.change((state) => {
+          state.jobs = rows.map((row) => ({
+            sessionId: 'session1',
+            kind: 'command',
+            title: `Verify ${row.id}`,
+            command: `npm run ${row.id}`,
+            elapsed: '7m 27s',
+            output: '',
+            outputPath: '',
+            stopRequested: false,
+            ...row,
+          }));
+        });
+      }, jobs);
+    const jobEnds = () =>
+      jobsCard.locator('.overview-row').evaluateAll((rows) =>
+        rows.map((row) => ({
+          name: row.querySelector('.overview-name').textContent,
+          end: row.querySelector('.overview-end-text').textContent,
+          tooltip: row.querySelector('.overview-end-text').title,
+          dot: row.querySelector('.overview-dot').dataset.state,
+        })),
+      );
+    await setJobs([{ id: 'suite', state: 'running' }]);
+    await jobsCard.waitFor();
+    assert.equal(
+      await jobsCard.locator('.overview-summary').textContent(),
+      '1',
+    );
+    assert.deepEqual(await jobEnds(), [
+      { name: 'Verify suite', end: '7m 27s', tooltip: '7m 27s', dot: 'run' },
+    ]);
+    await setJobs([{ id: 'suite', state: 'completed' }]);
+    await jobsCard.getByText(words.done, { exact: true }).waitFor();
+    assert.deepEqual(await jobEnds(), [
+      { name: 'Verify suite', end: words.done, tooltip: '7m 27s', dot: 'done' },
+    ]);
+    assert.equal(
+      await jobsCard.locator('.overview-summary').count(),
+      0,
+      'with none running the card counts nothing',
+    );
+    // Running jobs first; of those that ended the latest come first and three show.
+    await setJobs([
+      { id: 'one', state: 'completed' },
+      { id: 'two', state: 'completed' },
+      { id: 'three', state: 'cancelled' },
+      { id: 'four', state: 'failed' },
+      { id: 'five', state: 'completed' },
+      { id: 'six', state: 'running' },
+    ]);
+    await jobsCard.getByText('Verify six', { exact: true }).waitFor();
+    assert.deepEqual(
+      (await jobEnds()).map((row) => [row.name, row.end, row.dot]),
+      [
+        ['Verify six', '7m 27s', 'run'],
+        ['Verify five', words.done, 'done'],
+        ['Verify four', words.failed, 'fail'],
+        ['Verify three', words.stopped, 'idle'],
+      ],
+    );
+    assert.equal(
+      await jobsCard.locator('.overview-summary').textContent(),
+      '1',
+    );
+    await jobsCard.getByRole('button', { name: words.twoMore }).click();
+    await jobsCard.getByText('Verify one', { exact: true }).waitFor();
+    assert.equal((await jobEnds()).length, 6);
+    // A row opens the mode, where the job's text is small and monospaced.
+    await setJobs([
+      {
+        id: 'suite',
+        state: 'completed',
+        output: 'suite output',
+      },
+    ]);
+    await jobsCard.locator('.overview-row').click();
+    const jobOutput = page.locator('.jobs-output');
+    await jobOutput.waitFor();
+    const jobText = await page.evaluate(() => {
+      const font = (selector) => {
+        const style = getComputedStyle(document.querySelector(selector));
+        return { size: parseFloat(style.fontSize), family: style.fontFamily };
+      };
+      return {
+        title: font('.jobs-card .jobs-title'),
+        command: font('.jobs-command'),
+        output: font('.jobs-output'),
+      };
+    });
+    assert.equal(
+      await page.locator('.jobs-command').innerText(),
+      '$ npm run suite',
+    );
+    assert.match(jobText.output.family, /mono/i);
+    assert.match(jobText.command.family, /mono/i);
+    assert(jobText.output.size < jobText.title.size, JSON.stringify(jobText));
+    assert.deepEqual(errors, []);
+    await page.reload();
+    await page.locator('.overview-column .overview-card').first().waitFor();
+    await setJobs([]);
+    await jobsCard.waitFor({ state: 'detached' });
 
     // A plan whose every step is done is not in progress: with nothing else at work
     // there is no card at all.

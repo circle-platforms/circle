@@ -88,7 +88,9 @@ test('session UI is isolated, survives full updates and rejects secret/core fiel
     runtime.updateSessionView(a.id, { draft: 'draft A', showThinking: false });
     runtime.updateSessionView(b.id, {
       draft: 'draft B',
-      presentation: { toolTabs: { 'b-tool': 'output' } },
+      presentation: {
+        disclosures: { 'tool:b-tool': { open: true, defaultOpen: false } },
+      },
     });
     assert.throws(
       () =>
@@ -119,8 +121,8 @@ test('session UI is isolated, survives full updates and rejects secret/core fiel
     );
     assert.equal(
       runtime.getSnapshot().sessions.find((s) => s.id === b.id)!.presentation!
-        .toolTabs?.['b-tool'],
-      'output',
+        .disclosures?.['tool:b-tool']?.open,
+      true,
     );
     assert.equal(
       runtime.updateSessionView('removed-session', {

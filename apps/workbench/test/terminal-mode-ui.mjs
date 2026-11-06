@@ -63,7 +63,7 @@ try {
   {
     const { page, errors } = await open(browser, 'light', 'en');
     await page.waitForFunction(
-      () => document.querySelectorAll('.term-tab-main').length === 5,
+      () => document.querySelectorAll('.term-tab-main').length === 4,
     );
     // The row follows when each tab came to be, not what kind of tab it is: a
     // console opened after a shell stands after it, not in front of it.
@@ -71,13 +71,17 @@ try {
       'terminal 1',
       'terminal 2',
       'core-switch · SSH',
-      'npm run test -- reconnect',
       'rack-pdu · Telnet',
     ]);
-    // A command Circle runs in the foreground has a terminal and no tab; the
-    // background jobs button counts the commands that run in the background,
-    // and the terminal button carries no count.
+    // A command Circle runs has a terminal and no tab, in the foreground or in the
+    // background: the background jobs button counts the ones in the background, the
+    // mode lists them, and the terminal button carries no count.
     assert.equal((await names(page)).includes('ls -la'), false);
+    assert.equal(
+      (await names(page)).includes('npm run test -- reconnect'),
+      false,
+      'a background command is not shown twice',
+    );
     assert.equal(
       await page
         .getByRole('button', { name: 'background jobs panel', exact: true })
@@ -92,26 +96,6 @@ try {
         .count(),
       0,
     );
-    // A command Circle runs in the background: in front, ringed in blue, with its dot and
-    // its stop, and no way to close it while it runs.
-    const command = page.getByRole('tab', {
-      name: 'npm run test -- reconnect',
-    });
-    assert.equal(await command.getAttribute('aria-selected'), 'true');
-    assert.equal(
-      await page.locator('.term-frame').getAttribute('data-frame'),
-      'run',
-    );
-    assert.equal(
-      await command.locator('.term-dot').getAttribute('data-state'),
-      'run',
-    );
-    assert.equal(
-      await page.locator('.term-tab.on .term-tab-x').count(),
-      0,
-      'a running command has no close',
-    );
-    await page.screenshot({ path: `${output}/command-light-en.png` });
     // A shell of yours: no ring, no dot, a close; its menu has the terminal's own actions.
     await page.getByRole('tab', { name: 'terminal 1' }).click();
     assert.equal(
@@ -495,32 +479,6 @@ try {
     );
     assert.equal((await calls(page, 'terminal.close')).length, 1);
 
-    // The command ends: its dot is a ring, the stop goes, the close comes, the blue goes.
-    await page.getByRole('tab', { name: 'npm run test -- reconnect' }).click();
-    await page.evaluate(() => window.terminalModeFixture.endCommand(0));
-    await page.waitForFunction(
-      () =>
-        document
-          .querySelector('.term-tab.on .term-dot')
-          ?.getAttribute('data-state') === 'done',
-    );
-    assert.equal(
-      await page.getByRole('button', { name: 'stop', exact: true }).count(),
-      0,
-    );
-    assert.equal(
-      await page.locator('.term-frame').getAttribute('data-frame'),
-      '',
-    );
-    await page
-      .getByRole('button', { name: 'close npm run test -- reconnect' })
-      .click();
-    await page.waitForFunction(
-      () =>
-        ![...document.querySelectorAll('.term-tab-main')].some((node) =>
-          node.textContent.includes('npm run test'),
-        ),
-    );
     // A bulk close from a tab's menu is the person's choice already: it closes
     // every console on the row without asking once per machine.
     await page
@@ -555,14 +513,13 @@ try {
   ]) {
     const { page, errors } = await open(browser, theme, locale);
     await page.waitForFunction(
-      () => document.querySelectorAll('.term-tab-main').length === 5,
+      () => document.querySelectorAll('.term-tab-main').length === 4,
     );
     const zh = locale === 'zh-CN';
     assert.deepEqual(await names(page), [
       zh ? '终端 1' : 'terminal 1',
       zh ? '终端 2' : 'terminal 2',
       'core-switch · SSH',
-      'npm run test -- reconnect',
       'rack-pdu · Telnet',
     ]);
     await page.getByRole('tab', { name: /rack-pdu/ }).click();

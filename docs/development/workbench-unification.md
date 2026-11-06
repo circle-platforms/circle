@@ -31,7 +31,10 @@ The owner set these rules on 2026-11-05, after the graphite restyle of #405 was 
 - A ChatGPT plan is not marked apart from other connections and shows no cost anywhere.
 - Tool calls of steps with nothing to read between them fold into one line; a thinking-only step joins them. Opened, the line lists the calls with each step's thinking; a call opens to its command and output.
 - The thinking line shows the newest heading of the summary without markdown marks; headings alone do not open.
-- The model's short update before its calls (its `commentary` channel) names their folded line, and shows in order among them when opened. An update with no call after it stays readable as it is. A ChatGPT plan's reasoning summary is often headings alone (openai/codex#34873); this is how a step says what it does in words.
+- Words written for the person always show. The model's updates (its `commentary` channel) are ordinary text and each starts a new folded line, so every model shows a run the same way, with or without that channel. The owner decided this on 2026-11-06, after #441 folded the updates into the tool line and hid what the model had found. A ChatGPT plan's reasoning summary is often headings alone (openai/codex#34873); these updates are how a step says what it does.
+- The folded line says what happened: one finished call by its description or `$ command`, up to three edited files by name, Circle's own tools by what they do, and a failure first and in red. Opened, a browser or terminal call's row says which action it was. A subagent's link shows under the line however it is folded. A plan update alone is the only time `write_todos` gets a word, and that word is not its name.
+- A call opens to `$ command` over its output, with no tabs, as a background job's card does; another tool's arguments are folded under its output. A line of one call opens that call.
+- **Undo file changes** is a text action on the row of the time and usage at the end of a finished turn, shown on the newest turn and on hover on older ones. A session at work offers none.
 - A turn's time, tokens and cost show once, under its last message, as the turn's total.
 - Switching the mode raises no notice; the mode button names the mode and its menu explains each one.
 - Queued messages are one panel above the message box, as Claude shows them: a folding `N messages queued` heading, one row per message with a ⋯ menu (edit, remove) and **clear all** at the foot. The rows carry no steering or follow-up label, and the word 插话 is not used. They cannot be reordered, since the runtime keeps their order.
@@ -56,11 +59,11 @@ An empty mode uses [PaneEmpty](../../apps/workbench/src/components/ui.tsx) and n
 | files           | 文件         | 显示当前工作文件夹中的文件     |
 | changes         | 改动         | 显示当前工作文件夹中的所有改动 |
 | browser         | 网页         | 使用内置浏览器进行控制和访问   |
-| terminal        | 终端         | 显示当前的后台任务或创建新终端 |
+| terminal        | 终端         | 创建新终端或连接设备           |
 | subagents       | 子代理       | 控制和查看当前运行的所有子代理 |
 | background jobs | 后台任务     | 显示 Circle 在后台运行的命令   |
 
-**Background jobs** are Circle's own background commands, apart from the terminals the person opens. They have their own mode and icon, between subagents and terminal, which carries the count of running jobs, and their own overview card; a row of the card opens the mode on that job. The mode lists running jobs, then finished ones under a folding heading, each a card named by the model's short `description` (or else its command), with its time and, while it runs, a stop button. A card opens to `$ command` and the end of its output. The terminal carries no count.
+**Background jobs** are Circle's own background commands, apart from the terminals the person opens. They have their own mode and icon, between subagents and terminal, which carries the count of running jobs, and their own overview card, which lists the running jobs, then the three that ended last, each saying how it ended; a row of the card opens the mode on that job. The mode lists running jobs, then finished ones under a folding heading, each a row named by the model's short `description` (or else its command), with its state's dot, its time and, while it runs, a stop button, as a subagent's row. A row opens to `$ command` over the end of its output, in small monospaced text without terminal control codes. A background command has no terminal tab, so the same thing is not shown twice; **open in terminal** on its row opens the terminal of that one command. The terminal carries no count.
 
 Status lines that say nothing useful are not shown, such as a loaded-file count. A field shows its whole text; an input is as tall as its field.
 
@@ -123,7 +126,7 @@ The [independent verifier](../../apps/desktop/src/workspace/task-verification.ts
 
 ## File undo is a separate, bounded operation
 
-The message's **undo file changes** action uses [SafeFileUndo](../../apps/workbench/src/features/SafeFileUndo.tsx), the controller's `preview-file-undo` / `restore-turn-files` requests, and [FileRewindJournal](../../src/file_rewind.ts). It is separate from `/undo` and conversation-tree navigation.
+The turn's **undo file changes** action uses [SafeFileUndo](../../apps/workbench/src/features/SafeFileUndo.tsx), the controller's `preview-file-undo` / `restore-turn-files` requests, and [FileRewindJournal](../../src/file_rewind.ts). It is separate from `/undo` and conversation-tree navigation.
 
 The journal records before/after versions only for text-tool mutations attached to an actual turn in the current runtime. The user first previews the affected paths, then explicitly confirms restoration. The host checks every current revision again before restoring. External changes, an incomplete journal or an unsupported backend prevent restoration. Plan mode allows preview but refuses restoration.
 

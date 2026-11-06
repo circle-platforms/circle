@@ -525,13 +525,22 @@ const nativeUrls = () =>
 // Close one named tab from its own page, as a page's script does. The call
 // resolves when the page has run `window.close()`, so a refused close is
 // settled before the tab list is read.
-const closeView = (title) =>
-  app.evaluate(async ({ BrowserWindow }, name) => {
+const closeView = async (title) => {
+  // A tab is listed as soon as it opens, before its page has given it a title.
+  await waitFor(
+    () =>
+      app.evaluate(({ BrowserWindow }, name) => {
+        const views = BrowserWindow.getAllWindows()[0].contentView.children;
+        return views.some((entry) => entry.webContents.getTitle() === name);
+      }, title),
+    `a tab titled ${title}`,
+  );
+  await app.evaluate(async ({ BrowserWindow }, name) => {
     const views = BrowserWindow.getAllWindows()[0].contentView.children;
     const view = views.find((entry) => entry.webContents.getTitle() === name);
-    if (!view) throw Error(`no tab titled ${name}`);
     await view.webContents.executeJavaScript('window.close()');
   }, title);
+};
 // The tab’s own back-forward list, as Chromium holds it
 const nativeHistory = () =>
   app.evaluate(({ BrowserWindow }) => {

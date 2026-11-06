@@ -899,10 +899,28 @@ test('connected account exposes repository tools without a local allowlist and d
     );
     f.connection.assertGrant(state.epoch, 'fixture/repo');
     f.connection.assertGrant(state.epoch, 'another/repo');
-    assert.throws(
-      () => f.connection.assertGrant(state.epoch, '../invalid'),
-      /permission changed/,
-    );
+    for (const repository of [
+      '../invalid',
+      './repo',
+      'fixture/..',
+      'fixture/.',
+      'fixture/repo/extra',
+      'fixture/repo?query',
+      '-owner/repo',
+    ]) {
+      assert.throws(
+        () => f.connection.assertGrant(state.epoch, repository),
+        /permission changed/,
+      );
+      await assert.rejects(
+        backend.call('candidate', { epoch: state.epoch, repository }),
+        /invalid GitHub task scope/,
+      );
+    }
+    for (const repository of ['octo_corp/repo', 'old-/repo', 'fixture/re.po'])
+      assert.doesNotThrow(() =>
+        f.connection.assertGrant(state.epoch, repository),
+      );
     const metadata = path.join(f.root, 'profile', 'github-connection.json');
     const saved = JSON.parse(await readFile(metadata, 'utf8'));
     assert.equal(saved.accessPolicy, 'github-account');

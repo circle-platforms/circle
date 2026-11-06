@@ -1,5 +1,6 @@
 import { validateKnowledgeRequest } from '../../../src/knowledge/desktop-contract';
 import type { WorkbenchSnapshot } from '../../workbench/src/model/types';
+import type { RuntimeHistory } from './runtime-history-wire';
 
 export type RuntimeCommandName =
   | 'knowledge'
@@ -87,6 +88,8 @@ export interface RuntimeUpdate {
   snapshot: WorkbenchSnapshot;
   /** Cursor of the separate token channel included in this authoritative snapshot. */
   tokenStream?: { epoch: string; seq: number };
+  /** Set when the worker sent this: how to read stored history, left out of `snapshot`. */
+  history?: RuntimeHistory;
   event?: {
     kind: string;
     sessionId: string;

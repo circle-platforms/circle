@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { RuntimeSupervisor as Supervisor } from '../src/runtime-supervisor.ts';
 import type { WorkspaceServiceEvent } from '../src/workspace-protocol.ts';
 import type { RuntimeUpdate } from '../src/runtime-protocol.ts';
+import { HistoryCompactor } from '../src/runtime-history-wire.ts';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -428,6 +429,73 @@ test('runtime exit retires stale execution claims and rejects further commands w
       /disconnected/,
     );
     assert.equal(running.state, 'waiting', 'source snapshot is immutable');
+  }));
+
+test('the supervisor holds whole history, hands windows what changed, and asks again when it has lost its place', () =>
+  fixture(async (supervisor, child) => {
+    const compactor = new HistoryCompactor();
+    const row = (id: string) => ({
+      id,
+      parentId: null,
+      role: 'user' as const,
+      text: id,
+      at: 'fixture',
+    });
+    const update = (seq: number, messages: ReturnType<typeof row>[]) =>
+      ({
+        seq,
+        connected: true,
+        tokenStream: { epoch: 'epoch-0', seq: 0 },
+        snapshot: {
+          sessions: [{ id: 's', messages, branchIds: [] }],
+          agents: [],
+          runtime: { connected: true },
+        },
+      }) as unknown as RuntimeUpdate;
+    const seen: { update: RuntimeUpdate; sent?: RuntimeUpdate }[] = [];
+    supervisor.subscribe((update, sent) => seen.push({ update, sent }));
+    const send = (value: RuntimeUpdate) =>
+      child.emit('message', { type: 'update', update: value });
+    send(compactor.compact(update(2, [row('one')])));
+    send(compactor.compact(update(3, [row('one'), row('two')])));
+    assert.deepEqual(
+      supervisor.state().snapshot.sessions[0].messages.map((m) => m.id),
+      ['one', 'two'],
+      'a window opened now is given all of it',
+    );
+    assert.deepEqual(
+      seen.at(-1)!.update.snapshot.sessions[0].messages.map((m) => m.id),
+      ['one', 'two'],
+    );
+    const wire = seen.at(-1)!.sent!;
+    assert.deepEqual(wire.snapshot.sessions[0].messages, []);
+    assert.deepEqual(
+      wire.history?.deltas?.[0]?.messages.map((m) => m.id),
+      ['two'],
+      'a window with the rest is sent the new row',
+    );
+    assert.equal(
+      child.sent.some((message) => message.type === 'history-resync'),
+      false,
+    );
+
+    // One the worker made on rows that never arrived: nothing moves, and it sends them again.
+    compactor.compact(update(4, [row('one'), row('two'), row('lost')]));
+    const count = seen.length;
+    send(compactor.compact(update(5, [row('after')])));
+    assert.equal(seen.length, count);
+    assert.equal(supervisor.state().seq, 3);
+    assert.equal(
+      child.sent.filter((message) => message.type === 'history-resync').length,
+      1,
+    );
+    compactor.reset();
+    send(compactor.compact(update(6, [row('after')])));
+    assert.deepEqual(
+      supervisor.state().snapshot.sessions[0].messages.map((m) => m.id),
+      ['after'],
+    );
+    assert.equal(seen.length, count + 1);
   }));
 
 test('public runtime commands cannot smuggle the native file-capability message tag', () =>

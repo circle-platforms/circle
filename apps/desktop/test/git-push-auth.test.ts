@@ -63,6 +63,22 @@ async function gitProbe(args: string[], env: NodeJS.ProcessEnv, cwd: string) {
     clearTimeout(limit);
   }
 }
+test('a repository that is not owner/name gets no credentials', async () => {
+  for (const repository of ['../invalid', '-owner/repo', 'fixture/..'])
+    await assert.rejects(
+      withGitHubPushCredentials(
+        {
+          repository,
+          token: TOKEN,
+          ghPath: 'unused',
+          env: {},
+          assertActive() {},
+        },
+        () => assert.fail('the command must not run'),
+      ),
+      /select an authorized GitHub repository/,
+    );
+});
 test('owned gh credential helper serves only the exact HTTPS repository and cleans private helpers without writing Git configuration', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'circle-private-push-'));
   const env = {

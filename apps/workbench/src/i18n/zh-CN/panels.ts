@@ -124,7 +124,7 @@ export const panels: Record<string, string> = {
   'browse and control pages in the built-in browser':
     '使用内置浏览器进行控制和访问',
   'watch and control the running subagents': '控制和查看当前运行的所有子代理',
-  'background jobs, or a new terminal': '显示当前的后台任务或创建新终端',
+  'a new terminal, or a device console': '创建新终端或连接设备',
   'type a URL': '输入网址',
   'not secure': '不安全',
   'valid until': '有效期截止',

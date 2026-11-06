@@ -1,4 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
+import { useStableCallback } from '../app/stable-callback';
 const CommandTerminal = createContext<
   | ((
       sourceSessionId: string,
@@ -33,9 +34,18 @@ export function CommandTerminalNavigation({
   ) => Promise<void>;
   children: ReactNode;
 }) {
+  // Rows read these: the application's own render must not make them render again.
+  const open = useStableCallback(
+    (sourceSessionId: string, toolCallId: string, trigger?: HTMLElement) =>
+      onOpen!(sourceSessionId, toolCallId, trigger),
+  );
+  const openUserShell = useStableCallback(
+    (sourceSessionId: string, userShellId: string, trigger?: HTMLElement) =>
+      onOpenUserShell!(sourceSessionId, userShellId, trigger),
+  );
   return (
-    <CommandTerminal.Provider value={onOpen}>
-      <UserShellTerminal.Provider value={onOpenUserShell}>
+    <CommandTerminal.Provider value={onOpen && open}>
+      <UserShellTerminal.Provider value={onOpenUserShell && openUserShell}>
         {children}
       </UserShellTerminal.Provider>
     </CommandTerminal.Provider>

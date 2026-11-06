@@ -1,5 +1,15 @@
 /** Explicit additions to the bundled GitHub CLI device grant, not its default scope set. */
 export const GITHUB_ADDITIONAL_SCOPES = ['workflow'] as const;
+/**
+ * `owner/name`, as a command argument and a path may carry it. An owner may hold an
+ * underscore or end in a hyphen: managed accounts and some old ones do.
+ */
+export function isGitHubRepository(value: string): boolean {
+  return (
+    /^[a-z\d][\w-]{0,38}\/[\w.-]{1,100}$/i.test(value) &&
+    !['.', '..'].includes(value.split('/')[1] ?? '')
+  );
+}
 /** Sanitized native capability injected only into Circle's bundled GitHub extension. */
 export interface GitHubConnectionState {
   provider: 'github';

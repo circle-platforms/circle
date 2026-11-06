@@ -34,14 +34,15 @@ import {
 import { endedToolCalls, useGitChanges } from '../model/git-changes';
 import { failedRunLog, usePullRequests } from '../model/pull-requests';
 import { currentSession } from '../model/state';
-import type { PanelId, SessionMemoryDocument } from '../model/types';
+import type { Job, PanelId, SessionMemoryDocument } from '../model/types';
 import { workspaceLabel } from '../model/workspace-label';
 import { SAMPLE_PULL_REQUESTS } from '../preview/pull-requests';
 import type { PullRequestSummary } from '../../../desktop/src/workspace/pulls-types';
-import { sessionJobs } from '../model/jobs';
+import { jobDot, sessionJobs } from '../model/jobs';
 import '../styles/overview.css';
 
 const OUTPUTS_SHOWN = 3;
+const ENDED_JOBS_SHOWN = 3;
 const PULL_REQUESTS_SHOWN = 2;
 
 type CardId =
@@ -137,6 +138,26 @@ function Row({
 
 function Dot({ state }: { state: 'run' | 'wait' | 'fail' | 'done' | 'idle' }) {
   return <i className="overview-dot" data-state={state} aria-hidden />;
+}
+
+/** The words a background job's row ends with: its time while it runs, then how it ended. */
+function jobEnd(job: Job): { word: string; title?: string } {
+  switch (job.state) {
+    case 'waiting':
+      return { word: t('waiting for you') };
+    case 'stopping':
+      return { word: t('stopping') };
+    case 'running':
+      return { word: job.elapsed || t('running') };
+    case 'completed':
+      return { word: t('done'), title: job.elapsed };
+    case 'failed':
+      return { word: t('failed'), title: job.elapsed };
+    case 'cancelled':
+      return { word: t('stopped'), title: job.elapsed };
+    case 'interrupted':
+      return { word: t('interrupted'), title: job.elapsed };
+  }
 }
 
 /**
@@ -267,6 +288,7 @@ export function Overview({
   );
   const toggle = (id: CardId) => setOpen((old) => ({ ...old, [id]: !old[id] }));
   const [moreOutputs, setMoreOutputs] = useState(false);
+  const [moreJobs, setMoreJobs] = useState(false);
   const [moreFiles, setMoreFiles] = useState(false);
   const [morePulls, setMorePulls] = useState(false);
 
@@ -276,8 +298,16 @@ export function Overview({
     snapshot.sessions,
     snapshot.agents,
   );
-  // Circle's background commands have a card of their own; a row opens the mode.
-  const jobs = sessionJobs(session.id, snapshot.jobs).running;
+  // Circle's background commands have a card of their own; a row opens the mode. A job
+  // that ended keeps its row and says how it ended.
+  const { running: runningJobs, ended: endedJobs } = sessionJobs(
+    session.id,
+    snapshot.jobs,
+  );
+  const jobRows = [
+    ...runningJobs,
+    ...(moreJobs ? endedJobs : endedJobs.slice(0, ENDED_JOBS_SHOWN)),
+  ];
   const outputs = outputRows(session.changes, workspace?.path);
   const { overview } = usePullRequests({
     sessionId: session.id,
@@ -534,36 +564,46 @@ export function Overview({
         </Card>
       )}
 
-      {jobs.length > 0 && (
+      {jobRows.length > 0 && (
         <Card
           id="jobs"
           title={t('background jobs')}
           open={open.jobs ?? true}
           onToggle={() => toggle('jobs')}
-          summary={jobs.length}
+          summary={runningJobs.length || undefined}
         >
-          {jobs.map((job) => (
-            <Row
-              key={job.id}
-              icon={Activity}
-              title={job.command ?? job.title}
-              onClick={() => onPanel('jobs', job.id)}
-              end={
-                <>
-                  <Dot state={job.state === 'waiting' ? 'wait' : 'run'} />
-                  <EndText>
-                    {job.state === 'waiting'
-                      ? t('waiting for you')
-                      : job.state === 'stopping'
-                        ? t('stopping')
-                        : job.elapsed || t('running')}
-                  </EndText>
-                </>
-              }
+          {jobRows.map((job) => {
+            const end = jobEnd(job);
+            return (
+              <Row
+                key={job.id}
+                icon={Activity}
+                title={job.command ?? job.title}
+                onClick={() => onPanel('jobs', job.id)}
+                end={
+                  <>
+                    <Dot state={jobDot(job)} />
+                    <EndText title={end.title}>{end.word}</EndText>
+                  </>
+                }
+              >
+                <span className="overview-name">{job.title}</span>
+              </Row>
+            );
+          })}
+          {endedJobs.length > ENDED_JOBS_SHOWN && (
+            <button
+              type="button"
+              className="overview-more"
+              onClick={() => setMoreJobs((on) => !on)}
             >
-              <span className="overview-name">{job.title}</span>
-            </Row>
-          ))}
+              {moreJobs
+                ? t('show less')
+                : t('show {n} more', {
+                    n: endedJobs.length - ENDED_JOBS_SHOWN,
+                  })}
+            </button>
+          )}
         </Card>
       )}
 

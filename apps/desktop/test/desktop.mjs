@@ -60,11 +60,8 @@ const site = createServer((req, res) => {
     res.end(ICON);
     return;
   }
-  if (req.url === '/slow') {
-    const timer = setTimeout(() => res.end('<title>slow</title>late'), 4000);
-    res.on('close', () => clearTimeout(timer));
-    return;
-  }
+  // Never answers, so a page that stops loading can only have been stopped.
+  if (req.url === '/slow') return;
   if (req.url === '/chrome' || req.url === '/linked') {
     res.writeHead(200, { 'Content-Type': 'text/html' });
     res.end(
@@ -559,8 +556,6 @@ async function chromeControls() {
     'loading stopped',
     patience(3000),
   );
-  // Stopped, not finished: the slow page answers only after four seconds.
-  assert.notEqual((await state()).title, 'slow');
   // Stopped by the person, the page is no failure
   assert.equal((await state()).failure, undefined);
   assert.equal(await page.getByTestId('browser-load-failure').count(), 0);

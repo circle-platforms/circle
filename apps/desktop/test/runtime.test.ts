@@ -4024,6 +4024,286 @@ test('archive all rejects a busy workspace atomically and cannot strand a pendin
   );
 });
 
+// A command that exits once the test creates its file, so a job ends when the test says.
+const gatedCommand = (file: string, output: string) => {
+  const script = `const fs=require('node:fs');const t=setInterval(()=>{if(fs.existsSync(${JSON.stringify(file)})){clearInterval(t);console.log(${JSON.stringify(output)})}},20)`;
+  const encoded = Buffer.from(script).toString('base64');
+  return `"${process.execPath}" -e "eval(Buffer.from('${encoded}','base64').toString())"`;
+};
+const startedJob = (command: string, id = 'gated') => ({
+  message: assistant('', [
+    { id, name: 'execute', args: { command, background: true } },
+  ]),
+  usage: emptyUsage(),
+});
+const noticesIn = (request: Pick<ModelRequest, 'messages'>) =>
+  request.messages.filter((message) => message.internal === 'job_notice');
+
+async function startGatedJob(
+  f: Awaited<ReturnType<typeof setup>>,
+  sessionId: string,
+) {
+  await f.call('prompt', { text: 'run it in the background' }, sessionId);
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .interactions.some((item) => item.status === 'pending'),
+    'command approval',
+  );
+  const pending = f.controller
+    .snapshot()
+    .interactions.find((item) => item.status === 'pending')!;
+  await f.call(
+    'answer',
+    { id: pending.id, revision: pending.revision, answer: 'approve' },
+    sessionId,
+  );
+  await wait(
+    () =>
+      f.model.requests.length === 2 &&
+      f.controller.snapshot().sessions.find((item) => item.id === sessionId)
+        ?.state === 'idle',
+    'the turn that started the job ends',
+  );
+}
+
+test('a background job that ends while nothing runs starts a turn that reads its notice, with no row of its own', async (t) => {
+  let command = '';
+  const f = await setup(t, [
+    async () => startedJob(command),
+    { message: assistant('waiting for the suite'), usage: emptyUsage() },
+    { message: assistant('the suite passed'), usage: emptyUsage() },
+  ]);
+  const gate = join(f.workspace, 'gate');
+  command = gatedCommand(gate, 'suite output');
+  const id = f.controller.snapshot().activeSessionId;
+  await startGatedJob(f, id);
+  const session = () =>
+    f.controller.snapshot().sessions.find((item) => item.id === id)!;
+  const job = () =>
+    f.controller.snapshot().jobs.find((item) => item.sessionId === id)!;
+  assert.equal(job().state, 'running');
+
+  await writeFile(gate, '');
+  await wait(
+    () => f.model.requests.length === 3 && session().state === 'idle',
+    'the turn the job starts ends',
+  );
+  assert.equal(job().state, 'completed');
+  const [notice] = noticesIn(f.model.requests[2]!);
+  assert.match(String(notice?.content), /suite output/);
+  assert.equal(
+    f.model.requests[2]!.messages.filter(
+      (message) => message.role === 'user' && !message.internal,
+    ).length,
+    1,
+    'no message of the person is made up',
+  );
+  // Closed here: on Windows its folder cannot be removed while the store is open.
+  const history = new CheckpointStore(f.home);
+  try {
+    assert.equal(
+      history
+        .messages(id)
+        .filter((message) => message.internal === 'job_notice').length,
+      1,
+      'the notice is in the history',
+    );
+  } finally {
+    history.close();
+  }
+  assert.deepEqual(
+    session()
+      .messages.filter((message) => message.role === 'user')
+      .map((message) => message.text),
+    ['run it in the background'],
+    'the conversation shows no row for it',
+  );
+  assert.equal(
+    session().messages.at(-1)?.text,
+    'the suite passed',
+    'the answer is the last row',
+  );
+  assert.ok(session().messages.at(-1)?.usage, 'the turn shows its own usage');
+});
+
+test("an ended job's output is read once and carries no terminal control codes", async (t) => {
+  let command = '';
+  const f = await setup(t, [
+    async () => startedJob(command),
+    { message: assistant('waiting'), usage: emptyUsage() },
+    { message: assistant('read it'), usage: emptyUsage() },
+  ]);
+  const gate = join(f.workspace, 'gate');
+  command = gatedCommand(gate, '\u28d9\u001b[1G\u001b[0Ksuite passed');
+  const id = f.controller.snapshot().activeSessionId;
+  await startGatedJob(f, id);
+  await writeFile(gate, '');
+  await wait(
+    () =>
+      f.model.requests.length === 3 &&
+      f.controller.snapshot().sessions.find((row) => row.id === id)?.state ===
+        'idle',
+    'the turn the job starts ends',
+  );
+  const job = () =>
+    f.controller.snapshot().jobs.find((row) => row.sessionId === id)!;
+  assert.equal(job().output, 'suite passed');
+  const owner = (
+    f.controller as unknown as { runtimes: Map<string, AgentRuntime> }
+  ).runtimes.get(id)!;
+  await rm(owner.jobs.list(id)[0]!.outputPath);
+  assert.equal(job().output, 'suite passed', 'no read after it ended');
+});
+
+test("file changes of a turn a job starts belong to the person's turn, not to a notice", async (t) => {
+  let first = '';
+  let second = '';
+  const f = await setup(t, [
+    async () => startedJob(first),
+    { message: assistant('waiting'), usage: emptyUsage() },
+    async () => startedJob(second, 'gated-again'),
+    { message: assistant('waiting again'), usage: emptyUsage() },
+    async () => ({
+      message: assistant('', [
+        {
+          id: 'write',
+          name: 'write_file',
+          args: { file_path: 'made.txt', content: 'by the second wake' },
+        },
+      ]),
+      usage: emptyUsage(),
+    }),
+    { message: assistant('wrote it'), usage: emptyUsage() },
+  ]);
+  const firstGate = join(f.workspace, 'first-gate');
+  const secondGate = join(f.workspace, 'second-gate');
+  first = gatedCommand(firstGate, 'first');
+  second = gatedCommand(secondGate, 'second');
+  const id = f.controller.snapshot().activeSessionId;
+  const session = () =>
+    f.controller.snapshot().sessions.find((item) => item.id === id)!;
+  const answered = new Set<string>();
+  const approveUntil = async (check: () => boolean, what: string) => {
+    await wait(() => {
+      const card = f.controller
+        .snapshot()
+        .interactions.find(
+          (item) => item.status === 'pending' && !answered.has(item.id),
+        );
+      if (card) {
+        answered.add(card.id);
+        void f.call(
+          'answer',
+          { id: card.id, revision: card.revision, answer: 'approve' },
+          id,
+        );
+      }
+      return check();
+    }, what);
+  };
+  await startGatedJob(f, id);
+  await writeFile(firstGate, '');
+  await approveUntil(
+    () => f.model.requests.length === 4 && session().state === 'idle',
+    'the first wake ends',
+  );
+  await writeFile(secondGate, '');
+  await approveUntil(
+    () => f.model.requests.length === 6 && session().state === 'idle',
+    'the second wake ends',
+  );
+  assert.equal(
+    await readFile(join(f.workspace, 'made.txt'), 'utf8'),
+    'by the second wake',
+  );
+  const person = session().messages.find((row) => row.role === 'user')!;
+  assert.deepEqual(session().fileUndoTurns, [person.id]);
+});
+
+test('a job of a conversation that is not selected starts a turn in its own conversation', async (t) => {
+  let command = '';
+  const f = await setup(t, [
+    async () => startedJob(command),
+    { message: assistant('waiting'), usage: emptyUsage() },
+    { message: assistant('read the notice'), usage: emptyUsage() },
+  ]);
+  const gate = join(f.workspace, 'gate');
+  command = gatedCommand(gate, 'away output');
+  const away = f.controller.snapshot().activeSessionId;
+  await startGatedJob(f, away);
+  assert.equal((await f.call('new-session')).ok, true);
+  const selected = f.controller.snapshot().activeSessionId;
+  assert.notEqual(selected, away);
+
+  await writeFile(gate, '');
+  await wait(
+    () =>
+      f.controller
+        .snapshot()
+        .sessions.find((item) => item.id === away)!
+        .messages.some((message) => message.text === 'read the notice'),
+    'the turn of the conversation that owns the job',
+  );
+  assert.equal(noticesIn(f.model.requests[2]!).length, 1);
+  assert.equal(f.controller.snapshot().activeSessionId, selected);
+  assert.equal(
+    f.controller.snapshot().sessions.find((item) => item.id === selected)!
+      .messages.length,
+    0,
+  );
+});
+
+test("a stopped turn leaves a finished job's notice for the person's next message", async (t) => {
+  let command = '';
+  const f = await setup(t, [
+    async () => startedJob(command),
+    { message: assistant('waiting'), usage: emptyUsage() },
+    async (request: ModelRequest) => {
+      await new Promise((_, reject) =>
+        request.signal.addEventListener('abort', () =>
+          reject(request.signal.reason),
+        ),
+      );
+      throw Error('stopped');
+    },
+    { message: assistant('read it with your message'), usage: emptyUsage() },
+  ]);
+  const gate = join(f.workspace, 'gate');
+  command = gatedCommand(gate, 'late output');
+  const id = f.controller.snapshot().activeSessionId;
+  const session = () =>
+    f.controller.snapshot().sessions.find((item) => item.id === id)!;
+  await startGatedJob(f, id);
+  await f.call('prompt', { text: 'do something slow' });
+  await wait(() => f.model.requests.length === 3, 'the slow request');
+  await f.call('abort');
+  await wait(() => session().state === 'idle', 'the stop');
+
+  await writeFile(gate, '');
+  await wait(
+    () =>
+      f.controller.snapshot().jobs.find((item) => item.sessionId === id)
+        ?.state === 'completed',
+    'the job ends',
+  );
+  // Longer than a job's end takes to start a turn: a turn would have asked the model.
+  await delay(1500);
+  assert.equal(f.model.requests.length, 3);
+
+  await f.call('prompt', { text: 'and now' });
+  await wait(
+    () => f.model.requests.length === 4 && session().state === 'idle',
+    'the next message',
+  );
+  assert.equal(noticesIn(f.model.requests[3]!).length, 1);
+  assert.match(
+    String(noticesIn(f.model.requests[3]!)[0]?.content),
+    /late output/,
+  );
+});
+
 test('an inactive session with a real running background job cannot be archived or deleted (#56)', async (t) => {
   const command = `"${process.execPath}" -e "setTimeout(()=>{},30000)"`;
   const f = await setup(t, [

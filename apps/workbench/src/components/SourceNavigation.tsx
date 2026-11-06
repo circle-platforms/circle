@@ -1,4 +1,11 @@
-import { createContext, useContext, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
+import { useStableCallback } from '../app/stable-callback';
 import type { Attachment } from '../model/types';
 import { attachmentImage, sourceLocation } from '../model/source-navigation';
 import { Modal, DataBlock } from './common';
@@ -24,14 +31,19 @@ export function SourceNavigation({
   onFile: (path: string, line?: number, column?: number) => void;
 }) {
   const [attachment, setAttachment] = useState<Attachment | null>(null);
+  // One value for the life of the window: what reads it must not render with every
+  // publication because the application's own render made a new `onFile`.
+  const openFile = useStableCallback(onFile);
+  const sources = useMemo(
+    () => ({ openFile, openAttachment: setAttachment }),
+    [openFile],
+  );
   const image =
     attachment?.kind === 'image'
       ? attachmentImage(attachment.content, attachment.mime)
       : null;
   return (
-    <Sources.Provider
-      value={{ openFile: onFile, openAttachment: setAttachment }}
-    >
+    <Sources.Provider value={sources}>
       {children}
       <Modal
         open={!!attachment}

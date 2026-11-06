@@ -16,6 +16,20 @@ export function sessionJobs(
   );
   return {
     running: own.filter((job) => GOING.has(job.state)),
-    ended: own.filter((job) => !GOING.has(job.state)).reverse(),
+    // A long job that ends now comes first, however early it started.
+    ended: own
+      .filter((job) => !GOING.has(job.state))
+      .reverse()
+      .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0)),
   };
+}
+
+/** The state's dot on a job's row, wherever the row is. */
+export function jobDot(
+  job: Pick<Job, 'state'>,
+): 'run' | 'wait' | 'done' | 'fail' | 'idle' {
+  if (job.state === 'waiting') return 'wait';
+  if (GOING.has(job.state)) return 'run';
+  if (job.state === 'completed') return 'done';
+  return job.state === 'failed' ? 'fail' : 'idle';
 }

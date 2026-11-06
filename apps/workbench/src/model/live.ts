@@ -269,11 +269,19 @@ export class LiveRuntime implements RuntimePort {
       return false;
     }
   }
-  private receive = (update: RuntimeUpdate) => {
+  private receive = (sent: RuntimeUpdate) => {
     if (this.disposed) return;
-    if (!this.tokenBuffer.acceptFull(update)) return;
+    const accepted = this.tokenBuffer.accept(sent);
+    // A publication made on rows this window does not have: it asks for the state.
+    if (accepted === 'history-gap') this.resyncTokens();
+    if (accepted !== 'accepted') return;
+    const update = this.tokenBuffer.materialize();
     this.seq = update.seq;
-    this.snapshot = structuredClone(update.snapshot);
+    // Rows stay shared with the baseline and between publications, and are never changed.
+    this.snapshot = {
+      ...update.snapshot,
+      sessions: update.snapshot.sessions.map((session) => ({ ...session })),
+    };
     this.receivedFullEpoch = update.tokenStream?.epoch;
     this.snapshot.files = this.files;
     this.snapshot.fileListings = this.fileListings;
@@ -1480,9 +1488,8 @@ export class LiveRuntime implements RuntimePort {
       await native('reload');
       return { notice: t('Circle integrations reloaded') };
     }
-    // Background commands are tabs of the terminal, beside its shells and device consoles.
-    if (name === 'jobs' || name === 'terminals')
-      return { panel: 'terminal', selection: args };
+    if (name === 'jobs') return { panel: 'jobs', selection: args };
+    if (name === 'terminals') return { panel: 'terminal', selection: args };
     // The bridge is Circle's own listener in the terminal: the window has no
     // editor of that kind to open or close.
     if (name === 'bridge')

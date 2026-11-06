@@ -25,7 +25,7 @@ Limits: 16 commands and watches at once (processes left running by a command are
 
 ## When a job ends
 
-The model gets a notice: how the job ended, the exit code, how long it ran, and the last 20 lines of its output (a subagent's report, a watch's result).
+The model gets a notice: how the job ended, the exit code, how long it ran, and the last 20 lines of its output as plain text (a subagent's report, a watch's result).
 
 - **During a turn**, the notice reaches the model before its next step, and the conversation shows a row for it: `◆ j3 done · npm test · 12s`. A job ends `done`, `failed` or `stopped`.
 - **When nothing runs**, Circle starts a turn with the notice. The turn opens with the job's row instead of a message of yours, and you can steer it or stop it like any turn. Notices that arrive within a second of each other go in one turn.
@@ -37,6 +37,13 @@ Circle does not start such a turn:
 - for a job you stopped, or one that was your own `!command`. A `!command` you moved to the background shares its output with the model when it ends, as one in the foreground does;
 - for a job of another conversation: its notice waits until that conversation is open again;
 - more than ten times in a row: then it waits for you.
+
+The [desktop application](desktop.md) starts such a turn too, with these differences:
+
+- The conversation has no row for the notice. The job's row in the overview's [background jobs card](desktop.md#the-overview) says how it ended.
+- The stop button counts as `esc`, and going back with the session tree counts as `/tree`.
+- Each open conversation wakes by itself, selected or not, so a job of a conversation you are not looking at starts a turn in that conversation.
+- Typing holds nothing back: what you send during the turn waits in the queue, as it does during any turn.
 
 The model is told not to poll. If it runs a bare `sleep` anyway (`sleep 30`), the sleep ends as soon as one of its jobs ends; if it keeps sleeping or re-reading a job's output while jobs run, Circle reminds it that a notice will come. After older messages are summarized, Circle reminds it of the jobs it started that still run.
 

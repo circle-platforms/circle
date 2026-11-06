@@ -189,7 +189,6 @@ export interface Session {
       anchor?: { messageId: string; offset: number };
     };
     disclosures?: Record<string, { open: boolean; defaultOpen: boolean }>;
-    toolTabs?: Record<string, 'input' | 'output'>;
   };
   title: string;
   workspaceId: string;
@@ -333,12 +332,16 @@ export interface Job {
     | 'stopping'
     | 'interrupted';
   elapsed: string;
+  /** When it ended, in milliseconds. */
+  endedAt?: number;
   output: string;
   outputPath: string;
   stopRequested: boolean;
   agentId?: string;
-  /** The terminal a background command runs in, so its row and its terminal tab are one. */
+  /** The terminal a background command runs in. It has no tab: the job's row stands for it. */
   terminal?: { id: string; epoch: string };
+  /** The call that started it, by which its terminal opens. */
+  toolCallId?: string;
 }
 export interface Interaction {
   callId?: string;

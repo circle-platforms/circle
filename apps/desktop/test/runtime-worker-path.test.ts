@@ -158,7 +158,7 @@ test('actual scripted desktop worker runs nested npm with strict system PATH thr
       },
     });
     await copyRuntimeAssets(app);
-    const wrapper = `let listener,started=false;Object.defineProperty(process,'parentPort',{value:{on(n,cb){listener=cb},postMessage(m){if(m.type==='update'&&!started){started=true;queueMicrotask(()=>listener({data:{id:'auto',name:'set-auto',sessionId:m.update.snapshot.activeSessionId,payload:{enabled:true}}}));}if(m.type==='reply'&&m.reply.id==='auto'){queueMicrotask(()=>listener({data:{id:'prompt',name:'prompt',payload:{text:'Run the nested npm fixture'}}}));}if(m.type==='update'&&m.update.snapshot.sessions.some(s=>s.messages.some(v=>v.text==='worker npm done'))){queueMicrotask(()=>listener({data:{id:'finish',name:'close',payload:{}}}));}if(m.type==='reply'&&m.reply.id==='finish'){console.log('WORKER_NPM_DONE');process.exit(0);}}}});await import(${JSON.stringify(pathToFileURL(bundle).href)});`;
+    const wrapper = `let listener,started=false,asked=false,whole=false;Object.defineProperty(process,'parentPort',{value:{on(n,cb){listener=cb},postMessage(m){if(m.type==='update'&&!started){started=true;queueMicrotask(()=>listener({data:{id:'auto',name:'set-auto',sessionId:m.update.snapshot.activeSessionId,payload:{enabled:true}}}));}if(m.type==='reply'&&m.reply.id==='auto'){queueMicrotask(()=>listener({data:{id:'prompt',name:'prompt',payload:{text:'Run the nested npm fixture'}}}));}const rows=m.type==='update'?(m.update.history?.deltas??[]).flatMap(d=>d.messages):[];if(!asked&&rows.some(v=>v.text==='worker npm done')){asked=true;queueMicrotask(()=>listener({data:{type:'history-resync'}}));}else if(asked&&!whole&&m.type==='update'&&m.update.history.deltas.every(d=>d.base===undefined)&&rows.some(v=>v.text==='worker npm done')){whole=true;console.log('WORKER_SENT_WHOLE');queueMicrotask(()=>listener({data:{id:'finish',name:'close',payload:{}}}));}if(m.type==='reply'&&m.reply.id==='finish'){console.log('WORKER_NPM_DONE');process.exit(0);}}}});await import(${JSON.stringify(pathToFileURL(bundle).href)});`;
     const systemPath =
       process.platform === 'win32'
         ? `${process.env.SystemRoot}\\System32;${process.env.SystemRoot}`
@@ -217,6 +217,8 @@ test('actual scripted desktop worker runs nested npm with strict system PATH thr
     });
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /WORKER_NPM_DONE/);
+    // Asked again, the worker sends every history whole, the turn's rows among them.
+    assert.match(result.stdout, /WORKER_SENT_WHOLE/);
     const actualRequests = (await readFile(requests, 'utf8'))
       .trim()
       .split('\n')

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { CREDENTIAL_REENTRY } from '../runtime-private-channel';
 import {
   GITHUB_ADDITIONAL_SCOPES,
+  isGitHubRepository,
   type GitHubConnectionState,
 } from '../../../../src/github_connection.js';
 import {
@@ -676,8 +677,7 @@ export class NativeGitHubConnection {
       epoch !== this.state.epoch ||
       this.state.state !== 'connected' ||
       !this.active ||
-      // owner/name, neither of them `.` or `..`.
-      !/^(?!\.{1,2}\/)[-\w.]+\/(?!\.{1,2}$)[-\w.]+$/.test(repository)
+      !isGitHubRepository(repository)
     )
       throw Error('GitHub connection or repository permission changed');
   }

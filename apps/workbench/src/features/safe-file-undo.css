@@ -1,10 +1,33 @@
+/* The action sits on the row of the turn's time and usage; what it opens takes a row of its own. */
 .safe-file-undo {
+  display: contents;
+}
+.safe-file-undo > .text-button {
+  padding: 0;
+  font-size: inherit;
+  transition: opacity 0.15s ease;
+}
+.safe-file-undo > .text-button:disabled {
+  opacity: 0.5;
+}
+.safe-file-undo[data-quiet] > .text-button {
+  opacity: 0;
+}
+.message:hover .safe-file-undo[data-quiet] > .text-button,
+.turn-foot:hover .safe-file-undo[data-quiet] > .text-button,
+.safe-file-undo[data-quiet] > .text-button:focus-visible {
+  opacity: 1;
+}
+.safe-file-undo > p {
+  flex: 0 0 100%;
+  margin: 0;
+  color: var(--secondary);
+}
+.safe-file-undo section {
+  flex: 0 0 100%;
   margin-block: var(--space-2, 8px);
   color: var(--secondary);
   font-size: var(--text-sm, 12px);
-}
-.safe-file-undo section {
-  margin-block: var(--space-2, 8px);
   padding: var(--space-3, 12px);
   border: 1px solid var(--border);
   border-radius: var(--radius-md, 8px);

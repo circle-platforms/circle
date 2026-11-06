@@ -38,7 +38,14 @@ export function plainJobOutput(text: string): string {
   return text
     .split('\n')
     .map((line) =>
-      stripAnsi(line.replace(/\r+$/, '').split('\r').at(-1) ?? '')
+      // A progress bar goes back with `\r`, or with a jump to the first column.
+      stripAnsi(
+        line
+          .replace(/\x1b\[1?G/g, '\r')
+          .replace(/\r+$/, '')
+          .split('\r')
+          .at(-1) ?? '',
+      )
         .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
         .replaceAll('\t', '    '),
     )
@@ -183,9 +190,11 @@ export function outputTail(
     const buffer = Buffer.alloc(Math.min(size, maxBytes));
     const count = readSync(fd, buffer, 0, buffer.length, start);
     // A tail may start in the middle of a character or a line.
-    const text = decodeOutput(buffer.subarray(0, count), {
-      cutStart: start > 0,
-    }).trimEnd();
+    // Read as plain text before counting lines. A Windows console paints its screen into
+    // the file, and its last paint is rows of erase codes that would fill the whole tail.
+    const text = plainJobOutput(
+      decodeOutput(buffer.subarray(0, count), { cutStart: start > 0 }),
+    ).trimEnd();
     const firstNewline = text.indexOf('\n');
     return (
       start > 0 && firstNewline >= 0 ? text.slice(firstNewline + 1) : text

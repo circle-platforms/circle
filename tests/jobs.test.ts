@@ -404,6 +404,20 @@ test('a completed job is checkpointed before the next real model request, then s
   );
   assert.equal(readFileSync(join(root, 'receipt.txt'), 'utf8'), 'once');
 });
+test("a job's tail is its text, not the erase codes of a Windows console's last paint", (t) => {
+  const root = scratch(t);
+  const log = join(root, 'job.log');
+  writeFileSync(
+    log,
+    '\x1b[?25l\x1b[2J\x1b[H' +
+      'first line\r\n' +
+      '\x1b[32msuite output\x1b[m\r\n' +
+      '\x1b[K\r\n'.repeat(30) +
+      '\x1b[K\x1b[2;1H\x1b[?25h',
+  );
+  assert.equal(outputTail(log), 'first line\nsuite output');
+  assert.equal(outputTail(log, 32_768, 1), 'suite output');
+});
 test('an idle job notice resumes the model without inventing a user prompt and stopped jobs never wake it', async (t) => {
   const root = scratch(t);
   const model = new ScriptedModel([

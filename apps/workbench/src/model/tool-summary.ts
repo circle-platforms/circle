@@ -1,3 +1,4 @@
+import { BUILTIN_TOOL_INFO } from './tool-info.ts';
 import type { Message, ToolCall } from './types';
 import { locale, t, tn } from '../i18n/index.ts';
 import { isKnowledgeTool, knowledgeToolTitle } from './knowledge-tools.ts';
@@ -186,8 +187,102 @@ const AGENT_QUERY = [
   'native_tasks_artifacts',
 ];
 const AGENT_CONTROL = ['native_tasks_cancel', 'native_tasks_retry'];
+const JOBS = ['list_jobs', 'wait_jobs', 'stop_job', 'send_to_job'];
+const PLAN_MODE = ['plan_enter', 'plan_exit'];
 const name = (path: string) =>
   path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+
+type InternalKind =
+  | 'plan'
+  | 'browser'
+  | 'terminal'
+  | 'editor'
+  | 'jobs'
+  | 'question'
+  | 'plan mode'
+  | 'skill';
+
+/** Circle's own tools by what they are for. A tool from elsewhere keeps its name. */
+function internalKind(tool: string): InternalKind | undefined {
+  if (tool === 'write_todos') return 'plan';
+  if (tool.startsWith('browser_')) return 'browser';
+  if (tool.startsWith('terminal_')) return 'terminal';
+  if (tool.startsWith('editor_')) return 'editor';
+  if (JOBS.includes(tool)) return 'jobs';
+  if (tool === 'question') return 'question';
+  if (PLAN_MODE.includes(tool)) return 'plan mode';
+  if (tool === 'skill') return 'skill';
+  return undefined;
+}
+
+/** A browser's or a terminal's calls differ by what each one does, so a row says that. */
+function actionTitle(tool: string): string | undefined {
+  const described = (
+    BUILTIN_TOOL_INFO as readonly { name: string; description: string }[]
+  ).find((info) => info.name === tool)?.description;
+  return described && described[0]!.toLowerCase() + described.slice(1);
+}
+
+/** What a row in the list of calls says for one of Circle's own tools. */
+export function internalToolTitle(tool: string): string | undefined {
+  switch (internalKind(tool)) {
+    case 'plan':
+      return t('update plan');
+    case 'browser':
+      return actionTitle(tool) ?? t('browser');
+    case 'terminal':
+      return actionTitle(tool) ?? t('terminal');
+    case 'editor':
+      return actionTitle(tool) ?? t('editor');
+    case 'jobs':
+      return t('background jobs');
+    case 'question':
+      return t('ask a question');
+    case 'plan mode':
+      return t('plan mode');
+    case 'skill':
+      return t('load a skill');
+    default:
+      return undefined;
+  }
+}
+
+function internalPhrase(kind: InternalKind): string {
+  if (kind === 'browser') return t('used the browser');
+  if (kind === 'terminal') return t('used the terminal');
+  if (kind === 'editor') return t('used the editor');
+  if (kind === 'jobs') return t('checked background jobs');
+  if (kind === 'question') return t('asked a question');
+  if (kind === 'plan mode') return t('changed plan mode');
+  if (kind === 'skill') return t('loaded a skill');
+  return t('updated the plan');
+}
+
+const firstLine = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim()
+    ? value.trim().split('\n')[0]
+    : undefined;
+
+/** One finished call says what it did, not that a call happened. */
+function singleCallLine(tool: ToolCall): string | undefined {
+  const outcome = editOutcome(tool);
+  if (tool.name === 'execute') {
+    const description = firstLine(tool.input.description);
+    const command = firstLine(tool.input.command);
+    const what = description ?? (command && `$ ${command}`);
+    if (!what) return undefined;
+    if (tool.status === 'success') return what;
+    return outcome === 'failed' ? t('failed: {what}', { what }) : undefined;
+  }
+  if (tool.status !== 'success') return undefined;
+  const query = firstLine(tool.input.pattern ?? tool.input.query);
+  if (tool.name === 'grep' && query) return t('searched “{query}”', { query });
+  if (tool.name === 'glob' && query)
+    return t('searched files “{query}”', { query });
+  const path = firstLine(tool.input.path);
+  if (tool.name === 'ls' && path) return t('listed {path}', { path });
+  return undefined;
+}
 
 /**
  * What a run of tool calls did, in one line: `ran 2 commands, edited calc.py +1 −1`.
@@ -206,6 +301,8 @@ function editPaths(tool: NonNullable<Message['tool']>): string[] {
 
 export function toolSummary(rows: Message[]): {
   text: string;
+  /** The words of the line in order, failures first so that a narrow row still shows them. */
+  segments: { text: string; failed?: boolean }[];
   added: number;
   removed: number;
 } {
@@ -217,35 +314,55 @@ export function toolSummary(rows: Message[]): {
   const count = (names: string[]) =>
     tools.filter((tool) => names.includes(tool.name));
   const parts: string[] = [];
+  const failures = new Set<string>();
+  const add = (outcome: EditOutcome, phrase: string) => {
+    parts.push(phrase);
+    if (outcome === 'failed') failures.add(phrase);
+  };
   for (const [outcome, group] of editGroups(count(['execute'])))
-    parts.push(commandPhrase(outcome, group.length));
+    add(outcome, commandPhrase(outcome, group.length));
   for (const [outcome, group] of editGroups(count(READS))) {
     const files = [
       ...new Set(group.map((tool) => tool.filePath).filter(Boolean)),
     ] as string[];
     if (files.length === 1)
-      parts.push(readPhrase(outcome, name(files[0]!), group.length));
+      add(outcome, readPhrase(outcome, name(files[0]!), group.length));
     else if (group.length)
-      parts.push(readPhrase(outcome, undefined, group.length));
+      add(outcome, readPhrase(outcome, undefined, group.length));
   }
   for (const [outcome, group] of editGroups(count(['ls'])))
-    parts.push(listPhrase(outcome, group.length));
+    add(outcome, listPhrase(outcome, group.length));
   for (const [outcome, group] of editGroups(count(['glob'])))
-    parts.push(globPhrase(outcome, group.length));
+    add(outcome, globPhrase(outcome, group.length));
   for (const [outcome, group] of editGroups(count(['grep'])))
-    parts.push(grepPhrase(outcome, group.length));
+    add(outcome, grepPhrase(outcome, group.length));
   for (const [outcome, group] of editGroups(count(['lsp'])))
-    parts.push(symbolPhrase(outcome, group.length));
+    add(outcome, symbolPhrase(outcome, group.length));
   const edits = count(EDITS);
   for (const [outcome, group] of editGroups(edits)) {
     const files = [...new Set(group.flatMap(editPaths))] as string[];
-    if (files.length === 1)
-      parts.push(editPhrase(outcome, name(files[0]!), group.length));
+    if (files.length === 1 || (files.length <= 3 && outcome !== 'rejected'))
+      add(
+        outcome,
+        editPhrase(
+          outcome,
+          files.map(name).join(locale() === 'zh-CN' ? '、' : ', '),
+          group.length,
+        ),
+      );
     else if (group.length)
-      parts.push(editPhrase(outcome, undefined, files.length || group.length));
+      add(
+        outcome,
+        editPhrase(outcome, undefined, files.length || group.length),
+      );
   }
   const agents = completed.filter((tool) => tool.name === 'task').length;
   if (agents) parts.push(tn(agents, 'ran a subagent', 'ran {n} subagents'));
+  const agentsAtWork = tools.filter(
+    (tool) => tool.name === 'task' && tool.status === 'running',
+  ).length;
+  if (agentsAtWork)
+    parts.push(tn(agentsAtWork, 'running a subagent', 'running {n} subagents'));
   if (completed.some((tool) => AGENT_SCHEDULE.includes(tool.name)))
     parts.push(t('scheduled agents'));
   if (completed.some((tool) => AGENT_PROPOSE.includes(tool.name)))
@@ -282,7 +399,10 @@ export function toolSummary(rows: Message[]): {
   ];
   for (const status of ['waiting', 'running'] as const) {
     const pending = tools.filter(
-      (tool) => tool.status === status && !outcomeTools.includes(tool.name),
+      (tool) =>
+        tool.status === status &&
+        !outcomeTools.includes(tool.name) &&
+        !(status === 'running' && tool.name === 'task'),
     ).length;
     if (pending)
       parts.push(
@@ -295,7 +415,15 @@ export function toolSummary(rows: Message[]): {
           : tn(pending, '{n} tool running', '{n} tools running'),
       );
   }
-  const other = completed.filter((tool) => !known.includes(tool.name));
+  const other = completed.filter(
+    (tool) => !known.includes(tool.name) && !internalKind(tool.name),
+  );
+  const kinds = [
+    ...new Set(completed.flatMap((tool) => internalKind(tool.name) ?? [])),
+  ];
+  // The plan shows in the overview: it only gets a word when nothing else happened.
+  for (const kind of kinds)
+    if (kind !== 'plan') parts.push(internalPhrase(kind));
   // A knowledge call goes by its card title; other tools keep their own names.
   const names = [
     ...new Set(
@@ -308,6 +436,8 @@ export function toolSummary(rows: Message[]): {
     parts.push(t('used {tools}', { tools: names.join(', ') }));
   else if (other.length)
     parts.push(tn(other.length, 'used a tool', 'used {n} tools'));
+  if (!parts.length && kinds.includes('plan'))
+    parts.push(internalPhrase('plan'));
   if (!parts.length && allTools.length) parts.push(t('tool results'));
   if (!parts.length && rows.some((row) => row.thinking))
     parts.push(t('thinking'));
@@ -319,8 +449,27 @@ export function toolSummary(rows: Message[]): {
         if (row.tone === 'added') added++;
         if (row.tone === 'removed') removed++;
       }
+  const only = allTools.length === 1 ? singleCallLine(allTools[0]!) : undefined;
+  const segments = only
+    ? [
+        {
+          text: only,
+          ...(editOutcome(allTools[0]!) === 'failed' ? { failed: true } : {}),
+        },
+      ]
+    : [
+        ...parts
+          .filter((text) => failures.has(text))
+          .map((text) => ({ text, failed: true })),
+        ...parts
+          .filter((text) => !failures.has(text))
+          .map((text) => ({ text })),
+      ];
   return {
-    text: parts.join(locale() === 'zh-CN' ? '，' : ', '),
+    text: segments
+      .map((part) => part.text)
+      .join(locale() === 'zh-CN' ? '，' : ', '),
+    segments,
     added,
     removed,
   };

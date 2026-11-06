@@ -9,6 +9,7 @@ import { resolve } from 'node:path';
 import type { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { rpcMessage, rpcJob } from './rpc_codec.js';
+import { JobWake, answerJobsBeforeLeaving } from './job_wake.js';
 export interface RpcIO {
   input: Readable;
   write(text: string): void;
@@ -26,7 +27,26 @@ export async function runRpc(
     io.write(JSON.stringify(record) + '\n');
   };
   let lastAnswer = '';
+  let running: Promise<void> | undefined;
+  let code = 0;
+  let ended = false;
+  const wake = new JobWake({
+    hasNotice: () => runtime.jobs.hasNotices(runtime.session.id, true),
+    occupied: () => runtime.busy,
+    closed: () => ended,
+    start: () => {
+      const run = runtime.runJobNotices();
+      running = run
+        .then(
+          () => {},
+          () => {},
+        )
+        .finally(() => send({ type: 'agent_settled' }));
+      return run;
+    },
+  });
   const off = runtime.bus.subscribe((event) => {
+    if (event.kind === 'job_ended') wake.jobEnded();
     if (event.kind === 'run_end')
       lastAnswer = String(event.payload.answer ?? '');
     const record = jsonEvent(event);
@@ -41,38 +61,12 @@ export async function runRpc(
   const inputClosed = () => input.close();
   io.input.once('close', inputClosed);
   if (io.input.destroyed) input.close();
-  let code = 0;
   const interrupt = (): void => {
     code = 130;
     input.close();
     void runtime.cancel();
   };
   process.on('SIGINT', interrupt);
-  let running: Promise<void> | undefined;
-  let snoozed = false;
-  let wakeCount = 0;
-  let ended = false;
-  const wake = setInterval(() => {
-    if (
-      ended ||
-      snoozed ||
-      wakeCount >= 10 ||
-      runtime.busy ||
-      !runtime.jobs.hasNotices(runtime.session.id, true)
-    )
-      return;
-    wakeCount++;
-    running = runtime
-      .runJobNotices()
-      .then(
-        () => {},
-        () => {
-          snoozed = true;
-        },
-      )
-      .finally(() => send({ type: 'agent_settled' }));
-  }, 1000);
-  wake.unref();
   try {
     for await (const line of lines) {
       if (!line.trim()) continue;
@@ -103,8 +97,7 @@ export async function runRpc(
         if (['prompt', 'steer', 'follow_up'].includes(type)) {
           if (typeof command.message !== 'string' || !command.message.trim())
             throw new Error('message is required');
-          snoozed = false;
-          wakeCount = 0;
+          wake.personSent();
           if (runtime.harness.busy) {
             const mode =
               type === 'steer'
@@ -127,13 +120,13 @@ export async function runRpc(
               .finally(() => send({ type: 'agent_settled' }));
           }
         } else if (type === 'abort') {
-          snoozed = true;
+          wake.snooze();
           await runtime.cancel();
           response();
         } else if (type === 'clear_queue')
           response(runtime.harness.clearQueue());
         else if (type === 'new_session') {
-          snoozed = true;
+          wake.snooze();
           await runtime.newSession();
           lastAnswer = '';
           response({ cancelled: false, sessionId: runtime.session.id });
@@ -256,34 +249,18 @@ export async function runRpc(
     // EOF has print-mode semantics: finish the visible turn, deliver completed
     // model-owned job notices, then stop remaining work before returning.
     ended = true;
-    clearInterval(wake);
     await running;
-    const configured = Number(process.env.CIRCLE_JOB_WAIT ?? 1800);
-    const deadline =
-      Date.now() +
-      (Number.isFinite(configured) && configured >= 0 ? configured : 1800) *
-        1000;
-    for (const job of runtime.jobs
-      .list()
-      .filter((job) => job.kind === 'adopted' && job.status === 'running'))
-      await runtime.jobs.stop(job.id, 'exit');
-    while (!snoozed && code === 0 && Date.now() < deadline && wakeCount < 10) {
-      if (runtime.jobs.hasNotices(runtime.session.id, true)) {
-        await delay(1000);
-        if (snoozed || code !== 0) break;
-        wakeCount++;
+    await answerJobsBeforeLeaving(runtime, {
+      delay,
+      carryOn: () => !wake.snoozed && code === 0,
+      wakesSoFar: wake.wakesInARow,
+      wake: async () => {
         await runtime.runJobNotices().catch(() => {
-          snoozed = true;
+          wake.snooze();
         });
         send({ type: 'agent_settled' });
-      } else if (
-        runtime.jobs
-          .list(runtime.session.id)
-          .some((job) => job.status === 'running' && job.startedBy !== 'user')
-      )
-        await delay(50);
-      else break;
-    }
+      },
+    });
     const stopped = await runtime.jobs.close();
     for (const sessionId of new Set(
       runtime.jobs.list().map((job) => job.sessionId),
@@ -295,7 +272,6 @@ export async function runRpc(
     send({ type: 'jobs_stopped', count: stopped.length });
   } finally {
     ended = true;
-    clearInterval(wake);
     io.input.off('close', inputClosed);
     input.close();
     process.off('SIGINT', interrupt);

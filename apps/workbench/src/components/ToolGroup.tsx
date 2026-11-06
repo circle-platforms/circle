@@ -1,19 +1,31 @@
-import { groupNote } from '../model/commentary';
 import {
   cleanThinking,
   thinkingHasBody,
   thinkingHeadline,
 } from '../model/thinking';
 import { Markdown } from './Markdown';
-import { useId, type ReactNode } from 'react';
+import {
+  memo,
+  useId,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from 'react';
 import { useSessionDisclosure } from '../model/presentation';
 import { Brain, ChevronDown, ChevronRight, LoaderCircle } from 'lucide-react';
 import type { Message, Session } from '../model/types';
 import { toolSummary } from '../model/tool-summary';
 import { TurnClock } from './TurnClock';
-import { ToolMessage } from './ToolMessage';
+import {
+  AgentToolLinks,
+  mappedToolAgents,
+  sameToolAgents,
+  ToolMessage,
+} from './ToolMessage';
+import { useRuntimeSelector } from '../app/context';
+import { currentSession } from '../model/state';
 import { ImageThumb } from './ImageThumb';
-import { t, tn } from '../i18n';
+import { locale, t, tn, useLocale } from '../i18n';
 import '../features/conversation-requests.css';
 
 export { toolSummary };
@@ -23,24 +35,41 @@ export { toolSummary };
  * the calls. While one runs the line names it, and a request that waits for you (the
  * children) shows under the line whether it is open or not.
  */
-export function ToolGroup({
-  rows,
-  ownerSessionId,
+/**
+ * One call has nothing to list, so opening its line opens the call. The first look
+ * decides: a call that joins later must not close what is being read.
+ */
+function GroupCall({
+  alone,
   expanded,
-  onFile,
-  onAgent,
-  turn,
-  children,
-}: {
+  ...call
+}: ComponentProps<typeof ToolMessage> & { alone: boolean }) {
+  const [opensAlone] = useState(alone);
+  return <ToolMessage {...call} expanded={expanded || opensAlone} />;
+}
+
+interface ToolGroupProps {
   rows: Message[];
   ownerSessionId?: string;
   expanded: boolean;
+  showThinking?: boolean;
   onFile: (path: string) => void;
   onAgent: (id: string) => void;
   /** The turn under way, when these are its latest tools: its clock goes on their row. */
   turn?: NonNullable<Session['turn']>;
   children?: ReactNode;
-}) {
+}
+function ToolGroupRow({
+  rows,
+  ownerSessionId,
+  expanded,
+  showThinking = true,
+  onFile,
+  onAgent,
+  turn,
+  children,
+}: ToolGroupProps) {
+  useLocale();
   const tools = rows.flatMap((row) => (row.tool ? [row.tool] : []));
   // A call with no result in an old session stays 'unknown'; only these are live.
   const runningTool = tools.some((tool) => tool.status === 'running');
@@ -71,13 +100,37 @@ export function ToolGroup({
     expanded,
   );
   const summary = toolSummary(rows);
-  const note = groupNote(rows);
+  // The way into a subagent stays in view however the line is folded.
+  const agents = useRuntimeSelector(
+    (snapshot) => [
+      ...new Map(
+        tools
+          .flatMap((tool) =>
+            mappedToolAgents(
+              tool,
+              snapshot.agents,
+              ownerSessionId ?? currentSession(snapshot).id,
+            ),
+          )
+          .map((agent) => [agent.id, agent]),
+      ).values(),
+    ],
+    sameToolAgents,
+  );
+  const separator = locale() === 'zh-CN' ? '，' : ', ';
   const running = tools.find((tool) => tool.status === 'running');
   // A picture a tool brought back, such as the browser's screenshot, belongs to the
   // call that took it: the folded line only says how many there are.
   const shots = rows.flatMap((row) =>
     (row.attachments ?? []).filter((file) => file.kind === 'image'),
   );
+  // Steps with only hidden thinking, or nothing at all, have nothing to show.
+  if (
+    !tools.length &&
+    !turn &&
+    !(showThinking && rows.some((row) => row.thinking))
+  )
+    return null;
   return (
     <div
       className="tool-group"
@@ -95,8 +148,14 @@ export function ToolGroup({
         ) : runningTool || turn ? (
           <LoaderCircle size={13} className="spin" />
         ) : null}
-        {note && <span className="tool-note">{note}</span>}
-        <span className="tool-summary-text">{summary.text}</span>
+        <span className="tool-summary-text">
+          {summary.segments.map((segment, index) => (
+            <span key={index} className={segment.failed ? 'failed' : undefined}>
+              {index > 0 && separator}
+              {segment.text}
+            </span>
+          ))}
+        </span>
         {(summary.added > 0 || summary.removed > 0) && (
           <span className="diff-count">
             <span className="added">+{summary.added}</span>
@@ -132,6 +191,9 @@ export function ToolGroup({
         {turn && <TurnClock turn={turn} />}
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
       </button>
+      {!open && agents.length > 0 && (
+        <AgentToolLinks agents={agents} onAgent={onAgent} />
+      )}
       {open && (
         <>
           {shots.length > 0 && (
@@ -145,24 +207,16 @@ export function ToolGroup({
             {rows.map((row) =>
               row.tool ? (
                 <div key={row.id} data-message-id={row.id}>
-                  <ToolMessage
+                  <GroupCall
                     tool={row.tool}
                     ownerSessionId={ownerSessionId}
+                    alone={tools.length === 1}
                     expanded={expanded}
                     onAgent={onAgent}
                     onFile={onFile}
                   />
                 </div>
-              ) : row.phase === 'commentary' && row.text.trim() ? (
-                <div
-                  key={row.id}
-                  data-message-id={row.id}
-                  className="group-commentary"
-                >
-                  {row.thinking && <GroupThinking row={row} />}
-                  <Markdown text={row.text} />
-                </div>
-              ) : row.thinking ? (
+              ) : row.thinking && showThinking ? (
                 <GroupThinking key={row.id} row={row} />
               ) : null,
             )}
@@ -173,6 +227,24 @@ export function ToolGroup({
     </div>
   );
 }
+
+/**
+ * It renders when its rows change, not with each publication. The list of rows is built
+ * again whenever the transcript changes; the rows in it are the same objects.
+ */
+export const ToolGroup = memo(
+  ToolGroupRow,
+  (one, other) =>
+    one.rows.length === other.rows.length &&
+    one.rows.every((row, index) => row === other.rows[index]) &&
+    one.ownerSessionId === other.ownerSessionId &&
+    one.expanded === other.expanded &&
+    one.showThinking === other.showThinking &&
+    one.onFile === other.onFile &&
+    one.onAgent === other.onAgent &&
+    one.turn === other.turn &&
+    one.children === other.children,
+);
 
 function GroupThinking({ row }: { row: Message }) {
   const [open, setOpen] = useSessionDisclosure('thinking:' + row.id);

@@ -1206,7 +1206,10 @@ try {
     'historical PNG opens exact persisted original and returns to reading position',
   );
   await page.locator('.tool-summary').last().click();
-  await page.locator('.tool-head').last().click();
+  // A line of one call opens that call.
+  const logCall = page.locator('.tool-head').last();
+  if ((await logCall.getAttribute('aria-expanded')) !== 'true')
+    await logCall.click();
   await page
     .getByRole('button', { name: 'copy tool output', exact: true })
     .last()

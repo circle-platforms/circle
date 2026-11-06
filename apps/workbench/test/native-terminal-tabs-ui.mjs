@@ -604,72 +604,21 @@ try {
       assert.equal(reordered.pageX, initial.pageX);
       assert.equal(reordered.pageY, initial.pageY);
       assert.deepEqual(errors, []);
-      // A command Circle runs in the background: its tab says the command, with a blue
-      // dot, no × while it runs, its stop at the end of the row, and a blue ring.
+      // A command Circle runs in the background is a row of the background jobs mode. It
+      // has no tab here: the same thing is not shown twice.
       await page.evaluate(() =>
         window.terminalTabsFixture.showManagedProcess(),
       );
-      const command = strip.getByRole('tab', {
-        name: 'node managed-display.cjs',
-        exact: true,
-      });
-      await command.waitFor();
-      assert.equal(
-        await command.getAttribute('aria-controls'),
-        'terminal-terminal-10',
-      );
-      assert.equal(await command.getAttribute('aria-selected'), 'true');
-      assert.equal(
-        await command.locator('.term-dot').getAttribute('data-state'),
-        'run',
-      );
-      assert.equal(await page.locator('.term-tab.on .term-tab-x').count(), 0);
-      assert.equal(
-        await page.locator('.term-frame').getAttribute('data-frame'),
-        'run',
-      );
-      assert.equal(
-        await page.locator('.native-service-details').count(),
-        0,
-        "a command's words are its tab, not a details line",
-      );
-      // The background jobs button counts the command that runs in the
-      // background, and the terminal button carries no count.
-      assert.equal(
-        await page
-          .getByRole('button', { name: 'background jobs panel', exact: true })
-          .locator('.drawer-mode-badge')
-          .textContent(),
-        '1',
-      );
+      const jobsBadge = page
+        .getByRole('button', { name: 'background jobs panel', exact: true })
+        .locator('.drawer-mode-badge');
+      await jobsBadge.waitFor();
+      assert.equal(await jobsBadge.textContent(), '1');
       assert.equal(await toggle.locator('.drawer-mode-badge').count(), 0);
       assert.equal(
-        await terminalMenuItemEnabled(page, 'restart terminal'),
-        false,
-        'managed command restart remains disabled',
-      );
-      await page.getByRole('button', { name: 'stop', exact: true }).click();
-      const exit = page.locator('.native-terminal-exit');
-      await exit.waitFor();
-      assert.deepEqual((await sent('close')).at(-1), { id: 'terminal-10' });
-      // The ended command keeps its process ids in its tooltip, each named for what it is.
-      assert.match(
-        await exit.getAttribute('title'),
-        /\ncommand pid 52010 · pty pid 51010$/,
-      );
-      assert.equal(
-        (await exit.getAttribute('title')).includes('process pid 51010'),
-        false,
-        'supervisor PID must not be mislabeled as the actual command',
-      );
-      await page
-        .getByRole('button', {
-          name: 'close node managed-display.cjs',
-          exact: true,
-        })
-        .waitFor();
-      assert.equal(
-        await page.getByRole('button', { name: 'stop', exact: true }).count(),
+        await strip
+          .getByRole('tab', { name: 'node managed-display.cjs', exact: true })
+          .count(),
         0,
       );
       await page.reload();

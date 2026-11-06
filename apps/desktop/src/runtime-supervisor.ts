@@ -197,7 +197,9 @@ export class RuntimeSupervisor {
   private tokenResync?: Promise<void>;
   private exited?: Promise<void>;
   private closing?: Promise<boolean>;
-  private listeners = new Set<(update: RuntimeUpdate) => void>();
+  private listeners = new Set<
+    (update: RuntimeUpdate, sent?: RuntimeUpdate) => void
+  >();
   private workspaceListeners = new Set<
     (event: WorkspaceServiceEvent) => void
   >();
@@ -357,11 +359,17 @@ export class RuntimeSupervisor {
           if (message.type === 'terminal-tab-reply')
             this.terminalTabReply(message);
           if (message.type === 'update' && message.update) {
-            if (!this.tokenBuffer.acceptFull(message.update)) return;
-            this.latest = message.update;
+            const accepted = this.tokenBuffer.accept(message.update);
+            // The worker made this on rows that are not here: it sends them all again.
+            if (accepted === 'history-gap')
+              child.postMessage({ type: 'history-resync' });
+            if (accepted !== 'accepted') return;
+            const update = this.tokenBuffer.materialize();
+            this.latest = update;
             clearTimeout(timer);
             resolve();
-            for (const listener of this.listeners) listener(message.update);
+            for (const listener of this.listeners)
+              listener(update, message.update);
           }
           if (message.type === 'reply' && message.reply) {
             const pending = this.pending.get(message.reply.id);
@@ -952,7 +960,11 @@ export class RuntimeSupervisor {
     if (!this.latest) throw Error('runtime not ready');
     return this.latest.connected ? this.tokenBuffer.materialize() : this.latest;
   }
-  subscribe(listener: (update: RuntimeUpdate) => void) {
+  /**
+   * `update` has all stored history. `sent` is the same publication as the worker sent it,
+   * with what changed and no more: what a window with its own copy of the rest is sent.
+   */
+  subscribe(listener: (update: RuntimeUpdate, sent?: RuntimeUpdate) => void) {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }

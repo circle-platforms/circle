@@ -142,6 +142,7 @@ function openDatabase(
       CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, title TEXT NOT NULL, model TEXT NOT NULL, head TEXT, created REAL NOT NULL, updated REAL NOT NULL);
       CREATE TABLE IF NOT EXISTS checkpoints (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, parent TEXT REFERENCES checkpoints(id), message TEXT NOT NULL, created REAL NOT NULL);
       CREATE INDEX IF NOT EXISTS checkpoints_session ON checkpoints(session_id);
+      CREATE INDEX IF NOT EXISTS checkpoints_session_created ON checkpoints(session_id, created);
       CREATE TABLE IF NOT EXISTS context_projections (session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE, at_checkpoint TEXT NOT NULL, summary TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS context_versions (version INTEGER PRIMARY KEY AUTOINCREMENT, checkpoint_id TEXT NOT NULL REFERENCES checkpoints(id) ON DELETE CASCADE, state TEXT NOT NULL, created REAL NOT NULL);
       CREATE INDEX IF NOT EXISTS context_versions_checkpoint ON context_versions(checkpoint_id, version);
@@ -280,6 +281,12 @@ export class CheckpointStore {
   private writeVersion = 0;
   get version(): number {
     return this.writeVersion;
+  }
+  /** Moves with every write to the database, by this connection or another. */
+  changeVersion(): string {
+    const local = this.db.prepare('SELECT total_changes() AS n').get()?.n;
+    const other = this.db.prepare('PRAGMA data_version').get()?.data_version;
+    return `${this.writeVersion}:${local}:${other}`;
   }
   constructor(home?: string, hooks?: { onBusy?: () => void }) {
     this.home = home;
@@ -538,7 +545,9 @@ export class CheckpointStore {
   list(workspace?: string, includeChildren = false, empty = false): Session[] {
     // Last message, not last open. A mode boundary or an interrupted marker
     // written while opening must not jump the row to the top.
-    const activity = `COALESCE((SELECT MAX(c.created) FROM checkpoints c WHERE c.session_id = sessions.id AND json_extract(c.message, '$.role') IN ('user', 'assistant') AND IFNULL(json_extract(c.message, '$.internal'), '') = ''), sessions.created)`;
+    // Walked from the newest row: reading every message of every session is what this list
+    // cost once, and the desktop lists on every publication.
+    const activity = `COALESCE((SELECT c.created FROM checkpoints c WHERE c.session_id = sessions.id AND json_extract(c.message, '$.role') IN ('user', 'assistant') AND IFNULL(json_extract(c.message, '$.internal'), '') = '' ORDER BY c.created DESC LIMIT 1), sessions.created)`;
     const hidden = includeChildren
       ? ''
       : empty
@@ -614,7 +623,8 @@ export class CheckpointStore {
     return this.checkpoints(session).tree;
   }
   // What the database holds for a session: count(*) and max(rowid) come from its index.
-  private checkpointExtent(session: string): {
+  // A checkpoint is never rewritten, so history with the same extent is the same history.
+  checkpointExtent(session: string): {
     count: number;
     last: number | null;
   } {

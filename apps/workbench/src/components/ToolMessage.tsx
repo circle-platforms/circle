@@ -5,10 +5,7 @@ import {
   useUserShellTerminal,
 } from './CommandTerminalNavigation';
 import { copyText } from '../host';
-import {
-  useSessionDisclosure,
-  useSessionPresentation,
-} from '../model/presentation';
+import { useSessionDisclosure } from '../model/presentation';
 import {
   Check,
   ChevronDown,
@@ -24,7 +21,8 @@ import {
 } from 'lucide-react';
 import type { AgentRecord, ToolCall } from '../model/types';
 import { agentState } from '../model/activity';
-import { useRuntime } from '../app/context';
+import { internalToolTitle } from '../model/tool-summary';
+import { useRuntimeActions, useRuntimeSelector } from '../app/context';
 import { DataBlock, IconButton, Status } from './common';
 import { DiffBlock } from './DiffBlock';
 import { t } from '../i18n';
@@ -67,7 +65,7 @@ export function agentToolTitle(name: string): string {
   if (name === 'native_tasks_cancel') return t('cancel agent task');
   if (name === 'native_tasks_retry') return t('retry agent task');
   if (name === 'native_tasks_artifacts') return t('agent artifacts');
-  return name;
+  return internalToolTitle(name) ?? name;
 }
 /** Only trusted projected IDs can create child navigation; tool output remains evidence. */
 export function mappedToolAgents(
@@ -81,8 +79,23 @@ export function mappedToolAgents(
     ...(tool.agentIds ?? []),
     ...(tool.agentId ? [tool.agentId] : []),
   ]);
+  if (!ids.size) return [];
   return agents.filter(
     (agent) => agent.sessionId === ownerSessionId && ids.has(agent.id),
+  );
+}
+/** Whether two lists read the same in AgentToolLinks: rows are rebuilt each publication. */
+export function sameToolAgents(one: AgentRecord[], other: AgentRecord[]) {
+  return (
+    one.length === other.length &&
+    one.every((agent, index) => {
+      const next = other[index]!;
+      return (
+        agent.id === next.id &&
+        agent.name === next.name &&
+        agentState(agent) === agentState(next)
+      );
+    })
   );
 }
 export function AgentToolLinks({
@@ -152,7 +165,7 @@ function KnowledgeToolMessage({
   expanded,
 }: Pick<ToolMessageProps, 'tool' | 'expanded'>) {
   const [open, setOpen] = useSessionDisclosure('tool:' + tool.id, expanded);
-  const { notify } = useRuntime();
+  const { notify } = useRuntimeActions();
   const shownOutput = shownToolOutput(tool.output);
   const target = knowledgeToolTarget(tool.name, tool.input, tool.output);
   const result = knowledgeToolResult(tool.name, tool.output, tool.status);
@@ -242,25 +255,29 @@ function GenericToolMessage({
   const attachments =
     (tool as ToolCall & { attachments?: Attachment[] }).attachments ?? [];
   const [open, setOpen] = useSessionDisclosure('tool:' + tool.id, expanded);
-  const { view, update } = useSessionPresentation();
-  const tab = view.toolTabs?.[tool.id] ?? 'output';
+  const [inputOpen, setInputOpen] = useSessionDisclosure(
+    'tool-input:' + tool.id,
+  );
   const textOutput = useMemo(
     () => structuredTextOutput(withoutHookAllowedLine(tool.output)),
     [tool.output],
   );
-  const setTab = (value: 'input' | 'output') =>
-    update((target) => {
-      (target.toolTabs ??= {})[tool.id] = value;
-    });
-  const { notify, runtime, snapshot } = useRuntime();
-  const childAgents = mappedToolAgents(
-    tool,
-    snapshot.agents,
-    ownerSessionId ?? currentSession(snapshot).id,
+  const { notify, runtime } = useRuntimeActions();
+  const childAgents = useRuntimeSelector(
+    (snapshot) =>
+      mappedToolAgents(
+        tool,
+        snapshot.agents,
+        ownerSessionId ?? currentSession(snapshot).id,
+      ),
+    sameToolAgents,
   );
-  const root = snapshot.workspaces.find(
-    (workspace) => workspace.id === currentSession(snapshot).workspaceId,
-  )?.path;
+  const root = useRuntimeSelector(
+    (snapshot) =>
+      snapshot.workspaces.find(
+        (workspace) => workspace.id === currentSession(snapshot).workspaceId,
+      )?.path,
+  );
   const Icon = AGENT_TOOLS.has(tool.name)
     ? Users
     : ['execute', '!', '!!'].includes(tool.name)
@@ -273,13 +290,11 @@ function GenericToolMessage({
             ? FileDiff
             : FileText;
   const isCommand = ['execute', '!', '!!'].includes(tool.name);
-  // What the call was given, in plain words: a command reads as its command
-  // line, other tools as their arguments.
+  // A command reads as its command line, above what it printed.
   const commandLine =
     isCommand && typeof tool.input.command === 'string'
       ? tool.input.command
       : undefined;
-  const inputLabel = isCommand ? t('command') : t('arguments');
   const shownOutput = shownToolOutput(tool.output);
   const live = ['running', 'waiting'].includes(tool.status);
   // A file change that happened shows its diff under the call; a waiting one shows it in
@@ -301,6 +316,7 @@ function GenericToolMessage({
             String(
               tool.input.file_path ??
                 tool.input.path ??
+                (isCommand ? tool.input.description : undefined) ??
                 tool.input.command ??
                 tool.input.description ??
                 tool.input.query ??
@@ -336,22 +352,6 @@ function GenericToolMessage({
         <div className="tool-content">
           {diff && <DiffBlock diff={diff} />}
           <div className="tool-toolbar">
-            <div className="segmented">
-              <button
-                className={tab === 'output' ? 'active' : ''}
-                onClick={() => setTab('output')}
-              >
-                {t('output')}
-              </button>
-              {hasToolInput(tool.input) && (
-                <button
-                  className={tab === 'input' ? 'active' : ''}
-                  onClick={() => setTab('input')}
-                >
-                  {inputLabel}
-                </button>
-              )}
-            </div>
             {((tool.name === 'execute' && openCommandTerminal) ||
               (userShellId && openUserShellTerminal)) && (
               <button
@@ -363,7 +363,8 @@ function GenericToolMessage({
                   setTerminalError('');
                   try {
                     const source =
-                      ownerSessionId ?? currentSession(snapshot).id;
+                      ownerSessionId ??
+                      currentSession(runtime.getSnapshot()).id;
                     if (userShellId)
                       await openUserShellTerminal!(
                         source,
@@ -395,7 +396,20 @@ function GenericToolMessage({
                 <ArrowUpRight size={12} />
               </button>
             )}
-            {tab === 'output' && textOutput && (
+            {commandLine && (
+              <IconButton
+                label={t('copy command')}
+                onClick={() =>
+                  copyText(commandLine).then(
+                    () => notify(t('copied')),
+                    () => notify(t('clipboard unavailable')),
+                  )
+                }
+              >
+                <Terminal size={13} />
+              </IconButton>
+            )}
+            {textOutput && (
               <IconButton
                 label={t('copy text output')}
                 onClick={() =>
@@ -411,11 +425,7 @@ function GenericToolMessage({
             <IconButton
               label={t('copy tool output')}
               onClick={() =>
-                copyText(
-                  tab === 'input'
-                    ? (commandLine ?? JSON.stringify(tool.input, null, 2))
-                    : shownOutput,
-                ).then(
+                copyText(shownOutput).then(
                   () => notify(t('copied')),
                   () => notify(t('clipboard unavailable')),
                 )
@@ -425,7 +435,10 @@ function GenericToolMessage({
             </IconButton>
           </div>
           {terminalError && <p role="alert">{terminalError}</p>}
-          {tab === 'output' && textOutput ? (
+          {commandLine && (
+            <DataBlock title={t('command')} value={`$ ${commandLine}`} />
+          )}
+          {textOutput ? (
             <>
               <div className="tool-text-preview">
                 <DataBlock
@@ -441,14 +454,25 @@ function GenericToolMessage({
                 <DataBlock title={t('full response')} value={shownOutput} />
               </details>
             </>
-          ) : tab === 'input' && hasToolInput(tool.input) ? (
-            <DataBlock title={inputLabel} value={commandLine ?? tool.input} />
           ) : shownOutput.trim() ? (
             <DataBlock title={t('output')} value={shownOutput} />
           ) : (
             <p className="tool-empty">
               {live ? t('no output yet') : t('no output')}
             </p>
+          )}
+          {!commandLine && hasToolInput(tool.input) && (
+            <details className="context-source tool-input" open={inputOpen}>
+              <summary
+                onClick={(event) => {
+                  event.preventDefault();
+                  setInputOpen(!inputOpen);
+                }}
+              >
+                {t('arguments')}
+              </summary>
+              <DataBlock title={t('arguments')} value={tool.input} />
+            </details>
           )}
           {attachments.length > 0 && (
             <div className="message-attachments">
