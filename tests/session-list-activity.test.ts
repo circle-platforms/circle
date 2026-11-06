@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { DatabaseSync } from 'node:sqlite';
 import { CheckpointStore } from '../src/checkpoint_store.js';
-import { scratch } from './helpers.js';
+import { cleanup, scratch } from './helpers.js';
 
 const internals = (store: CheckpointStore) =>
   store as unknown as { db: DatabaseSync };
@@ -20,7 +20,7 @@ const setCreated = (
 
 test('sessions list by their latest prompt or reply, whatever follows it and however rows were written', (t) => {
   const store = new CheckpointStore(scratch(t));
-  t.after(() => store.close());
+  cleanup(t, () => store.close());
   const workspace = scratch(t);
   store.create(workspace, 'fixture', 'older', 'older');
   store.create(workspace, 'fixture', 'newer', 'newer');
@@ -90,7 +90,7 @@ test('sessions list by their latest prompt or reply, whatever follows it and how
 
 test('listing sessions reads from the newest row of each and not through all their messages', (t) => {
   const store = new CheckpointStore(scratch(t));
-  t.after(() => store.close());
+  cleanup(t, () => store.close());
   const workspace = scratch(t);
   store.create(workspace, 'fixture', 'long', 'long');
   store.append(
@@ -121,7 +121,7 @@ test('listing sessions reads from the newest row of each and not through all the
 test('the change version moves with every write to the database and with no read', (t) => {
   const home = scratch(t);
   const store = new CheckpointStore(home);
-  t.after(() => store.close());
+  cleanup(t, () => store.close());
   const workspace = scratch(t);
   store.create(workspace, 'fixture', 'one', 'one');
   const version = store.changeVersion();
