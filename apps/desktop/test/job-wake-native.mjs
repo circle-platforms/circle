@@ -105,6 +105,14 @@ try {
   const page = await app.firstWindow();
   page.setDefaultTimeout(patience(15000));
   page.on('pageerror', (error) => errors.push(String(error)));
+  // The window is as wide as the run asks. A narrow one has no room for the overview
+  // beside the drawer, and a runner's default size is narrower than a desktop's.
+  const width = Number(process.env.CIRCLE_DESKTOP_TEST_WIDTH || 1400);
+  await app.evaluate(
+    ({ BrowserWindow }, size) =>
+      BrowserWindow.getAllWindows()[0].setContentSize(size, 900),
+    width,
+  );
   const box = page.getByRole('textbox', { name: 'message', exact: true });
   await box.waitFor();
   const info = await page.evaluate(() => window.circleDesktop.info());
@@ -145,7 +153,14 @@ try {
     .locator('section.overview-card[aria-labelledby="overview-jobs"]')
     .locator('.overview-row')
     .filter({ hasText: title });
-  await row.waitFor();
+  const showRow = async () => {
+    if (!(await page.locator('.overview-column').isVisible()))
+      await page
+        .getByRole('button', { name: 'overview panel', exact: true })
+        .click();
+    await row.waitFor();
+  };
+  await showRow();
   assert.equal(
     await row.locator('.overview-dot').getAttribute('data-state'),
     'run',
@@ -168,12 +183,7 @@ try {
     0,
     'the view of one command is not a tab of the row',
   );
-  // A narrow window has no room for the overview beside the drawer: bring it back.
-  if (!(await row.isVisible()))
-    await page
-      .getByRole('button', { name: 'overview panel', exact: true })
-      .click();
-  await row.waitFor();
+  await showRow();
 
   await writeFile(gate, '');
   await row
