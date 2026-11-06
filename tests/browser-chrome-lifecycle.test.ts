@@ -105,15 +105,18 @@ test(
 );
 
 test('close returns only after the browser it stopped has exited, and kills one that will not stop', async (t) => {
-  // Stand-ins for a browser that does not close when asked: one is slow to finish once it is
-  // stopped, as a loaded Windows machine was; the other ignores the stop.
+  // Stand-ins for a browser that does not close when asked: one is slow to finish once it
+  // stopped, as a loaded Windows machine was; the other ignores the stop. The slow one
+  // ends only after the test has seen close still waiting for it, so nothing here races
+  // the wait on a loaded machine.
+  const root = made(t);
+  const gate = join(root, 'gate');
   const programs = {
-    slow: "process.on('SIGTERM', () => setTimeout(() => process.exit(0), 700));",
+    slow: `process.on('SIGTERM', () => { console.log('stopping'); setInterval(() => { if (require('node:fs').existsSync(${JSON.stringify(gate)})) process.exit(0); }, 10); });`,
     deaf: "process.on('SIGTERM', () => {});",
   };
-  const root = made(t);
   const stopped = await Promise.all(
-    Object.values(programs).map(async (program) => {
+    Object.entries(programs).map(async ([name, program]) => {
       const child = spawn(
         process.execPath,
         ['-e', `${program} setInterval(() => {}, 1000); console.log('ready');`],
@@ -127,7 +130,16 @@ test('close returns only after the browser it stopped has exited, and kills one 
         downloads: join(root, 'downloads'),
       });
       (chrome as unknown as { child: ChildProcess }).child = child;
-      await chrome.close();
+      let closed = false;
+      const closing = chrome.close().then(() => {
+        closed = true;
+      });
+      if (name === 'slow' && process.platform !== 'win32') {
+        await new Promise((resolve) => child.stdout.once('data', resolve));
+        assert.equal(closed, false, 'close waits for the browser to exit');
+        writeFileSync(gate, '');
+      }
+      await closing;
       return child;
     }),
   );
