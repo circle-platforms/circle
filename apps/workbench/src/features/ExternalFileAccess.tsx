@@ -212,6 +212,11 @@ function SessionFileAccess({ sessionId }: { sessionId: string }) {
           'Choose one exact file outside the workspace. Access expires when the app closes or the session is deleted or archived. Forks do not inherit it.',
         )}
       </p>
+      <p className="panel-note">
+        {t(
+          'To work with a project folder, open it as a workspace from home and start a session there. This access does not cover folders or shell commands.',
+        )}
+      </p>
       <div className="external-file-actions">
         <Button disabled={!canGrant || busy} onClick={() => void grant('read')}>
           <FileKey2 size={14} />
