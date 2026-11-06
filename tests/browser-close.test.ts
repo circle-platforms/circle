@@ -771,7 +771,18 @@ test(
     owned.cdp = { close: () => {} };
     try {
       const started = Date.now();
-      assert.equal(await owned.groupRunning(child.pid), true);
+      const running = await owned.groupRunning(child.pid);
+      // What decides #452 the next time this is false: did the child go, or did ps not say so?
+      assert.equal(
+        running,
+        true,
+        `ps says ${JSON.stringify(
+          String(
+            spawnSync('/bin/ps', ['-o', 'pgid=,stat=', '-p', String(child.pid)])
+              .stdout,
+          ),
+        )}; child exit ${child.exitCode}, signal ${child.signalCode}`,
+      );
       assert.ok(Date.now() - started >= 100, 'the actual delayed ps ran');
       assert.ok(existsSync(marker), 'the inspection process really started');
       assert.equal(child.exitCode, null);
