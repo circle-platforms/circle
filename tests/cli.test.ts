@@ -874,9 +874,9 @@ test('a prompt goes on without stdin that stays open, and the folder must be tru
 
 test('a trusted parent covers a subfolder, and --trust remembers a folder for a later print run', async (t) => {
   const home = scratch(t);
-  const parent = realpathSync(scratch(t));
+  const parent = join(realpathSync(scratch(t)), 'project');
   const child = join(parent, 'nested');
-  mkdirSync(child);
+  mkdirSync(child, { recursive: true });
   const beside = parent + '-other';
   mkdirSync(beside);
   assert.equal(
