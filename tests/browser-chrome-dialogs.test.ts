@@ -145,8 +145,7 @@ test(
       element: 'make',
     });
     // The page makes the file after the click: asked with this result or the next
-    await pause(1000);
-    const made2 = make.approval ? make : await act('snapshot');
+    const made2 = await held(make);
     assert.equal(made2.approval?.kind, 'download');
     assert.equal((made2.approval as { site: string }).site, base);
     const kept = await act('click', {
@@ -154,6 +153,13 @@ test(
       approval: { token: token(made2), scope: 'once' },
     });
     assert.match(kept.text, /The download was kept\./);
+    await fixture.run(
+      { phase: section, action: 'wait for kept blob download' },
+      async () => {
+        while (!existsSync(join(downloads, 'made.txt'))) await pause(25);
+      },
+      10_000,
+    );
     assert.equal(
       readFileSync(join(downloads, 'made.txt'), 'utf8'),
       'made here',
@@ -167,8 +173,7 @@ test(
       element: 'later',
     });
     assert.equal(clicked.approval, undefined);
-    await pause(2500);
-    const after = await act('snapshot');
+    const after = await held(clicked);
     assert.equal(after.approval?.kind, 'download');
     assert.equal((after.approval as { site: string }).site, base);
     await act('snapshot', {
@@ -219,11 +224,13 @@ test(
 
     // ---- a dialog in another tab is answered only with that site's allowance
     section = 'other tab dialog';
-    const opened = await act('tabs', { action: 'new', url: otherBase });
-    await pause(800);
-    const asking = await act('snapshot');
+    let asking = await act('tabs', { action: 'new', url: otherBase });
+    const dialogEnd = Date.now() + 10_000;
+    while (!/\[(d\d+)\] confirm/.test(asking.text) && Date.now() < dialogEnd) {
+      await pause(100);
+      asking = await act('snapshot');
+    }
     const dialog = ref(asking.text, /\[(d\d+)\] confirm/);
-    void opened;
     await act('tabs', { action: 'select', tab: 't1' });
     const refused = await act('dialog', {
       id: dialog,

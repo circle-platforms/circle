@@ -352,26 +352,36 @@ function parse(
   const cleanEnd = (line: number): number =>
     ends[line]! - (nulThrough === null ? 0 : nulThrough[line]!);
 
-  // Ends of pandoc multiline and headerless tables, from right to left, so each start is checked in constant time.
-  const INF = Number.MAX_SAFE_INTEGER;
-  const nextClose = new Float64Array(n + 2).fill(INF);
-  const nextDoubleBlank = new Float64Array(n + 2).fill(INF);
-  const nextGroups = new Float64Array(n + 2).fill(INF);
-  for (let i = n - 1; i >= 0; i--) {
-    const dash = fullDash(lines[i]!) || dashGroups(lines[i]!);
-    nextClose[i]! =
-      dash && (i + 1 >= n || isBlank(lines[i + 1]!)) ? i : nextClose[i + 1]!;
-    nextDoubleBlank[i]! =
-      isBlank(lines[i]!) && i + 1 < n && isBlank(lines[i + 1]!)
-        ? i
-        : nextDoubleBlank[i + 1]!;
-    nextGroups[i]! = dashGroups(lines[i]!) ? i : nextGroups[i + 1]!;
-  }
+  // Ends of pandoc multiline and headerless tables, built on demand from right to left, so each start is checked in constant time.
+  const INF = 0x7fffffff;
+  let nextClose: Int32Array | null = null;
+  let nextDoubleBlank: Int32Array | null = null;
+  let nextGroups: Int32Array | null = null;
   const multilineEnd = (i: number): number => {
     if (i + 2 >= n || isBlank(lines[i + 1]!)) return -1;
+    if (nextClose === null) {
+      nextClose = new Int32Array(n + 2).fill(INF);
+      nextDoubleBlank = new Int32Array(n + 2).fill(INF);
+      nextGroups = new Int32Array(n + 2).fill(INF);
+      for (let k = n - 1; k >= 0; k--) {
+        const line = lines[k]!;
+        const groups = dashGroups(line);
+        const dash = groups || fullDash(line);
+        const blank = !dash && isBlank(line);
+        nextClose[k] =
+          dash && (k + 1 >= n || isBlank(lines[k + 1]!))
+            ? k
+            : nextClose[k + 1]!;
+        nextDoubleBlank[k] =
+          blank && k + 1 < n && isBlank(lines[k + 1]!)
+            ? k
+            : nextDoubleBlank[k + 1]!;
+        nextGroups[k] = groups ? k : nextGroups[k + 1]!;
+      }
+    }
     const j = nextClose[i + 2]!;
-    if (j === INF || nextDoubleBlank[i + 1]! < j) return -1;
-    return dashGroups(lines[i]!) || nextGroups[i + 1]! <= j ? j : -1;
+    if (j === INF || nextDoubleBlank![i + 1]! < j) return -1;
+    return dashGroups(lines[i]!) || nextGroups![i + 1]! <= j ? j : -1;
   };
   const htmlInterrupts = (line: string): boolean => {
     const type = htmlBlockType(line);

@@ -3,12 +3,11 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { ChildProcess } from 'node:child_process';
-import { ChromeBrowser, findBrowser } from '../src/browser/chrome.js';
+import { ChromeBrowser } from '../src/browser/chrome.js';
 import { cleanup, cleanupServer, until } from './helpers.js';
 import { listenForBrowser } from './browser-port.mjs';
 import { BrowserFixture } from './browser-fixture.js';
-
-const executable = findBrowser();
+import { acquireChromeSlot, executable } from './browser-chrome-helpers.js';
 
 test(
   'a real dialog opening while an isolated world is pending returns the tab dialog and never executes a late page command',
@@ -55,6 +54,7 @@ test(
       forceWorld = false;
     const fixture = new BrowserFixture({
       budgetMs: 60000,
+      acquire: () => acquireChromeSlot(chrome),
       close: () => chrome.close(),
       ownedRoots: () => [...(internal.ownedRoots ?? []), internal.child],
       state: () => ({

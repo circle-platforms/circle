@@ -278,6 +278,8 @@ const TASKKILL_TIMEOUT = 3000;
 const TASKKILL_NOT_FOUND = 128;
 const taskkillFoundNothing = (error: unknown): boolean =>
   (error as { code?: unknown } | undefined)?.code === TASKKILL_NOT_FOUND;
+const taskkillTimedOut = (error: unknown): boolean =>
+  (error as { killed?: unknown } | undefined)?.killed === true;
 /** How long the exit event of a process the OS says has ended has to arrive. */
 const EXIT_EVENT_GRACE = 1000;
 /** Whether the OS says no process has this PID: signal 0 only looks. */
@@ -726,7 +728,7 @@ export class ChromeBrowser implements BrowserPort {
             // reused PID), then retain the existing exit verification. A failed tree command
             // keeps its error and the live root, for a later explicit close.
             const terminated =
-              !forceFailed &&
+              (!forceFailed || taskkillTimedOut(forceError)) &&
               process.platform === 'win32' &&
               !this.exited(child) &&
               this.terminateHandle(child);
@@ -1276,6 +1278,9 @@ export class ChromeBrowser implements BrowserPort {
     for (const download of hold.downloads) {
       download.held = false;
       if (keep) {
+        const end = Date.now() + LATE_DOWNLOAD;
+        while (download.running && Date.now() < end && !this.closed)
+          await delay(25);
         if (!download.running) this.finish(download);
         continue;
       }

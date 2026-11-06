@@ -45,7 +45,7 @@ test(
     // the interface's first step.
     await page.goto(server.resolvedUrls!.local[0]!, { timeout: 0 });
     const composer = page.locator('.composer textarea');
-    await composer.waitFor();
+    await composer.waitFor({ timeout: 0 });
     await composer.fill('draft retained while reading a source document');
     await page
       .getByRole('button', { name: 'files panel', exact: true })
@@ -58,8 +58,9 @@ test(
     await filter.fill('connection');
     await index.getByRole('treeitem', { name: /connection.ts/ }).click();
     const editor = page.locator('.drawer-document-content .native-code-editor');
-    // The document loads Monaco locally; no model or host user data is used.
-    await editor.waitFor();
+    // The first document opens the lazy FileViewer and Monaco's 129 modules (~22 MB)
+    // plus its worker: like page.goto, that first cold evaluation is setup (#185, #413).
+    await editor.waitFor({ timeout: 0 });
     const editorNode = await editor.elementHandle();
     assert.equal(
       await composer.inputValue(),
@@ -217,7 +218,7 @@ test(
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(String(error)));
     await page.goto(server.resolvedUrls!.local[0]!, { timeout: 0 });
-    await page.locator('.composer textarea').waitFor();
+    await page.locator('.composer textarea').waitFor({ timeout: 0 });
     // Where things sit in the open mode, in pixels from the drawer's left edge.
     const grid = (spec: {
       bar?: string;

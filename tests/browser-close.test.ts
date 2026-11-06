@@ -510,6 +510,21 @@ test('on Windows, taskkill exit 128 for a root still running stops its own handl
   assert.equal(child.exitCode, 1);
 });
 
+test('on Windows, a timed-out taskkill helper still stops the owned root handle and confirms its exit', async () => {
+  const child = terminatingChild(50);
+  const browser = browserWithChild(child);
+  (browser as any).taskkill = async (pid: number, force: boolean) => {
+    if (!force) throw Object.assign(new Error('graceful refused'), { code: 1 });
+    throw Object.assign(
+      new Error(`Command failed: taskkill /PID ${pid} /T /F`),
+      { code: null, killed: true, signal: 'SIGKILL' },
+    );
+  };
+  await asWindows(() => browser.close());
+  assert.deepEqual(child.kills, ['SIGKILL']);
+  assert.equal(child.exitCode, 1);
+});
+
 test('on Windows, taskkill exit 128 is not taken as a stop: a root that never exits still fails close', async () => {
   const child = terminatingChild();
   const browser = browserWithChild(child);

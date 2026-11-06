@@ -361,7 +361,7 @@
     },
     {
       "path": "src/knowledge/portable/parsers/markdown.ts",
-      "sha256": "38c8f01057ab921032dc68972699f4d482162f9878037ec4f1ee8b02e5d61292",
+      "sha256": "4648aacb0fb39980a189f51ce0dd2088bffa642f0e182c13dbec66d02cc5f332",
       "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
     },
     {
@@ -381,7 +381,7 @@
     },
     {
       "path": "src/knowledge/portable/text-decoding.ts",
-      "sha256": "87ca5328fdd8fea227ac7c56857e9a8c2c4bc7ed46be56b0aa9abf605f7ebcf1",
+      "sha256": "3612d01e3ddcfc51fe9fa82087787d528d74afa93482c3f8e6a201fd263d5f8e",
       "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
     },
     {
@@ -391,7 +391,7 @@
     },
     {
       "path": "tests/knowledge-markdown-parser.test.ts",
-      "sha256": "8d76e05e5d5f9427ec396437e9639c2eefa2e2e3d5866e873a08b06f02eeee04",
+      "sha256": "58bd948b5118d1f7f91bff5c70b6058eefae42b7d0281d1b59e9e96a7ba792ea",
       "note": "Portable adaptation or unchanged fixture from the committed sources recorded in references"
     },
     {
