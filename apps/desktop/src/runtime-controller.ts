@@ -207,7 +207,6 @@ import {
 import {
   elapsed,
   outputTail,
-  plainJobOutput,
   type Job as BackgroundJob,
 } from '../../../src/jobs.js';
 import { JobWake } from '../../../src/job_wake.js';
@@ -2624,10 +2623,7 @@ export class RuntimeController {
     }
     if (!existsSync(job.outputPath)) return '';
     const size = statSync(job.outputPath).size;
-    const text =
-      known?.size === size
-        ? known.text
-        : plainJobOutput(outputTail(job.outputPath));
+    const text = known?.size === size ? known.text : outputTail(job.outputPath);
     outputs.set(job.outputPath, {
       size,
       text,

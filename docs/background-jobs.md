@@ -25,7 +25,7 @@ Limits: 16 commands and watches at once (processes left running by a command are
 
 ## When a job ends
 
-The model gets a notice: how the job ended, the exit code, how long it ran, and the last 20 lines of its output (a subagent's report, a watch's result).
+The model gets a notice: how the job ended, the exit code, how long it ran, and the last 20 lines of its output as plain text (a subagent's report, a watch's result).
 
 - **During a turn**, the notice reaches the model before its next step, and the conversation shows a row for it: `◆ j3 done · npm test · 12s`. A job ends `done`, `failed` or `stopped`.
 - **When nothing runs**, Circle starts a turn with the notice. The turn opens with the job's row instead of a message of yours, and you can steer it or stop it like any turn. Notices that arrive within a second of each other go in one turn.

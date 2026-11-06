@@ -190,9 +190,11 @@ export function outputTail(
     const buffer = Buffer.alloc(Math.min(size, maxBytes));
     const count = readSync(fd, buffer, 0, buffer.length, start);
     // A tail may start in the middle of a character or a line.
-    const text = decodeOutput(buffer.subarray(0, count), {
-      cutStart: start > 0,
-    }).trimEnd();
+    // Read as plain text before counting lines. A Windows console paints its screen into
+    // the file, and its last paint is rows of erase codes that would fill the whole tail.
+    const text = plainJobOutput(
+      decodeOutput(buffer.subarray(0, count), { cutStart: start > 0 }),
+    ).trimEnd();
     const firstNewline = text.indexOf('\n');
     return (
       start > 0 && firstNewline >= 0 ? text.slice(firstNewline + 1) : text
