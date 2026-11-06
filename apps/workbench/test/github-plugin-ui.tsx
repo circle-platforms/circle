@@ -118,7 +118,7 @@ Object.assign(window, {
           client: 'GitHub CLI',
           epoch: 1,
           state: 'disconnected',
-          repositories: [],
+          accessPolicy: 'github-account',
           remoteRevocation: 'not-requested',
         };
         extension.commands = ['github'];
@@ -134,7 +134,7 @@ Object.assign(window, {
         epoch: 2,
         state: 'connected',
         account: { login: 'fixture-account', id: 42 },
-        repositories: ['owner/repository'],
+        accessPolicy: 'github-account',
         storage: 'encrypted',
         remoteRevocation: 'not-requested',
       };
@@ -163,7 +163,7 @@ Object.assign(window, {
           url: 'https://github.com/login/device',
           status: 'waiting',
         },
-        repositories: [],
+        accessPolicy: 'github-account',
         storage: 'encrypted',
         remoteRevocation: 'not-requested',
       };
@@ -177,7 +177,7 @@ Object.assign(window, {
         client: 'GitHub CLI',
         epoch: 4,
         state: 'disconnected',
-        repositories: ['owner/repository'],
+        accessPolicy: 'github-account',
         error: 'GitHub authorization expired; reconnect in GitHub plugin',
         remoteRevocation: 'not-requested',
       };

@@ -1,4 +1,5 @@
 import { DeliveryPreflightError } from './delivery-preflight.ts';
+import { isGitHubRepository } from '../../../../src/github_connection.js';
 import type {
   GitHubConnectionBackend,
   GitHubConnectionMethods,
@@ -130,7 +131,7 @@ export function githubWorkspaceBackend(options: {
           throw new DeliveryPreflightError('GITHUB_CANDIDATE_REFRESH_REQUIRED');
         if (
           !Number.isSafeInteger(epoch) ||
-          !/^[-\w.]+\/[-\w.]+$/.test(repository) ||
+          !isGitHubRepository(repository) ||
           (head !== undefined && !/^[a-f\d]{40,64}$/i.test(head))
         )
           throw Error('invalid GitHub task scope');
