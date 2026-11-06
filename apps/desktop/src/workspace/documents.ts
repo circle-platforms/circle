@@ -12,12 +12,15 @@ import {
   mkdir,
   open,
   readdir,
+  readFile,
   realpath,
   rename,
   rm,
   stat,
   unlink,
 } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
+import { ScanPacer } from './scan-pacer.ts';
 import {
   basename,
   dirname,
@@ -191,7 +194,7 @@ export class WorkspaceDocuments {
   private watcher?: FSWatcher;
   private poll?: NodeJS.Timeout;
   private debounce?: NodeJS.Timeout;
-  private watchRefresh?: Promise<void>;
+  private pacer?: ScanPacer;
   private closed = false;
 
   constructor(root: string, options: WorkspaceDocumentsOptions = {}) {
@@ -262,6 +265,35 @@ export class WorkspaceDocuments {
     raw: string,
     allowMissing = false,
   ): Promise<{ full: string; path: string }> {
+    const parts = this.checkSpelling(raw);
+    let current = this.root;
+    let existingParent = this.root;
+    for (const [index, part] of parts.entries()) {
+      current = join(current, part);
+      try {
+        const info = await lstat(current, { bigint: true });
+        if (index === parts.length - 1)
+          this.access?.checkFile(raw, `${info.dev}:${info.ino}`);
+        if (info.isSymbolicLink())
+          throw new DocumentPathError('symbolic link was not granted');
+        if (index < parts.length - 1 && !info.isDirectory())
+          throw new DocumentPathError('file parent is not a folder');
+        if (index < parts.length - 1) existingParent = current;
+      } catch (error) {
+        if (!(allowMissing && missing(error))) throw error;
+        if (index === parts.length - 1) this.access?.checkFile(raw, null);
+      }
+    }
+    const parent = await realpath(existingParent);
+    const local = relative(this.root, parent);
+    if (local === '..' || local.startsWith('..' + sep) || isAbsolute(local))
+      throw new DocumentPathError('file moved outside the selected workspace');
+    this.access?.check(raw);
+    return { full: current, path: parts.join('/') };
+  }
+
+  /** Whether a path may be named at all. It reads nothing from the disk. */
+  private checkSpelling(raw: string): string[] {
     if (
       !raw ||
       raw.includes('\0') ||
@@ -292,30 +324,23 @@ export class WorkspaceDocuments {
           `file is not available in this workspace: ${part}`,
         );
     }
-    let current = this.root;
-    let existingParent = this.root;
-    for (const [index, part] of parts.entries()) {
-      current = join(current, part);
-      try {
-        const info = await lstat(current, { bigint: true });
-        if (index === parts.length - 1)
-          this.access?.checkFile(raw, `${info.dev}:${info.ino}`);
-        if (info.isSymbolicLink())
-          throw new DocumentPathError('symbolic link was not granted');
-        if (index < parts.length - 1 && !info.isDirectory())
-          throw new DocumentPathError('file parent is not a folder');
-        if (index < parts.length - 1) existingParent = current;
-      } catch (error) {
-        if (!(allowMissing && missing(error))) throw error;
-        if (index === parts.length - 1) this.access?.checkFile(raw, null);
-      }
+    return parts;
+  }
+
+  /** A linked Git worktree is another checkout of the project, not part of this folder. */
+  private async isLinkedWorktree(
+    folder: string,
+    entries: Dirent[],
+  ): Promise<boolean> {
+    if (!entries.some((entry) => entry.name === '.git' && entry.isFile()))
+      return false;
+    try {
+      return /^gitdir:.*[\\/]worktrees[\\/]/.test(
+        await readFile(join(folder, '.git'), 'utf8'),
+      );
+    } catch {
+      return false;
     }
-    const parent = await realpath(existingParent);
-    const local = relative(this.root, parent);
-    if (local === '..' || local.startsWith('..' + sep) || isAbsolute(local))
-      throw new DocumentPathError('file moved outside the selected workspace');
-    this.access?.check(raw);
-    return { full: current, path: parts.join('/') };
   }
 
   private identity(path: string): string {
@@ -802,7 +827,13 @@ export class WorkspaceDocuments {
           }
           if (folder !== this.root)
             await this.target(relative(this.root, folder).split(sep).join('/'));
-          for (const entry of await readdir(folder, { withFileTypes: true })) {
+          const entries = await readdir(folder, { withFileTypes: true });
+          if (
+            folder !== this.root &&
+            (await this.isLinkedWorktree(folder, entries))
+          )
+            return;
+          for (const entry of entries) {
             if (indexed.size >= this.options.maxFiles) {
               truncated = true;
               break;
@@ -826,8 +857,13 @@ export class WorkspaceDocuments {
               }
             } else if (entry.isFile()) {
               try {
-                const target = await this.target(path);
-                const info = await lstat(target.full, { bigint: true });
+                // Its folder was checked above: one call per file, as this runs for
+                // every file of the workspace again and again.
+                this.checkSpelling(path);
+                const info = await lstat(join(folder, entry.name), {
+                  bigint: true,
+                });
+                this.access?.checkFile(path, `${info.dev}:${info.ino}`);
                 if (!info.isFile() || info.nlink > 1n) continue;
                 const file = {
                   id: this.identity(path),
@@ -910,20 +946,17 @@ export class WorkspaceDocuments {
     options.signal?.addEventListener('abort', close, { once: true });
     if (options.signal?.aborted) close();
     if (this.listeners.size && !this.poll) {
-      const refresh = () => {
-        // A slow scan must not accumulate one queued scan per poll interval.
-        if (this.watchRefresh) return;
-        this.watchRefresh = this.refresh()
+      const pacer = new ScanPacer(() =>
+        this.refresh()
           .then(() => undefined)
           .catch((error) => {
             this.notifyError(
               error instanceof Error ? error : Error(String(error)),
             );
-          })
-          .finally(() => {
-            this.watchRefresh = undefined;
-          });
-      };
+          }),
+      );
+      this.pacer = pacer;
+      const refresh = () => pacer.request();
       try {
         this.watcher = watch(
           this.root,
@@ -944,7 +977,8 @@ export class WorkspaceDocuments {
       }
       this.poll = setInterval(
         refresh,
-        Math.max(40, options.pollIntervalMs ?? 1000),
+        // With native events a poll only catches the ones that were dropped.
+        Math.max(40, options.pollIntervalMs ?? (this.watcher ? 5000 : 1000)),
       );
       this.poll.unref();
     }
@@ -954,6 +988,8 @@ export class WorkspaceDocuments {
   private stopWatching(): void {
     this.watcher?.close();
     this.watcher = undefined;
+    this.pacer?.stop();
+    this.pacer = undefined;
     clearInterval(this.poll);
     this.poll = undefined;
     clearTimeout(this.debounce);

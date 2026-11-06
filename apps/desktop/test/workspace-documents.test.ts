@@ -622,7 +622,8 @@ test('refresh discovers external files without re-opening the granted root', asy
 
 test('a slow catalog scan does not hold the document mutation queue', async (t) => {
   const { root, documents } = await fixture(t);
-  await writeFile(join(root, 'slow.txt'), 'catalog');
+  await mkdir(join(root, 'slow'));
+  await writeFile(join(root, 'slow', 'catalog.txt'), 'catalog');
   await writeFile(join(root, 'fast.txt'), 'original');
   const fast = await documents.read('fast.txt');
   let entered!: () => void;
@@ -644,7 +645,7 @@ test('a slow catalog scan does not hold the document mutation queue', async (t) 
     paths,
     'target',
     async (path: string, allowMissing?: boolean) => {
-      if (path === 'slow.txt') {
+      if (path === 'slow') {
         entered();
         await blockedScan;
       }
@@ -686,6 +687,26 @@ test('credential policy updates apply to cached services and refresh results', a
     documents.save('.env', 'forbidden', null),
     DocumentPathError,
   );
+});
+
+test('a linked Git worktree inside the workspace is left out of the file list, and a submodule is not', async (t) => {
+  const { root, documents } = await fixture(t);
+  await mkdir(join(root, '.worktrees', 'topic'), { recursive: true });
+  await writeFile(
+    join(root, '.worktrees', 'topic', '.git'),
+    'gitdir: /somewhere/repo/.git/worktrees/topic\n',
+  );
+  await writeFile(join(root, '.worktrees', 'topic', 'copy.txt'), 'copy');
+  await mkdir(join(root, 'vendor', 'module'), { recursive: true });
+  await writeFile(
+    join(root, 'vendor', 'module', '.git'),
+    'gitdir: ../../.git/modules/module\n',
+  );
+  await writeFile(join(root, 'vendor', 'module', 'kept.txt'), 'kept');
+  const { files } = await documents.refresh();
+  const paths = files.map((file) => file.path);
+  assert(!paths.some((path) => path.startsWith('.worktrees/')));
+  assert(paths.includes('vendor/module/kept.txt'));
 });
 
 test('watch delivers independent subscribers, detects external edits, and closes cleanly', async (t) => {
