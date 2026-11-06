@@ -4,6 +4,7 @@ import type { CircleEvent } from './events.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { rpcJob } from './rpc_codec.js';
 import type { Message } from './types.js';
+import { answerJobsBeforeLeaving } from './job_wake.js';
 export function jsonEvent(
   event: CircleEvent,
 ): Record<string, unknown> | undefined {
@@ -358,31 +359,17 @@ export async function runPrint(
     for (const prompt of prompts)
       answer = (await runtime.harness.run(prompt)).answer;
     if (options.waitJobs !== false) {
-      for (const job of runtime.jobs
-        .list()
-        .filter((job) => job.kind === 'adopted' && job.status === 'running'))
-        await runtime.jobs.stop(job.id, 'exit');
-      const configured = Number(process.env.CIRCLE_JOB_WAIT ?? 1800);
-      const deadline =
-        Date.now() +
-        (Number.isFinite(configured) && configured >= 0 ? configured : 1800) *
-          1000;
-      let wakes = 0;
-      while (Date.now() < deadline) {
-        waiting.signal.throwIfAborted();
-        if (runtime.jobs.hasNotices(runtime.session.id, true)) {
-          if (wakes++ >= 10) break;
-          await delay(1000, undefined, { signal: waiting.signal });
+      await answerJobsBeforeLeaving(runtime, {
+        delay: (ms) => delay(ms, undefined, { signal: waiting.signal }),
+        carryOn: () => {
+          waiting.signal.throwIfAborted();
+          return true;
+        },
+        wake: async () => {
           const later = await runtime.runJobNotices();
           if (later !== undefined) answer = later;
-        } else if (
-          !runtime.jobs
-            .list(runtime.session.id)
-            .some((job) => job.status === 'running' && job.startedBy !== 'user')
-        )
-          break;
-        else await delay(50, undefined, { signal: waiting.signal });
-      }
+        },
+      });
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

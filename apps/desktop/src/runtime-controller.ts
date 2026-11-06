@@ -210,7 +210,7 @@ import {
   plainJobOutput,
   type Job as BackgroundJob,
 } from '../../../src/jobs.js';
-import { JobWake } from './job-wake.js';
+import { JobWake } from '../../../src/job_wake.js';
 import type { CircleEvent } from '../../../src/events.js';
 import type {
   WorkbenchSnapshot,
@@ -2565,7 +2565,12 @@ export class RuntimeController {
         // time in the subagents mode, while it works and after it has ended.
         ...(job.kind === 'agent' && job.agent ? { agentId: job.agent } : {}),
         ...(job.execution?.terminal
-          ? { terminal: job.execution.terminal }
+          ? {
+              terminal: job.execution.terminal,
+              ...(job.execution.toolCallId
+                ? { toolCallId: job.execution.toolCallId }
+                : {}),
+            }
           : {}),
       })),
     );

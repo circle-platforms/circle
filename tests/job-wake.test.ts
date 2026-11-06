@@ -1,9 +1,9 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { JobWake } from '../src/job-wake.ts';
+import { JobWake, answerJobsBeforeLeaving } from '../src/job_wake.js';
 
 function setup(t: TestContext) {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   const state = {
     notice: true,
     occupied: false,
@@ -119,4 +119,95 @@ test('a turn that fails to start waits for the person instead of trying again', 
   wake.jobEnded();
   tick(5000);
   assert.equal(state.starts, 1);
+});
+
+test('a front end with a clock of its own looks when it likes, and nothing starts before the second is up', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  let starts = 0;
+  const wake = new JobWake(
+    {
+      hasNotice: () => true,
+      occupied: () => false,
+      closed: () => false,
+      start: () => {
+        starts++;
+        return Promise.resolve();
+      },
+    },
+    { timed: false },
+  );
+  wake.jobEnded();
+  wake.check();
+  assert.equal(starts, 0);
+  t.mock.timers.tick(5000);
+  assert.equal(starts, 0, 'no timer of its own');
+  wake.check();
+  assert.equal(starts, 1);
+});
+
+test('before leaving, the model answers as its jobs end, up to the limit, and what commands left running is stopped', async () => {
+  const stopped: string[] = [];
+  let notices = 12;
+  let running = true;
+  const runtime = {
+    session: { id: 's' },
+    jobs: {
+      list: () => [
+        { id: 'left', kind: 'adopted', status: 'running', startedBy: 'model' },
+        ...(running
+          ? [{ id: 'j', kind: 'shell', status: 'running', startedBy: 'model' }]
+          : []),
+      ],
+      stop: async (id: string) => {
+        stopped.push(id);
+      },
+      hasNotices: () => notices > 0,
+    },
+  };
+  let wakes = 0;
+  await answerJobsBeforeLeaving(runtime as never, {
+    delay: async () => {},
+    wake: async () => {
+      wakes++;
+      notices--;
+    },
+    wakesSoFar: 3,
+  });
+  assert.deepEqual(stopped, ['left']);
+  assert.equal(wakes, 7, 'ten in a row, counting the ones before');
+
+  notices = 1;
+  wakes = 0;
+  let looks = 0;
+  await answerJobsBeforeLeaving(runtime as never, {
+    delay: async () => {
+      looks++;
+    },
+    wake: async () => {
+      wakes++;
+      notices = 0;
+      running = false;
+    },
+    carryOn: () => looks < 5,
+  });
+  assert.equal(wakes, 1);
+});
+
+test('before leaving, carrying on no longer ends the wait without a turn', async () => {
+  const runtime = {
+    session: { id: 's' },
+    jobs: { list: () => [], stop: async () => {}, hasNotices: () => true },
+  };
+  let stop = false;
+  let wakes = 0;
+  await answerJobsBeforeLeaving(runtime as never, {
+    delay: async () => {
+      stop = true;
+    },
+    wake: async () => {
+      wakes++;
+    },
+    carryOn: () => !stop,
+  });
+  assert.equal(wakes, 0);
 });

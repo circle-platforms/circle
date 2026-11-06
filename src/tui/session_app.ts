@@ -145,6 +145,7 @@ import { loadSecrets } from '../secrets.js';
 import { KnowledgeService } from '../knowledge/service.js';
 import { knowledgeLamp, knowledgeSyncNotice } from './knowledge_view.js';
 import { PROTOCOLS } from '../protocols.js';
+import { JobWake } from '../job_wake.js';
 export { VERSION } from '../version.js';
 interface DialogPending {
   complete: (answer: unknown) => void;
@@ -170,9 +171,7 @@ interface SessionView {
   backgroundCard: boolean;
   meterCleared?: string;
   shared?: string;
-  jobWakeAt: number;
-  jobWakeCount: number;
-  jobWakeSnoozed: boolean;
+  jobWake: JobWake;
   jobsList?: { list: Picker; rows: () => PickerItem[] };
   terminalsList?: { list: Picker; rows: () => PickerItem[] };
   // The handoff's own card: unlike any other card, it does not drop the attached page.
@@ -296,23 +295,8 @@ export class SessionApp {
   private commandList?: Map<string, string>;
   private off?: () => void;
   private offSignals?: () => void;
-  private get jobWakeAt() {
-    return this.view.jobWakeAt;
-  }
-  private set jobWakeAt(value: number) {
-    this.view.jobWakeAt = value;
-  }
-  private get jobWakeCount() {
-    return this.view.jobWakeCount;
-  }
-  private set jobWakeCount(value: number) {
-    this.view.jobWakeCount = value;
-  }
-  private get jobWakeSnoozed() {
-    return this.view.jobWakeSnoozed;
-  }
-  private set jobWakeSnoozed(value: boolean) {
-    this.view.jobWakeSnoozed = value;
+  private get jobWake() {
+    return this.view.jobWake;
   }
   // A background agent's card shows whether a turn runs or not: after the
   // turn's own cards (the queue takes those first) and once typing pauses.
@@ -451,7 +435,7 @@ export class SessionApp {
   private signalListener = (): void => {
     if (this.externalEditor) return;
     if (this.backgroundCard) return;
-    this.jobWakeSnoozed = true;
+    this.jobWake.snooze();
     if (this.runtime?.busy)
       void this.runtime.cancel({
         compactionOperationId:
@@ -535,10 +519,24 @@ export class SessionApp {
       agents: new SubagentNavigation(),
       parked: new ParkedDraft(),
       backgroundCard: false,
-      jobWakeAt: 0,
-      jobWakeCount: 0,
-      jobWakeSnoozed: false,
     } as SessionView;
+    // The clock that repaints the screen looks for it, in this view.
+    view.jobWake = new JobWake(
+      {
+        hasNotice: () =>
+          !!this.runtime?.jobs.hasNotices(this.runtime.session.id, true),
+        occupied: () =>
+          !!this.runtime?.busy ||
+          !!this.state.waiting ||
+          !!this.state.picker ||
+          !!this.state.jobDetail ||
+          !!this.state.draft,
+        closed: () => !this.runtime || this.ended,
+        start: () =>
+          this.runtime!.runJobNotices().finally(() => this.repaint()),
+      },
+      { timed: false },
+    );
     view.selection = new MouseSelection({
       scroll: (delta) => this.inView(view, () => this.scrollTranscript(delta)),
       copy: (text) => this.inView(view, () => this.copySelection(text)),
@@ -607,7 +605,7 @@ export class SessionApp {
         this.requestRender();
       for (const view of this.views.values())
         this.inView(view, () => {
-          this.wakeJobs();
+          this.jobWake.check();
           this.refreshTerminalsList();
         });
     }, 160);
@@ -1401,7 +1399,7 @@ export class SessionApp {
               if (progress.phase === 'error') this.state.compaction = undefined;
             }
           }
-          if (event.kind === 'job_ended') this.jobWakeAt = Date.now() + 1000;
+          if (event.kind === 'job_ended') this.jobWake.jobEnded();
           if (event.kind === 'todo_list' && !event.tags.subagent) {
             const sessionId = this.runtime!.session.id;
             let tracker = this.planCompletions.get(sessionId);
@@ -1789,31 +1787,6 @@ export class SessionApp {
       return true;
     }
     return false;
-  }
-  private wakeJobs(): void {
-    const runtime = this.runtime;
-    if (
-      !runtime ||
-      this.ended ||
-      this.jobWakeSnoozed ||
-      this.jobWakeCount >= 10 ||
-      runtime.busy ||
-      this.state.waiting ||
-      this.state.picker ||
-      this.state.jobDetail ||
-      this.state.draft ||
-      Date.now() < this.jobWakeAt ||
-      !runtime.jobs.hasNotices(runtime.session.id, true)
-    )
-      return;
-    this.jobWakeCount++;
-    const view = this.view;
-    void runtime
-      .runJobNotices()
-      .catch(() => {
-        view.jobWakeSnoozed = true;
-      })
-      .finally(() => this.repaint());
   }
   // Approvals, questions and secrets reach the runtime through the card queue: one card at
   // a time, the turn's own before a background agent's, none while you are typing.
@@ -2837,7 +2810,7 @@ export class SessionApp {
     if (key === 'ctrl+c') {
       if (this.state.draft && !this.runtime?.busy) {
         // What you typed is cleared but stays in the history
-        this.jobWakeSnoozed = true;
+        this.jobWake.snooze();
         this.remember(this.state.draft);
         this.composer.clear();
         this.lastCtrlC = 0;
@@ -2846,7 +2819,7 @@ export class SessionApp {
       this.suspend();
       return;
     } else if (key === 'escape') {
-      this.jobWakeSnoozed = true;
+      this.jobWake.snooze();
       if (this.runtime?.busy) this.interrupt();
       else if (this.state.draft) {
         // One esc is not enough to throw the draft away. The second clears it,
@@ -2993,7 +2966,7 @@ export class SessionApp {
   // ctrl+c with nothing typed: it stops a running turn; otherwise the first press
   // says how to leave and a second within 1.5 s leaves (so does one just after a stop).
   private ctrlC(): void {
-    this.jobWakeSnoozed = true;
+    this.jobWake.snooze();
     const now = Date.now();
     if (this.runtime?.busy) {
       this.interrupt();
@@ -3034,8 +3007,7 @@ export class SessionApp {
         )
           return;
         // A message of yours starts this turn: finished jobs may start turns again
-        view.jobWakeSnoozed = false;
-        view.jobWakeCount = 0;
+        view.jobWake.personSent();
         void runtime.harness
           .run()
           .catch(() => {
@@ -3399,8 +3371,7 @@ export class SessionApp {
       }
       return;
     }
-    this.jobWakeSnoozed = false;
-    this.jobWakeCount = 0;
+    this.jobWake.personSent();
     // The notice was on the home page and a session is starting. Hiding it
     // because the transcript is no longer empty is not enough: /new would
     // show it again. Dismiss or this prompt marks it seen.
@@ -3583,7 +3554,7 @@ export class SessionApp {
       },
       setDraft: (text, pastes) => owner.composer.restore(text, pastes),
       snoozeJobs: () => {
-        owner.jobWakeSnoozed = true;
+        owner.jobWake.snooze();
       },
       send: (text) => this.inView(owner, () => this.submit(text, text, true)),
       command: (name, args) =>
