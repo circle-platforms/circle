@@ -1,3 +1,4 @@
+import { BUILTIN_TOOL_INFO } from './tool-info.ts';
 import type { Message, ToolCall } from './types';
 import { locale, t, tn } from '../i18n/index.ts';
 import { isKnowledgeTool, knowledgeToolTitle } from './knowledge-tools.ts';
@@ -214,17 +215,25 @@ function internalKind(tool: string): InternalKind | undefined {
   return undefined;
 }
 
+/** A browser's or a terminal's calls differ by what each one does, so a row says that. */
+function actionTitle(tool: string): string | undefined {
+  const described = (
+    BUILTIN_TOOL_INFO as readonly { name: string; description: string }[]
+  ).find((info) => info.name === tool)?.description;
+  return described && described[0]!.toLowerCase() + described.slice(1);
+}
+
 /** What a row in the list of calls says for one of Circle's own tools. */
 export function internalToolTitle(tool: string): string | undefined {
   switch (internalKind(tool)) {
     case 'plan':
       return t('update plan');
     case 'browser':
-      return t('browser');
+      return actionTitle(tool) ?? t('browser');
     case 'terminal':
-      return t('terminal');
+      return actionTitle(tool) ?? t('terminal');
     case 'editor':
-      return t('editor');
+      return actionTitle(tool) ?? t('editor');
     case 'jobs':
       return t('background jobs');
     case 'question':

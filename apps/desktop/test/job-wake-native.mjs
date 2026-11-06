@@ -152,6 +152,19 @@ try {
   );
   await page.screenshot({ path: join(output, 'running.png') });
 
+  // Its row in the mode opens the terminal of this one command; it has no tab of its own.
+  await row.click();
+  const mode = page.locator('.jobs-mode');
+  await mode.waitFor();
+  await mode
+    .getByRole('button', { name: 'open in terminal', exact: true })
+    .click();
+  await page.locator('.term-tab').filter({ hasText: title }).waitFor();
+  await page
+    .getByRole('button', { name: 'overview panel', exact: true })
+    .click();
+  await row.waitFor();
+
   await writeFile(gate, '');
   await row
     .locator('.overview-end-text')

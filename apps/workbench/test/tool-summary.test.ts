@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { toolSummary } from '../src/model/tool-summary.ts';
+import { internalToolTitle, toolSummary } from '../src/model/tool-summary.ts';
 import type { Message, ToolCall } from '../src/model/types.ts';
 
 function row(name: string): Message {
@@ -320,4 +320,23 @@ test('a subagent at work is called one', () => {
     toolSummary([withInput('task', {}, 'running')]).text,
     'running a subagent',
   );
+});
+
+test("the rows of an opened line say which of Circle's own actions each one was", () => {
+  assert.equal(
+    internalToolTitle('browser_click'),
+    'click an element in the browser',
+  );
+  assert.equal(
+    internalToolTitle('browser_type'),
+    'type text into a browser element',
+  );
+  assert.equal(
+    internalToolTitle('terminal_read'),
+    'read a device screen and its prompt',
+  );
+  // A new one with no description yet still says what it belongs to.
+  assert.equal(internalToolTitle('browser_future'), 'browser');
+  assert.equal(internalToolTitle('write_todos'), 'update plan');
+  assert.equal(internalToolTitle('some_mcp_tool'), undefined);
 });
