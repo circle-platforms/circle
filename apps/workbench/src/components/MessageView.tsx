@@ -15,6 +15,7 @@ import {
 import { Markdown } from './Markdown';
 import { t } from '../i18n';
 import { useSources } from './SourceNavigation';
+import type { ReactNode } from 'react';
 import { interruptedLabel } from '../model/completion';
 import { useSessionDisclosure } from '../model/presentation';
 import { ToolMessage } from './ToolMessage';
@@ -44,10 +45,16 @@ export function shownMessageText(message: Message): string {
 export function MessageView({
   message,
   showThinking,
+  interim,
+  footer,
   onAttachment,
 }: {
   message: Message;
   showThinking: boolean;
+  /** Words on the way to more work: they read with what follows, the row shows on hover. */
+  interim?: boolean;
+  /** An action for the turn that ends here, on the row of its time and usage. */
+  footer?: ReactNode;
   /** Used where no preview window is provided. */
   onAttachment?: () => void;
 }) {
@@ -59,7 +66,10 @@ export function MessageView({
   const preview = thinkingHeadline(message.thinking);
   const opens = thinkingHasBody(message.thinking);
   return (
-    <article className={`message ${message.role}`}>
+    <article
+      className={`message ${message.role}`}
+      data-interim={interim || undefined}
+    >
       {message.thinking && showThinking && (
         <details
           className="thinking"
@@ -174,6 +184,7 @@ export function MessageView({
             <Copy size={12} />
           </IconButton>
         )}
+        {footer}
       </div>
       {message.interrupted && (
         <div className="transcript-notice">{interruptedLabel()}</div>

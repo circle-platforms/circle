@@ -96,15 +96,20 @@ try {
           ),
           true,
         );
-        await card.locator('details > summary').click();
+        await card
+          .locator('details > summary')
+          .filter({ hasText: language === 'en' ? 'full response' : '完整响应' })
+          .click();
         assert.equal(
-          await card.locator('details .data-block pre').textContent(),
+          await card
+            .locator('details:not(.tool-input) .data-block pre')
+            .textContent(),
           await page.evaluate(() => window.textOutputFixture.raw),
         );
         assert(
-          (await card.locator('details pre').textContent()).includes(
-            'candidate-exact-head',
-          ),
+          (
+            await card.locator('details:not(.tool-input) pre').textContent()
+          ).includes('candidate-exact-head'),
         );
         await card.getByRole('button', { name: rawCopy, exact: true }).click();
         await page.waitForFunction(
@@ -118,14 +123,9 @@ try {
           ),
           true,
         );
-        await card
-          .getByRole('button', {
-            name: language === 'en' ? 'arguments' : '参数',
-            exact: true,
-          })
-          .click();
+        await card.locator('.tool-input > summary').click();
         assert.equal(
-          await card.locator('.data-block pre').textContent(),
+          await card.locator('.tool-input .data-block pre').textContent(),
           JSON.stringify({ runId: 314 }, null, 2),
         );
         assert.deepEqual(errors, []);

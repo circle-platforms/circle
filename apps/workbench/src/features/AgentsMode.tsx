@@ -166,6 +166,7 @@ export function AgentsMode({
                   rows={item.rows}
                   ownerSessionId={selected.id}
                   expanded={session.expandTools}
+                  showThinking={session.showThinking}
                   onFile={onFile}
                   onAgent={onSelect}
                 />

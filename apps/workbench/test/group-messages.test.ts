@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { groupMessages } from '../src/features/Conversation.tsx';
-import { groupNote } from '../src/model/commentary.ts';
+import { fileUndoFoots, groupMessages } from '../src/features/Conversation.tsx';
 import type { Message } from '../src/model/types.ts';
 
 const row = (
@@ -224,61 +223,102 @@ test('text between steps, and the step with the turn usage, keep their own lines
   ]);
 });
 
-test("the model's update before its calls folds into their line and names it", () => {
-  const tool = (id: string, parentId: string) =>
-    row(id, 'tool', {
-      parentId,
-      tool: {
-        id,
-        name: 'grep',
-        input: { pattern: 'x' },
-        output: 'ok',
-        status: 'success',
-      },
-    });
+const grep = (id: string, parentId: string) =>
+  row(id, 'tool', {
+    parentId,
+    tool: {
+      id,
+      name: 'grep',
+      input: { pattern: 'x' },
+      output: 'ok',
+      status: 'success',
+    },
+  });
+
+test("the model's updates stay as text and each starts its own line of calls", () => {
   const messages = [
     row('note-1', 'assistant', {
       phase: 'commentary',
-      text: 'Checking the **J8** logs first.',
+      text: 'Checking the logs first.',
     }),
-    tool('t1', 'note-1'),
-    tool('t2', 'a2'),
+    grep('t1', 'note-1'),
+    grep('t2', 'a2'),
     row('note-2', 'assistant', {
       phase: 'commentary',
       text: 'The port was taken; looking at who holds it.',
     }),
-    tool('t3', 'note-2'),
+    grep('t3', 'note-2'),
     row('answer', 'assistant', { phase: 'final_answer', text: 'Fixed.' }),
   ];
-  const items = groupMessages(messages);
-  assert.deepEqual(shape(items), [
-    {
-      kind: 'tools',
-      batchKey: 'note-1',
-      ids: ['note-1', 't1', 't2', 'note-2', 't3'],
-    },
+  assert.deepEqual(shape(groupMessages(messages)), [
+    { kind: 'message', id: 'note-1' },
+    { kind: 'tools', batchKey: 'note-1', ids: ['t1', 't2'] },
+    { kind: 'message', id: 'note-2' },
+    { kind: 'tools', batchKey: 'note-2', ids: ['t3'] },
     { kind: 'message', id: 'answer' },
   ]);
-  const group = items[0]!;
-  assert.equal(group.kind, 'tools');
-  if (group.kind === 'tools')
-    assert.equal(
-      groupNote(group.rows),
-      'The port was taken; looking at who holds it.',
-    );
-  assert.equal(groupNote([messages[0]!]), 'Checking the J8 logs first.');
 });
 
-test('an update with no call after it is read as it is', () => {
-  const messages = [
-    row('note', 'assistant', {
-      phase: 'commentary',
-      text: 'I will look at it.',
-    }),
-    row('answer', 'assistant', { text: 'Done.' }),
+test('an update with no call after it stays as text, with calls before it or not', () => {
+  assert.deepEqual(
+    shape(
+      groupMessages([
+        grep('t1', 'a1'),
+        row('note', 'assistant', { phase: 'commentary', text: 'Found it.' }),
+        row('answer', 'assistant', { text: 'Done.' }),
+      ]),
+    ),
+    [
+      { kind: 'tools', batchKey: 'a1', ids: ['t1'] },
+      { kind: 'message', id: 'note' },
+      { kind: 'message', id: 'answer' },
+    ],
+  );
+});
+
+test('an update keeps its place when it stops streaming', () => {
+  const update = (at: string) => [
+    grep('t1', 'a1'),
+    row('note', 'assistant', { phase: 'commentary', text: 'Next.', at }),
   ];
-  assert.deepEqual(shape(groupMessages(messages)), [
-    { kind: 'message', id: 'note' },
-    { kind: 'message', id: 'answer' },
+  assert.deepEqual(
+    shape(groupMessages(update('streaming'))),
+    shape(groupMessages(update('2026-10-22T00:00:00Z'))),
+  );
+});
+
+test('models with and without the commentary channel show a run the same way', () => {
+  const run = (phase?: 'commentary') => [
+    row('n1', 'assistant', { text: 'One.', ...(phase ? { phase } : {}) }),
+    grep('t1', 'n1'),
+    row('n2', 'assistant', { text: 'Two.', ...(phase ? { phase } : {}) }),
+    grep('t2', 'n2'),
+    row('end', 'assistant', { text: 'Done.' }),
+  ];
+  assert.deepEqual(
+    shape(groupMessages(run('commentary'))),
+    shape(groupMessages(run())),
+  );
+});
+
+test("file undo goes on the last row of a finished turn and not on a working session's", () => {
+  const items = groupMessages([
+    row('u1', 'user', { text: 'first' }),
+    grep('t1', 'a1'),
+    row('end-1', 'assistant', { text: 'Done.' }),
+    row('u2', 'user', { text: 'second' }),
+    row('note', 'assistant', { text: 'Working.' }),
+    grep('t2', 'note'),
+    row('u3', 'user', { text: 'third' }),
   ]);
+  assert.deepEqual(
+    [...fileUndoFoots(items, ['u1', 'u2'], false)],
+    [
+      [2, 'u1'],
+      [5, 'u2'],
+    ],
+  );
+  assert.equal(fileUndoFoots(items, ['u1', 'u2'], true).size, 0);
+  assert.equal(fileUndoFoots(items, undefined, false).size, 0);
+  assert.deepEqual([...fileUndoFoots(items, ['u3'], false)], [[6, 'u3']]);
 });

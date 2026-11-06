@@ -11,10 +11,13 @@ export function SafeFileUndo({
   sessionId,
   turnId,
   disabled,
+  quiet,
 }: {
   sessionId: string;
   turnId: string;
-  disabled: boolean;
+  disabled?: boolean;
+  /** An older turn's: it shows when the pointer is on its row. */
+  quiet?: boolean;
 }) {
   const { runtime, snapshot } = useRuntime();
   const session = snapshot.sessions.find((row) => row.id === sessionId);
@@ -123,10 +126,18 @@ export function SafeFileUndo({
     }
   }
   return (
-    <div className="safe-file-undo" aria-busy={busy}>
-      <Button disabled={unavailable || busy} onClick={() => void run()}>
+    <div
+      className="safe-file-undo"
+      aria-busy={busy}
+      data-quiet={(quiet && !preview && !restored && !error) || undefined}
+    >
+      <button
+        className="text-button"
+        disabled={unavailable || busy}
+        onClick={() => void run()}
+      >
         {t('undo file changes')}
-      </Button>
+      </button>
       {preview && (
         <section aria-label={t('file undo preview')}>
           <p>
