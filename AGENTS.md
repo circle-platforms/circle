@@ -41,7 +41,7 @@ Read `docs/development/tui-contract.md` before you change anything on screen. Wh
   - **A needed check measured unreliably**, by wall-clock waits, the runner's screen or input timing: check the same real effect another way, such as waiting on state or events or a deterministic unit test. A longer timeout or a retry is not another way.
   - **A check that is not needed**, because it repeats other coverage or tests the CI machine: take it out of the required path, saying why in the issue.
 - Say what you ran. Do not report that tests pass unless you ran them.
-- Keep unit tests fast and deterministic: use in-process fault injection (`onPhase` hooks) rather than spawning child processes, parameterize cache/size limits rather than allocating multi-megabyte buffers, and close every `KnowledgeStore` and `KnowledgeSync` handle (`CIRCLE_KNOWLEDGE_TEST_STRICT_CLEANUP=1` fails on leaks).
+- Keep unit tests fast and deterministic: use in-process fault injection (`onPhase` hooks) rather than spawning child processes, parameterize cache/size limits rather than allocating multi-megabyte buffers, and close every `KnowledgeStore` and `KnowledgeSync` handle (`CIRCLE_KNOWLEDGE_TEST_STRICT_CLEANUP=1` fails on leaks). Follow [docs/development/testing.md](docs/development/testing.md) for avoiding wall-clock races, premature timeout overrides, and unbounded browser process concurrency.
 
 ## Rules for docs
 

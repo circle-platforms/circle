@@ -32,6 +32,7 @@ The English guides and reference in this folder are published at <https://circle
 More:
 
 - [Architecture](architecture.md): the module map.
+- [Writing reliable tests](testing.md): CI test anti-patterns, deterministic synchronization rules and local CPU-throttled reproduction.
 - [The TUI contract](https://github.com/circle-platforms/circle/blob/main/docs/development/tui-contract.md): the rules for everything on screen. It is written in Chinese.
 - [Releasing](releasing.md): cutting a release.
 - [Windows acceptance](windows-acceptance.md): what has been tried by hand on Windows, what it showed, and what still has no evidence.

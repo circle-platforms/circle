@@ -118,14 +118,16 @@ export class BrowserFixture {
       budgetMs: number;
       state: () => Record<string, unknown>;
       close: () => Promise<void>;
+      acquire?: () => Promise<void>;
       ownedRoots?: () => Iterable<ChildProcess | undefined>;
       report: (record: BrowserFixtureRecord) => void;
     },
   ) {
-    this.timer = setTimeout(
-      () => this.expire(options.budgetMs),
-      options.budgetMs,
-    );
+    if (!options.acquire)
+      this.timer = setTimeout(
+        () => this.expire(options.budgetMs),
+        options.budgetMs,
+      );
   }
 
   private record(status: string): BrowserFixtureRecord {
@@ -156,6 +158,18 @@ export class BrowserFixture {
     operation: () => Promise<T>,
     timeoutMs?: number,
   ): Promise<T> {
+    this.signal.throwIfAborted();
+    if (this.options.acquire) {
+      const acquire = this.options.acquire;
+      this.options.acquire = undefined;
+      await acquire();
+      this.started = Date.now();
+      if (!this.failure && !this.closing)
+        this.timer = setTimeout(
+          () => this.expire(this.options.budgetMs),
+          this.options.budgetMs,
+        );
+    }
     this.signal.throwIfAborted();
     this.active = phase;
     this.record('before');

@@ -432,22 +432,32 @@ export interface Lines {
 export function splitLines(text: string, max: number): Lines | null {
   const starts: number[] = [];
   const ends: number[] = [];
-  if (text.length === 0) return { starts, ends };
-  const breaks = /\r\n|\r|\n/g;
+  const len = text.length;
+  if (len === 0) return { starts, ends };
   let start = 0;
-  for (
-    let match = breaks.exec(text);
-    match !== null;
-    match = breaks.exec(text)
-  ) {
-    starts.push(start);
-    ends.push(match.index);
-    if (starts.length > max) return null;
-    start = match.index + match[0]!.length;
+  if (!text.includes('\r')) {
+    for (let nl = text.indexOf('\n'); nl >= 0; nl = text.indexOf('\n', start)) {
+      starts.push(start);
+      ends.push(nl);
+      if (starts.length > max) return null;
+      start = nl + 1;
+    }
+  } else {
+    for (let i = 0; i < len; i++) {
+      const code = text.charCodeAt(i);
+      if (code === 0x0a || code === 0x0d) {
+        starts.push(start);
+        ends.push(i);
+        if (starts.length > max) return null;
+        if (code === 0x0d && i + 1 < len && text.charCodeAt(i + 1) === 0x0a)
+          i++;
+        start = i + 1;
+      }
+    }
   }
-  if (start < text.length) {
+  if (start < len) {
     starts.push(start);
-    ends.push(text.length);
+    ends.push(len);
     if (starts.length > max) return null;
   }
   return { starts, ends };

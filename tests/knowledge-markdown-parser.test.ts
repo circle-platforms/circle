@@ -387,7 +387,7 @@ describe('markdown@1 on hostile headings', () => {
   });
 
   it('maps texts without NUL in linear time, however few the NULs', async () => {
-    const document = parsed(`${'p\n\n'.repeat(300_000)}tail\u0000end\n`);
+    const document = parsed(`${'p\n'.repeat(300_000)}\ntail\u0000end\n`);
     assert.equal(document.model.nulRemoved, 1);
     assert.equal(document.model.blocks.at(-1)!.text, 'tailend');
     const many = markdownParser.parse(

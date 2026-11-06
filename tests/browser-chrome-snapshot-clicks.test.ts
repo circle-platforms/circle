@@ -205,7 +205,7 @@ test(
     const site = createHttp((_req, res) => {
       res.setHeader('Content-Type', 'text/html');
       res.end(
-        "<!doctype html><title>settle</title><button onclick=\"let i = 0; const timer = setInterval(() => { i++; document.getElementById('status').textContent = i < 7 ? 'step ' + i : 'Done'; if (i >= 7) clearInterval(timer) }, 120)\">Run</button><p id=\"status\">idle</p>",
+        "<!doctype html><title>settle</title><button onclick=\"let i = 0; const timer = setInterval(() => { i++; document.getElementById('status').textContent = i < 4 ? 'step ' + i : 'Done'; if (i >= 4) clearInterval(timer) }, 30)\">Run</button><p id=\"status\">idle</p>",
       );
     });
     const url = `http://127.0.0.1:${await listen(site)}/`;

@@ -122,11 +122,11 @@ import {
 /** In the files mode's document slot, the plan in place of a workspace file. No file's
  * path holds a NUL. */
 const PLAN = '\u0000plan';
-const FileViewer = lazy(() =>
+const loadFileViewer = () =>
   import('../features/FileViewer').then((module) => ({
     default: module.FileViewer,
-  })),
-);
+  }));
+const FileViewer = lazy(loadFileViewer);
 import { ManagementPage } from '../features/Pages';
 import { SettingsDialog } from '../features/SettingsDialog';
 import { DialogHost, InteractionDialog } from '../features/Dialogs';
@@ -285,6 +285,9 @@ export function App() {
   };
   // The mode drawer is closed at first; the top bar's icons open it.
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  useEffect(() => {
+    if (inspectorOpen) void loadFileViewer();
+  }, [inspectorOpen]);
   useEffect(() => {
     if (narrow) setInspectorOpen(false);
     else setOverviewOverlay(false);
