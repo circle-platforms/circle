@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+## 1.15.1 - 2026-11-06
+
 ### Changed
 
 - **What the model writes stays in the conversation as text.** Its updates while it works no longer fold into the tool line, where they hid what it had found. A folded line now says what happened: one call by its description or `$ command`, up to three edited files by name, Circle's own tools by what they do, failures first and in red. A call opens to `$ command` over its output, with no tabs, and a browser or terminal call's row says which action it was. **undo file changes** moves to the row of the turn's time and usage.
