@@ -211,13 +211,18 @@ jobs:
       - run: npm --prefix apps/desktop run package
         timeout-minutes: 15
       # Chromium's sandbox helper must belong to root and be setuid where unprivileged user
-      # namespaces are restricted (Ubuntu 24.04 and later); xvfb-run gives the window a display
+      # namespaces are restricted (Ubuntu 24.04 and later); xvfb-run gives the window a display.
+      # The runner image already holds these packages, so the install reaches no package mirror;
+      # the index is refreshed only if the install fails.
       - name: Prepare the Linux display and Chromium sandbox
         if: runner.os == 'Linux'
         timeout-minutes: 8
         run: |
-          timeout 180 sudo apt-get update -o Acquire::Retries=1
-          timeout 240 sudo apt-get install -y xvfb xauth libgtk-3-0 libnss3 libasound2t64
+          packages=(xvfb xauth libgtk-3-0 libnss3 libasound2t64)
+          if ! timeout 120 sudo apt-get install -y "${packages[@]}"; then
+            timeout 120 sudo apt-get update -o Acquire::Retries=1
+            timeout 180 sudo apt-get install -y "${packages[@]}"
+          fi
           helper="apps/desktop/out/${{ matrix.app }}/chrome-sandbox"
           sudo chown root:root "$helper"
           sudo chmod 4755 "$helper"

@@ -84,12 +84,17 @@ jobs:
           openssl version
       - name: Start an isolated Linux display and retain the Chromium sandbox
         if: runner.os == 'Linux'
-        # A slow package mirror fails here within minutes rather than holding the job
+        # The runner image already holds these packages, so the install reaches no package mirror;
+        # the index is refreshed only if the install fails. A slow mirror then fails here within
+        # minutes rather than holding the job.
         timeout-minutes: 8
         shell: bash
         run: |
-          timeout 180 sudo apt-get update -o Acquire::Retries=1
-          timeout 240 sudo apt-get install -y xvfb xauth libgtk-3-0 libnss3 libasound2t64
+          packages=(xvfb xauth libgtk-3-0 libnss3 libasound2t64)
+          if ! timeout 120 sudo apt-get install -y "${packages[@]}"; then
+            timeout 120 sudo apt-get update -o Acquire::Retries=1
+            timeout 180 sudo apt-get install -y "${packages[@]}"
+          fi
           Xvfb :99 -screen 0 1920x1080x24 > "$RUNNER_TEMP/circle-xvfb.log" 2>&1 &
           echo 'DISPLAY=:99' >> "$GITHUB_ENV"
           helper="$GITHUB_WORKSPACE/apps/desktop/node_modules/electron/dist/chrome-sandbox"

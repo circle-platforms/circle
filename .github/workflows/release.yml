@@ -205,13 +205,18 @@ jobs:
       # The Desktop workbench workflow runs this on main on macOS and Linux, not on Windows
       - if: env.VERIFY_ONLY != 'true' && (env.WORKBENCH_ON_MAIN != 'true' || runner.os == 'Windows')
         run: npm --prefix apps/workbench test
-      # What a display needs on Linux, for the application from source and packaged
+      # What a display needs on Linux, for the application from source and packaged. The runner
+      # image already holds these packages, so the install reaches no package mirror; the index
+      # is refreshed only if the install fails.
       - name: Install the Linux display
         if: runner.os == 'Linux'
         timeout-minutes: 8
         run: |
-          timeout 180 sudo apt-get update -o Acquire::Retries=1
-          timeout 240 sudo apt-get install -y xvfb xauth libgtk-3-0 libnss3 libasound2t64
+          packages=(xvfb xauth libgtk-3-0 libnss3 libasound2t64)
+          if ! timeout 120 sudo apt-get install -y "${packages[@]}"; then
+            timeout 120 sudo apt-get update -o Acquire::Retries=1
+            timeout 180 sudo apt-get install -y "${packages[@]}"
+          fi
       # Runtime discovery includes the real Electron sandbox guard. Configure
       # its development binary before runtime tests, not only the packaged app.
       - name: Prepare the Linux development display and Chromium sandbox
