@@ -93,6 +93,7 @@ export interface DesktopBridge {
   runtimeCommand: (command: RuntimeCommand) => Promise<RuntimeReply>;
   /** Start the runtime process again after it stopped; nothing while it runs. */
   restartRuntime?: () => Promise<void>;
+  /** Stored history is left out: RuntimeTokenBuffer puts it back on the state before it. */
   onRuntime: (listener: (update: RuntimeUpdate) => void) => () => void;
   onRuntimeDelta?: (
     listener: (delta: import('./runtime-protocol').RuntimeTokenDelta) => void,

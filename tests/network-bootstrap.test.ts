@@ -270,7 +270,7 @@ test(
     const listeners=[]; let prompted=false;
     Object.defineProperty(process,'parentPort',{value:{on(_name,listener){listeners.push(listener)},postMessage(value){
       if(value.type==='update' && !prompted){prompted=true;queueMicrotask(()=>listeners[0]({data:{id:'request',name:'prompt',sessionId:value.update.snapshot.activeSessionId,payload:{text:'hello'}}}));}
-      if(value.type==='update' && value.update.snapshot.sessions.some(s=>s.messages.some(m=>m.text==='worker network ready'))){console.log('worker network ready');queueMicrotask(()=>listeners[0]({data:{id:'close',name:'close',payload:{}}}));setTimeout(()=>process.exit(0),100);}
+      if(value.type==='update' && (value.update.history?.deltas??[]).some(d=>d.messages.some(m=>m.text==='worker network ready'))){console.log('worker network ready');queueMicrotask(()=>listeners[0]({data:{id:'close',name:'close',payload:{}}}));setTimeout(()=>process.exit(0),100);}
     }}});
     await import(${JSON.stringify(pathToFileURL(bundle).href)});
   `;

@@ -372,6 +372,35 @@ export interface ControllerOptions {
   beforeDelete?: (sessionId: string) => Promise<void>;
 }
 
+/** A transcript row and what it was made of: the same parts give the same object back. */
+type RowMemo = Map<string, { parts: readonly unknown[]; row: Message }>;
+/** A notice placed after a stored row rather than stored in the history itself. */
+interface AnchoredNotice {
+  id: string;
+  after: string | null;
+  text: string;
+  at: string;
+  planCompleted?: number;
+  completionFailure?: ModelCompletionFailureCode;
+  compaction?: CompactionSnapshot;
+}
+interface SessionHistory {
+  /** Equal only if nothing was written and nothing happened to this session. */
+  unchanged: string;
+  /** What the rows depend on; none while a runtime or a task can change them unseen. */
+  stamp?: string;
+  rows: RowMemo;
+  messages: Message[];
+  branchIds: string[];
+  compaction?: CompactionSnapshot;
+  compacting: boolean;
+}
+interface HistoryInputs {
+  priced: boolean;
+  showHookAllow: boolean;
+  storeVersion: string;
+}
+
 /** The IPC adapter delegates execution and persistence to the existing Circle core. */
 export class RuntimeController {
   private readonly desktopKnowledge = new DesktopKnowledge(() => [
@@ -458,6 +487,11 @@ export class RuntimeController {
   >();
   // Each session's finished turns, by their last message: time and tokens, in memory only
   private turnUsage = new Map<string, Record<string, TurnUsage>>();
+  // What a transcript is made of that is not in the store changes only with an event about
+  // that session, and each one counts here.
+  private sessionEvents = new Map<string, number>();
+  private histories = new Map<string, SessionHistory>();
+  private historiesRead = new Set<string>();
   private turns = new Map<
     string,
     { status: TurnStatus; started: number; waited: number; since?: number }
@@ -1780,7 +1814,7 @@ export class RuntimeController {
       return { records: [], archived: true };
     }
   }
-  private nativeTaskAgents(runtime: AgentRuntime): AgentRecord[] {
+  private nativeTaskAgents(inputs: HistoryInputs): AgentRecord[] {
     const agents = new Map<string, AgentRecord>();
     for (const owner of this.store.list(undefined, true)) {
       const { records, archived } = this.taskAgentAttempts(owner.id);
@@ -1831,7 +1865,8 @@ export class RuntimeController {
                   : 'completed',
             model: child.model,
             tokens: 0,
-            messages: this.projectMessages(runtime, child.id),
+            messages: this.sessionHistory(child.id, child.head, inputs)
+              .messages,
             workspaceId: identity(child.workspace),
             resourceSessionId: child.id,
             readOnly: source.access === 'readonly',
@@ -2605,6 +2640,8 @@ export class RuntimeController {
       this.runtimes.get(id) ??
       [...this.taskRuntimes.values()].find((r) => r.session.id === id);
     if (owner && !owner.isClosing) return owner.compactionHistory();
+    // Most sessions never compacted: finding that out does not walk their history.
+    if (!this.store.compactions.operations(id).length) return [];
     const operations = this.store.compactions.operations(
       id,
       this.store.ancestorIds(id),
@@ -2616,8 +2653,8 @@ export class RuntimeController {
       this.store.compactions.snapshot(operation.snapshot, interrupted),
     );
   }
-  private compactionNotices(id: string) {
-    return this.compactionStates(id)
+  private compactionNotices(states: CompactionSnapshot[]) {
+    return states
       .filter((s) => s.status !== 'running')
       .map((s) => ({
         id: 'compaction-' + s.operationId,
@@ -2629,17 +2666,158 @@ export class RuntimeController {
           ModelCompletionFailureCode | undefined,
       }));
   }
-  private projectMessages(
-    runtime: AgentRuntime,
+  /**
+   * A session's transcript, in the same objects while what they are made of is the same, so
+   * that a publication costs what changed. History that nothing live touches is not read
+   * again until its head, extent or labels move. A session with a runtime of its own is
+   * walked each time, and keeps every row it did not change.
+   */
+  private sessionHistory(
     id: string,
-    nodes = this.store.tree(id),
-  ): Message[] {
+    head: string | null,
+    inputs: HistoryInputs,
+  ): SessionHistory {
+    this.historiesRead.add(id);
+    const owner =
+      this.runtimes.get(id) ??
+      [...this.taskRuntimes.values()].find((task) => task.session.id === id);
+    const before = this.histories.get(id);
+    const { priced, showHookAllow } = inputs;
+    const attempts = this.taskAgentAttempts(id).records;
+    const live = owner || attempts.length;
+    const unchanged = [
+      inputs.storeVersion,
+      head,
+      priced,
+      showHookAllow,
+      this.sessionEvents.get(id) ?? 0,
+      this.failures.get(id)?.length,
+      this.notices.get(id)?.length,
+    ].join();
+    // Nothing was written and nothing happened: no query or walk at all. A compaction left
+    // running may die or come back with its process, which writes nothing, so it is looked at.
+    if (!live && before?.unchanged === unchanged && !before.compacting)
+      return before;
+    const compactions = this.compactionStates(id);
+    const anchored: AnchoredNotice[] = [
+      ...(this.failures.get(id) ?? []),
+      ...(this.notices.get(id) ?? []),
+      ...this.compactionNotices(compactions),
+    ];
     const labels = this.store.labels(id);
+    const { count, last } = this.store.checkpointExtent(id);
+    const stamp = live
+      ? undefined
+      : JSON.stringify([
+          head,
+          count,
+          last,
+          labels,
+          priced,
+          showHookAllow,
+          this.sessionEvents.get(id) ?? 0,
+          anchored,
+        ]);
+    const compaction = compactions.at(-1);
+    const compacting = compactions.some(
+      (state) => state.status === 'running' || state.status === 'interrupted',
+    );
+    if (before && stamp !== undefined && before.stamp === stamp) {
+      Object.assign(before, { unchanged, compaction, compacting });
+      return before;
+    }
+    const nodes = this.store.tree(id);
+    const rows: RowMemo = new Map();
+    const messages = this.projectMessages(id, nodes, {
+      labels,
+      priced,
+      showHookAllow,
+      attempts,
+      anchored,
+      before: before?.rows,
+      rows,
+    });
+    const path = new Set(this.store.messages(id).map((message) => message.id));
+    const branchIds = nodes
+      .filter((node) => node.message && path.has(node.message.id))
+      .flatMap((node) => [
+        node.id,
+        ...(node.message?.tool_calls ?? []).map(
+          (call) => `${node.id}:${call.id}`,
+        ),
+        ...(node.message?.role === 'assistant' &&
+        (node.message.completion || node.message.truncated) &&
+        completionFailure(node.message)
+          ? [`completion-${node.id}`]
+          : []),
+      ]);
+    const listed = new Set(branchIds);
+    for (const failure of anchored)
+      if (failure.after === null || listed.has(failure.after)) {
+        branchIds.push(failure.id);
+        listed.add(failure.id);
+      }
+    const stream = this.streams.get(id);
+    if (stream) branchIds.push(stream.id);
+    for (const view of owner?.userShells.views ?? [])
+      if (
+        view.sessionId === id &&
+        (!view.anchor || path.has(view.anchor)) &&
+        !nodes.some((node) => node.message?.id === view.persistedMessageId)
+      )
+        branchIds.push('user-shell-' + view.id);
+    const history = {
+      unchanged,
+      stamp,
+      rows,
+      messages,
+      branchIds,
+      compaction,
+      compacting,
+    };
+    this.histories.set(id, history);
+    return history;
+  }
+  private projectMessages(
+    id: string,
+    nodes: ReturnType<CheckpointStore['tree']>,
+    made: {
+      labels: Record<string, string>;
+      priced: boolean;
+      showHookAllow: boolean;
+      attempts: readonly TaskRecord[];
+      anchored: readonly AnchoredNotice[];
+      before?: RowMemo;
+      rows: RowMemo;
+    },
+  ): Message[] {
+    const { labels, priced, showHookAllow, attempts, anchored } = made;
     const turns = this.turnUsage.get(id) ?? {};
-    // A ChatGPT plan is not billed per token: its replies show no cost at all.
-    const priced = runtime.options.settings.auth.protocol !== 'chatgpt';
     const result: Message[] = [];
-    const calls = new Map<string, Message>();
+    const calls = new Map<string, { row: Message; at: number }>();
+    const reuse = (
+      key: string,
+      parts: readonly unknown[],
+      build: () => Message,
+    ): Message => {
+      const kept = made.before?.get(key);
+      const entry =
+        kept &&
+        kept.parts.length === parts.length &&
+        kept.parts.every((part, index) => part === parts[index])
+          ? kept
+          : { parts, row: build() };
+      made.rows.set(key, entry);
+      return entry.row;
+    };
+    const agentIds = (
+      name: string,
+      input: Record<string, unknown>,
+      output: string,
+    ) =>
+      name.startsWith('native_tasks_')
+        ? taskToolAgentIds(name, input, output, attempts)
+        : undefined;
     // A stored reply has tokens but not the turn clock. Measure it from the prompt,
     // or from the previous reply, so an older footer shows a duration too.
     for (const node of nodes) {
@@ -2648,163 +2826,172 @@ export class RuntimeController {
       // A crash leaves this marker and no reply. A stopped reply does not:
       // its own `interrupted` flag is the mark, below.
       if (raw.internal === 'interrupted') {
-        result.push({
-          id: node.id,
-          parentId: node.parent,
-          role: 'notice',
-          text: '✖ Interrupted',
-          interrupted: true,
-          at: new Date(node.created).toISOString(),
-        });
+        result.push(
+          reuse(node.id, [node], () => ({
+            id: node.id,
+            parentId: node.parent,
+            role: 'notice',
+            text: '✖ Interrupted',
+            interrupted: true,
+            at: new Date(node.created).toISOString(),
+          })),
+        );
         continue;
       }
       if (raw.internal === 'hook_notice') {
-        if (
-          raw.hook?.kind === 'allowed' &&
-          !loadSettings(this.home).show_hook_allow
-        )
-          continue;
-        result.push({
-          id: node.id,
-          parentId: node.parent,
-          role: 'notice',
-          text: raw.display ?? raw.content,
-          ...(raw.hook ? { hookNotice: raw.hook } : {}),
-          at: new Date(node.created).toISOString(),
-        });
+        if (raw.hook?.kind === 'allowed' && !showHookAllow) continue;
+        result.push(
+          reuse(node.id, [node], () => ({
+            id: node.id,
+            parentId: node.parent,
+            role: 'notice',
+            text: raw.display ?? raw.content,
+            ...(raw.hook ? { hookNotice: raw.hook } : {}),
+            at: new Date(node.created).toISOString(),
+          })),
+        );
         continue;
       }
       if (raw.internal) continue;
       if (raw.role === 'tool') {
-        const call = calls.get(raw.tool_call_id ?? '');
-        if (call?.tool) {
+        const found = calls.get(raw.tool_call_id ?? '');
+        if (found?.row.tool) {
+          const { row: call, at } = found;
+          const tool = call.tool!;
+          const ids = agentIds(tool.name, tool.input, raw.content);
           // In place: a finished call keeps its position among its turn's calls.
-          result[result.indexOf(call)] = {
-            ...call,
-            id: node.id,
-            parentId: node.parent,
-            attachments: raw.attachments?.map((a, index) => ({
-              id: `${node.id}-attachment-${index}`,
-              name: a.filename,
-              kind: a.kind,
-              content: a.data,
-              mime: a.mime_type,
-            })),
-            tool: {
-              ...call.tool,
-              output: raw.content,
-              status: raw.status ?? 'success',
-              agentIds: taskToolAgentIds(
-                call.tool.name,
-                call.tool.input,
-                raw.content,
-                this.taskAgentAttempts(id).records,
-              ),
-            },
-          };
+          if (at >= 0)
+            result[at] = reuse(node.id, [node, call, ids?.join('\n')], () => ({
+              ...call,
+              id: node.id,
+              parentId: node.parent,
+              attachments: raw.attachments?.map((a, index) => ({
+                id: `${node.id}-attachment-${index}`,
+                name: a.filename,
+                kind: a.kind,
+                content: a.data,
+                mime: a.mime_type,
+              })),
+              tool: {
+                ...tool,
+                output: raw.content,
+                status: raw.status ?? 'success',
+                agentIds: ids,
+              },
+            }));
+          found.at = -1;
         } else
-          result.push({
-            id: node.id,
-            parentId: node.parent,
-            role: 'tool',
-            text: raw.content,
-            at: new Date(node.created).toISOString(),
-          });
+          result.push(
+            reuse(node.id, [node], () => ({
+              id: node.id,
+              parentId: node.parent,
+              role: 'tool',
+              text: raw.content,
+              at: new Date(node.created).toISOString(),
+            })),
+          );
         continue;
       }
-      const runtimeNotice =
-        raw.role === 'assistant'
-          ? storedGitHubStatusNotice(raw.content, raw.runtimeNotice)
-          : undefined;
-      const base: Message = {
-        id: node.id,
-        parentId: node.parent,
-        role: runtimeNotice ? 'notice' : raw.role,
-        ...(runtimeNotice ? { runtimeNotice } : {}),
-        text: raw.display ?? raw.content,
-        thinking: raw.thinking,
-        ...(raw.phase ? { phase: raw.phase } : {}),
-        ...(typeof raw.thinking_seconds === 'number'
-          ? { thinkingSeconds: raw.thinking_seconds }
-          : {}),
-        label: labels[raw.id],
-        at: new Date(node.created).toISOString(),
-        ...(raw.shell
-          ? {
-              shell: {
-                id: raw.shell.id,
-                sourceSessionId: id,
-                command: raw.shell.command,
-                output: raw.shell.output,
-                exitCode: raw.shell.exit_code,
-                status:
-                  raw.shell.exit_code === 0
-                    ? ('done' as const)
-                    : ('error' as const),
-                interactive: (raw.commandExecutions ?? []).some(
-                  (execution) =>
-                    execution.executionSessionId === id &&
-                    execution.userShellId === raw.shell!.id &&
-                    execution.toolCallId === undefined &&
-                    !!execution.terminal,
-                ),
-              },
-            }
-          : {}),
-        attachments: raw.attachments?.map((a, index) => ({
-          id: `${node.id}-attachment-${index}`,
-          name: a.filename,
-          kind: a.kind,
-          content: a.data,
-          mime: a.mime_type,
-        })),
-        ...(raw.role === 'assistant' && raw.interrupted
-          ? { interrupted: true }
-          : {}),
-        // Only the last message of a finished turn shows usage: the whole turn's time,
-        // tokens and cost, once. The steps before it show none.
-        usage: turns[raw.id]
-          ? {
-              input: turns[raw.id]!.input,
-              output: turns[raw.id]!.output,
-              ...(turns[raw.id]!.unreported ? { unreported: true } : {}),
-              ...(priced ? { cost: turns[raw.id]!.cost ?? null } : {}),
-              // A stop prices an estimate. The mark follows the amount (`$0.0182~`).
-              ...(raw.interrupted ? { estimated: true } : {}),
-              elapsed: formatElapsed(turns[raw.id]!.seconds),
-            }
-          : undefined,
-      };
+      const label = labels[raw.id];
+      const turn = turns[raw.id];
+      const role = raw.role;
+      const base = reuse(node.id, [node, label, turn, priced], () => {
+        const runtimeNotice =
+          role === 'assistant'
+            ? storedGitHubStatusNotice(raw.content, raw.runtimeNotice)
+            : undefined;
+        return {
+          id: node.id,
+          parentId: node.parent,
+          role: runtimeNotice ? 'notice' : role,
+          ...(runtimeNotice ? { runtimeNotice } : {}),
+          text: raw.display ?? raw.content,
+          thinking: raw.thinking,
+          ...(raw.phase ? { phase: raw.phase } : {}),
+          ...(typeof raw.thinking_seconds === 'number'
+            ? { thinkingSeconds: raw.thinking_seconds }
+            : {}),
+          label,
+          at: new Date(node.created).toISOString(),
+          ...(raw.shell
+            ? {
+                shell: {
+                  id: raw.shell.id,
+                  sourceSessionId: id,
+                  command: raw.shell.command,
+                  output: raw.shell.output,
+                  exitCode: raw.shell.exit_code,
+                  status:
+                    raw.shell.exit_code === 0
+                      ? ('done' as const)
+                      : ('error' as const),
+                  interactive: (raw.commandExecutions ?? []).some(
+                    (execution) =>
+                      execution.executionSessionId === id &&
+                      execution.userShellId === raw.shell!.id &&
+                      execution.toolCallId === undefined &&
+                      !!execution.terminal,
+                  ),
+                },
+              }
+            : {}),
+          attachments: raw.attachments?.map((a, index) => ({
+            id: `${node.id}-attachment-${index}`,
+            name: a.filename,
+            kind: a.kind,
+            content: a.data,
+            mime: a.mime_type,
+          })),
+          ...(role === 'assistant' && raw.interrupted
+            ? { interrupted: true }
+            : {}),
+          // Only the last message of a finished turn shows usage: the whole turn's time,
+          // tokens and cost, once. The steps before it show none.
+          usage: turn
+            ? {
+                input: turn.input,
+                output: turn.output,
+                ...(turn.unreported ? { unreported: true } : {}),
+                ...(priced ? { cost: turn.cost ?? null } : {}),
+                // A stop prices an estimate. The mark follows the amount (`$0.0182~`).
+                ...(raw.interrupted ? { estimated: true } : {}),
+                elapsed: formatElapsed(turn.seconds),
+              }
+            : undefined,
+        };
+      });
       const shown =
         raw.role !== 'assistant' ||
         Boolean(base.text || base.thinking || base.attachments?.length);
       if (shown) result.push(base);
       for (const call of raw.tool_calls ?? []) {
         const state = this.toolStates.get(`${id}:${call.id}`);
-        const row: Message = {
-          id: `${node.id}:${call.id}`,
-          parentId: node.id,
-          role: 'tool',
-          text: '',
-          at: base.at,
-          tool: {
-            id: call.id,
-            name: call.name,
-            input: call.args,
-            output: state?.output ?? '',
-            status: state?.status ?? 'unknown',
-            filePath:
-              String(call.args.file_path ?? call.args.path ?? '') || undefined,
-            diff: this.diffs.get(`${id}:${call.id}`),
-            agentIds: taskToolAgentIds(
-              call.name,
-              call.args,
-              state?.output ?? '',
-              this.taskAgentAttempts(id).records,
-            ),
-          },
-        };
-        calls.set(call.id, row);
+        const diff = this.diffs.get(`${id}:${call.id}`);
+        const ids = agentIds(call.name, call.args, state?.output ?? '');
+        const row = reuse(
+          `${node.id}:${call.id}`,
+          [node, state, diff, ids?.join('\n')],
+          () => ({
+            id: `${node.id}:${call.id}`,
+            parentId: node.id,
+            role: 'tool',
+            text: '',
+            at: base.at,
+            tool: {
+              id: call.id,
+              name: call.name,
+              input: call.args,
+              output: state?.output ?? '',
+              status: state?.status ?? 'unknown',
+              filePath:
+                String(call.args.file_path ?? call.args.path ?? '') ||
+                undefined,
+              diff,
+              agentIds: ids,
+            },
+          }),
+        );
+        calls.set(call.id, { row, at: result.length });
         result.push(row);
       }
       const completion =
@@ -2812,14 +2999,16 @@ export class RuntimeController {
         (raw.completion || raw.truncated) &&
         completionFailure(raw);
       if (completion)
-        result.push({
-          id: `completion-${node.id}`,
-          parentId: node.id,
-          role: 'notice',
-          text: `✖ ${completion.message}`,
-          completionFailure: completion.code,
-          at: base.at,
-        });
+        result.push(
+          reuse(`completion-${node.id}`, [node], () => ({
+            id: `completion-${node.id}`,
+            parentId: node.id,
+            role: 'notice',
+            text: `✖ ${completion.message}`,
+            completionFailure: completion.code,
+            at: base.at,
+          })),
+        );
     }
     const actual =
       this.runtimes.get(id) ??
@@ -2866,16 +3055,18 @@ export class RuntimeController {
       result.splice(index, 0, shell);
       shellAnchors.set(anchor, shell.id);
     }
-    const parents = new Map(nodes.map((node) => [node.id, node.parent]));
+    const parents = anchored.length
+      ? new Map(nodes.map((node) => [node.id, node.parent]))
+      : new Map<string, string | null>();
     const insertedAfter = new Map<string | null, string>();
-    const storedStop = result.some(
-      (row) => row.role === 'notice' && row.text === '✖ Interrupted',
-    );
-    for (const failure of [
-      ...(this.failures.get(id) ?? []),
-      ...(this.notices.get(id) ?? []),
-      ...this.compactionNotices(id),
-    ].filter((failure) => failure.text !== '✖ Interrupted' || !storedStop)) {
+    const storedStop =
+      anchored.length > 0 &&
+      result.some(
+        (row) => row.role === 'notice' && row.text === '✖ Interrupted',
+      );
+    for (const failure of anchored.filter(
+      (failure) => failure.text !== '✖ Interrupted' || !storedStop,
+    )) {
       // After the message it followed and that message's tool rows
       const afterIndex = (anchor: string | null) =>
         result.findLastIndex(
@@ -2910,14 +3101,11 @@ export class RuntimeController {
         role: 'notice',
         text: failure.text,
         at: failure.at,
-        ...('compaction' in failure
-          ? { compaction: failure.compaction as CompactionSnapshot }
-          : {}),
-        ...('completionFailure' in failure && failure.completionFailure
+        ...(failure.compaction ? { compaction: failure.compaction } : {}),
+        ...(failure.completionFailure
           ? { completionFailure: failure.completionFailure }
           : {}),
-        ...('planCompleted' in failure &&
-        typeof failure.planCompleted === 'number'
+        ...(typeof failure.planCompleted === 'number'
           ? { planCompleted: failure.planCompleted }
           : {}),
       });
@@ -3043,7 +3231,14 @@ export class RuntimeController {
     // The open conversation is listed before its first message.
     const rows = this.store.list(undefined, false, true);
     const paths = this.listedFolders(rows);
-    const nativeAgents = this.nativeTaskAgents(runtime);
+    this.historiesRead.clear();
+    const historyInputs: HistoryInputs = {
+      // A ChatGPT plan is not billed per token: its replies show no cost at all.
+      priced: settings.auth.protocol !== 'chatgpt',
+      showHookAllow: savedSettings.show_hook_allow,
+      storeVersion: this.store.changeVersion(),
+    };
+    const nativeAgents = this.nativeTaskAgents(historyInputs);
     const sessions: Session[] = rows.map((row) => {
       const owner =
         this.runtimes.get(row.id) ??
@@ -3055,39 +3250,7 @@ export class RuntimeController {
       const queue = selected
         ? owner.harness.queuedMessages
         : { steering: [], followUp: [] };
-      const path = new Set(
-        this.store.messages(row.id).map((message) => message.id),
-      );
-      const nodes = this.store.tree(row.id);
-      const branchIds = nodes
-        .filter((node) => node.message && path.has(node.message.id))
-        .flatMap((node) => [
-          node.id,
-          ...(node.message?.tool_calls ?? []).map(
-            (call) => `${node.id}:${call.id}`,
-          ),
-          ...(node.message?.role === 'assistant' &&
-          (node.message.completion || node.message.truncated) &&
-          completionFailure(node.message)
-            ? [`completion-${node.id}`]
-            : []),
-        ]);
-      for (const failure of [
-        ...(this.failures.get(row.id) ?? []),
-        ...(this.notices.get(row.id) ?? []),
-        ...this.compactionNotices(row.id),
-      ])
-        if (failure.after === null || branchIds.includes(failure.after))
-          branchIds.push(failure.id);
-      const stream = this.streams.get(row.id);
-      if (stream) branchIds.push(stream.id);
-      for (const view of owner?.userShells.views ?? [])
-        if (
-          view.sessionId === row.id &&
-          (!view.anchor || path.has(view.anchor)) &&
-          !nodes.some((node) => node.message?.id === view.persistedMessageId)
-        )
-          branchIds.push('user-shell-' + view.id);
+      const history = this.sessionHistory(row.id, row.head, historyInputs);
       return {
         id: row.id,
         archivedAt: this.metadata.archivedAt(row.id),
@@ -3109,12 +3272,12 @@ export class RuntimeController {
           : savedSettings.default_thinking) || 'default') as Effort,
         draft: '',
         attachments: [],
-        messages: this.projectMessages(runtime, row.id, nodes),
+        messages: history.messages,
         fileUndoTurns: owner
           ? this.fileRewinds.get(owner)?.availableTurns()
           : [],
         leafId: row.head,
-        branchIds,
+        branchIds: history.branchIds,
         hiddenIds: [],
         undoStack: [],
         queueVersion: owner?.harness.queuedVersion,
@@ -3136,7 +3299,7 @@ export class RuntimeController {
         mode: selected ? owner.mode : 'manual',
         meters: selected && !owner.isClosing ? this.meters(owner) : undefined,
         turn: this.turn(row.id),
-        compaction: this.compactionStates(row.id).at(-1),
+        compaction: history.compaction,
         changes: this.changeList(row.id),
         showThinking: !savedSettings.hide_thinking,
         expandTools: false,
@@ -3253,7 +3416,8 @@ export class RuntimeController {
                     : 'completed',
                 model: row.model,
                 tokens: 0,
-                messages: this.projectMessages(runtime, row.id),
+                messages: this.sessionHistory(row.id, row.head, historyInputs)
+                  .messages,
               }) as AgentRecord,
           ),
         ...nativeAgents,
@@ -3586,6 +3750,9 @@ export class RuntimeController {
       tokenStream: { epoch: this.tokenEpoch, seq: this.tokenSequence },
       event,
     };
+    // A session deleted elsewhere keeps no rows here.
+    for (const id of this.histories.keys())
+      if (!this.historiesRead.has(id)) this.histories.delete(id);
     this.options.emit(update);
     this.refreshTerminalTabWaits();
     return update;
@@ -3607,6 +3774,7 @@ export class RuntimeController {
     const id = String(
       event.tags?.subagent ?? event.tags?.session_id ?? runtime.session.id,
     );
+    this.sessionEvents.set(id, (this.sessionEvents.get(id) ?? 0) + 1);
     if (event.tags?.subagent)
       this.activities.set(
         id,
@@ -5047,6 +5215,8 @@ export class RuntimeController {
           this.planCompletions.delete(target);
           this.turns.delete(target);
           this.turnUsage.delete(target);
+          this.sessionEvents.delete(target);
+          this.histories.delete(target);
           this.activities.delete(target);
           this.changes.delete(target);
           for (const key of this.diffs.keys())

@@ -1,5 +1,6 @@
 import type { RuntimeTokenDelta, RuntimeUpdate } from './runtime-protocol';
 import type { Message, Session } from '../../workbench/src/model/types';
+import { restoreHistory } from './runtime-history-wire';
 
 interface StreamState {
   index: number;
@@ -8,6 +9,7 @@ interface StreamState {
 }
 export type TokenDeltaResult =
   'applied' | 'duplicate' | 'gap' | 'missing-session';
+export type FullUpdateResult = 'accepted' | 'stale' | 'history-gap';
 
 /** Shared by native supervisor and renderer. Chunks update only active stream
  * buffers; snapshot/history copies happen only when a consumer asks to render
@@ -15,6 +17,7 @@ export type TokenDeltaResult =
  */
 export class RuntimeTokenBuffer {
   private full?: RuntimeUpdate;
+  private historyRevisions: ReadonlyMap<string, number> = new Map();
   private sessions = new Map<string, Session>();
   private streams = new Map<string, StreamState>();
   private compactions = new Map<
@@ -28,6 +31,10 @@ export class RuntimeTokenBuffer {
   }
 
   acceptFull(update: RuntimeUpdate): boolean {
+    return this.accept(update) === 'accepted';
+  }
+  /** Take a publication as the new baseline; materialize() then has its stored history. */
+  accept(update: RuntimeUpdate): FullUpdateResult {
     const marker = update.tokenStream;
     const sameEpoch = !marker || marker.epoch === this.cursor.epoch;
     if (
@@ -37,21 +44,24 @@ export class RuntimeTokenBuffer {
         (update.seq === this.full.seq &&
           (!marker || marker.seq <= this.cursor.seq)))
     )
-      return false;
-    if (marker && this.retiredEpochs.has(marker.epoch)) return false;
+      return 'stale';
+    if (marker && this.retiredEpochs.has(marker.epoch)) return 'stale';
+    const restored = restoreHistory(update, this.full, this.historyRevisions);
+    if (!restored) return 'history-gap';
     if (marker && this.cursor.epoch && marker.epoch !== this.cursor.epoch) {
       this.retiredEpochs.add(this.cursor.epoch);
       if (this.retiredEpochs.size > 32)
         this.retiredEpochs.delete(this.retiredEpochs.values().next().value!);
     }
-    this.full = update;
+    this.full = restored.update;
+    this.historyRevisions = restored.revisions;
     this.cursor = marker ? { ...marker } : { epoch: '', seq: 0 };
     this.sessions = new Map(
-      update.snapshot.sessions.map((session) => [session.id, session]),
+      restored.update.snapshot.sessions.map((session) => [session.id, session]),
     );
     this.streams.clear();
     this.compactions.clear();
-    return true;
+    return 'accepted';
   }
   apply(delta: RuntimeTokenDelta): TokenDeltaResult {
     if (!this.full || !delta || typeof delta.epoch !== 'string') return 'gap';

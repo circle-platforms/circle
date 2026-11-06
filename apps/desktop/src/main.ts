@@ -959,7 +959,7 @@ app
       runtime.onTokenDelta((delta) =>
         broadcast('circle:runtime-token-delta', delta),
       );
-      runtime.subscribe((update) => {
+      runtime.subscribe((update, sent) => {
         externalFilePicker.observe({
           connected: update.connected,
           activeSessionId: update.snapshot.activeSessionId,
@@ -975,7 +975,7 @@ app
             browserCertificates.delete(id);
           }
         runtimeSessions = current;
-        broadcast('circle:runtime-update', update);
+        broadcast('circle:runtime-update', sent ?? update);
         showAttention(update);
       });
       await runtime.start();

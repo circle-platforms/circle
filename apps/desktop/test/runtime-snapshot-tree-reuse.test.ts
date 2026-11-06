@@ -15,7 +15,7 @@ import {
 } from '../../../src/settings.ts';
 import { patience } from './helpers/patience.mjs';
 
-test('one snapshot reads each root tree once while preserving branch selection, labels and real tool history across later appends', async () => {
+test('one snapshot reads a changed root tree once and an unchanged one not at all, while preserving branch selection, labels and real tool history across later appends', async () => {
   const temp = await mkdtemp(join(tmpdir(), 'circle-snapshot-tree-'));
   const home = join(temp, 'home'),
     workspace = join(temp, 'workspace');
@@ -152,7 +152,12 @@ test('one snapshot reads each root tree once while preserving branch selection, 
       final.messages.find((m) => m.id === old.id)?.label,
       'old branch label',
     );
-    assertOneTree();
+    assert.equal(reads.get('history'), 1, 'the open session is walked once');
+    assert.equal(
+      reads.get('other'),
+      undefined,
+      'nothing changed in the inactive root, so it is not read at all',
+    );
     reads.clear();
     for (const [key, value] of firstReads) reads.set(key, value);
     assertOneTree();

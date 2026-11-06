@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { Code } from 'lucide-react';
 import { splitAutolink } from '../../../../src/autolink.ts';
 import { t } from '../i18n';
@@ -125,7 +125,8 @@ function remarkFullwidthAutolinks() {
   };
   return (tree: MarkdownNode) => walk(tree);
 }
-export function Markdown({ text }: { text: string }) {
+// Parsed again only when its text changes: every publication renders the rows on screen.
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
   const sources = useSources();
   return (
     <div className="markdown">
@@ -179,4 +180,4 @@ export function Markdown({ text }: { text: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});

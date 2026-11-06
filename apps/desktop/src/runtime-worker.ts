@@ -5,6 +5,7 @@ import {
 import { close as closeFile, open, readFileSync, stat } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { RuntimeController } from './runtime-controller';
+import { HistoryCompactor } from './runtime-history-wire';
 import { pendingResources, ThreadPoolWatch } from './thread-pool-watch';
 import { BrowserBridge } from '../../../src/browser/tools.js';
 import type { BrowserReply } from '../../../src/browser/protocol.js';
@@ -57,6 +58,7 @@ async function run() {
     port.postMessage(message),
   );
   const terminal = new TerminalBridge((message) => port.postMessage(message));
+  const history = new HistoryCompactor();
   const controller = new RuntimeController({
     home,
     onFatalError: (error) => {
@@ -100,7 +102,8 @@ async function run() {
       ? (path) =>
           new ModelCatalog(path, { env: { CIRCLE_NO_MODELS_REFRESH: '1' } })
       : undefined,
-    emit: (update) => port.postMessage({ type: 'update', update }),
+    emit: (update) =>
+      port.postMessage({ type: 'update', update: history.compact(update) }),
     emitTokenDelta: (delta: RuntimeTokenDelta) =>
       port.postMessage({ type: 'token-delta', delta }),
     openUrl: (url) => port.postMessage({ type: 'open-url', url }),
@@ -138,6 +141,11 @@ async function run() {
 
     if ((data as { type?: unknown })?.type === 'credential-reply') {
       credentialStore.receive(data);
+      return;
+    }
+    if ((data as { type?: unknown })?.type === 'history-resync') {
+      history.reset();
+      controller.publish();
       return;
     }
     const message = data as {
