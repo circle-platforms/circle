@@ -38,6 +38,13 @@ Circle does not start such a turn:
 - for a job of another conversation: its notice waits until that conversation is open again;
 - more than ten times in a row: then it waits for you.
 
+The [desktop application](desktop.md) starts such a turn too, with these differences:
+
+- The conversation has no row for the notice. The job's row in the overview's [background jobs card](desktop.md#the-overview) says how it ended.
+- The stop button counts as `esc`, and going back with the session tree counts as `/tree`.
+- Each open conversation wakes by itself, selected or not, so a job of a conversation you are not looking at starts a turn in that conversation.
+- Typing holds nothing back: what you send during the turn waits in the queue, as it does during any turn.
+
 The model is told not to poll. If it runs a bare `sleep` anyway (`sleep 30`), the sleep ends as soon as one of its jobs ends; if it keeps sleeping or re-reading a job's output while jobs run, Circle reminds it that a notice will come. After older messages are summarized, Circle reminds it of the jobs it started that still run.
 
 ## Background subagents

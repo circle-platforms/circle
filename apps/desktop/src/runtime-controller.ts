@@ -205,6 +205,7 @@ import {
   type SecretRequest,
 } from '../../../src/secret_prompt.js';
 import { elapsed, outputTail } from '../../../src/jobs.js';
+import { JobWake } from './job-wake.js';
 import type { CircleEvent } from '../../../src/events.js';
 import type {
   WorkbenchSnapshot,
@@ -483,6 +484,7 @@ export class RuntimeController {
     { canonical: string; dev: number; ino: number }
   >();
   private taskRuntimes = new Map<string, AgentRuntime>();
+  private jobWakes = new WeakMap<AgentRuntime, JobWake>();
   private workspaceEventPending = new Set<Promise<unknown>>();
   private workspaceStreamFailures = new Map<string, string>();
   private workspaceEpoch = randomUUID();
@@ -2172,8 +2174,10 @@ export class RuntimeController {
       const result = owner.harness.resolveInputs(
         request.params as unknown as ResolveInputsRequest,
       );
-      if (result.applied && result.action === 'resume' && !owner.busy)
+      if (result.applied && result.action === 'resume' && !owner.busy) {
+        this.jobWakes.get(owner)?.personSent();
         this.track(owner.harness.run(), owner);
+      }
       this.publish();
       return result;
     }
@@ -2468,8 +2472,38 @@ export class RuntimeController {
             ),
           },
         });
-      } else this.event(runtime, event);
+      } else {
+        if (event.kind === 'job_ended') this.jobWakes.get(runtime)?.jobEnded();
+        this.event(runtime, event);
+      }
     });
+    // A task's runtime ends with its turn; only a conversation waits for its jobs.
+    if (!task)
+      this.jobWakes.set(
+        runtime,
+        new JobWake({
+          hasNotice: () => runtime.jobs.hasNotices(runtime.session.id, true),
+          occupied: () =>
+            runtime.busy ||
+            [...this.pending.values()].some(
+              (pending) => pending.row.sessionId === runtime.session.id,
+            ),
+          closed: () =>
+            this.closing ||
+            runtime.isClosing ||
+            this.runtimes.lifecycle(runtime.session.id) !== 'open' ||
+            Boolean(this.metadata.archivedAt(runtime.session.id)) ||
+            !isFolderTrusted(
+              runtime.options.settings,
+              runtime.options.workspace,
+            ),
+          start: () => {
+            const run = runtime.runJobNotices();
+            this.track(run, runtime);
+            return run;
+          },
+        }),
+      );
     const tracker = new PlanCompletionTracker();
     tracker.reset(runtime.todos);
     this.planCompletions.set(runtime.session.id, tracker);
@@ -4509,6 +4543,7 @@ export class RuntimeController {
       throw Error('connect an API URL, key and model first');
     const prompt = text(p.text, 'prompt');
     if (!prompt.trim()) throw Error('prompt is empty');
+    this.jobWakes.get(runtime)?.personSent();
     const kind = p.kind ?? 'steering';
     if (!['steering', 'follow-up'].includes(String(kind)))
       throw Error('invalid queue kind');
@@ -4794,6 +4829,7 @@ export class RuntimeController {
             runtime.compaction.status !== 'running')
         )
           return {};
+        if (!operationId) this.jobWakes.get(runtime)?.snooze();
         const id = runtime.session.id;
         this.cancelling.add(id);
         try {
@@ -5057,6 +5093,8 @@ export class RuntimeController {
             runtime.jobs.list().some((job) => job.status === 'running'))
         )
           throw Error('stop the current turn before branching');
+        if (command.name === 'select-branch')
+          this.jobWakes.get(runtime)?.snooze();
         const sourceId = this.selectedSessionId;
         const workspace = this.selectedWorkspace;
         const nodes = this.store.tree(sourceId);
