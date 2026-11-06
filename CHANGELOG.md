@@ -4,6 +4,24 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+### Changed
+
+- **What the model writes stays in the conversation as text.** Its updates while it works no longer fold into the tool line, where they hid what it had found. A folded line now says what happened: one call by its description or `$ command`, up to three edited files by name, Circle's own tools by what they do, failures first and in red. A call opens to `$ command` over its output, with no tabs, and a browser or terminal call's row says which action it was. **undo file changes** moves to the row of the turn's time and usage.
+- **A background command shows once.** It no longer has a terminal tab as well as its place in **background jobs**. To type into it, **open in terminal** on its job row or its tool row opens that command's terminal, and `/jobs` opens the background jobs mode.
+- **The background jobs mode is easier to read.** Rows match the subagents mode, with a state dot, and output is small monospaced text without terminal control codes. The overview card keeps a job's row with `done`, `failed` or `stopped`, and shows the three that ended last.
+
+### Fixed
+
+- **A background job that ends starts a turn in the desktop.** The model was told to end its turn and wait for the notice, but the desktop never started that turn, so the conversation stopped until you wrote something. Each open conversation now wakes by itself, selected or not, as the terminal already did.
+- **The desktop rests while nothing happens.** The workspace file scan ran every second for each open folder and could hold most of a core. Where the system reports file changes it now runs every five seconds, it rests in proportion to how long a scan took, and it skips linked Git worktrees.
+- **Long histories no longer slow every update in the desktop.** Each update sent all stored messages of all sessions and rendered every row of the conversation. It now sends and renders only what changed.
+- **A job's notice says what it printed on Windows.** A Windows console's last repaint filled the notice with erase codes, so the model was told the job ended and saw nothing it had printed.
+- **GitHub repository names are checked the same everywhere.** The backend and the push credentials accepted names such as `../invalid` and `-owner/repo`; these are now refused, and an owner may hold an underscore or end in a hyphen, as managed and some old accounts do.
+- **A download you approve reaches the downloads folder before the approval returns.** Approving a held download now waits up to 10 seconds for it to finish.
+- **Closing the browser survives a slow `taskkill` on Windows.** When `taskkill` runs out of time on a busy machine, Circle stops the browser through its own handle and confirms that it ended.
+- **Large Markdown documents parse with less work in local knowledge.** Table lookups are built only for a document that needs them, and lines are split without a regular expression.
+- **The first file in the files panel opens sooner.** The file viewer starts loading as soon as the drawer opens.
+
 ## 1.15.0 - 2026-11-05
 
 ### Added
