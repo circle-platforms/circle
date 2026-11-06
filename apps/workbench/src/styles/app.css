@@ -872,10 +872,8 @@ pre {
   display: flex;
   gap: 9px;
   align-items: center;
+  justify-content: flex-end;
   margin: 11px 0;
-}
-.tool-toolbar .segmented {
-  margin-right: auto;
 }
 .tool-meta {
   color: var(--muted);
@@ -4117,6 +4115,7 @@ pre {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
   min-height: 24px;
   margin-top: 4px;
   color: var(--muted);
@@ -4126,8 +4125,29 @@ pre {
 }
 .message .message-meta,
 .message:hover .message-meta,
-.message-meta:focus-within {
+.message-meta:focus-within,
+.turn-foot {
   opacity: 1;
+}
+/* Words on the way to more work read with the line under them, so the row takes no place. */
+.message[data-interim] {
+  position: relative;
+  margin-bottom: 16px;
+}
+.message[data-interim] .message-meta {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0;
+  padding-left: 8px;
+  background: var(--bg);
+  opacity: 0;
+  pointer-events: none;
+}
+.message[data-interim]:hover .message-meta,
+.message[data-interim] .message-meta:focus-within {
+  opacity: 1;
+  pointer-events: auto;
 }
 .message-meta footer {
   margin: 0;
@@ -4226,6 +4246,9 @@ pre {
 .tool-summary .failed {
   color: var(--negative-text);
   font-size: var(--ui-small);
+}
+.tool-summary-text .failed {
+  font-size: inherit;
 }
 /* Only the folded line's command. A running card is .tool-call.tool-running and keeps its width. */
 .tool-summary .tool-running {
@@ -5252,22 +5275,6 @@ button.sidebar-brand {
   visibility: hidden;
 }
 .thinking-body {
-  color: var(--secondary);
-  font-size: var(--ui-small);
-}
-.tool-note {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--fg);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tool-note + .tool-summary-text {
-  flex: none;
-  color: var(--muted);
-}
-.group-commentary {
-  padding: 4px 12px;
   color: var(--secondary);
   font-size: var(--ui-small);
 }

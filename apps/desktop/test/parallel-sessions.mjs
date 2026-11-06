@@ -530,11 +530,8 @@ try {
     'false',
   );
   await page.locator('.tool-summary').click();
-  await page.locator('.tool-head').click();
-  await page
-    .locator('.tool-toolbar')
-    .getByRole('button', { name: 'arguments', exact: true })
-    .click();
+  // One call: opening the line opened the call.
+  await page.locator('.tool-input > summary').click();
   await select(a);
   await select(b);
   assert.equal(
@@ -546,10 +543,10 @@ try {
     'true',
   );
   assert.equal(
-    await page.locator('.tool-toolbar button.active').innerText(),
-    'arguments',
+    await page.locator('.tool-input').evaluate((node) => node.open),
+    true,
   );
-  checks.push('individual tool folds and tool input tabs are per session');
+  checks.push('individual tool folds and tool arguments are per session');
   await setViewport(app, page, {
     width: toolViewport.width,
     height: toolViewport.height,

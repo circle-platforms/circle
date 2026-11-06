@@ -1,4 +1,3 @@
-import { groupNote } from '../model/commentary';
 import {
   cleanThinking,
   thinkingHasBody,
@@ -11,9 +10,11 @@ import { Brain, ChevronDown, ChevronRight, LoaderCircle } from 'lucide-react';
 import type { Message, Session } from '../model/types';
 import { toolSummary } from '../model/tool-summary';
 import { TurnClock } from './TurnClock';
-import { ToolMessage } from './ToolMessage';
+import { AgentToolLinks, mappedToolAgents, ToolMessage } from './ToolMessage';
+import { useRuntime } from '../app/context';
+import { currentSession } from '../model/state';
 import { ImageThumb } from './ImageThumb';
-import { t, tn } from '../i18n';
+import { locale, t, tn } from '../i18n';
 import '../features/conversation-requests.css';
 
 export { toolSummary };
@@ -27,6 +28,7 @@ export function ToolGroup({
   rows,
   ownerSessionId,
   expanded,
+  showThinking = true,
   onFile,
   onAgent,
   turn,
@@ -35,6 +37,7 @@ export function ToolGroup({
   rows: Message[];
   ownerSessionId?: string;
   expanded: boolean;
+  showThinking?: boolean;
   onFile: (path: string) => void;
   onAgent: (id: string) => void;
   /** The turn under way, when these are its latest tools: its clock goes on their row. */
@@ -70,14 +73,36 @@ export function ToolGroup({
     'group:' + rows[0]?.id,
     expanded,
   );
+  const { snapshot } = useRuntime();
   const summary = toolSummary(rows);
-  const note = groupNote(rows);
+  // The way into a subagent stays in view however the line is folded.
+  const agents = [
+    ...new Map(
+      tools
+        .flatMap((tool) =>
+          mappedToolAgents(
+            tool,
+            snapshot.agents,
+            ownerSessionId ?? currentSession(snapshot).id,
+          ),
+        )
+        .map((agent) => [agent.id, agent]),
+    ).values(),
+  ];
+  const separator = locale() === 'zh-CN' ? '，' : ', ';
   const running = tools.find((tool) => tool.status === 'running');
   // A picture a tool brought back, such as the browser's screenshot, belongs to the
   // call that took it: the folded line only says how many there are.
   const shots = rows.flatMap((row) =>
     (row.attachments ?? []).filter((file) => file.kind === 'image'),
   );
+  // Steps with only hidden thinking, or nothing at all, have nothing to show.
+  if (
+    !tools.length &&
+    !turn &&
+    !(showThinking && rows.some((row) => row.thinking))
+  )
+    return null;
   return (
     <div
       className="tool-group"
@@ -95,8 +120,14 @@ export function ToolGroup({
         ) : runningTool || turn ? (
           <LoaderCircle size={13} className="spin" />
         ) : null}
-        {note && <span className="tool-note">{note}</span>}
-        <span className="tool-summary-text">{summary.text}</span>
+        <span className="tool-summary-text">
+          {summary.segments.map((segment, index) => (
+            <span key={index} className={segment.failed ? 'failed' : undefined}>
+              {index > 0 && separator}
+              {segment.text}
+            </span>
+          ))}
+        </span>
         {(summary.added > 0 || summary.removed > 0) && (
           <span className="diff-count">
             <span className="added">+{summary.added}</span>
@@ -132,6 +163,9 @@ export function ToolGroup({
         {turn && <TurnClock turn={turn} />}
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
       </button>
+      {!open && agents.length > 0 && (
+        <AgentToolLinks agents={agents} onAgent={onAgent} />
+      )}
       {open && (
         <>
           {shots.length > 0 && (
@@ -148,21 +182,13 @@ export function ToolGroup({
                   <ToolMessage
                     tool={row.tool}
                     ownerSessionId={ownerSessionId}
-                    expanded={expanded}
+                    // One call has nothing to list: opening the line opens the call.
+                    expanded={expanded || tools.length === 1}
                     onAgent={onAgent}
                     onFile={onFile}
                   />
                 </div>
-              ) : row.phase === 'commentary' && row.text.trim() ? (
-                <div
-                  key={row.id}
-                  data-message-id={row.id}
-                  className="group-commentary"
-                >
-                  {row.thinking && <GroupThinking row={row} />}
-                  <Markdown text={row.text} />
-                </div>
-              ) : row.thinking ? (
+              ) : row.thinking && showThinking ? (
                 <GroupThinking key={row.id} row={row} />
               ) : null,
             )}

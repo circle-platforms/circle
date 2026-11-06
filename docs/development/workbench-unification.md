@@ -31,7 +31,10 @@ The owner set these rules on 2026-11-05, after the graphite restyle of #405 was 
 - A ChatGPT plan is not marked apart from other connections and shows no cost anywhere.
 - Tool calls of steps with nothing to read between them fold into one line; a thinking-only step joins them. Opened, the line lists the calls with each step's thinking; a call opens to its command and output.
 - The thinking line shows the newest heading of the summary without markdown marks; headings alone do not open.
-- The model's short update before its calls (its `commentary` channel) names their folded line, and shows in order among them when opened. An update with no call after it stays readable as it is. A ChatGPT plan's reasoning summary is often headings alone (openai/codex#34873); this is how a step says what it does in words.
+- Words written for the person always show. The model's updates (its `commentary` channel) are ordinary text and each starts a new folded line, so every model shows a run the same way, with or without that channel. The owner decided this on 2026-11-06, after #441 folded the updates into the tool line and hid what the model had found. A ChatGPT plan's reasoning summary is often headings alone (openai/codex#34873); these updates are how a step says what it does.
+- The folded line says what happened: one finished call by its description or `$ command`, up to three edited files by name, Circle's own tools by what they do, and a failure first and in red. A subagent's link shows under the line however it is folded. A plan update alone is the only time `write_todos` gets a word, and that word is not its name.
+- A call opens to `$ command` over its output, with no tabs, as a background job's card does; another tool's arguments are folded under its output. A line of one call opens that call.
+- **Undo file changes** is a text action on the row of the time and usage at the end of a finished turn, shown on the newest turn and on hover on older ones. A session at work offers none.
 - A turn's time, tokens and cost show once, under its last message, as the turn's total.
 - Switching the mode raises no notice; the mode button names the mode and its menu explains each one.
 - Queued messages are one panel above the message box, as Claude shows them: a folding `N messages queued` heading, one row per message with a ⋯ menu (edit, remove) and **clear all** at the foot. The rows carry no steering or follow-up label, and the word 插话 is not used. They cannot be reordered, since the runtime keeps their order.
@@ -123,7 +126,7 @@ The [independent verifier](../../apps/desktop/src/workspace/task-verification.ts
 
 ## File undo is a separate, bounded operation
 
-The message's **undo file changes** action uses [SafeFileUndo](../../apps/workbench/src/features/SafeFileUndo.tsx), the controller's `preview-file-undo` / `restore-turn-files` requests, and [FileRewindJournal](../../src/file_rewind.ts). It is separate from `/undo` and conversation-tree navigation.
+The turn's **undo file changes** action uses [SafeFileUndo](../../apps/workbench/src/features/SafeFileUndo.tsx), the controller's `preview-file-undo` / `restore-turn-files` requests, and [FileRewindJournal](../../src/file_rewind.ts). It is separate from `/undo` and conversation-tree navigation.
 
 The journal records before/after versions only for text-tool mutations attached to an actual turn in the current runtime. The user first previews the affected paths, then explicitly confirms restoration. The host checks every current revision again before restoring. External changes, an incomplete journal or an unsupported backend prevent restoration. Plan mode allows preview but refuses restoration.
 

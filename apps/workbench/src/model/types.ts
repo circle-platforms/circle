@@ -189,7 +189,6 @@ export interface Session {
       anchor?: { messageId: string; offset: number };
     };
     disclosures?: Record<string, { open: boolean; defaultOpen: boolean }>;
-    toolTabs?: Record<string, 'input' | 'output'>;
   };
   title: string;
   workspaceId: string;

@@ -141,23 +141,12 @@ export function groupMessages(
     !message.text.trim() &&
     !message.attachments?.length &&
     !message.usage;
-  // An update while the model works goes with the calls it introduces.
-  const commentary = (message: Message) =>
-    message.role === 'assistant' &&
-    message.phase === 'commentary' &&
-    message.at !== 'streaming' &&
-    !message.attachments?.length &&
-    !message.usage;
   // Tools inherit the issuing assistant's id as parentId; a quiet assistant is that id.
   const batchKey = (message: Message) =>
     message.role === 'tool' ? (message.parentId ?? message.id) : message.id;
   for (const message of messages) {
     const last = items.at(-1);
-    if (
-      (message.role === 'tool' && message.tool) ||
-      quiet(message) ||
-      commentary(message)
-    ) {
+    if ((message.role === 'tool' && message.tool) || quiet(message)) {
       const key = batchKey(message);
       if (last?.kind === 'tools') last.rows.push(message);
       else
@@ -169,15 +158,28 @@ export function groupMessages(
         });
     } else items.push({ kind: 'message', message });
   }
-  // Updates with no call after them are read as they are, not folded away.
-  return items.flatMap((item) => {
-    if (item.kind !== 'tools' || item.rows.some((row) => row.tool))
-      return [item];
-    const said = item.rows.filter((row) => row.text.trim());
-    return said.length
-      ? item.rows.map((message) => ({ kind: 'message' as const, message }))
-      : [item];
+  return items;
+}
+/**
+ * Where each finished turn's file undo goes: the last row of the turn, by that row's index.
+ * Undo belongs to a finished turn, so a session at work offers none.
+ */
+export function fileUndoFoots(
+  items: TranscriptItem[],
+  undoable: readonly string[] | undefined,
+  working: boolean,
+): Map<number, string> {
+  const foots = new Map<number, string>();
+  if (working || !undoable?.length) return foots;
+  const isUser = (item: TranscriptItem) =>
+    item.kind === 'message' && item.message.role === 'user';
+  items.forEach((item, index) => {
+    if (item.kind !== 'message' || !isUser(item)) return;
+    if (!undoable.includes(item.message.id)) return;
+    const next = items.findIndex((row, at) => at > index && isUser(row));
+    foots.set(next < 0 ? items.length - 1 : next - 1, item.message.id);
   });
+  return foots;
 }
 const transcriptKey = (item: TranscriptItem) =>
   item.kind === 'tools' ? item.id : item.message.id;
@@ -732,6 +734,24 @@ export function Conversation({
     savedAnchor?.offset,
     session.presentation?.scroll?.follow,
   ]);
+  const working = !!session.turn || session.state !== 'idle';
+  const undoFoots = useMemo(
+    () => fileUndoFoots(items, session.fileUndoTurns, working),
+    [items, session.fileUndoTurns, working],
+  );
+  const newestFoot = Math.max(-1, ...undoFoots.keys());
+  const fileUndo = (index: number) => {
+    const turnId = undoFoots.get(index);
+    return (
+      turnId && (
+        <SafeFileUndo
+          sessionId={session.id}
+          turnId={turnId}
+          quiet={index !== newestFoot}
+        />
+      )
+    );
+  };
   const clock =
     session.compaction?.status !== 'running' &&
     showTurnClock(messages, pending.length, session.turn)
@@ -856,6 +876,7 @@ export function Conversation({
                               matches[findIndex % matches.length]?.id,
                           ))
                       }
+                      showThinking={session.showThinking}
                       onAgent={onAgent}
                       onFile={onFile}
                       turn={index === clockAt ? clock : undefined}
@@ -883,6 +904,11 @@ export function Conversation({
                           />
                         ))}
                     </ToolGroup>
+                    {fileUndo(index) && (
+                      <div className="message-meta turn-foot">
+                        {fileUndo(index)}
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div
@@ -897,31 +923,33 @@ export function Conversation({
                     }
                   >
                     {item.message.role === 'notice' ? (
-                      <RuntimeNotice
-                        message={{
-                          ...item.message,
-                          text: completionNoticeText(item.message),
-                        }}
-                        onConnection={() => onDialog('connect')}
-                        onMessage={() => input.current?.focus()}
-                      />
-                    ) : (
                       <>
-                        <MessageView
-                          message={item.message}
-                          showThinking={session.showThinking}
+                        <RuntimeNotice
+                          message={{
+                            ...item.message,
+                            text: completionNoticeText(item.message),
+                          }}
+                          onConnection={() => onDialog('connect')}
+                          onMessage={() => input.current?.focus()}
                         />
-                        {item.message.role === 'user' &&
-                          session.fileUndoTurns?.includes(item.message.id) && (
-                            <SafeFileUndo
-                              sessionId={session.id}
-                              turnId={item.message.id}
-                              disabled={
-                                !!session.turn || session.state !== 'idle'
-                              }
-                            />
-                          )}
+                        {fileUndo(index) && (
+                          <div className="message-meta turn-foot">
+                            {fileUndo(index)}
+                          </div>
+                        )}
                       </>
+                    ) : (
+                      <MessageView
+                        message={item.message}
+                        showThinking={session.showThinking}
+                        interim={
+                          item.message.role === 'assistant' &&
+                          !item.message.usage &&
+                          (item.message.at === 'streaming' ||
+                            items[index + 1]?.kind === 'tools')
+                        }
+                        footer={fileUndo(index)}
+                      />
                     )}
                   </div>
                 )
