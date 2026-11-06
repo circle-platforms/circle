@@ -1,6 +1,6 @@
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, realpath, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -25,7 +25,7 @@ const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
 const output = join(root, 'artifacts/live');
 await mkdir(output, { recursive: true });
-const temp = await mkdtemp(join(tmpdir(), 'circle-native-live-'));
+const temp = await realpath(await mkdtemp(join(tmpdir(), 'circle-native-live-')));
 const fixturePath = join(temp, 'model.json');
 const requestsPath = join(temp, 'requests.jsonl');
 const exportPath = join(temp, 'export.jsonl');
