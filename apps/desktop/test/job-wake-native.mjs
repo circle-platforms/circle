@@ -159,10 +159,16 @@ try {
   await mode
     .getByRole('button', { name: 'open in terminal', exact: true })
     .click();
-  await page.locator('.term-tab').filter({ hasText: title }).waitFor();
   await page
-    .getByRole('button', { name: 'overview panel', exact: true })
-    .click();
+    .getByRole('region', { name: /terminal/i })
+    .getByRole('button', { name: 'stop', exact: true })
+    .waitFor();
+  assert.equal(
+    await page.locator('.term-tab').filter({ hasText: title }).count(),
+    0,
+    'the view of one command is not a tab of the row',
+  );
+  // The overview stays beside the drawer: the row is still in view for what follows.
   await row.waitFor();
 
   await writeFile(gate, '');
