@@ -789,7 +789,9 @@ export class AgentRuntime {
       if (event.kind === 'run_start') {
         const user = this.store
           .tree(this.session.id)
-          .findLast((node) => node.message?.role === 'user');
+          .findLast(
+            (node) => node.message?.role === 'user' && !node.message.internal,
+          );
         if (user) this.fileRewind.beginTurn(user.id);
       } else if (event.kind === 'run_end' || event.kind === 'run_error')
         this.fileRewind.endTurn();

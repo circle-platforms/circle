@@ -4,7 +4,7 @@ import {
   thinkingHeadline,
 } from '../model/thinking';
 import { Markdown } from './Markdown';
-import { useId, type ReactNode } from 'react';
+import { useId, useState, type ComponentProps, type ReactNode } from 'react';
 import { useSessionDisclosure } from '../model/presentation';
 import { Brain, ChevronDown, ChevronRight, LoaderCircle } from 'lucide-react';
 import type { Message, Session } from '../model/types';
@@ -24,6 +24,19 @@ export { toolSummary };
  * the calls. While one runs the line names it, and a request that waits for you (the
  * children) shows under the line whether it is open or not.
  */
+/**
+ * One call has nothing to list, so opening its line opens the call. The first look
+ * decides: a call that joins later must not close what is being read.
+ */
+function GroupCall({
+  alone,
+  expanded,
+  ...call
+}: ComponentProps<typeof ToolMessage> & { alone: boolean }) {
+  const [opensAlone] = useState(alone);
+  return <ToolMessage {...call} expanded={expanded || opensAlone} />;
+}
+
 export function ToolGroup({
   rows,
   ownerSessionId,
@@ -179,11 +192,11 @@ export function ToolGroup({
             {rows.map((row) =>
               row.tool ? (
                 <div key={row.id} data-message-id={row.id}>
-                  <ToolMessage
+                  <GroupCall
                     tool={row.tool}
                     ownerSessionId={ownerSessionId}
-                    // One call has nothing to list: opening the line opens the call.
-                    expanded={expanded || tools.length === 1}
+                    alone={tools.length === 1}
+                    expanded={expanded}
                     onAgent={onAgent}
                     onFile={onFile}
                   />

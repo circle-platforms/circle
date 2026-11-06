@@ -16,6 +16,10 @@ export function sessionJobs(
   );
   return {
     running: own.filter((job) => GOING.has(job.state)),
-    ended: own.filter((job) => !GOING.has(job.state)).reverse(),
+    // A long job that ends now comes first, however early it started.
+    ended: own
+      .filter((job) => !GOING.has(job.state))
+      .reverse()
+      .sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0)),
   };
 }

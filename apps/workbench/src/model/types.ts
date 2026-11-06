@@ -332,6 +332,8 @@ export interface Job {
     | 'stopping'
     | 'interrupted';
   elapsed: string;
+  /** When it ended, in milliseconds. */
+  endedAt?: number;
   output: string;
   outputPath: string;
   stopRequested: boolean;

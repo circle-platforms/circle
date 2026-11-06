@@ -38,4 +38,13 @@ test("the background jobs mode lists this conversation's commands, going ones fi
     ['j2', 'j1'],
   );
   assert.deepEqual(sessionJobs('s1', []), { running: [], ended: [] });
+  // By when each ended: the job that started first and ended last leads.
+  assert.deepEqual(
+    sessionJobs('s1', [
+      job('long', { state: 'completed', endedAt: 300 }),
+      job('short', { state: 'completed', endedAt: 100 }),
+      job('other', { state: 'failed', endedAt: 200 }),
+    ]).ended.map((item) => item.id),
+    ['long', 'other', 'short'],
+  );
 });

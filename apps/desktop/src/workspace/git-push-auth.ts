@@ -1,6 +1,7 @@
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { isGitHubRepository } from '../../../../src/github_connection.js';
 /** Main-process capability, never accepted from workspace RPC parameters. */
 export interface GitPushAuthentication {
   repository: string;
@@ -29,7 +30,7 @@ export async function withGitHubPushCredentials(
   },
   run: (env: NodeJS.ProcessEnv, config: string[]) => Promise<string>,
 ): Promise<string> {
-  if (!/^[-\w.]+\/[-\w.]+$/.test(options.repository))
+  if (!isGitHubRepository(options.repository))
     throw Error('select an authorized GitHub repository');
   options.signal?.throwIfAborted();
   options.assertActive();

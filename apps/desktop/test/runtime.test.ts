@@ -4030,9 +4030,9 @@ const gatedCommand = (file: string, output: string) => {
   const encoded = Buffer.from(script).toString('base64');
   return `"${process.execPath}" -e "eval(Buffer.from('${encoded}','base64').toString())"`;
 };
-const startedJob = (command: string) => ({
+const startedJob = (command: string, id = 'gated') => ({
   message: assistant('', [
-    { id: 'gated', name: 'execute', args: { command, background: true } },
+    { id, name: 'execute', args: { command, background: true } },
   ]),
   usage: emptyUsage(),
 });
@@ -4121,6 +4121,71 @@ test('a background job that ends while nothing runs starts a turn that reads its
     'the answer is the last row',
   );
   assert.ok(session().messages.at(-1)?.usage, 'the turn shows its own usage');
+});
+
+test("file changes of a turn a job starts belong to the person's turn, not to a notice", async (t) => {
+  let first = '';
+  let second = '';
+  const f = await setup(t, [
+    async () => startedJob(first),
+    { message: assistant('waiting'), usage: emptyUsage() },
+    async () => startedJob(second, 'gated-again'),
+    { message: assistant('waiting again'), usage: emptyUsage() },
+    async () => ({
+      message: assistant('', [
+        {
+          id: 'write',
+          name: 'write_file',
+          args: { file_path: 'made.txt', content: 'by the second wake' },
+        },
+      ]),
+      usage: emptyUsage(),
+    }),
+    { message: assistant('wrote it'), usage: emptyUsage() },
+  ]);
+  const firstGate = join(f.workspace, 'first-gate');
+  const secondGate = join(f.workspace, 'second-gate');
+  first = gatedCommand(firstGate, 'first');
+  second = gatedCommand(secondGate, 'second');
+  const id = f.controller.snapshot().activeSessionId;
+  const session = () =>
+    f.controller.snapshot().sessions.find((item) => item.id === id)!;
+  const answered = new Set<string>();
+  const approveUntil = async (check: () => boolean, what: string) => {
+    await wait(() => {
+      const card = f.controller
+        .snapshot()
+        .interactions.find(
+          (item) => item.status === 'pending' && !answered.has(item.id),
+        );
+      if (card) {
+        answered.add(card.id);
+        void f.call(
+          'answer',
+          { id: card.id, revision: card.revision, answer: 'approve' },
+          id,
+        );
+      }
+      return check();
+    }, what);
+  };
+  await startGatedJob(f, id);
+  await writeFile(firstGate, '');
+  await approveUntil(
+    () => f.model.requests.length === 4 && session().state === 'idle',
+    'the first wake ends',
+  );
+  await writeFile(secondGate, '');
+  await approveUntil(
+    () => f.model.requests.length === 6 && session().state === 'idle',
+    'the second wake ends',
+  );
+  assert.equal(
+    await readFile(join(f.workspace, 'made.txt'), 'utf8'),
+    'by the second wake',
+  );
+  const person = session().messages.find((row) => row.role === 'user')!;
+  assert.deepEqual(session().fileUndoTurns, [person.id]);
 });
 
 test('a job of a conversation that is not selected starts a turn in its own conversation', async (t) => {

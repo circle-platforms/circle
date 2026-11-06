@@ -159,6 +159,26 @@ try {
           .locator('.tool-content pre', { hasText: 'output of' })
           .first()
           .waitFor();
+        // A call that joins the line does not close what is being read.
+        await page.evaluate(() => window.foldingFixture.joinCall());
+        await page.waitForFunction(() =>
+          [...document.querySelectorAll('.tool-group')].some(
+            (group) => group.querySelectorAll('.tool-head').length === 2,
+          ),
+        );
+        await page.evaluate(
+          () =>
+            new Promise((done) =>
+              requestAnimationFrame(() => requestAnimationFrame(done)),
+            ),
+        );
+        assert.equal(
+          await page
+            .locator('.tool-content pre', { hasText: '$ git status' })
+            .count(),
+          1,
+          where,
+        );
 
         // A session at work offers no undo.
         await page.evaluate(() => window.foldingFixture.work());

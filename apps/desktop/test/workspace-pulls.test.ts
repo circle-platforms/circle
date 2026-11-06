@@ -175,6 +175,9 @@ test('only a github.com remote names a repository', () => {
     'https://gitlab.com/acme/orbit.git',
     'https://github.com.evil.example/acme/orbit',
     '/srv/git/orbit.git',
+    'https://github.com/../orbit',
+    'https://github.com/-acme/orbit',
+    'https://github.com/acme/..',
   ])
     assert.equal(githubSlug(remote), '');
 });

@@ -7,6 +7,7 @@ import {
   completedFailedJobLogs,
   redactGitHubCredentials,
 } from './delivery.ts';
+import { isGitHubRepository } from '../../../../src/github_connection.js';
 import { GitWorkspaceService } from './git.ts';
 import type {
   PullRequestAccess,
@@ -197,7 +198,8 @@ export function githubSlug(remote: string): string {
     .replace(/^git@github\.com:/, 'https://github.com/')
     .replace(/^ssh:\/\/git@github\.com\//, 'https://github.com/')
     .replace(/\.git$/, '');
-  return /^https:\/\/github\.com\/([-\w.]+\/[-\w.]+)$/.exec(url)?.[1] ?? '';
+  const slug = /^https:\/\/github\.com\/([^/]+\/[^/]+)$/.exec(url)?.[1] ?? '';
+  return isGitHubRepository(slug) ? slug : '';
 }
 
 /**

@@ -2493,6 +2493,7 @@ export class RuntimeController {
             runtime.isClosing ||
             this.runtimes.lifecycle(runtime.session.id) !== 'open' ||
             Boolean(this.metadata.archivedAt(runtime.session.id)) ||
+            (!this.options.model && !isReady(runtime.options.settings)) ||
             !isFolderTrusted(
               runtime.options.settings,
               runtime.options.workspace,
@@ -3196,6 +3197,7 @@ export class RuntimeController {
                   ? ('cancelled' as const)
                   : ('failed' as const),
           elapsed: elapsed(job),
+          ...(job.ended ? { endedAt: job.ended } : {}),
           output: existsSync(job.outputPath) ? outputTail(job.outputPath) : '',
           outputPath: job.virtualPath,
           stopRequested: this.stoppedJobs.has(`${job.sessionId}:${job.id}`),
@@ -3584,7 +3586,9 @@ export class RuntimeController {
       if (event.kind === 'run_start') {
         const user = runtime.store
           .tree(runtime.session.id)
-          .findLast((node) => node.message?.role === 'user');
+          .findLast(
+            (node) => node.message?.role === 'user' && !node.message.internal,
+          );
         if (user) journal?.beginTurn(user.id);
       }
       if (['run_end', 'run_error'].includes(event.kind)) journal?.endTurn();
@@ -5093,8 +5097,6 @@ export class RuntimeController {
             runtime.jobs.list().some((job) => job.status === 'running'))
         )
           throw Error('stop the current turn before branching');
-        if (command.name === 'select-branch')
-          this.jobWakes.get(runtime)?.snooze();
         const sourceId = this.selectedSessionId;
         const workspace = this.selectedWorkspace;
         const nodes = this.store.tree(sourceId);
@@ -5111,6 +5113,7 @@ export class RuntimeController {
               : node!.id;
         this.store.requireBalancedTools(this.store.messages(sourceId, head));
         if (command.name === 'select-branch') {
+          this.jobWakes.get(runtime)?.snooze();
           runtime.store.select(runtime.session.id, head);
           await runtime.switchSession(runtime.session.id);
         } else {

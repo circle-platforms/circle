@@ -89,6 +89,16 @@ runtime.change((state) => {
 });
 Object.assign(window, {
   foldingFixture: {
+    joinCall: () =>
+      runtime.change((state) => {
+        const session = state.sessions[0]!;
+        const after = session.messages.findIndex(
+          (row) => row.tool?.input.command === 'git status',
+        );
+        const row = call('grep', { pattern: 'joined' });
+        session.messages.splice(after + 1, 0, row);
+        session.branchIds.splice(after + 1, 0, row.id);
+      }),
     work: () =>
       runtime.change((state) => {
         const session = state.sessions[0]!;
