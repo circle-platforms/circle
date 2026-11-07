@@ -3,16 +3,34 @@
 // at that moment, so a refusal that happens only now and then can be read from the run's
 // evidence. The write itself is never repeated.
 import { spawn } from 'node:child_process';
-import { realpathSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
+import { constants, realpathSync } from 'node:fs';
+import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
+
+/**
+ * Writes over the file where it stands, as an editor that keeps a file's identity does, and
+ * cuts it only if the new content is shorter. Truncating first is what Windows refuses while
+ * anything has the file mapped to read it, as Git does to hash a file: `ERROR_USER_MAPPED_FILE`,
+ * which Node has no name for and reports as `UNKNOWN` from `open` (#331).
+ */
+async function writeInPlace(path, content) {
+  const file = await open(path, constants.O_RDWR | constants.O_CREAT);
+  try {
+    const bytes = Buffer.from(content);
+    await file.writeFile(bytes);
+    if ((await file.stat()).size > bytes.length)
+      await file.truncate(bytes.length);
+  } finally {
+    await file.close();
+  }
+}
 
 export async function writeOutside(
   path,
   content,
   {
-    write = writeFile,
+    write = writeInPlace,
     platform = process.platform,
     holders = fileHolders,
   } = {},
