@@ -4,8 +4,6 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { defaultEffort } from '../src/model.js';
 import { CONTEXT_FILE_CAP, readCappedText } from '../src/memory_sources.js';
 import {
@@ -66,8 +64,8 @@ test('skill blurbs in the prompt stay short', () => {
   assert.equal(prompt.includes('x'.repeat(200)), false);
 });
 
-test('a greeting request stays within the trimmed tool budget', () => {
-  const root = mkdtempSync(join(tmpdir(), 'circle-budget-'));
+test('a greeting request stays within the trimmed tool budget', (t) => {
+  const root = scratch(t);
   const system = buildSystemPrompt(
     root,
     'glm-5.3',
