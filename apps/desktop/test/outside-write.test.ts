@@ -120,7 +120,8 @@ async function holdFile(
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      `${open}; [Console]::Out.WriteLine('held'); [Console]::Out.Flush(); Start-Sleep -Seconds 300`,
+      // Stops at the first error: it says it holds the file only once it does.
+      `$ErrorActionPreference = 'Stop'; ${open}; [Console]::Out.WriteLine('held'); [Console]::Out.Flush(); Start-Sleep -Seconds 300`,
     ],
     {
       env: { ...process.env, CIRCLE_HELD_FILE: file },
@@ -162,7 +163,7 @@ test(
       t,
       folder,
       file,
-      "$file = [System.IO.File]::Open($env:CIRCLE_HELD_FILE, 'Open', 'Read', 'ReadWrite, Delete'); $map = [System.IO.MemoryMappedFiles.MemoryMappedFile]::CreateFromFile($file, $null, 0, 'Read', $null, 'None', $false); $view = $map.CreateViewAccessor(0, 0, 'Read')",
+      "$file = [System.IO.File]::Open($env:CIRCLE_HELD_FILE, 'Open', 'Read', 'ReadWrite, Delete'); $map = [System.IO.MemoryMappedFiles.MemoryMappedFile]::CreateFromFile($file, ('circle-held-' + $PID), 0, 'Read', $null, 'None', $false); $view = $map.CreateViewAccessor(0, 0, 'Read')",
     );
     // What the editor journey met (#331): the same code, errno and system call.
     await assert.rejects(writeFile(file, 'truncating\n'), {
