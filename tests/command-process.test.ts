@@ -182,7 +182,16 @@ function pipeLauncher(
           observed('stop-requested');
           if (process.platform === 'win32') {
             if (!shellClosed && child.pid)
-              await exec('taskkill', ['/PID', String(child.pid), '/T', '/F']);
+              await exec('taskkill', [
+                '/PID',
+                String(child.pid),
+                '/T',
+                '/F',
+              ]).catch((error: { code?: unknown }) => {
+                // Exit 128 is "not found": the shell ended between the check and
+                // taskkill. `settled` below still confirms that it exited.
+                if (error.code !== 128) throw error;
+              });
           } else if (child.pid && groupAlive(child.pid)) {
             await signalProcessGroup(child.pid, 'SIGTERM');
             await delay(30);
