@@ -646,6 +646,15 @@ export class ChromeBrowser implements BrowserPort {
       throw error;
     }
   }
+  /** Whether the kernel would signal the group. macOS refuses one with only exiting members. */
+  private groupAnswers(pid: number): boolean {
+    try {
+      process.kill(-pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
   private async groupRunning(pid: number): Promise<boolean> {
     // Signal 0 checks permission too; a refused probe does not tell us whether
     // live owned descendants remain. Read actual process state instead: a zombie
@@ -766,7 +775,9 @@ export class ChromeBrowser implements BrowserPort {
       const failedRoot = failedRoots.get(pid);
       if (failedRoot && !this.exited(failedRoot)) continue;
       try {
-        if (await this.groupRunning(pid)) {
+        // A listing that leaves a group out does not prove it has gone, and leaving a live
+        // browser behind costs more than signalling a group of zombies (#452).
+        if ((await this.groupRunning(pid)) || this.groupAnswers(pid)) {
           await this.signalGroup(pid, 'SIGKILL');
           const deadline = Date.now() + timeout;
           while (await this.groupRunning(pid)) {
