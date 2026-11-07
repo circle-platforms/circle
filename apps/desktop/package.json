@@ -63,5 +63,8 @@
   "allowScripts": {
     "node-pty": true,
     "esbuild": true
+  },
+  "overrides": {
+    "minimatch": "^11.0.5"
   }
 }
