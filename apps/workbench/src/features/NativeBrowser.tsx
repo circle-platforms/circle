@@ -111,6 +111,24 @@ function laidOutBrowserViewport(node: HTMLElement): DOMRect | null {
   return rect;
 }
 
+/**
+ * The next frame, or a moment later when no frame comes. Placing the native page paints
+ * nothing, so a window whose drawing is held up must not keep the page away.
+ */
+function afterFrame(callback: () => void) {
+  const cancel = () => {
+    cancelAnimationFrame(frame);
+    clearTimeout(timer);
+  };
+  const run = () => {
+    cancel();
+    callback();
+  };
+  const frame = requestAnimationFrame(run);
+  const timer = setTimeout(run, 100);
+  return cancel;
+}
+
 const platform = () =>
   document.documentElement.dataset.desktop ??
   (/Mac/.test(navigator.platform) ? 'darwin' : 'other');
@@ -312,11 +330,10 @@ export function NativeBrowser({
         .catch(() => {});
     };
     updateBounds.current = update;
-    let frame = 0;
+    let pending: (() => void) | undefined;
     const schedule = () => {
-      if (frame) return;
-      frame = requestAnimationFrame(() => {
-        frame = 0;
+      pending ??= afterFrame(() => {
+        pending = undefined;
         update();
       });
     };
@@ -341,6 +358,8 @@ export function NativeBrowser({
     if (viewport.current) seen.observe(viewport.current);
     addEventListener('resize', schedule);
     addEventListener('scroll', schedule, true);
+    // A placement made while the window was hidden was dropped: make it again
+    document.addEventListener('visibilitychange', schedule);
     update();
     // The window may not have a size on the first frame, and a page that just
     // moved is measured again once it does. A failed placement is retried.
@@ -350,12 +369,13 @@ export function NativeBrowser({
       disposed = true;
       clearTimeout(soon);
       clearTimeout(later);
-      if (frame) cancelAnimationFrame(frame);
+      pending?.();
       observer.disconnect();
       dialogs.disconnect();
       seen.disconnect();
       removeEventListener('resize', schedule);
       removeEventListener('scroll', schedule, true);
+      document.removeEventListener('visibilitychange', schedule);
       captureGeneration.current++;
       if (!elsewhereRef.current && releaseOnUnmount.current) {
         void host.browserHide(id);
@@ -374,9 +394,9 @@ export function NativeBrowser({
       if (active.current) updateBounds.current();
       if (placed.current || ++ticks > 50) clearInterval(timer);
     }, 100);
-    const frame = requestAnimationFrame(() => updateBounds.current());
+    const cancel = afterFrame(() => updateBounds.current());
     return () => {
-      cancelAnimationFrame(frame);
+      cancel();
       clearInterval(timer);
     };
   }, [elsewhere, id]);
@@ -391,8 +411,7 @@ export function NativeBrowser({
   }, [state?.host]);
   // Full view moves the same panel to another box. Measure after that move.
   useEffect(() => {
-    const frame = requestAnimationFrame(() => updateBounds.current());
-    return () => cancelAnimationFrame(frame);
+    return afterFrame(() => updateBounds.current());
   }, [whole]);
   // Pointing starts and stops the same way a menu does: the page leaves the window for
   // its picture, and comes back when the picture goes. Esc stops the pointing whatever
@@ -608,7 +627,7 @@ export function NativeBrowser({
     addressTab.current = state.tab;
     if (opened !== active.current) {
       active.current = opened;
-      requestAnimationFrame(() => updateBounds.current());
+      afterFrame(() => updateBounds.current());
     }
     const shown = browserEventAddress(
       state,
@@ -629,7 +648,7 @@ export function NativeBrowser({
     try {
       active.current = true;
       await host.browserNavigate(id, target);
-      requestAnimationFrame(() => updateBounds.current());
+      afterFrame(() => updateBounds.current());
     } catch (error) {
       if (
         version !== navigationVersion.current ||
@@ -664,7 +683,7 @@ export function NativeBrowser({
     host
       .browserTabs(id, action, tab)
       .then(() => {
-        requestAnimationFrame(() => updateBounds.current());
+        afterFrame(() => updateBounds.current());
       })
       .catch(() => notify(t('navigation failed')));
   const page = (
@@ -674,7 +693,7 @@ export function NativeBrowser({
   ) =>
     Promise.resolve(host.browserPage?.(id, action, value))
       .then(() => {
-        requestAnimationFrame(() => updateBounds.current());
+        afterFrame(() => updateBounds.current());
       })
       .catch(() => {});
   const focusAddress = () =>

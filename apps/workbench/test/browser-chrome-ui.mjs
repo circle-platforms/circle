@@ -73,12 +73,14 @@ try {
       const listeners = new Set();
       const keyListeners = new Set();
       const calls = [];
+      const placements = [];
       const emit = () => {
         for (const listener of listeners)
           listener(JSON.parse(JSON.stringify(state)));
       };
       window.__browser = {
         calls,
+        placements,
         state,
         emit,
         set: (values) => {
@@ -139,10 +141,13 @@ try {
           // No mode of this window is in a window of its own.
           popouts: async () => [],
           // The main process places the page where the panel measured it, and says so
-          browserBounds: async (id, rect, visible, host) => ({
-            ...JSON.parse(JSON.stringify(state)),
-            applied: host === state.host,
-          }),
+          browserBounds: async (id, rect, visible, host) => {
+            placements.push(visible);
+            return {
+              ...JSON.parse(JSON.stringify(state)),
+              applied: host === state.host,
+            };
+          },
           browserPage: async (id, action, value) => {
             calls.push(['page', action, value ?? null]);
             if (action === 'snapshot') return ICON;
@@ -240,6 +245,48 @@ try {
     name: 'browser address',
     exact: true,
   });
+
+  // Placing the page needs no paint. While no frames come, as when a busy machine holds
+  // up the window's drawing, a dialog that closes still brings the page back (#464).
+  const placedLast = (visible) =>
+    page.waitForFunction(
+      (visible) => window.__browser.placements.at(-1) === visible,
+      visible,
+      { polling: 50 },
+    );
+  await placedLast(true);
+  await page.keyboard.press('ControlOrMeta+,');
+  const overPage = page.getByRole('dialog', { name: 'settings', exact: true });
+  await overPage.waitFor();
+  await placedLast(false);
+  await page.evaluate(() => {
+    window.__browser.frame = window.requestAnimationFrame;
+    window.requestAnimationFrame = () => 0;
+  });
+  await overPage
+    .getByRole('button', { name: 'close dialog', exact: true })
+    .click();
+  await overPage.waitFor({ state: 'detached' });
+  await placedLast(true);
+  // A window that comes back places the page again, since a placement made while it
+  // was hidden was dropped
+  const placedBefore = await page.evaluate(
+    () => window.__browser.placements.length,
+  );
+  await page.evaluate(() =>
+    document.dispatchEvent(new Event('visibilitychange')),
+  );
+  await page.waitForFunction(
+    (before) => window.__browser.placements.length > before,
+    placedBefore,
+    { polling: 50 },
+  );
+  await page.evaluate(() => {
+    window.requestAnimationFrame = window.__browser.frame;
+  });
+  checks.push(
+    'a dialog that closes, or a window that comes back, places the page with no frames coming',
+  );
 
   // Tabs: an icon or a spinner, the title cut short with all of it as the tooltip,
   // and a close button on every tab
