@@ -255,7 +255,10 @@ try {
       { polling: 50 },
     );
   await placedLast(true);
-  await page.keyboard.press('ControlOrMeta+,');
+  await page
+    .locator('.sidebar')
+    .getByRole('button', { name: 'settings', exact: true })
+    .click();
   const overPage = page.getByRole('dialog', { name: 'settings', exact: true });
   await overPage.waitFor();
   await placedLast(false);
