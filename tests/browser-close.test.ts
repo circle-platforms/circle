@@ -10,7 +10,7 @@ import { AgentRuntime } from '../src/runtime.js';
 import { SessionRuntimeManager } from '../src/session_manager.js';
 import { defaultSettings } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
-import { cancellationFixture, cleanup, scratch } from './helpers.js';
+import { cancellationFixture, cleanup, scratch, until } from './helpers.js';
 
 function browserWithChild(child: ChildProcess) {
   const browser = new ChromeBrowser({
@@ -785,24 +785,19 @@ test(
     owned.processGroups.add(child.pid);
     owned.cdp = { close: () => {} };
     try {
-      const started = Date.now();
-      const running = await owned.groupRunning(child.pid);
-      // What decides #452 the next time this is false: did the child go, or did ps not say so?
-      assert.equal(
-        running,
-        true,
-        `ps says ${JSON.stringify(
-          String(
-            spawnSync('/bin/ps', ['-o', 'pgid=,stat=', '-p', String(child.pid)])
-              .stdout,
-          ),
-        )}; child exit ${child.exitCode}, signal ${child.signalCode}`,
+      // The kernel says the child is there. This failing means something ended it (#452);
+      // whether ps lists it is not what this checks, and closing no longer depends on that.
+      assert.doesNotThrow(
+        () => process.kill(-child.pid!, 0),
+        `child exit ${child.exitCode}, signal ${child.signalCode}`,
       );
-      assert.ok(Date.now() - started >= 100, 'the actual delayed ps ran');
-      assert.ok(existsSync(marker), 'the inspection process really started');
       assert.equal(child.exitCode, null);
       assert.equal(child.signalCode, null);
+      const started = Date.now();
+      // A budget as short as closeTimeout would fail this: the delayed ps takes longer.
       await browser.close();
+      assert.ok(Date.now() - started >= 100, 'the actual delayed ps ran');
+      assert.ok(existsSync(marker), 'the inspection process really started');
       await exited;
       assert.equal(child.signalCode, 'SIGKILL');
       assert.equal(owned.processGroups.has(child.pid), false);
@@ -811,6 +806,43 @@ test(
         child.kill('SIGKILL');
       await exited;
     }
+  },
+);
+
+test(
+  'a live browser group the process listing leaves out is still stopped',
+  { skip: process.platform === 'win32' },
+  async (t) => {
+    const root = scratch(t);
+    // It answers and lists nothing: the answer that once let a live group go unstopped.
+    writeFileSync(join(root, 'ps'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    const child = spawn(
+      process.execPath,
+      ['-e', "process.stdout.write('ready');setInterval(()=>{},1000)"],
+      { detached: true, stdio: ['ignore', 'pipe', 'ignore'] },
+    );
+    cleanup(t, () => {
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill('SIGKILL');
+    });
+    await new Promise<void>((resolve, reject) => {
+      child.stdout!.once('data', () => resolve());
+      child.once('error', reject);
+    });
+    const browser = new ChromeBrowser({
+      executable: process.execPath,
+      closeTimeout: 1000,
+      processInspector: join(root, 'ps'),
+    });
+    const owned = browser as any;
+    owned.processGroups.add(child.pid);
+    owned.cdp = { close: () => {} };
+    await browser.close();
+    await until(() => child.signalCode !== null, {
+      label: 'the listed-out group to stop',
+    });
+    assert.equal(child.signalCode, 'SIGKILL');
+    assert.equal(owned.processGroups.has(child.pid), false);
   },
 );
 
