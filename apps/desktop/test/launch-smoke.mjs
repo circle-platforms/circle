@@ -31,6 +31,7 @@ import {
 } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { readDebuggingPort } from './helpers/debugging-port.mjs';
 import { patience } from './helpers/patience.mjs';
 import { answerTitle, isTitleRequest } from './helpers/title-requests.mjs';
 // Node runs the TypeScript source directly: both files use only erasable syntax.
@@ -289,8 +290,7 @@ try {
   while (!port) {
     if (app.exitCode !== null || app.signalCode)
       throw Error(`the application exited: ${JSON.stringify(await exited)}`);
-    if (existsSync(portFile))
-      port = Number((await readFile(portFile, 'utf8')).split('\n')[0]);
+    port = await readDebuggingPort(portFile);
     if (!port) {
       if (Date.now() > listening)
         throw Error('the application wrote no debugging port');
