@@ -1331,6 +1331,7 @@ try {
   // Circle's own.
   const expectedInterfaces = [
     'GitHub',
+    'Hub',
     'file and diff inspector',
     'browser pane',
   ].map((title) => `enable ${title} interface`);

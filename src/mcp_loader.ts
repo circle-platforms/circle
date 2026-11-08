@@ -34,6 +34,12 @@ import {
   currentDirectMcpGrant,
 } from './mcp_auth.js';
 import { openInBrowser } from './open_url.js';
+import {
+  deviceEndpoint,
+  deviceSignInWaiting,
+  pollDeviceToken,
+  startDeviceAuthorization,
+} from './mcp_device.js';
 import { VERSION } from './version.js';
 import { formatJcs } from './knowledge/canonical.js';
 import { replaceLongest } from './secrets.js';
@@ -75,8 +81,16 @@ export interface McpStatus {
   headers?: string[];
   /** Configured headers that are not sent, since Circle sets them itself. */
   notSent?: string[];
-  /** The server's sign-in page, while Circle waits for the browser to come back from it. */
+  /** The server's sign-in page, while Circle waits for the browser to come back from it or for the code to be typed. */
   authorize?: string;
+  /** During a device sign-in, the code to type on that page. */
+  code?: string;
+}
+/** What a server shows while its sign-in is under way; a reload meanwhile shows the same. */
+interface SignInShown {
+  error: string;
+  authorize: string;
+  code?: string;
 }
 /** What a server waiting for its browser sign-in says in place of its tools. */
 export const SIGN_IN_WAITING = 'waiting for sign-in in the browser';
@@ -621,7 +635,7 @@ export class McpManager {
   // Ends the sign-ins under way when the manager closes
   private lifetime = new AbortController();
   // A sign-in under way, by server address: its page
-  private signingIn = new Map<string, string>();
+  private signingIn = new Map<string, SignInShown>();
   // `timeout` bounds connecting and listing tools. A tool call has no limit unless `callTimeout`
   // is given: a tool may wait minutes (a login), and an interrupt cancels it.
   constructor(
@@ -1039,26 +1053,78 @@ export class McpManager {
     return new McpAuthProvider(home, server, await redirectPort(home, server));
   }
   /**
-   * The browser sign-in of a server that answered 401: the page opens in the system browser (and /mcp shows its address
-   * in case none opens), Circle waits on its loopback address for the redirect, exchanges the code for tokens and
-   * connects the server again. One sign-in per server at a time; a reload meanwhile shows the one under way.
+   * The sign-in of a server that answered 401. When its authorization server offers the device code (RFC 8628), Circle
+   * shows a user code with the address of the page it is typed on, opens that page, and polls until a person approved
+   * or refused it there: nothing has to come back to this machine. Otherwise, or when the server gives no device code,
+   * the browser sign-in: the page opens in the system browser (and /mcp shows its address in case none opens), Circle
+   * waits on its loopback address for the redirect and exchanges the code for tokens. Either way the server is connected
+   * again. One sign-in per server at a time; a reload meanwhile shows the one under way.
    */
   private signIn(
     connection: McpConnection,
     provider: McpAuthProvider,
     state: McpStatus,
   ): void {
-    state.error = SIGN_IN_WAITING;
     const pending = this.signingIn.get(provider.server);
-    if (pending) {
-      state.authorize = pending;
-      return;
-    }
+    const show = (shown: SignInShown, current: McpStatus): void => {
+      current.error = shown.error;
+      current.authorize = shown.authorize;
+      if (shown.code) current.code = shown.code;
+      else delete current.code;
+    };
+    if (pending) return show(pending, state);
     const url = provider.authorizationUrl!.href;
-    state.authorize = url;
-    this.signingIn.set(provider.server, url);
+    const shown: SignInShown = { error: SIGN_IN_WAITING, authorize: url };
+    show(shown, state);
+    this.signingIn.set(provider.server, shown);
     const lifetime = this.lifetime.signal;
+    const discovery = provider.discoveryState();
+    const device = deviceEndpoint(discovery);
+    const tokenEndpoint =
+      discovery?.authorizationServerMetadata?.token_endpoint;
+    const clientId = provider.clientInformation()?.client_id;
+    const resource = discovery?.resourceMetadata?.resource ?? provider.server;
     void (async () => {
+      if (device && tokenEndpoint && clientId) {
+        const authorization = await startDeviceAuthorization(
+          device,
+          clientId,
+          resource,
+          fetch,
+          lifetime,
+        ).catch((error: unknown) => {
+          // A server that gives no device code is signed in to in the browser instead
+          if (lifetime.aborted) throw error;
+          return undefined;
+        });
+        if (authorization) {
+          shown.error = deviceSignInWaiting(authorization.userCode);
+          shown.authorize =
+            authorization.verificationUriComplete ??
+            authorization.verificationUri;
+          shown.code = authorization.userCode;
+          show(
+            shown,
+            this.status.find((item) => item.name === connection.name) ?? state,
+          );
+          this.services.onChange?.();
+          await (this.services.openUrl ?? openInBrowser)(shown.authorize).catch(
+            () => {},
+          );
+          const tokens = await pollDeviceToken(
+            tokenEndpoint,
+            clientId,
+            resource,
+            authorization,
+            fetch,
+            lifetime,
+          );
+          // The sign-in under way makes these the tokens of a new grant
+          provider.saveTokens(tokens);
+          await this.connectAgain(connection, lifetime);
+          return;
+        }
+      }
       const redirect = startRedirect(
         provider.port,
         () => provider.expectedState,
@@ -1089,6 +1155,7 @@ export class McpManager {
           this.status.find((item) => item.name === connection.name) ?? state;
         current.error = `sign-in failed: ${error instanceof Error ? error.message : String(error)}`;
         delete current.authorize;
+        delete current.code;
         this.services.onChange?.();
       })
       .finally(() => this.signingIn.delete(provider.server));

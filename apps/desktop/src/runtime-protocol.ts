@@ -67,7 +67,9 @@ export type RuntimeCommandName =
   | 'remove-secret'
   | 'create-skill'
   | 'dismiss-whats-new'
-  | 'link-opened';
+  | 'link-opened'
+  | 'hub-connect'
+  | 'hub-disconnect';
 
 export interface RuntimeCommand {
   id: string;
@@ -183,6 +185,8 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'create-skill',
   'dismiss-whats-new',
   'link-opened',
+  'hub-connect',
+  'hub-disconnect',
 ]);
 
 // A message carries its pictures and PDFs as base64, up to 20 MiB each in the core: room for

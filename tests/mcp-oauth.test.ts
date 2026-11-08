@@ -15,6 +15,7 @@ import {
   startRedirect,
 } from '../src/mcp_auth.js';
 import { McpManager, SIGN_IN_WAITING } from '../src/mcp_loader.js';
+import { DEVICE_CODE_GRANT } from '../src/mcp_device.js';
 import {
   ApprovalPolicy,
   ApprovalStore,
@@ -38,11 +39,19 @@ interface OAuthServer {
   exchanges: URLSearchParams[];
   /** Bearer tokens /mcp accepts; a test can revoke one. */
   valid: Set<string>;
+  /** Device authorization requests the server saw. */
+  devices: URLSearchParams[];
+  /** Set when a person approved the device code on the server's page. */
+  approved: boolean;
 }
 
 async function oauthServer(
   t: Parameters<typeof scratch>[0],
-  options: { refuse?: boolean } = {},
+  options: {
+    refuse?: boolean;
+    /** Offer the device code (RFC 8628); `noCode` refuses to give one, `deny` refuses the sign-in on the page. */
+    device?: { noCode?: boolean; deny?: boolean };
+  } = {},
 ): Promise<OAuthServer> {
   const state: OAuthServer = {
     origin: '',
@@ -50,6 +59,8 @@ async function oauthServer(
     authorizations: [],
     exchanges: [],
     valid: new Set(),
+    devices: [],
+    approved: false,
   };
   const challenges = new Map<string, { challenge: string; redirect: string }>();
   let issued = 0;
@@ -73,10 +84,28 @@ async function oauthServer(
         token_endpoint: `${state.origin}/token`,
         registration_endpoint: `${state.origin}/register`,
         response_types_supported: ['code'],
-        grant_types_supported: ['authorization_code'],
+        grant_types_supported: options.device
+          ? ['authorization_code', DEVICE_CODE_GRANT]
+          : ['authorization_code'],
+        ...(options.device
+          ? { device_authorization_endpoint: `${state.origin}/device` }
+          : {}),
         code_challenge_methods_supported: ['S256'],
         token_endpoint_auth_methods_supported: ['none'],
       });
+    if (url.pathname === '/device' && request.method === 'POST') {
+      state.devices.push(new URLSearchParams(body));
+      if (options.device?.noCode)
+        return json(400, { error: 'unauthorized_client' });
+      return json(200, {
+        device_code: 'device-code-1',
+        user_code: 'BCDF-GHJK',
+        verification_uri: `${state.origin}/device`,
+        verification_uri_complete: `${state.origin}/device?user_code=BCDF-GHJK`,
+        expires_in: 600,
+        interval: 1,
+      });
+    }
     if (url.pathname === '/register') {
       const metadata = JSON.parse(body) as Record<string, unknown>;
       state.clients.push(metadata);
@@ -106,6 +135,16 @@ async function oauthServer(
     if (url.pathname === '/token') {
       const form = new URLSearchParams(body);
       state.exchanges.push(form);
+      if (form.get('grant_type') === DEVICE_CODE_GRANT) {
+        if (form.get('device_code') !== 'device-code-1')
+          return json(400, { error: 'invalid_grant' });
+        if (options.device?.deny) return json(400, { error: 'access_denied' });
+        if (!state.approved)
+          return json(400, { error: 'authorization_pending' });
+        const token = `token-${++issued}`;
+        state.valid.add(token);
+        return json(200, { access_token: token, token_type: 'Bearer' });
+      }
       const kept = challenges.get(form.get('code') ?? '');
       const verifier = form.get('code_verifier') ?? '';
       if (
@@ -413,4 +452,141 @@ test('the redirect listener takes only its own state and answers anything else w
   assert.equal(ours.status, 200);
   assert.match(await ours.text(), /Circle is signed in/);
   assert.equal(await redirect.code, 'the-code');
+});
+
+test('a server whose authorization server offers the device code shows a code, and connects once it is approved', async (t) => {
+  const server = await oauthServer(t, { device: {} });
+  const opened: string[] = [];
+  const change = changes();
+  const home = scratch(t);
+  const manager = new McpManager(scratch(t), 5000, undefined, {
+    home,
+    openUrl: async (url) => void opened.push(url),
+    onChange: change.onChange,
+  });
+  cleanup(t, () => manager.close());
+  const shown = change.next();
+  await manager.load([
+    {
+      name: 'remote',
+      url: `${server.origin}/mcp`,
+      transport: 'streamable_http',
+    },
+  ]);
+  await shown;
+  const waiting = manager.status[0]!;
+  assert.equal(waiting.error, 'enter the code BCDF-GHJK on the sign-in page');
+  assert.equal(waiting.code, 'BCDF-GHJK');
+  assert.equal(
+    waiting.authorize,
+    `${server.origin}/device?user_code=BCDF-GHJK`,
+  );
+  assert.match(
+    manager.describe(),
+    /enter the code BCDF-GHJK on the sign-in page: http:\/\/127\.0\.0\.1:\d+\/device\?user_code=BCDF-GHJK/,
+  );
+  assert.deepEqual(
+    opened,
+    [waiting.authorize],
+    'the page opens with the code filled in',
+  );
+  // Registered asking for the device code, since the server offers it; no browser sign-in was started
+  assert.deepEqual(server.clients[0]!.grant_types, [
+    'authorization_code',
+    'refresh_token',
+    DEVICE_CODE_GRANT,
+  ]);
+  assert.equal(server.devices[0]!.get('client_id'), 'client-1');
+  assert.equal(server.devices[0]!.get('resource'), `${server.origin}/mcp`);
+  assert.deepEqual(server.authorizations, []);
+
+  // Until a person approves, the server answers authorization_pending and Circle keeps polling
+  const polled = () =>
+    server.exchanges.filter(
+      (form) => form.get('grant_type') === DEVICE_CODE_GRANT,
+    ).length;
+  for (const deadline = Date.now() + 10_000; polled() === 0;) {
+    assert.ok(Date.now() < deadline, 'a first poll');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(manager.status[0]!.code, 'BCDF-GHJK', 'still waiting');
+  // A person approves on the page: the next poll gets the token and the server connects with it
+  const connected = change.next();
+  server.approved = true;
+  await connected;
+  assert.equal(manager.status[0]!.error, '');
+  assert.equal(manager.status[0]!.code, undefined);
+  assert.equal(manager.status[0]!.authorize, undefined);
+  assert.deepEqual(manager.status[0]!.tools, ['remote_echo']);
+  const polls = server.exchanges.filter(
+    (form) => form.get('grant_type') === DEVICE_CODE_GRANT,
+  );
+  assert.ok(polls.length >= 2, 'it polled until the approval');
+  assert.ok(polls.every((form) => form.get('client_id') === 'client-1'));
+  const kept = keptFor(home, `${server.origin}/mcp`);
+  assert.ok(
+    kept.tokens?.access_token && server.valid.has(kept.tokens.access_token),
+  );
+  assert.ok(kept.grant_id, 'the tokens are a new grant');
+  assert.equal(statSync(mcpAuthPath(home)).mode & 0o777, 0o600);
+});
+
+test('a server that gives no device code is signed in through the browser instead', async (t) => {
+  const server = await oauthServer(t, { device: { noCode: true } });
+  const opened: string[] = [];
+  const change = changes();
+  const manager = new McpManager(scratch(t), 5000, undefined, {
+    home: scratch(t),
+    openUrl: browser(opened),
+    onChange: change.onChange,
+  });
+  cleanup(t, () => manager.close());
+  const connected = change.next();
+  await manager.load([
+    {
+      name: 'remote',
+      url: `${server.origin}/mcp`,
+      transport: 'streamable_http',
+    },
+  ]);
+  await connected;
+  assert.equal(server.devices.length, 1, 'it asked for a code first');
+  assert.equal(
+    server.authorizations.length,
+    1,
+    'then signed in through the browser',
+  );
+  assert.equal(opened.length, 1);
+  assert.match(opened[0]!, /\/authorize\?/);
+  assert.equal(manager.status[0]!.error, '');
+  assert.deepEqual(manager.status[0]!.tools, ['remote_echo']);
+});
+
+test('a device sign-in refused on the page says so and leaves no code shown', async (t) => {
+  const server = await oauthServer(t, { device: { deny: true } });
+  const change = changes();
+  const manager = new McpManager(scratch(t), 5000, undefined, {
+    home: scratch(t),
+    openUrl: async () => {},
+    onChange: change.onChange,
+  });
+  cleanup(t, () => manager.close());
+  const shown = change.next();
+  await manager.load([
+    {
+      name: 'remote',
+      url: `${server.origin}/mcp`,
+      transport: 'streamable_http',
+    },
+  ]);
+  await shown;
+  const failed = change.next();
+  await failed;
+  assert.equal(
+    manager.status[0]!.error,
+    'sign-in failed: the sign-in was refused',
+  );
+  assert.equal(manager.status[0]!.code, undefined);
+  assert.equal(manager.status[0]!.authorize, undefined);
+  assert.deepEqual(manager.status[0]!.tools, []);
 });

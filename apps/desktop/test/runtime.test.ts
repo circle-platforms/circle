@@ -25,6 +25,7 @@ import {
 import { ScriptedModel } from '../../../src/testing.ts';
 import { AgentRuntime } from '../../../src/runtime.ts';
 import { AuthorizedServer } from '../../../tests/fixtures/knowledge-sync/authorized-server.ts';
+import { keptFor } from '../../../src/mcp_auth.ts';
 import { ExtensionAPI } from '../../../src/extensions.ts';
 import { ExtensionSecrets } from '../../../src/extension_secrets.ts';
 import {
@@ -3353,6 +3354,109 @@ test('an extension status and view reach the snapshot, and its links reach the w
   const own = await linkOpened(request.id);
   assert.equal(own.ok, true, own.error);
   assert.equal(controller.snapshot().openUrl, undefined);
+});
+
+test('the Hub extension connects a Hub by its typed address with a device code, and disconnecting revokes and removes it', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(join(workspace, '.git'), { recursive: true });
+  const peer = new AuthorizedServer(join(root, 'peer'));
+  peer.device = true;
+  await peer.start();
+  saveSettings(trustFolder(defaultSettings(), workspace), home);
+  const updates: RuntimeUpdate[] = [];
+  const opened: string[] = [];
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model: new ScriptedModel([]),
+    emit: (update) => updates.push(update),
+    openUrl: (url) => void opened.push(url),
+  });
+  t.after(async () => {
+    await controller.close();
+    await peer.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  await controller.initialize();
+  const call = (name: string, payload: Record<string, unknown> = {}) =>
+    controller.dispatch({
+      id: randomUUID(),
+      name,
+      payload,
+      sessionId: controller.snapshot().activeSessionId,
+    });
+  const row = (update: RuntimeUpdate) =>
+    update.snapshot.mcp.find((item) => item.name === 'Hub');
+
+  // An address where no Hub answers changes nothing
+  const wrong = await call('hub-connect', { address: 'http://127.0.0.1:9' });
+  assert.equal(wrong.ok, false);
+  assert.match(
+    wrong.error ?? '',
+    /no Circle Hub answers at http:\/\/127\.0\.0\.1:9/,
+  );
+  assert.deepEqual(loadSettings(home).mcp_servers, []);
+
+  // Typed without its scheme: https answers nothing there, so the Hub is found over http
+  const connected = await call('hub-connect', {
+    address: peer.origin.replace('http://', ''),
+  });
+  assert.equal(connected.ok, true, connected.error);
+  assert.deepEqual(connected.data, { endpoint: peer.origin + '/mcp' });
+  const saved = loadSettings(home);
+  assert.deepEqual(saved.mcp_servers, [
+    {
+      name: 'Hub',
+      url: peer.origin + '/mcp',
+      transport: 'streamable_http',
+      enabled: true,
+    },
+  ]);
+  assert.equal(saved.extensions.hub?.enabled, true);
+  await wait(
+    () => updates.some((update) => row(update)?.signIn?.code === 'BCDF-GHJK'),
+    'the code in a published snapshot',
+  );
+  const waiting = updates.map(row).find((item) => item?.signIn?.code)!;
+  assert.equal(
+    waiting.signIn!.url,
+    peer.origin + '/device?user_code=BCDF-GHJK',
+  );
+  assert.equal(waiting.error, 'enter the code BCDF-GHJK on the sign-in page');
+  assert.deepEqual(opened, [peer.origin + '/device?user_code=BCDF-GHJK']);
+  assert.equal(peer.deviceRequests.length, 1);
+  assert.equal(peer.deviceRequests[0]!.get('resource'), peer.origin + '/mcp');
+
+  // A person approves on the Hub's page: the connection shows without another command
+  peer.deviceApproved = true;
+  await wait(
+    () => updates.some((update) => row(update)?.status === 'connected'),
+    'the Hub connected in a published snapshot',
+  );
+  const live = row(updates.at(-1)!)!;
+  assert.equal(live.status, 'connected');
+  assert.equal(live.signIn, undefined);
+  assert.ok(live.tools.length > 0);
+  const kept = keptFor(home, peer.origin + '/mcp');
+  assert.equal(kept.tokens?.access_token, peer.token);
+
+  // Disconnecting revokes the Hub's tokens, forgets them and removes the entry
+  const out = await call('hub-disconnect');
+  assert.equal(out.ok, true, out.error);
+  assert.deepEqual(out.data, { revoked: true });
+  assert.deepEqual(
+    peer.revocations.map((form) => form.get('token')),
+    [kept.tokens!.refresh_token, kept.tokens!.access_token],
+  );
+  assert.deepEqual(keptFor(home, peer.origin + '/mcp'), {});
+  assert.deepEqual(loadSettings(home).mcp_servers, []);
+  assert.equal(
+    controller.snapshot().mcp.find((item) => item.name === 'Hub'),
+    undefined,
+  );
 });
 
 test('an MCP server that signs in after the start reaches the window without another command', async (t) => {

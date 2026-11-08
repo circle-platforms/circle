@@ -94,6 +94,13 @@ import {
   VARIABLE_NAME,
 } from '../../../src/settings.js';
 import {
+  addHub,
+  findHub,
+  hubEndpoint,
+  removeHub,
+} from '../../../src/hub_connection.js';
+import { revokeAuthorization } from '../../../src/mcp_auth.js';
+import {
   discoverCustomCommands,
   substituteArguments,
 } from '../../../src/commands.js';
@@ -908,6 +915,20 @@ export class RuntimeController {
     }
   }
   private synchronizeSharedSettings(settings: CircleSettings): void {
+    // The Hub extension applies as soon as its switch is saved, as GitHub's does: its page needs no reload
+    const hub = settings.extensions.hub?.enabled === true;
+    for (const owner of [
+      ...this.runtimes.values(),
+      ...this.taskRuntimes.values(),
+    ]) {
+      if ((owner.options.settings.extensions.hub?.enabled === true) === hub)
+        continue;
+      owner.options.settings.extensions.hub = {
+        ...owner.options.settings.extensions.hub,
+        enabled: hub,
+      };
+      void owner.setBundledExtensionEnabled('hub', hub).catch(() => {});
+    }
     if (settings.extensions.github?.enabled !== true) {
       this.githubLeases.clear();
       this.githubProviderLifetime.abort();
@@ -3512,6 +3533,15 @@ export class RuntimeController {
                   : 'connected'
                 : 'not connected',
           error: status?.error === 'disabled' ? undefined : status?.error,
+          // A sign-in under way: its page, and the code to type there when it is a device sign-in
+          ...(status?.authorize
+            ? {
+                signIn: {
+                  url: status.authorize,
+                  ...(status.code ? { code: status.code } : {}),
+                },
+              }
+            : {}),
           tools: runtime.mcp.tools
             .filter((tool) => status?.tools.includes(tool.name))
             .map((tool) => ({
@@ -6354,6 +6384,32 @@ export class RuntimeController {
         if (this.openRequest?.id === text(p.id, 'link', 100))
           this.openRequest = undefined;
         return {};
+      case 'hub-connect': {
+        // The Hub extension: the address a person typed becomes the Hub's MCP entry, and connecting it starts its
+        // sign-in, by device code where the Hub offers it.
+        if (
+          !isFolderTrusted(loadSettings(this.home), runtime.options.workspace)
+        )
+          throw Error('trust the workspace first');
+        const endpoint = await findHub(text(p.address, 'hub address', 2048));
+        const previous = hubEndpoint(loadSettings(this.home));
+        // Another Hub's sign-in is not this one's
+        if (previous && previous !== endpoint)
+          await revokeAuthorization(this.home, new URL(previous).href);
+        saveSettingsChange(this.home, (settings) => addHub(settings, endpoint));
+        // The runtime reads its settings again and connects the entry
+        await runtime.reloadIntegrations();
+        return { endpoint };
+      }
+      case 'hub-disconnect': {
+        const endpoint = hubEndpoint(loadSettings(this.home));
+        const revoked = endpoint
+          ? await revokeAuthorization(this.home, new URL(endpoint).href)
+          : false;
+        saveSettingsChange(this.home, removeHub);
+        await runtime.reloadIntegrations();
+        return { revoked };
+      }
       case 'launch-options':
         throw Error(
           'desktop launch options must be supplied when starting the application; use session controls for model, effort and plan mode',

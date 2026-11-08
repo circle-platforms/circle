@@ -1,0 +1,120 @@
+/* The Hub connection, laid out as the GitHub connection is. */
+.hub-connector {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  max-width: 760px;
+}
+.hub-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.hub-summary-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px 14px;
+}
+.hub-summary-title {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  flex: 1 1 190px;
+  min-width: 0;
+}
+.hub-summary-title h2 {
+  font-size: calc(var(--ui-size) + 1px);
+  font-weight: 600;
+}
+.hub-summary-head > .toggle {
+  margin-left: auto;
+  padding: 0;
+}
+.hub-status,
+.hub-message {
+  margin: 0;
+  font-size: var(--ui-small);
+  line-height: 1.6;
+  color: var(--secondary);
+  overflow-wrap: anywhere;
+}
+.hub-address {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.hub-address > label {
+  font-size: var(--ui-small);
+  color: var(--secondary);
+}
+.hub-address-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.hub-address-row > input {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.hub-device-code {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.hub-device-code p {
+  margin: 0;
+  font-size: var(--ui-small);
+  color: var(--secondary);
+}
+.hub-device-code code {
+  font-family: var(--mono);
+  font-size: var(--ui-large);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+  color: var(--fg);
+  user-select: all;
+}
+.hub-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.hub-actions > .button {
+  min-height: 32px;
+}
+.hub-actions > .hub-disconnect {
+  margin-left: auto;
+}
+.hub-alert {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--negative);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: var(--ui-small);
+}
+.hub-alert > p {
+  margin: 0 0 4px;
+}
+.hub-alert pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 8px 0 0;
+}
