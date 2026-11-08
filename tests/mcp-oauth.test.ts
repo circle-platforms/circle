@@ -528,7 +528,8 @@ test('a server whose authorization server offers the device code shows a code, a
     kept.tokens?.access_token && server.valid.has(kept.tokens.access_token),
   );
   assert.ok(kept.grant_id, 'the tokens are a new grant');
-  assert.equal(statSync(mcpAuthPath(home)).mode & 0o777, 0o600);
+  if (process.platform !== 'win32')
+    assert.equal(statSync(mcpAuthPath(home)).mode & 0o777, 0o600);
 });
 
 test('a server that gives no device code is signed in through the browser instead', async (t) => {
