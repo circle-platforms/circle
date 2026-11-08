@@ -2471,6 +2471,8 @@ export class RuntimeController {
           () => runtime.session.id,
         ),
         onExtensionStatus: () => this.publish(),
+        // A server that signed in after the start, or went away, shows without waiting for a turn
+        onMcpStatus: () => this.publish(),
         openUrl: async (url) => {
           this.openRequest = {
             id: randomUUID(),
@@ -6346,6 +6348,11 @@ export class RuntimeController {
       case 'dismiss-whats-new':
         dismissWhatsNew(this.home);
         this.whatsNew = undefined;
+        return {};
+      case 'link-opened':
+        // The window opened this link; one that loads later must not open it again.
+        if (this.openRequest?.id === text(p.id, 'link', 100))
+          this.openRequest = undefined;
         return {};
       case 'launch-options':
         throw Error(

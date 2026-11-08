@@ -1013,8 +1013,10 @@ export function App() {
   };
   const onSessionRoute = () =>
     navigate(`/session/${runtime.getSnapshot().activeSessionId}`);
-  // A link an extension asked to open (api.openUrl): the browser panel opens it, once.
-  const openedLink = useRef(snapshot.openUrl?.id);
+  // A link an extension or an MCP server's sign-in asked to open: the browser panel opens it,
+  // once. The runtime keeps it until this window says it opened it, so a link that came before
+  // the window loaded still opens, and a window that loads again does not open it a second time.
+  const openedLink = useRef<string>(undefined);
   useEffect(() => {
     const request = snapshot.openUrl;
     if (
@@ -1031,6 +1033,7 @@ export function App() {
     }
     // Without the panel, the window's own handler hands it to the system browser.
     else window.open(request.url, '_blank', 'noopener');
+    void runtime.request('link-opened', { id: request.id });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snapshot.openUrl?.id, session.id]);
   useEffect(() => {

@@ -24,6 +24,7 @@ import {
 } from '../../../src/browser/protocol.ts';
 import { ScriptedModel } from '../../../src/testing.ts';
 import { AgentRuntime } from '../../../src/runtime.ts';
+import { AuthorizedServer } from '../../../tests/fixtures/knowledge-sync/authorized-server.ts';
 import { ExtensionAPI } from '../../../src/extensions.ts';
 import { ExtensionSecrets } from '../../../src/extension_secrets.ts';
 import {
@@ -3337,6 +3338,66 @@ test('an extension status and view reach the snapshot, and its links reach the w
   assert.equal(request.url, 'https://lab.example.test/live');
   assert.equal(request.sessionId, controller.snapshot().activeSessionId);
   assert.match(request.id, /^[0-9a-f-]{36}$/);
+  // It stays for a window that loads later until a window says it opened it: another
+  // link's id leaves it, its own id removes it.
+  const linkOpened = (id: string) =>
+    controller.dispatch({
+      id: randomUUID(),
+      name: 'link-opened',
+      payload: { id },
+      sessionId: controller.snapshot().activeSessionId,
+    });
+  const other = await linkOpened(randomUUID());
+  assert.equal(other.ok, true, other.error);
+  assert.equal(controller.snapshot().openUrl?.id, request.id);
+  const own = await linkOpened(request.id);
+  assert.equal(own.ok, true, own.error);
+  assert.equal(controller.snapshot().openUrl, undefined);
+});
+
+test('an MCP server that signs in after the start reaches the window without another command', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-core-desktop-'));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(join(workspace, '.git'), { recursive: true });
+  const peer = new AuthorizedServer(join(root, 'peer'));
+  await peer.start();
+  const settings = trustFolder(defaultSettings(), workspace);
+  // No credential header: the server answers 401 and Circle signs in to it.
+  settings.mcp_servers = [
+    { name: 'signin', url: peer.origin + '/mcp', transport: 'streamable_http' },
+  ];
+  saveSettings(settings, home);
+  const updates: RuntimeUpdate[] = [];
+  const opened: string[] = [];
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model: new ScriptedModel([]),
+    emit: (update) => updates.push(update),
+    // The browser: its sign-in page approves at once and sends the code back to Circle.
+    openUrl: (url) => {
+      opened.push(url);
+      void fetch(url).catch(() => {});
+    },
+  });
+  t.after(async () => {
+    await controller.close();
+    await peer.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const row = (update: RuntimeUpdate) =>
+    update.snapshot.mcp.find((item) => item.name === 'signin');
+  // As the application starts: the runtime connects its servers, and this one asks for a sign-in.
+  await controller.initialize();
+  await wait(
+    () => updates.some((update) => row(update)?.status === 'connected'),
+    'the signed-in server in a published snapshot',
+  );
+  assert.equal(opened.length, 1);
+  assert.equal(peer.tokenRequests.length, 1);
+  assert.ok(row(updates.at(-1)!)!.tools.length > 0);
 });
 
 const activeSession = (f: { controller: RuntimeController }) => {

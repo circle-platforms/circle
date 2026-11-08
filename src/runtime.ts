@@ -224,6 +224,8 @@ export interface RuntimeOptions {
   bundledExtensions?: string | false;
   /** An extension's status line changed. */
   onExtensionStatus?: () => void;
+  /** An MCP server's status changed between reloads: a sign-in finished or failed, or a server went away. */
+  onMcpStatus?: () => void;
   /** The shared database is locked and startup is about to wait. */
   onStoreBusy?: () => void;
   /** Opens a link an extension asked for (api.openUrl); the URL is already checked. */
@@ -665,6 +667,7 @@ export class AgentRuntime {
         if (this.closing) return;
         this.toolsStale = true;
         this.scheduleToolRefresh();
+        this.options.onMcpStatus?.();
       },
     });
     this.knowledge = new KnowledgeConnection(
