@@ -1,3 +1,4 @@
+import { ModelCompletionFailure } from '../../../src/model_completion.ts';
 import { openai } from '../../../tests/chatgpt-fixture.js';
 import { chatgptAccountsPath } from '../../../src/chatgpt_plan.js';
 import test, { type TestContext } from 'node:test';
@@ -350,6 +351,35 @@ test('untyped harness failures retain their source-session diagnostic without a 
       .messages.filter((row) => row.text === '✖ local fixture network failed')
       .length,
     1,
+  );
+});
+
+test('a context failure keeps the words the endpoint said under its cause', async (t) => {
+  // Refused as too long, once and again after the step is tried once more
+  const refused = async () => {
+    const failure = new ModelCompletionFailure('context_limit');
+    failure.providerError = {
+      code: 'context_length_exceeded',
+      message:
+        '400 Your input exceeds the context window of this model. Please adjust your input and try again.',
+    };
+    throw failure;
+  };
+  const f = await setup(t, [refused, refused]);
+  await f.call('prompt', { text: 'refused as too long' });
+  await wait(
+    () => f.updates.some((row) => row.event?.kind === 'run_error'),
+    'context failure diagnostic',
+  );
+  const snapshot = f.controller.snapshot();
+  const notices = snapshot.sessions
+    .find((row) => row.id === snapshot.activeSessionId)!
+    .messages.filter((row) => row.role === 'notice');
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0]!.completionFailure, 'context_limit');
+  assert.equal(
+    notices[0]!.text,
+    '✖ model context window exhausted; response incomplete\ncontext_length_exceeded: 400 Your input exceeds the context window of this model. Please adjust your input and try again.',
   );
 });
 

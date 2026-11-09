@@ -86,7 +86,11 @@ export function completionNoticeText(
   const failure =
     message.completionFailure &&
     completionFailureText(message.completionFailure);
-  if (failure) return `✖ ${failure}`;
+  if (failure) {
+    // The endpoint's own words, on the lines under Circle's, stay as they were sent
+    const said = message.text.split('\n').slice(1).join('\n');
+    return `✖ ${failure}${said ? '\n' + said : ''}`;
+  }
   // The runtime's own words for a failed turn and a failed session title.
   if (message.text === '✖ the turn failed') return t('✖ the turn failed');
   if (message.text === '✖ Interrupted') return t('✖ Interrupted');

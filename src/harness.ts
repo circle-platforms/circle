@@ -1362,6 +1362,20 @@ export class Harness {
                 completion_message_id: failure.responseId,
               }
             : {}),
+          // What the endpoint itself said, under Circle's words for the failure: its
+          // code and message are what a person reports, and what tells one cause from another
+          ...(!signal.aborted &&
+          failure instanceof ModelCompletionFailure &&
+          failure.providerError
+            ? {
+                provider_error: {
+                  ...(failure.providerError.code
+                    ? { code: failure.providerError.code }
+                    : {}),
+                  message: redact(failure.providerError.message),
+                },
+              }
+            : {}),
         },
         usage: { ...usage },
         elapsed_ms: Date.now() - start,

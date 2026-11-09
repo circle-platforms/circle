@@ -126,6 +126,10 @@ test('a request the endpoint refuses as too long is compacted and sent once more
 
 test('a step refused again after compaction ends the turn instead of trying forever', async (t) => {
   const { runtime, turns } = await world(t, true);
+  const errors: Record<string, unknown>[] = [];
+  runtime.harness.bus.subscribe((event) => {
+    if (event.kind === 'run_error') errors.push(event.payload);
+  });
   await assert.rejects(
     runtime.harness.run('go on'),
     (error: unknown) =>
@@ -133,4 +137,11 @@ test('a step refused again after compaction ends the turn instead of trying fore
   );
   assert.equal(turns.length, 2, JSON.stringify(turns));
   assert.ok(turns.every((turn) => turn.refused));
+  // The failure carries the endpoint's own words, for the person to read and report
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]!.completion_failure, 'context_limit');
+  assert.deepEqual(errors[0]!.provider_error, {
+    code: 'context_length_exceeded',
+    message: `400 ${REFUSAL.error.message}`,
+  });
 });
