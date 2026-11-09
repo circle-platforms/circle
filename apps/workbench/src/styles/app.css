@@ -4083,9 +4083,11 @@ pre {
   color: var(--fg);
 }
 
-/* The transcript: Circle writes plain text, your messages are bubbles on the right. */
+/* The transcript: Circle writes plain text, your messages are bubbles on the right. It takes
+   the room the window gives it, up to a width at which a line of text can still be read;
+   the input box below keeps the same width. */
 .transcript-column {
-  max-width: 780px;
+  max-width: 1280px;
   padding: 18px 28px 36px;
 }
 .message {
@@ -4264,6 +4266,21 @@ pre {
   padding-left: 14px;
   border-left: 2px solid var(--border);
 }
+/* A step's calls, stacked in one frame with a rule between them and no room around each */
+.tool-stack {
+  margin: 6px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.tool-stack .tool-call {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+.tool-stack > * + * {
+  border-top: 1px solid var(--border);
+}
 .tool-group .inline-request {
   margin-top: 10px;
 }
@@ -4283,7 +4300,7 @@ pre {
 }
 .composer-area > * {
   width: 100%;
-  max-width: 780px;
+  max-width: 1280px;
   margin-left: auto;
   margin-right: auto;
 }

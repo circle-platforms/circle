@@ -70,6 +70,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'files-git-marks-ui.mjs',
   'drawer-auto-open-ui.mjs',
   'overview-cards-ui.mjs',
+  'transcript-layout-ui.mjs',
   'notice-timers-ui.mjs',
   'tool-summary-line-ui.mjs',
   'git-changes-refresh-ui.mjs',
