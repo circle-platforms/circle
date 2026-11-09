@@ -1,6 +1,7 @@
 import { DropdownMenu } from 'radix-ui';
 import {
   Bot,
+  Check,
   ChevronDown,
   ChevronRight,
   Folder,
@@ -34,7 +35,7 @@ import {
 import { endedToolCalls, useGitChanges } from '../model/git-changes';
 import { failedRunLog, usePullRequests } from '../model/pull-requests';
 import { currentSession } from '../model/state';
-import type { Job, PanelId, SessionMemoryDocument } from '../model/types';
+import type { Job, PanelId, SessionMemoryDocument, Todo } from '../model/types';
 import { workspaceLabel } from '../model/workspace-label';
 import { SAMPLE_PULL_REQUESTS } from '../preview/pull-requests';
 import type { PullRequestSummary } from '../../../desktop/src/workspace/pulls-types';
@@ -108,16 +109,21 @@ function Row({
   children,
   end,
   kind,
+  current,
 }: {
   icon?: LucideIcon;
   onClick?: () => void;
   title?: string;
   children: ReactNode;
   end?: ReactNode;
-  /** `agent`: the name stays whole and what the subagent does gives way first. */
-  kind?: 'agent';
+  /** `agent`: the name stays whole and what the subagent does gives way first. `plan`: one
+   * step of the plan, marked by its state. */
+  kind?: 'agent' | 'plan';
+  /** The plan step under way, or the next one. */
+  current?: boolean;
 }) {
   const className = kind ? `overview-row overview-${kind}` : 'overview-row';
+  const step = current ? ('step' as const) : undefined;
   const body = (
     <>
       {Icon && <Icon size={16} aria-hidden />}
@@ -126,13 +132,33 @@ function Row({
     </>
   );
   return onClick ? (
-    <button type="button" className={className} title={title} onClick={onClick}>
+    <button
+      type="button"
+      className={className}
+      title={title}
+      aria-current={step}
+      onClick={onClick}
+    >
       {body}
     </button>
   ) : (
-    <div className={className} title={title}>
+    <div className={className} title={title} aria-current={step}>
       {body}
     </div>
+  );
+}
+
+/** A plan step's mark, as the plan box drew it: a check when done, the blue dot for the
+ * step under way (or the next one), a ring for one still to do. */
+function PlanMark({ step, current }: { step: Todo; current: boolean }) {
+  return (
+    <span className="overview-plan-mark" aria-hidden>
+      {step.status === 'completed' ? (
+        <Check size={12} />
+      ) : (
+        <i className="overview-dot" data-state={current ? 'run' : 'pending'} />
+      )}
+    </span>
   );
 }
 
@@ -289,6 +315,7 @@ export function Overview({
   const toggle = (id: CardId) => setOpen((old) => ({ ...old, [id]: !old[id] }));
   const [moreOutputs, setMoreOutputs] = useState(false);
   const [moreJobs, setMoreJobs] = useState(false);
+  const [morePlan, setMorePlan] = useState(false);
   const [moreFiles, setMoreFiles] = useState(false);
   const [morePulls, setMorePulls] = useState(false);
 
@@ -502,14 +529,52 @@ export function Overview({
           onToggle={() => toggle('progress')}
           summary={progressSummary}
         >
-          {progress.plan && (
-            <Row end={<EndText>{t('plan')}</EndText>}>
-              <Dot state="run" />
-              <span className="overview-name">
-                {progress.plan.current.text}
-              </span>
-            </Row>
-          )}
+          {progress.plan &&
+            (() => {
+              const plan = progress.plan;
+              const folded = plan.shown.end - plan.shown.start;
+              const shown = morePlan
+                ? plan.steps
+                : plan.steps.slice(plan.shown.start, plan.shown.end);
+              return (
+                <>
+                  {shown.map((step, index) => {
+                    const current = step === plan.current;
+                    return (
+                      <Row
+                        key={step.id}
+                        kind="plan"
+                        current={current}
+                        title={step.text}
+                        end={
+                          index === 0 ? (
+                            <EndText>{t('plan')}</EndText>
+                          ) : undefined
+                        }
+                      >
+                        <PlanMark step={step} current={current} />
+                        <span className="overview-name" data-step={step.status}>
+                          {step.text}
+                        </span>
+                      </Row>
+                    );
+                  })}
+                  {plan.steps.length > folded && (
+                    <button
+                      type="button"
+                      className="overview-more"
+                      onClick={() => setMorePlan((on) => !on)}
+                    >
+                      {morePlan
+                        ? t('show less')
+                        : t('show {n} more', {
+                            n: plan.steps.length - folded,
+                          })}
+                    </button>
+                  )}
+                </>
+              );
+            })()}
           {progress.agents.map((agent) => {
             const label = agentLabel(agent);
             const asked = pendingFor(agent.id, snapshot.interactions);

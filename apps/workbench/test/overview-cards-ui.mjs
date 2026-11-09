@@ -25,6 +25,8 @@ const WORDS = {
     failed: 'failed',
     stopped: 'stopped',
     twoMore: 'show 2 more',
+    threeMore: 'show 3 more',
+    less: 'show less',
   },
   'zh-CN': {
     plan: '计划',
@@ -40,6 +42,8 @@ const WORDS = {
     failed: '失败',
     stopped: '已停止',
     twoMore: '再显示 2 个',
+    threeMore: '再显示 3 个',
+    less: '收起',
   },
 };
 // How a row of the in progress card fits: anything past the row's or the card's right
@@ -96,11 +100,20 @@ try {
     const progress = page.locator(
       'section.overview-card[aria-labelledby="overview-progress"]',
     );
-    const planRows = progress.locator('.overview-row').filter({
-      has: page.locator('.overview-end').getByText(words.plan, {
-        exact: true,
-      }),
-    });
+    // The plan's steps, one row each, marked by their state
+    const planRows = progress.locator('.overview-plan');
+    const planSteps = () =>
+      planRows.evaluateAll((rows) =>
+        rows.map((row) => ({
+          text: row.querySelector('.overview-name').textContent,
+          mark: row.querySelector('.overview-plan-mark svg')
+            ? 'check'
+            : row.querySelector('.overview-plan-mark .overview-dot').dataset
+                .state,
+          current: row.getAttribute('aria-current'),
+          end: row.querySelector('.overview-end-text')?.textContent ?? null,
+        })),
+      );
 
     // The background jobs card: a job that ends keeps its row and says how it ended.
     const jobsCard = page.locator(
@@ -260,15 +273,69 @@ try {
           'pending';
       }),
     );
-    await planRows.waitFor();
+    await planRows.first().waitFor();
     assert.equal(
       await progress.locator('.overview-summary').textContent(),
       words.planAndSubagent,
     );
-    assert.equal(
-      await planRows.locator('.overview-name').textContent(),
-      'Add the regression',
+    // Every step shows: the done one checked, the next one with the dot of the step at
+    // work; the first row says it is the plan
+    assert.deepEqual(await planSteps(), [
+      {
+        text: 'Trace the reconnect',
+        mark: 'check',
+        current: null,
+        end: words.plan,
+      },
+      { text: 'Add the regression', mark: 'run', current: 'step', end: null },
+    ]);
+
+    // A long plan folds to five steps around the one at work, the rest behind show more
+    await page.evaluate(() =>
+      window.readabilityFixture.runtime.change((state) => {
+        state.sessions.find((item) => item.id === 'session1').todos =
+          Array.from({ length: 8 }, (_, index) => ({
+            id: 'long-' + index,
+            text: 'Step ' + (index + 1),
+            status:
+              index < 4 ? 'completed' : index === 4 ? 'running' : 'pending',
+          }));
+      }),
     );
+    await progress.getByText('Step 5', { exact: true }).waitFor();
+    assert.deepEqual(
+      (await planSteps()).map((step) => [step.text, step.mark, step.current]),
+      [
+        ['Step 3', 'check', null],
+        ['Step 4', 'check', null],
+        ['Step 5', 'run', 'step'],
+        ['Step 6', 'pending', null],
+        ['Step 7', 'pending', null],
+      ],
+    );
+    const morePlan = progress.locator('.overview-more');
+    assert.equal(await morePlan.textContent(), words.threeMore);
+    await morePlan.click();
+    await progress.getByText('Step 8', { exact: true }).waitFor();
+    assert.equal(await planRows.count(), 8);
+    assert.equal(await morePlan.textContent(), words.less);
+    // Every step fits its row: the card is not widened by a long one
+    const widest = await planRows.evaluateAll((rows) =>
+      Math.max(
+        ...rows.map(
+          (row) =>
+            row.getBoundingClientRect().right -
+            row.closest('.overview-body').getBoundingClientRect().right,
+        ),
+      ),
+    );
+    assert.ok(widest <= 0.5, String(widest));
+    await page.screenshot({
+      path: `artifacts/overview-plan-${language}.png`,
+      clip: await progress.boundingBox(),
+    });
+    await morePlan.click();
+    assert.equal(await planRows.count(), 5);
 
     // The context card: its tokens are how full the model's window is, used of the
     // window, as the percentage above them says; cost and cache stay.

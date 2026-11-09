@@ -22,9 +22,22 @@ export function agentLabel(
   return { name: agent.name, detail };
 }
 
+/** How many of a plan's steps the card shows before "show N more". */
+export const PLAN_STEPS_SHOWN = 5;
+
 export interface OverviewProgress {
-  /** The plan while a step of it is under way or still to do; a finished plan is not. */
-  plan: { done: number; total: number; current: Todo } | null;
+  /**
+   * The plan while a step of it is under way or still to do; a finished plan is not.
+   * `steps` is every step in order; `shown` is the run of them the card shows folded:
+   * up to PLAN_STEPS_SHOWN around the current step.
+   */
+  plan: {
+    done: number;
+    total: number;
+    current: Todo;
+    steps: Todo[];
+    shown: { start: number; end: number };
+  } | null;
   /** Subagents that are working or waiting for the person; finished ones are not "in progress". */
   agents: AgentRecord[];
   /** Tasks that are queued, working, waiting, or need the person's review. */
@@ -39,6 +52,20 @@ const TASK_IN_PROGRESS = new Set([
   'cancelling',
   'needs_review',
 ]);
+
+/**
+ * The steps a folded plan shows: up to PLAN_STEPS_SHOWN, with the current one two steps
+ * from the top where there are steps before it, so what was just done and what comes
+ * next stay in sight.
+ */
+export function shownSteps(
+  total: number,
+  current: number,
+): { start: number; end: number } {
+  if (total <= PLAN_STEPS_SHOWN) return { start: 0, end: total };
+  const start = Math.min(Math.max(0, current - 2), total - PLAN_STEPS_SHOWN);
+  return { start, end: start + PLAN_STEPS_SHOWN };
+}
 
 /** What the "in progress" card lists for one conversation. */
 export function overviewProgress(
@@ -58,6 +85,8 @@ export function overviewProgress(
         done: todos.filter((todo) => todo.status === 'completed').length,
         total: todos.length,
         current,
+        steps: todos,
+        shown: shownSteps(todos.length, todos.indexOf(current)),
       }
     : null;
   return {

@@ -148,10 +148,9 @@ try {
     exact: true,
   });
   const inProgress = overview.getByRole('region', { name: /^in progress\b/ });
-  // The step under way is a row of the card, marked as the plan's
+  // The step under way is a row of the card's plan, marked as the current step
   const planStep = (text) =>
-    inProgress.locator('.overview-row').filter({
-      has: page.locator('.overview-end', { hasText: /^plan$/ }),
+    inProgress.locator('.overview-plan[aria-current="step"]', {
       hasText: text,
     });
   await send('show pending plan');
