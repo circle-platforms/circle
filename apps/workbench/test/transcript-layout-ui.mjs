@@ -52,6 +52,20 @@ const steps = [
     thinking: 'Adding a cache test',
   },
   call('c4', 'execute', 'cache'),
+  {
+    ...call('c5', 'write_file', 'docs/tasks/cache.md'),
+    tool: {
+      ...call('c5', 'write_file', 'docs/tasks/cache.md').tool,
+      diff: {
+        summary: 'new file, 2 lines',
+        rows: [
+          { text: '@@ -0,0 +1,2 @@' },
+          { text: '+  1  # Cache', tone: 'added' },
+          { text: '+  2  ', tone: 'added' },
+        ],
+      },
+    },
+  },
   { id: 'answer', role: 'assistant', at: '10:32', text: 'Done.' },
 ];
 let browser;
@@ -132,14 +146,31 @@ try {
         frame: frame.borderTopWidth + ' ' + frame.borderTopStyle,
       };
     });
-    // One frame per step: three calls, then one, with no room between the calls of a step
-    assert.deepEqual(measured.stacks, [3, 1], JSON.stringify(measured));
+    // One frame per step: three calls, then two, with no room between the calls of a step
+    assert.deepEqual(measured.stacks, [3, 2], JSON.stringify(measured));
     assert.ok(
       measured.gaps[0].every((gap) => gap >= 0 && gap <= 1),
       JSON.stringify(measured),
     );
     assert.deepEqual(measured.margins, ['0px 0px'], JSON.stringify(measured));
     assert.equal(measured.frame, '1px solid');
+    // A call's difference sits under its row with the row's margins on both sides: its
+    // left edge under the row's icon, as far from the card's right edge
+    const diff = await line.evaluate((group) => {
+      const card = [...group.querySelectorAll('.tool-call')].find((node) =>
+        node.querySelector('.tool-diff'),
+      );
+      const box = card.getBoundingClientRect();
+      const block = card.querySelector('.diff-block').getBoundingClientRect();
+      const icon = card.querySelector('.tool-head svg').getBoundingClientRect();
+      return {
+        left: Math.round(block.left - box.left),
+        right: Math.round(box.right - block.right),
+        iconLeft: Math.round(icon.left - box.left),
+      };
+    });
+    assert.equal(diff.left, diff.right, JSON.stringify(diff));
+    assert.ok(Math.abs(diff.left - diff.iconLeft) <= 1, JSON.stringify(diff));
     // The frames sit under the line itself, with no rule or indent on their left
     assert.equal(measured.rule, '0px', JSON.stringify(measured));
     assert.equal(measured.indent, 0, JSON.stringify(measured));

@@ -3804,8 +3804,10 @@ pre {
   gap: 10px;
   flex-shrink: 0;
 }
+/* A closed call's difference sits under its row with the row's own 12-pixel margins on
+   both sides: its left edge under the row's icon, as far from the right edge. */
 .tool-diff {
-  padding: 0 0 8px 30px;
+  padding: 0 12px 12px;
 }
 .tool-diff-summary {
   font-family: var(--mono);
