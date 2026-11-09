@@ -241,7 +241,7 @@ test('adopted proposal links use exact ledger attempts and reviewers while propo
   );
 });
 test('read-only source policy permits inspection but rejects disk mutation', () => {
-  for (const method of ['read', 'refresh', 'resolveSource'])
+  for (const method of ['read', 'refresh', 'resolveSource', 'readPlanFolder'])
     assert.doesNotThrow(() => assertReadonlyTaskRequest('documents', method));
   for (const method of ['save', 'applyEdits', 'delete'])
     assert.throws(

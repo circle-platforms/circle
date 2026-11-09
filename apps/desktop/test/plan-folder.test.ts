@@ -42,7 +42,9 @@ async function world() {
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe]),
   );
   await writeFile(join(data, 'secret.txt'), 'SYNTHETIC-SECRET\n');
-  await symlink(join(data, 'secret.txt'), join(folder, 'outside.md'));
+  // Windows makes a file link only with rights a runner may not have
+  if (process.platform !== 'win32')
+    await symlink(join(data, 'secret.txt'), join(folder, 'outside.md'));
   return { temp, home, workspace };
 }
 
@@ -80,7 +82,8 @@ test('a plan folder file is read as text, and nothing outside the folder is', as
     await refused('/session_plans/../secret.txt', /not a file of the plan/);
     await refused('/session_plans/drafts/x.md', /not a file of the plan/);
     await refused('/session_plans/drafts', /not a file of the plan/);
-    await refused('/session_plans/outside.md', /not a file of the plan/);
+    if (process.platform !== 'win32')
+      await refused('/session_plans/outside.md', /not a file of the plan/);
     await refused('/elsewhere/proposal-review.md', /not a file of the plan/);
     await refused('/session_plans/missing.md', /missing\.md does not exist/);
     await refused('/session_plans/picture.png', /picture\.png is not a text/);
