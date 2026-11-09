@@ -20,7 +20,6 @@ export const components: Record<string, string> = {
   archived: '已归档',
   output: '输出',
   input: '输入',
-  'open file': '打开文件',
   'agent record': '子代理记录',
   'copy tool output': '复制工具输出',
   copied: '已复制',

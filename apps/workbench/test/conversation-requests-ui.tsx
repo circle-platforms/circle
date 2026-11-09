@@ -1,4 +1,5 @@
 import { createRoot } from 'react-dom/client';
+import { Tooltip } from 'radix-ui';
 import { useState } from 'react';
 import { RuntimeProvider } from '../src/app/context';
 import { PreviewRuntime } from '../src/model/state';
@@ -131,4 +132,9 @@ Object.assign(window, {
     snapshot: () => JSON.stringify(runtime.getSnapshot()),
   },
 });
-createRoot(document.getElementById('root')!).render(<Fixture />);
+// The window's provider: a request's actions are icons with tips
+createRoot(document.getElementById('root')!).render(
+  <Tooltip.Provider delayDuration={0}>
+    <Fixture />
+  </Tooltip.Provider>,
+);

@@ -1,57 +1,19 @@
-import {
-  Activity,
-  ChevronDown,
-  ChevronRight,
-  Square,
-  Terminal,
-} from 'lucide-react';
+import { Activity, ChevronDown, ChevronRight, Square } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useRuntime } from '../app/context';
-import { IconButton, PaneEmpty } from '../components/common';
+import {
+  CopyableText,
+  IconButton,
+  OpenInTerminalButton,
+  PaneEmpty,
+  RowActions,
+} from '../components/common';
 import { useCommandTerminal } from '../components/CommandTerminalNavigation';
 import { t } from '../i18n';
 import { jobDot, sessionJobs } from '../model/jobs';
 import { currentSession } from '../model/state';
 import type { DialogId, Job } from '../model/types';
 import { ModeButtons } from './mode-chrome';
-
-/** A job has no terminal tab: to type into its command, its row opens that terminal. */
-function JobTerminal({ job }: { job: Job }) {
-  const open = useCommandTerminal();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const { terminal, toolCallId } = job;
-  if (!open || !terminal || !toolCallId) return null;
-  return (
-    <>
-      <button
-        type="button"
-        className="text-button jobs-open-terminal"
-        disabled={busy}
-        onClick={async (event) => {
-          const trigger = event.currentTarget;
-          setBusy(true);
-          setError('');
-          try {
-            await open(job.sessionId, toolCallId, trigger);
-          } catch (failure) {
-            setError(
-              failure instanceof Error
-                ? failure.message
-                : t('command terminal could not be opened; try again'),
-            );
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        <Terminal size={12} />
-        {busy ? t('opening terminal…') : t('open in terminal')}
-      </button>
-      {error && <p role="alert">{error}</p>}
-    </>
-  );
-}
 
 /**
  * The background jobs mode: the commands Circle runs in the background for this
@@ -68,6 +30,11 @@ export function JobsMode({
 }) {
   const { snapshot } = useRuntime();
   const session = currentSession(snapshot);
+  // A job has no terminal tab: to type into its command, its row opens that terminal
+  const openTerminal = useCommandTerminal();
+  const [terminalErrors, setTerminalErrors] = useState<Record<string, string>>(
+    {},
+  );
   const { running, ended } = sessionJobs(session.id, snapshot.jobs);
   const [open, setOpen] = useState<ReadonlySet<string>>(
     () => new Set(selection ? [selection] : []),
@@ -109,21 +76,49 @@ export function JobsMode({
             <span className="jobs-title">{job.title}</span>
             <span className="jobs-time">{job.elapsed}</span>
           </button>
-          {going && job.state !== 'stopping' && (
-            <IconButton
-              label={t('stop background job')}
-              onClick={() => onDialog('job-stop', job.id)}
-            >
-              <Square size={11} />
-            </IconButton>
-          )}
+          <RowActions>
+            {expanded && openTerminal && job.terminal && job.toolCallId && (
+              <OpenInTerminalButton
+                open={(trigger) =>
+                  openTerminal(job.sessionId, job.toolCallId!, trigger)
+                }
+                onError={(message) =>
+                  setTerminalErrors((errors) => ({
+                    ...errors,
+                    [job.id]: message,
+                  }))
+                }
+              />
+            )}
+            {going && job.state !== 'stopping' && (
+              <IconButton
+                label={t('stop background job')}
+                onClick={() => onDialog('job-stop', job.id)}
+              >
+                <Square size={11} />
+              </IconButton>
+            )}
+          </RowActions>
         </div>
         {expanded && (
           <div className="jobs-detail">
-            {job.command && <pre className="jobs-command">$ {job.command}</pre>}
-            <JobTerminal job={job} />
+            {job.command && (
+              <CopyableText
+                className="jobs-command"
+                text={`$ ${job.command}`}
+                copy={job.command}
+                label={t('copy command')}
+              />
+            )}
+            {terminalErrors[job.id] && (
+              <p role="alert">{terminalErrors[job.id]}</p>
+            )}
             {job.output ? (
-              <pre className="jobs-output">{job.output}</pre>
+              <CopyableText
+                className="jobs-output"
+                text={job.output}
+                label={t('copy tool output')}
+              />
             ) : (
               !going && <p className="jobs-empty">{t('no output')}</p>
             )}

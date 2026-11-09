@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { WorkspaceService } from '../../../desktop/src/workspace-protocol';
 import { workspaceCall } from '../model/workspace-client';
-import { Button } from '../components/common';
+import { Button, CopyButton, RowActions } from '../components/common';
 import { operationLabel } from '../model/operation-label';
 import { dateLocale, t } from '../i18n';
 import './task-panel.css';
@@ -92,29 +92,22 @@ export function PendingOperations({
   }
   // Nothing to check: the panel shows no empty section for it.
   if (!rows.length && !error && !reviewError) return null;
-  const diagnostic = (row: PendingOperation) => {
-    const epoch = generation.current;
-    void navigator.clipboard
-      .writeText(
-        JSON.stringify(
-          {
-            id: row.id,
-            sessionId: row.sessionId,
-            service: row.service,
-            method: row.method,
-            state: row.state,
-            createdAt: row.createdAt,
-            updatedAt: row.updatedAt,
-            errorCode: row.errorCode,
-          },
-          null,
-          2,
-        ),
-      )
-      .catch((err) => {
-        if (epoch === generation.current) setReviewError(String(err));
-      });
-  };
+  // What a person hands on when they report an operation, as one JSON object
+  const diagnostic = (row: PendingOperation) =>
+    JSON.stringify(
+      {
+        id: row.id,
+        sessionId: row.sessionId,
+        service: row.service,
+        method: row.method,
+        state: row.state,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        errorCode: row.errorCode,
+      },
+      null,
+      2,
+    );
   return (
     <section
       className={`task-operations panel-section${card ? ' overview-card' : ''}`}
@@ -146,7 +139,15 @@ export function PendingOperations({
       )}
       {rows.map((row) => (
         <article key={row.id} className="task-operation">
-          <strong>{operationLabel(row.service, row.method)}</strong>
+          <header className="head-row">
+            <strong>{operationLabel(row.service, row.method)}</strong>
+            <RowActions>
+              <CopyButton
+                text={() => diagnostic(row)}
+                label={t('copy diagnostic')}
+              />
+            </RowActions>
+          </header>
           <p>{new Date(row.createdAt).toLocaleString(dateLocale())}</p>
           <label className="task-field">
             {t('what you found')}
@@ -166,9 +167,6 @@ export function PendingOperations({
               onClick={() => void review(row)}
             >
               {t('mark as checked')}
-            </Button>
-            <Button onClick={() => diagnostic(row)}>
-              {t('copy diagnostic')}
             </Button>
           </div>
         </article>

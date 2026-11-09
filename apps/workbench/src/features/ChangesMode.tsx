@@ -1,7 +1,7 @@
-import { FileDiff, FileText } from 'lucide-react';
+import { FileDiff } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useRuntime } from '../app/context';
-import { Button, PaneEmpty } from '../components/common';
+import { PaneEmpty, PathLink } from '../components/common';
 import { DiffBlock } from '../components/DiffBlock';
 import { t } from '../i18n';
 import {
@@ -211,14 +211,17 @@ export function ChangesMode({
                 >
                   {current.letter}
                 </span>
-                <span className="changes-path" title={current.path}>
-                  {current.path}
-                </span>
-                {current.letter !== 'D' && (
-                  <Button onClick={() => onFile(current.path)}>
-                    <FileText size={13} aria-hidden />
-                    {t('open file')}
-                  </Button>
+                {/* A file still there opens by its name; a deleted one is only named */}
+                {current.letter === 'D' ? (
+                  <span className="changes-path" title={current.path}>
+                    {current.path}
+                  </span>
+                ) : (
+                  <PathLink
+                    className="changes-path"
+                    path={current.path}
+                    onOpen={() => onFile(current.path)}
+                  />
                 )}
               </header>
               <div className="changes-diff">

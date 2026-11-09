@@ -168,6 +168,13 @@ export function useRuntime() {
   return value;
 }
 /** What a component does to the runtime, for one that shows nothing of the snapshot. */
+/**
+ * The notice line, where a runtime is there to show it: a component that only copies text
+ * works without one.
+ */
+export function useNotify(): ((text: string) => void) | undefined {
+  return useContext(Actions)?.notify;
+}
 export function useRuntimeActions() {
   const value = useContext(Actions);
   if (!value) throw Error('RuntimeProvider is required');

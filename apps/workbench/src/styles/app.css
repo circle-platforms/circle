@@ -868,13 +868,6 @@ pre {
   border-top: 1px solid var(--border);
   background: var(--subtle);
 }
-.tool-toolbar {
-  display: flex;
-  gap: 9px;
-  align-items: center;
-  justify-content: flex-end;
-  margin: 11px 0;
-}
 .tool-meta {
   color: var(--muted);
   font-size: var(--ui-tiny);
@@ -2883,10 +2876,12 @@ pre {
   .usage-bar i {
     display: none;
   }
-  .tool-head {
+  .tool-head,
+  .tool-row,
+  .tool-row-end {
     gap: 6px;
   }
-  .tool-target,
+  span.tool-target,
   .tool-time {
     display: none;
   }
@@ -5310,4 +5305,118 @@ button.sidebar-brand {
 .thinking-body {
   color: var(--secondary);
   font-size: var(--ui-small);
+}
+/* Text copies itself: the one copy button sits in its top right corner, and the text keeps
+   clear of it. A row's actions are icons at the right end of its head. */
+.copyable {
+  position: relative;
+}
+.copyable > pre {
+  padding-right: 40px;
+}
+.copyable > .copy-button {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}
+.row-actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+/* A call's head: a click anywhere on the row opens or folds it, its file opens by its
+   own name, and its terminal from the right end */
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 12px;
+  color: var(--secondary);
+  font-size: var(--ui-small);
+  cursor: pointer;
+}
+.tool-row > .tool-head {
+  flex: none;
+  width: auto;
+  padding: 0;
+  gap: 9px;
+}
+.tool-row > .tool-target {
+  flex: 0 1 auto;
+}
+.tool-row-end {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 9px;
+  margin-left: auto;
+}
+.tool-row > .row-actions {
+  margin-right: -4px;
+}
+/* A path that opens its file: the path itself, marked only when pointed at */
+.path-link {
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.path-link:hover,
+.path-link:focus-visible {
+  color: var(--fg);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.path-link > code {
+  color: inherit;
+}
+/* A card's head: what it is, and its actions (copy, open) at the right end */
+.head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.head-row > h3 {
+  margin: 0;
+}
+/* A one-time code to type on another site: the code large, its copy button beside it */
+.device-code {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.device-code p {
+  margin: 0;
+  font-size: var(--ui-small);
+  color: var(--secondary);
+}
+.device-code-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.device-code code {
+  font-family: var(--mono);
+  font-size: var(--ui-large);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+  color: var(--fg);
+  user-select: all;
 }

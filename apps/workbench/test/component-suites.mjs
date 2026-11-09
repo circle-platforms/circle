@@ -71,6 +71,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'drawer-auto-open-ui.mjs',
   'overview-cards-ui.mjs',
   'transcript-layout-ui.mjs',
+  'row-actions-ui.mjs',
   'diff-block-ui.mjs',
   'notice-timers-ui.mjs',
   'tool-summary-line-ui.mjs',

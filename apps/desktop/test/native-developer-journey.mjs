@@ -1331,23 +1331,17 @@ try {
           .locator('.changes-diff span.removed')
           .filter({ hasText: 'JOURNEY_DELETED_LINE' })
           .waitFor();
-        assert.equal(
-          await file
-            .getByRole('button', { name: 'open file', exact: true })
-            .count(),
-          0,
-        );
+        // A deleted file is only named: its path opens nothing
+        assert.equal(await file.locator('.path-link').count(), 0);
         await screenshot('04-changes-mode-all-uncommitted');
-        // open file shows the file itself in the files mode, not its difference, with
+        // Its path opens the file itself in the files mode, not its difference, with
         // the line Git says is new marked beside it.
         await row('git-probe.txt').click();
         await file
           .locator('.changes-path')
           .getByText('git-probe.txt', { exact: true })
           .waitFor();
-        await file
-          .getByRole('button', { name: 'open file', exact: true })
-          .click();
+        await file.locator('.changes-path.path-link').click();
         const view = page.locator('.file-view:visible');
         await view
           .locator('.file-view-heading strong')

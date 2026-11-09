@@ -1627,9 +1627,13 @@ export function App() {
             .includes(search.toLowerCase()),
       )
     : [];
+  // The provider holds the source previews too: an attachment's text copies itself
   const surface = (
-    <SourceNavigation onFile={onFile}>
-      <Tooltip.Provider delayDuration={300}>
+    <Tooltip.Provider delayDuration={300}>
+      <SourceNavigation
+        onFile={onFile}
+        onChange={(path) => onPanel('changes', path)}
+      >
         <div
           className={`workbench${(sidebarCollapsed && !narrow) || narrowFolded ? ' sidebar-collapsed' : ''}`}
         >
@@ -2000,8 +2004,8 @@ export function App() {
             </div>
           )}
         </div>
-      </Tooltip.Provider>
-    </SourceNavigation>
+      </SourceNavigation>
+    </Tooltip.Provider>
   );
   return (
     <CommandTerminalNavigation

@@ -6,7 +6,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { useRuntime } from '../app/context';
-import { Button } from '../components/common';
+import { Button, PathLink } from '../components/common';
 import { DataBlock } from '../components/ui';
 import { DiffBlock } from '../components/DiffBlock';
 import type { Interaction } from '../model/types';
@@ -234,6 +234,13 @@ export function InlineRequest({
           <strong id={headingId}>{t('the plan is ready, what next?')}</strong>
           {item.origin?.name && <small>{item.origin.name}</small>}
         </header>
+        {onFile && plan && (
+          <div className="request-source">
+            <PathLink path={plan.file} onOpen={() => onFile(plan.file)}>
+              <code>{plan.file.split(/[\\/]/).pop()}</code>
+            </PathLink>
+          </div>
+        )}
         <PlanChoices
           name={item.id}
           choices={item.choices ?? []}
@@ -253,9 +260,6 @@ export function InlineRequest({
           >
             {t('send answer')}
           </Button>
-          {onFile && plan && (
-            <Button onClick={() => onFile(plan.file)}>{t('open plan')}</Button>
-          )}
         </div>
       </section>
     );
@@ -390,11 +394,12 @@ export function InlineRequest({
       </header>
       {target && (
         <div className="request-source">
-          <code title={target}>{target}</code>
-          {onFile && sourcePath && (
-            <Button onClick={() => onFile(item.target!)}>
-              {t('open file')}
-            </Button>
+          {onFile && sourcePath ? (
+            <PathLink path={target} onOpen={() => onFile(item.target!)}>
+              <code>{target}</code>
+            </PathLink>
+          ) : (
+            <code title={target}>{target}</code>
           )}
         </div>
       )}

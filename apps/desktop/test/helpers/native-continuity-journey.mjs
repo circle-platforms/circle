@@ -578,9 +578,15 @@ export async function runNativeChildSourceJourney({
       until,
     );
     const source = await openToolCall(page, conversation, sourcePath);
-    await source
-      .getByRole('button', { name: 'open file', exact: true })
-      .click();
+    // The call's path opens the task's own difference of the file it wrote, and the path
+    // there opens the task's copy of the file
+    await source.locator('.tool-row .path-link').click();
+    const change = page.locator('.changes-file:visible');
+    await change
+      .locator('.changes-diff')
+      .getByText(childContent.trim())
+      .waitFor();
+    await change.locator('.changes-path.path-link').click();
     await page
       .locator('.file-view:visible .view-lines')
       .filter({ hasText: childContent.trim() })

@@ -77,30 +77,6 @@
   align-self: flex-start;
   font-size: var(--ui-small);
 }
-.github-device-code {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 14px 16px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
-}
-.github-device-code p {
-  margin: 0;
-  font-size: var(--ui-small);
-  color: var(--secondary);
-}
-.github-device-code code {
-  font-family: var(--mono);
-  font-size: var(--ui-large);
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  white-space: nowrap;
-  color: var(--fg);
-  user-select: all;
-}
 .github-actions {
   display: flex;
   align-items: center;

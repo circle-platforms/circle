@@ -4,15 +4,12 @@ import {
   useCommandTerminal,
   useUserShellTerminal,
 } from './CommandTerminalNavigation';
-import { copyText } from '../host';
 import { useSessionDisclosure } from '../model/presentation';
 import {
   Check,
   ChevronDown,
   ChevronRight,
-  Copy,
   FileDiff,
-  ArrowUpRight,
   Terminal,
   Users,
   FileText,
@@ -23,11 +20,19 @@ import type { AgentRecord, ToolCall } from '../model/types';
 import { agentState } from '../model/activity';
 import { internalToolTitle } from '../model/tool-summary';
 import { useRuntimeActions, useRuntimeSelector } from '../app/context';
-import { DataBlock, IconButton, Status } from './common';
+import {
+  DataBlock,
+  OpenInTerminalButton,
+  PathLink,
+  RowActions,
+  Status,
+} from './common';
 import { DiffBlock, DiffSummary } from './DiffBlock';
 import { t } from '../i18n';
 import { relativePath } from '../model/format';
 import { currentSession } from '../model/state';
+import { sessionChangeRows } from '../model/changes';
+import { relativeTo } from '../model/overview';
 import { useSources } from './SourceNavigation';
 import type { Attachment } from '../model/types';
 import { hasToolInput } from '../model/browser';
@@ -116,7 +121,6 @@ export function AgentToolLinks({
           <Users size={12} />
           <span>{agent.name}</span>
           <Status value={agentState(agent)} />
-          <ArrowUpRight size={12} />
         </button>
       ))}
     </div>
@@ -165,7 +169,6 @@ function KnowledgeToolMessage({
   expanded,
 }: Pick<ToolMessageProps, 'tool' | 'expanded'>) {
   const [open, setOpen] = useSessionDisclosure('tool:' + tool.id, expanded);
-  const { notify } = useRuntimeActions();
   const shownOutput = shownToolOutput(tool.output);
   const target = knowledgeToolTarget(tool.name, tool.input, tool.output);
   const result = knowledgeToolResult(tool.name, tool.output, tool.status);
@@ -204,34 +207,15 @@ function KnowledgeToolMessage({
           )}
           <details className="context-source">
             <summary>{t('technical details')}</summary>
-            <div className="tool-toolbar">
-              <IconButton
-                label={t('copy tool output')}
-                onClick={() =>
-                  copyText(
-                    JSON.stringify(
-                      {
-                        tool: tool.name,
-                        input: tool.input,
-                        output: shownOutput,
-                      },
-                      null,
-                      2,
-                    ),
-                  ).then(
-                    () => notify(t('copied')),
-                    () => notify(t('clipboard unavailable')),
-                  )
-                }
-              >
-                <Copy size={13} />
-              </IconButton>
-            </div>
             {hasToolInput(tool.input) && (
               <DataBlock title={t('arguments')} value={tool.input} />
             )}
             {shownOutput.trim() && (
-              <DataBlock title={t('output')} value={shownOutput} />
+              <DataBlock
+                title={t('output')}
+                value={shownOutput}
+                copyLabel={t('copy tool output')}
+              />
             )}
           </details>
         </div>
@@ -250,7 +234,6 @@ function GenericToolMessage({
   const sources = useSources();
   const openCommandTerminal = useCommandTerminal();
   const openUserShellTerminal = useUserShellTerminal();
-  const [terminalBusy, setTerminalBusy] = useState(false);
   const [terminalError, setTerminalError] = useState('');
   const attachments =
     (tool as ToolCall & { attachments?: Attachment[] }).attachments ?? [];
@@ -262,7 +245,11 @@ function GenericToolMessage({
     () => structuredTextOutput(withoutHookAllowedLine(tool.output)),
     [tool.output],
   );
-  const { notify, runtime } = useRuntimeActions();
+  // A command's terminal opens from the right end of the head; each block of text copies itself
+  const canOpenTerminal =
+    (tool.name === 'execute' && !!openCommandTerminal) ||
+    (!!userShellId && !!openUserShellTerminal);
+  const { runtime } = useRuntimeActions();
   const childAgents = useRuntimeSelector(
     (snapshot) =>
       mappedToolAgents(
@@ -300,50 +287,99 @@ function GenericToolMessage({
   // A file change that happened shows its diff under the call; a waiting one shows it in
   // the request below, and one that failed changed nothing.
   const diff = tool.diff && tool.status === 'success' ? tool.diff : undefined;
+  const target = relativePath(
+    String(
+      tool.input.file_path ??
+        tool.input.path ??
+        (isCommand ? tool.input.description : undefined) ??
+        tool.input.command ??
+        tool.input.description ??
+        tool.input.query ??
+        tool.input.pattern ??
+        tool.input.url ??
+        tool.input.element ??
+        tool.input.key ??
+        '',
+    ),
+    root,
+  );
+  // A file the call changed opens at its difference while the session's changes still
+  // hold it; any other opens as the file.
+  const openPath = () => {
+    const path = tool.filePath!;
+    if (diff && sources?.openChange) {
+      const snapshot = runtime.getSnapshot();
+      const session = currentSession(snapshot);
+      const workspace = snapshot.workspaces.find(
+        (item) => item.id === session.workspaceId,
+      )?.path;
+      const relative = relativeTo(path, workspace);
+      const change = sessionChangeRows(session.changes, workspace).find(
+        (row) => row.path === relative,
+      );
+      if (change) return sources.openChange(change.path);
+    }
+    onFile(path);
+  };
   return (
     <div className={`tool-call tool-${tool.status}`}>
-      <button
-        className="tool-head"
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
+      {/* The row opens and folds the call; its file opens by its own name */}
+      <div
+        className="tool-row"
+        onClick={(event) => {
+          if (!(event.target as HTMLElement).closest('button')) setOpen(!open);
+        }}
       >
-        <span className="tool-icon">
-          <Icon size={14} />
-        </span>
-        <code title={tool.name}>{agentToolTitle(tool.name)}</code>
-        <span className="tool-target">
-          {relativePath(
-            String(
-              tool.input.file_path ??
-                tool.input.path ??
-                (isCommand ? tool.input.description : undefined) ??
-                tool.input.command ??
-                tool.input.description ??
-                tool.input.query ??
-                tool.input.pattern ??
-                tool.input.url ??
-                tool.input.element ??
-                tool.input.key ??
-                '',
-            ),
-            root,
-          )}
-        </span>
-        {diff && (
-          <span className="tool-diff-summary">
-            <DiffSummary text={diff.summary} />
+        <button
+          className="tool-head"
+          onClick={() => setOpen(!open)}
+          aria-expanded={open}
+        >
+          <span className="tool-icon">
+            <Icon size={14} />
           </span>
-        )}
-        <span className="tool-time">{tool.elapsed}</span>
-        {tool.status === 'success' ? (
-          <Check size={13} />
+          <code title={tool.name}>{agentToolTitle(tool.name)}</code>
+        </button>
+        {tool.filePath ? (
+          <PathLink
+            className="tool-target"
+            path={tool.filePath}
+            onOpen={openPath}
+          >
+            {target}
+          </PathLink>
         ) : (
-          <Status value={tool.status} />
+          <span className="tool-target">{target}</span>
         )}
-        <span>
+        <span className="tool-row-end">
+          {diff && (
+            <span className="tool-diff-summary">
+              <DiffSummary text={diff.summary} />
+            </span>
+          )}
+          <span className="tool-time">{tool.elapsed}</span>
+          {tool.status === 'success' ? (
+            <Check size={13} />
+          ) : (
+            <Status value={tool.status} />
+          )}
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </span>
-      </button>
+        {open && canOpenTerminal && (
+          <RowActions>
+            <OpenInTerminalButton
+              open={(trigger) => {
+                const source =
+                  ownerSessionId ?? currentSession(runtime.getSnapshot()).id;
+                return userShellId
+                  ? openUserShellTerminal!(source, userShellId, trigger)
+                  : openCommandTerminal!(source, tool.id, trigger);
+              }}
+              onError={setTerminalError}
+            />
+          </RowActions>
+        )}
+      </div>
       {diff && !open && (
         <div className="tool-diff">
           <DiffBlock diff={diff} compact header={false} />
@@ -355,92 +391,14 @@ function GenericToolMessage({
       {open && (
         <div className="tool-content">
           {diff && <DiffBlock diff={diff} header={false} />}
-          <div className="tool-toolbar">
-            {((tool.name === 'execute' && openCommandTerminal) ||
-              (userShellId && openUserShellTerminal)) && (
-              <button
-                className="text-button"
-                disabled={terminalBusy}
-                onClick={async (event) => {
-                  const trigger = event.currentTarget;
-                  setTerminalBusy(true);
-                  setTerminalError('');
-                  try {
-                    const source =
-                      ownerSessionId ??
-                      currentSession(runtime.getSnapshot()).id;
-                    if (userShellId)
-                      await openUserShellTerminal!(
-                        source,
-                        userShellId,
-                        trigger,
-                      );
-                    else await openCommandTerminal!(source, tool.id, trigger);
-                  } catch (error) {
-                    setTerminalError(
-                      error instanceof Error
-                        ? error.message
-                        : t('command terminal could not be opened; try again'),
-                    );
-                  } finally {
-                    setTerminalBusy(false);
-                  }
-                }}
-              >
-                <Terminal size={12} />
-                {terminalBusy ? t('opening terminal…') : t('open in terminal')}
-              </button>
-            )}
-            {tool.filePath && (
-              <button
-                className="text-button"
-                onClick={() => onFile(tool.filePath!)}
-              >
-                {t('open file')}
-                <ArrowUpRight size={12} />
-              </button>
-            )}
-            {commandLine && (
-              <IconButton
-                label={t('copy command')}
-                onClick={() =>
-                  copyText(commandLine).then(
-                    () => notify(t('copied')),
-                    () => notify(t('clipboard unavailable')),
-                  )
-                }
-              >
-                <Terminal size={13} />
-              </IconButton>
-            )}
-            {textOutput && (
-              <IconButton
-                label={t('copy text output')}
-                onClick={() =>
-                  copyText(textOutput.text).then(
-                    () => notify(t('copied')),
-                    () => notify(t('clipboard unavailable')),
-                  )
-                }
-              >
-                <Copy size={13} />
-              </IconButton>
-            )}
-            <IconButton
-              label={t('copy tool output')}
-              onClick={() =>
-                copyText(shownOutput).then(
-                  () => notify(t('copied')),
-                  () => notify(t('clipboard unavailable')),
-                )
-              }
-            >
-              <Copy size={13} />
-            </IconButton>
-          </div>
           {terminalError && <p role="alert">{terminalError}</p>}
           {commandLine && (
-            <DataBlock title={t('command')} value={`$ ${commandLine}`} />
+            <DataBlock
+              title={t('command')}
+              value={`$ ${commandLine}`}
+              copy={commandLine}
+              copyLabel={t('copy command')}
+            />
           )}
           {textOutput ? (
             <>
@@ -450,16 +408,26 @@ function GenericToolMessage({
                   value={textOutput.preview}
                   tabIndex={0}
                   wrap={false}
+                  copy={textOutput.text}
+                  copyLabel={t('copy text output')}
                 />
               </div>
               {/* The response as the tool returned it, folded: the text above is what it says. */}
               <details className="context-source">
                 <summary>{t('full response')}</summary>
-                <DataBlock title={t('full response')} value={shownOutput} />
+                <DataBlock
+                  title={t('full response')}
+                  value={shownOutput}
+                  copyLabel={t('copy tool output')}
+                />
               </details>
             </>
           ) : shownOutput.trim() ? (
-            <DataBlock title={t('output')} value={shownOutput} />
+            <DataBlock
+              title={t('output')}
+              value={shownOutput}
+              copyLabel={t('copy tool output')}
+            />
           ) : (
             <p className="tool-empty">
               {live ? t('no output yet') : t('no output')}

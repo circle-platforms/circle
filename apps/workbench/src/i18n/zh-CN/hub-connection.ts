@@ -14,6 +14,4 @@ export const hubConnection: Record<string, string> = {
   'finish the sign-in on the Hub’s page': '在 Hub 的页面完成登录',
   'open the Hub’s page': '打开 Hub 页面',
   'The Hub could not be connected.': '无法连接 Hub。',
-  'code copied': '代码已复制',
-  'link copied': '链接已复制',
 };

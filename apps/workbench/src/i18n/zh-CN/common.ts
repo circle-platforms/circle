@@ -50,7 +50,6 @@ export const common: Record<string, string> = {
   'save the plan only': '只保存计划，不做修改',
   'stay in plan mode; nothing changes': '留在计划模式，什么也不改',
   'what should change?': '要改什么？',
-  'open plan': '打开计划',
   'close plan': '关闭计划',
   'updated {time}': '更新于 {time}',
   'Circle has not written a plan in this conversation yet.':

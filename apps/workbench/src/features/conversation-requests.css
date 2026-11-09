@@ -36,8 +36,10 @@
   overflow-wrap: anywhere;
   font-size: var(--ui-small);
 }
-.request-source button {
-  flex-shrink: 0;
+/* The path opens its file; a long one wraps as the plain path does */
+.request-source .path-link {
+  flex: 0 1 auto;
+  white-space: normal;
 }
 /* A knowledge change in words: what it does, where, and how long. */
 .knowledge-change-preview p {

@@ -19,7 +19,6 @@ export const terminal: Record<string, string> = {
   'managed commands cannot be restarted': '受管理的命令不能从终端重新启动',
 
   'open in terminal': '在终端打开',
-  'opening terminal…': '正在打开终端…',
   'command terminal could not be opened; try again': '无法打开命令终端，请重试',
 
   'copy selected text': '复制选中文字',

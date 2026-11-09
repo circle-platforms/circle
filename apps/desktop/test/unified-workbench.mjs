@@ -600,9 +600,7 @@ try {
     .getByText('editor buffer survived drawer navigation')
     .first()
     .waitFor();
-  await changesMode
-    .getByRole('button', { name: 'open file', exact: true })
-    .waitFor();
+  await changesMode.locator('.changes-file .path-link').waitFor();
   assert.equal((await git('diff', '--cached')).trim(), '');
   assert.equal((await git('write-tree')).trim(), originalIndex);
   assert.equal((await git('rev-parse', 'HEAD')).trim(), commit);

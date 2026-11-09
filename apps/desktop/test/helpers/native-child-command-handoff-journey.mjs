@@ -618,9 +618,8 @@ export async function runNativeReviewerSourceJourney({
     assert.equal(opened.agent.task.role, 'reviewer');
     assert.equal(opened.agent.readOnly, true);
     const source = await toolCall(page, opened.conversation, 'read_file');
-    await source
-      .getByRole('button', { name: 'open file', exact: true })
-      .click();
+    // The call's path opens the file it read
+    await source.locator('.tool-row .path-link').click();
     const file = page.locator('.file-view:visible');
     await file
       .locator('.file-view-heading strong')
