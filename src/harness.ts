@@ -5,6 +5,8 @@ import { orderModeToolResults } from './tool_history.js';
 import type {
   ChatModel,
   Message,
+  ModelRequest,
+  ModelResponse,
   Tool,
   ToolCall,
   Usage,
@@ -50,8 +52,10 @@ import {
 } from './command_process.js';
 import {
   completionFailure,
+  isContextLimitError,
   ModelCompletionFailure,
 } from './model_completion.js';
+import { BudgetExceeded, requestBudget } from './request_budget.js';
 import {
   activeHookSummary,
   hookDeniedMessage,
@@ -1069,6 +1073,8 @@ export class Harness {
       this.pendingTitle = { display: shown.display, fallback };
     }
     this.bus.emit('run_start', { payload: { message: prompt } });
+    // A step the endpoint refused as too long is tried again once, after compaction
+    let refusedForContext = false;
     try {
       for (let step = 0; step < (this.options.maxSteps ?? 9999); step++) {
         signal.throwIfAborted();
@@ -1108,7 +1114,7 @@ export class Harness {
           this.bus.emit('llm_start');
           // After the user message is stored, and not for a title or side request.
           this.options.store.noteTurn(this.sessionId);
-          const response = await this.model.complete({
+          const request: ModelRequest = {
             enforceBudget: true,
             system:
               this.system +
@@ -1151,7 +1157,33 @@ export class Harness {
                 payload: { text, thinking: Boolean(thinking) },
               });
             },
-          });
+          };
+          let response: ModelResponse;
+          try {
+            response = await this.model.complete(request);
+          } catch (error) {
+            // The model's endpoint refused the request as too long, before any of an
+            // answer came: the context it has is smaller than the one Circle measured.
+            // The refused size is noted as the limit, so the step's next preparation
+            // compacts the conversation to fit, and the step is tried once more.
+            if (
+              !refusedForContext &&
+              !stepSignal.aborted &&
+              isContextLimitError(error) &&
+              // Circle's own measure, not the endpoint's refusal: nothing to learn
+              !(error instanceof BudgetExceeded) &&
+              !this.streamed.trim() &&
+              !this.streamedThinking.trim()
+            ) {
+              refusedForContext = true;
+              this.model.noteContextRefusal?.(
+                requestBudget(this.model, request).input,
+              );
+              continue;
+            }
+            throw error;
+          }
+          refusedForContext = false;
           stepSignal.throwIfAborted();
           const originalCalls = response.message.tool_calls;
           response.message.tool_calls = originalCalls?.map(

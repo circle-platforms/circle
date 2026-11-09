@@ -950,6 +950,11 @@ export class ExtensionHost {
       get estimateInput() {
         return base.estimateInput?.bind(base);
       },
+      // What the endpoint's refusal taught reaches the model itself, which every
+      // measure above reads from
+      get noteContextRefusal() {
+        return base.noteContextRefusal?.bind(base);
+      },
       complete: async (request) => {
         let next = (request: ModelRequest) => base.complete(request);
         for (const item of middleware

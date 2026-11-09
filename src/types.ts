@@ -251,6 +251,11 @@ export interface ChatModel {
   /** Opaque connection/model identity; never an API key or URL in a prompt. */
   budgetIdentity?: string;
   inputEstimateFactor?: number;
+  /**
+   * The endpoint refused a request of this many input tokens, as Circle measures them, as
+   * too long for its context. The model holds no larger a context from then on.
+   */
+  noteContextRefusal?: (input: number) => void;
   estimateInput?: (
     request: import('./request_budget.js').RequestFrame,
   ) => number;
