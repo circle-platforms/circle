@@ -1157,6 +1157,7 @@ export class LiveRuntime implements RuntimePort {
         'write-file': 'write-file',
         'check-update': 'check-update',
         'dismiss-whats-new': 'dismiss-whats-new',
+        'link-opened': 'link-opened',
         'discover-models': 'discover-models',
         'launch-options': 'launch-options',
         'trust-workspace': 'trust',

@@ -66,7 +66,8 @@ export type RuntimeCommandName =
   | 'save-secret'
   | 'remove-secret'
   | 'create-skill'
-  | 'dismiss-whats-new';
+  | 'dismiss-whats-new'
+  | 'link-opened';
 
 export interface RuntimeCommand {
   id: string;
@@ -181,6 +182,7 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'remove-secret',
   'create-skill',
   'dismiss-whats-new',
+  'link-opened',
 ]);
 
 // A message carries its pictures and PDFs as base64, up to 20 MiB each in the core: room for
