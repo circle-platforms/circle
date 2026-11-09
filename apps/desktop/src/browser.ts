@@ -1,3 +1,4 @@
+import { LOCAL_SCHEME, LocalPages, localNavigation } from './local-pages';
 import {
   checkCoordinateTarget,
   checkScreenshot,
@@ -251,6 +252,8 @@ interface PageRestore {
 }
 interface Conversation {
   id: string;
+  /** The workspace pages and PDFs this conversation's browser may show. */
+  local: LocalPages;
   /** The window that shows the conversation's pages: the main one unless popped out. */
   window?: BrowserWindow;
   tabs: Map<string, Tab>;
@@ -519,6 +522,7 @@ export class BrowserSessions {
     if (!conversation) {
       conversation = {
         id,
+        local: new LocalPages(),
         tabs: new Map(),
         nextTab: 0,
         nextDialog: 0,
@@ -732,6 +736,8 @@ export class BrowserSessions {
       nodeIntegration: false,
       webSecurity: true,
       backgroundThrottling: false,
+      // Chromium's own PDF viewer, which shows a workspace PDF; it runs no plugin else
+      plugins: true,
     };
   }
   /**
@@ -1045,6 +1051,10 @@ export class BrowserSessions {
       });
       this.publish(conversation.id);
     });
+    // The workspace's pages the person opened, for this conversation's tabs only
+    session.protocol.handle(LOCAL_SCHEME, (request) =>
+      conversation.local.respond(request.url),
+    );
     // Circle's certificate warning, served only for the warning a tab is showing
     session.protocol.handle(WARNING_SCHEME, (request) => {
       const token = hostOf(request.url);
@@ -1370,7 +1380,18 @@ export class BrowserSessions {
     const contents = tab.contents;
     const id = conversation.id;
     contents.setWindowOpenHandler((details) => {
-      if (!safeExternalUrl(details.url) && details.url !== BLANK)
+      // A local page opens only the conversation's other local pages, and no site opens one
+      const local = localNavigation(
+        contents.getURL(),
+        details.url,
+        conversation.local,
+      );
+      if (
+        local === 'deny' ||
+        (local === 'browser' &&
+          !safeExternalUrl(details.url) &&
+          details.url !== BLANK)
+      )
         return { action: 'deny' };
       if (details.disposition === 'background-tab') {
         const opened = this.createTab(conversation, {
@@ -1397,10 +1418,12 @@ export class BrowserSessions {
       if (url.startsWith(WARNING_SCHEME + ':')) {
         event.preventDefault();
         this.decide(conversation, tab, url);
-      } else if (!safeExternalUrl(url)) event.preventDefault();
+      } else if (!this.mayGo(conversation, contents.getURL(), url))
+        event.preventDefault();
     });
     contents.on('will-redirect', (event, url) => {
-      if (!safeExternalUrl(url)) event.preventDefault();
+      if (!this.mayGo(conversation, contents.getURL(), url))
+        event.preventDefault();
     });
     // A site asks for a client certificate, which tells it who the person is: only they
     // choose one, or none. Electron would send the first one there is.
@@ -1570,11 +1593,12 @@ export class BrowserSessions {
       tab.favicon = undefined;
       tab.find = undefined;
       if (
-        safeExternalUrl(url) &&
-        !(
-          url.startsWith('https:') &&
-          conversation.insecureHosts.has(hostOf(url))
-        )
+        conversation.local.allows(url) ||
+        (safeExternalUrl(url) &&
+          !(
+            url.startsWith('https:') &&
+            conversation.insecureHosts.has(hostOf(url))
+          ))
       )
         tab.safeUrl = url;
       this.dropStaleWarnings(tab);
@@ -2471,6 +2495,23 @@ export class BrowserSessions {
     tab.favicon = data;
     this.publish(conversation.id);
   }
+  /**
+   * The address a workspace's page or PDF opens at in this conversation's browser, after
+   * checking it is one, in that workspace. Opening it is then an ordinary `navigate`.
+   */
+  async localPage(idValue: unknown, workspace: string, pathValue: unknown) {
+    const id = this.validId(idValue);
+    if (typeof pathValue !== 'string' || pathValue.length > 4096)
+      throw Error('invalid page path');
+    return this.conversation(id).local.address(workspace, pathValue);
+  }
+  /** Where a page may take its tab: local pages by their rule, sites by the browser's. */
+  private mayGo(conversation: Conversation, current: string, next: string) {
+    const local = localNavigation(current, next, conversation.local);
+    return (
+      local === 'allow' || (local === 'browser' && !!safeExternalUrl(next))
+    );
+  }
   async navigate(idValue: unknown, urlValue: unknown) {
     const id = this.validId(idValue);
     if (typeof urlValue !== 'string' || urlValue.length > 4096)
@@ -2484,7 +2525,10 @@ export class BrowserSessions {
       // The person may type a bare host into the address bar; a request that
       // reaches here from the model is already a full URL, so this only widens
       // human input, and still refuses any scheme but http(s).
-      const url = addressBarInput(urlValue);
+      // A local page the person opened stays openable from its address
+      const url = conversation.local.allows(urlValue)
+        ? urlValue
+        : addressBarInput(urlValue);
       if (!url) throw Error('invalid browser address');
       await this.load(conversation, tab, url);
     }

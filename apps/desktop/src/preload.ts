@@ -82,6 +82,13 @@ const bridge: DesktopBridge = {
     ipcRenderer.invoke('circle:window-control', action),
   openExternal: (url) => ipcRenderer.invoke('circle:open-external', url),
   browserState: (id) => ipcRenderer.invoke('circle:browser-state', id),
+  browserLocalPage: (sessionId, path, ownerSessionId) =>
+    ipcRenderer.invoke(
+      'circle:browser-local-page',
+      sessionId,
+      path,
+      ownerSessionId,
+    ),
   browserNavigate: (id, url) =>
     ipcRenderer
       .invoke('circle:browser-navigate', id, url)

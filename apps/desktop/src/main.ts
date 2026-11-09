@@ -45,6 +45,7 @@ import { spawn } from 'node:child_process';
 import originalFs from 'original-fs';
 import { join, dirname, basename } from 'node:path';
 import { workspaceFileToReveal } from './reveal';
+import { LOCAL_SCHEME } from './local-pages';
 import { WorkspaceGrants, nativeFile } from './files';
 import { WorkspaceListings } from './workspace-listings';
 import { selectedFolder } from './folder-dialog';
@@ -158,6 +159,17 @@ protocol.registerSchemesAsPrivileged([
       secure: true,
       supportFetchAPI: true,
       corsEnabled: true,
+      stream: true,
+    },
+  },
+  // A conversation's workspace pages: a standard scheme, so a page's own files load by
+  // their relative addresses; served only by that conversation's browser session
+  {
+    scheme: LOCAL_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
       stream: true,
     },
   },
@@ -1382,6 +1394,26 @@ app
     handle('circle:browser-navigate', (id, url) => {
       if (!browsers) throw Error('window not ready');
       return browsers.navigate(id, url);
+    });
+    // A page or PDF of a session's own workspace, as an address its browser opens
+    handle('circle:browser-local-page', (sessionId, path, ownerSessionId) => {
+      if (!browsers || !runtime) throw Error('window not ready');
+      if (
+        typeof sessionId !== 'string' ||
+        (ownerSessionId !== undefined && typeof ownerSessionId !== 'string')
+      )
+        throw Error('invalid session');
+      // The page opens in this conversation's browser, from the workspace of the
+      // conversation that has the file: a task's own worktree for a task's file
+      const snapshot = runtime.state().snapshot;
+      const session = snapshot.sessions.find(
+        (row) => row.id === (ownerSessionId ?? sessionId),
+      );
+      const workspace = snapshot.workspaces.find(
+        (row) => row.id === session?.workspaceId,
+      );
+      if (!workspace) throw Error('workspace not found');
+      return browsers.localPage(sessionId, workspace.path, path);
     });
     // Only the window that has a conversation's pages places them: the drawer of the main
     // window keeps its hands off while the browser is in a window of its own.

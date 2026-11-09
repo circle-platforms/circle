@@ -54,8 +54,12 @@ export const common: Record<string, string> = {
   'plan folder, read only': '计划文件夹，只读',
   '{file} could not be opened': '{file} 无法打开',
   '{file} is not a text file': '{file} 不是文本文件',
-  'Circle opens text files and pictures here.':
-    'Circle 在这里只能打开文本文件和图片。',
+  'Circle opens text files and pictures here, and pages and PDFs in the browser.':
+    'Circle 在这里打开文本文件和图片，网页和 PDF 在浏览器中打开。',
+  'local file': '本地文件',
+  'open in browser': '在浏览器中打开',
+  'a file of the workspace, shown without the network':
+    '工作区中的文件，不联网显示',
   'updated {time}': '更新于 {time}',
   'Circle has not written a plan in this conversation yet.':
     'Circle 还没有在这个会话里写计划。',

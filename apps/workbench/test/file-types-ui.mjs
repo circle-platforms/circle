@@ -99,6 +99,63 @@ try {
         },
       ],
     );
+    // A page and a PDF of the workspace open in the conversation's browser, at the
+    // addresses the desktop made for them, and the address bar names them as local files
+    const sessionId = await page.evaluate(
+      () => window.fileTypesFixture.sessionId,
+    );
+    const opened = async (name, path, url) => {
+      await answer.getByRole('link', { name, exact: true }).click();
+      await page.waitForFunction(
+        (wanted) =>
+          window.fileTypesFixture.calls.some(
+            (c) => c.call === 'browserNavigate' && c.params.url === wanted,
+          ),
+        url,
+      );
+      assert.deepEqual(
+        await page.evaluate(() =>
+          window.fileTypesFixture.calls
+            .filter((c) => c.call === 'browserLocalPage')
+            .at(-1),
+        ),
+        {
+          call: 'browserLocalPage',
+          params: { sessionId, path, ownerSessionId: undefined },
+        },
+      );
+      const local = page.getByTestId('browser-local');
+      await local.waitFor();
+      assert.equal(
+        (await local.textContent()).trim(),
+        word('local file', '本地文件'),
+      );
+    };
+    await opened(
+      'the page',
+      '.tmp/designs/editor-a.html',
+      `circle-local://${'a'.repeat(32)}/.tmp/designs/editor-a.html`,
+    );
+    // Not being typed in, the address bar shows the page's path in the workspace, never
+    // the token it is served under
+    await page.locator('.browser-url input').evaluate((node) => node.blur());
+    const shown = page.locator('.browser-url-display');
+    await shown.waitFor();
+    assert.equal(
+      (await shown.textContent()).trim(),
+      '.tmp/designs/editor-a.html',
+    );
+    await opened(
+      'the spec',
+      'docs/spec.pdf',
+      'file:///workspace/orbit-api/docs/spec.pdf',
+    );
+    // Neither was read as a text file
+    assert.equal(
+      (await calls()).filter((call) => call === 'documents.read').length,
+      1,
+      'only the binary file was read as text',
+    );
     await page.screenshot({
       path: `${output}/file-types-${locale}-${theme}.png`,
     });

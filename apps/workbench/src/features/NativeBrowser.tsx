@@ -13,6 +13,7 @@ import {
   Crosshair,
   Download,
   EllipsisVertical,
+  FileText,
   FileUp,
   FolderOpen,
   Globe,
@@ -674,7 +675,8 @@ export function NativeBrowser({
   // A link an extension asked for opens as soon as it is given; typing in the address
   // bar does not.
   useEffect(() => {
-    if (!target || !/^https?:\/\//i.test(target)) return;
+    // A site's address, or a workspace page's that the desktop made for this conversation
+    if (!target || !/^(https?|circle-local|file):\/\//i.test(target)) return;
     setUrl(target);
     void navigate(target);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1053,6 +1055,15 @@ export function NativeBrowser({
             <span className="browser-not-secure" data-testid="browser-http">
               <ShieldAlert size={13} />
               {t('not secure')}
+            </span>
+          ) : connection === 'local' ? (
+            <span
+              className="browser-secure"
+              data-testid="browser-local"
+              title={t('a file of the workspace, shown without the network')}
+            >
+              <FileText size={12} />
+              {t('local file')}
             </span>
           ) : connection === 'https' ? (
             <span

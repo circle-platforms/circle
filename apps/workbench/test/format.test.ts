@@ -540,6 +540,22 @@ test('the address bar shows an address as Chrome does, and names its connection'
     host: '',
     rest: 'about:blank',
   });
+  // A workspace page shows its path, never its token, and a PDF its file
+  assert.deepEqual(
+    addressParts(
+      'circle-local://0123456789abcdef0123456789abcdef/designs/a%20b/page.html?x#y',
+    ),
+    { host: '', rest: 'designs/a b/page.html' },
+  );
+  assert.deepEqual(addressParts('file:///work/%E6%96%87/spec.pdf'), {
+    host: '',
+    rest: '/work/文/spec.pdf',
+  });
+  assert.equal(
+    connectionKind({ url: 'circle-local://0123/designs/page.html' }),
+    'local',
+  );
+  assert.equal(connectionKind({ url: 'file:///work/spec.pdf' }), 'local');
   assert.equal(connectionKind(null), 'none');
   assert.equal(connectionKind({ url: 'about:blank' }), 'none');
   assert.equal(connectionKind({ url: 'https://example.test/' }), 'https');
