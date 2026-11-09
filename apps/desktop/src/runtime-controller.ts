@@ -9,6 +9,7 @@ import {
 import { DesktopKnowledge } from './knowledge-service';
 import { FileRewindJournal } from '../../../src/file_rewind.js';
 import { ExternalFileGrants } from './workspace/external-file-grants';
+import { WorkspaceDocuments } from './workspace/documents';
 import { homedir } from 'node:os';
 import {
   githubStatusNotice,
@@ -1573,19 +1574,42 @@ export class RuntimeController {
     }
   }
   private fileRewinds = new WeakMap<AgentRuntime, FileRewindJournal>();
+  // Documents of the other checkouts of a workspace's repository, one per checkout root
+  private worktreeDocuments = new Map<string, WorkspaceDocuments>();
   private fileMutations(
     workspace: string,
     runtime: () => AgentRuntime,
   ): FileMutations {
-    const external = (path: string) => !runtime().sandbox.isInside(path);
-    const domain = (changes: { path: string }[]) => {
-      const kinds = new Set(changes.map((change) => external(change.path)));
-      if (kinds.size > 1)
-        throw Error(
-          'mixed workspace and external file changes are unsupported; no files changed',
-        );
-      return kinds.has(true);
+    // Where a file lives: the workspace, another checkout of its repository (read and
+    // written as the workspace is, through documents of its own root), or outside both,
+    // where only an exact grant reaches it. One change touches one place.
+    const place = (path: string): string => {
+      const sandbox = runtime().sandbox;
+      if (sandbox.isInside(path)) return 'workspace';
+      return sandbox.worktreeRoot(canonicalPath(path)) ?? 'external';
     };
+    const domain = (changes: { path: string }[]) => {
+      const places = new Set(changes.map((change) => place(change.path)));
+      if (places.size > 1)
+        throw Error(
+          'changes to more than one of the workspace, a worktree and external files are unsupported at once; no files changed',
+        );
+      return [...places][0] ?? 'workspace';
+    };
+    const documentsAt = (where: string): WorkspaceDocuments => {
+      if (where === 'workspace') return this.services(workspace).documents;
+      let documents = this.worktreeDocuments.get(where);
+      if (!documents) {
+        documents = new WorkspaceDocuments(where, {
+          credentialFiles: settingsForRun(this.home, workspace).settings
+            .credential_files,
+        });
+        this.worktreeDocuments.set(where, documents);
+      }
+      return documents;
+    };
+    const inDocuments = (documents: WorkspaceDocuments, path: string) =>
+      relative(documents.root, canonicalPath(path)).split(sep).join('/');
     return {
       authorize: (path, sessionId, access) => {
         const owner = runtime();
@@ -1594,7 +1618,8 @@ export class RuntimeController {
         this.authorizeExternal(owner, path, access);
       },
       restoreAtomic: async (changes, signal) => {
-        if (domain(changes)) {
+        const where = domain(changes);
+        if (where === 'external') {
           const owner = runtime();
           for (const change of changes)
             this.authorizeExternal(owner, change.path, 'write');
@@ -1604,26 +1629,25 @@ export class RuntimeController {
             signal,
           );
         }
-        const documents = this.services(workspace).documents;
+        const documents = documentsAt(where);
         await documents.restoreAtomic(
           changes.map((change) => ({
             ...change,
-            path: relative(documents.root, canonicalPath(change.path))
-              .split(sep)
-              .join('/'),
+            path: inDocuments(documents, change.path),
           })),
           { signal },
         );
       },
       read: async (path, signal) => {
-        if (external(path)) {
+        const where = place(path);
+        if (where === 'external') {
           const owner = runtime();
           this.authorizeExternal(owner, path, 'read');
           return this.externalRegistry().read(owner.session.id, path, signal);
         }
-        const documents = this.services(workspace).documents;
+        const documents = documentsAt(where);
         const document = await documents.snapshot(
-          relative(documents.root, canonicalPath(path)).split(sep).join('/'),
+          inDocuments(documents, path),
           { signal },
         );
         return {
@@ -1634,7 +1658,8 @@ export class RuntimeController {
         };
       },
       apply: async (changes, signal) => {
-        if (domain(changes)) {
+        const where = domain(changes);
+        if (where === 'external') {
           const owner = runtime();
           for (const change of changes)
             this.authorizeExternal(owner, change.path, 'write');
@@ -1644,13 +1669,11 @@ export class RuntimeController {
             signal,
           );
         }
-        const documents = this.services(workspace).documents;
+        const documents = documentsAt(where);
         const result = await documents.applyChanges(
           changes.map((change) => ({
             ...change,
-            path: relative(documents.root, canonicalPath(change.path))
-              .split(sep)
-              .join('/'),
+            path: inDocuments(documents, change.path),
           })),
           { signal },
         );

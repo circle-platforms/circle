@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import test, { type TestContext } from 'node:test';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -309,6 +310,105 @@ test('grep, glob and ls do not show a folder outside the workspace that read_fil
   }
   // Refused, not asked: no card was shown for any of them
   assert.deepEqual(f.controller.snapshot().interactions, []);
+});
+
+test('a worktree of the workspace repository beside it is read, searched and edited as the workspace is', async (t) => {
+  let side = '';
+  let outside = '';
+  const f = await fixture(t, [
+    async () =>
+      assistant('read', 'read_file', {
+        file_path: join(side, 'src', 'app.ts'),
+      }),
+    async () =>
+      assistant('grep', 'grep', {
+        pattern: 'before',
+        path: side,
+        output_mode: 'content',
+      }),
+    async () =>
+      assistant('edit', 'edit_file', {
+        file_path: join(side, 'src', 'app.ts'),
+        old_string: 'before',
+        new_string: 'after',
+      }),
+    async () => assistant('ls', 'ls', { path: side }),
+    async () =>
+      assistant('git', 'read_file', { file_path: join(side, '.git') }),
+    async () => assistant('outside', 'read_file', { file_path: outside }),
+    assistant('end'),
+  ]);
+  // The workspace becomes a real repository, with a worktree of it beside it
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync(
+      'git',
+      [
+        '-c',
+        'user.name=Circle Test',
+        '-c',
+        'user.email=test@example.invalid',
+        ...args,
+      ],
+      { cwd, stdio: 'pipe' },
+    );
+  await rm(join(f.workspace, '.git'), { recursive: true, force: true });
+  git(f.workspace, 'init', '-q');
+  await mkdir(join(f.workspace, 'src'));
+  await writeFile(
+    join(f.workspace, 'src', 'app.ts'),
+    'export const value = 1;\n',
+  );
+  git(f.workspace, 'add', '-A');
+  git(f.workspace, 'commit', '-q', '-m', 'start');
+  side = join(f.root, 'workspace-side');
+  git(f.workspace, 'worktree', 'add', '-q', '-b', 'side', side);
+  await writeFile(join(side, 'src', 'app.ts'), 'const state = "before";\n');
+  outside = join(f.root, 'outside.txt');
+  await writeFile(outside, 'not a worktree\n');
+  const owner = f.controller.snapshot().activeSessionId;
+  // Edits in the workspace go without a card in this mode; a worktree's count as such
+  assert.equal((await f.call('set-mode', { mode: 'accept-edits' })).ok, true);
+  assert.equal(
+    (await f.call('prompt', { text: 'work in the worktree' })).ok,
+    true,
+  );
+  await f.until(
+    () =>
+      f.model.requests.length >= 7 &&
+      f.controller.snapshot().sessions.find((s) => s.id === owner)?.state !==
+        'waiting',
+  );
+  assert.deepEqual(f.controller.snapshot().interactions, []);
+  const results = new Map(
+    f.model.requests[6]!.messages.filter((m) => m.role === 'tool').map((m) => [
+      m.tool_call_id,
+      m,
+    ]),
+  );
+  const ok = (id: string, pattern: RegExp) => {
+    const result = results.get(id + '-call');
+    assert.equal(result?.status, 'success', JSON.stringify(result));
+    assert.match(String(result!.content), pattern);
+  };
+  ok('read', /const state = "before";/);
+  ok('grep', /const state = "before";/);
+  ok('edit', /Edited/);
+  ok('ls', /src\//);
+  assert.equal(
+    await readFile(join(side, 'src', 'app.ts'), 'utf8'),
+    'const state = "after";\n',
+  );
+  // Its repository internals stay closed, and a folder that is no worktree stays outside
+  const refused = (id: string, pattern: RegExp) => {
+    const result = results.get(id + '-call');
+    assert.equal(result?.status, 'error', JSON.stringify(result));
+    assert.match(String(result!.content), pattern);
+  };
+  refused('git', /not available in this workspace: \.git; .*git commands/);
+  refused(
+    'outside',
+    /outside this session workspace or lacks an exact-file grant/,
+  );
 });
 
 test('opening a project folder starts a session whose file reads need no external grant', async (t) => {

@@ -67,6 +67,7 @@ import type { CircleSettings } from './settings.js';
 import { discoverSkills, loadSkillBody, type SkillInfo } from './skills.js';
 import { fromJsonl, toSessionBundle } from './session_export.js';
 import { projectDataDir, circleHome, normalizeWorkspace } from './paths.js';
+import { repositoryWorktrees } from './worktrees.js';
 import { KnowledgeConnection } from './knowledge/connection.js';
 import {
   loadSessionMemory,
@@ -607,6 +608,12 @@ export class AgentRuntime {
       (path) => this.sandbox.resolvePath(path),
       options.settings.allowed_commands,
     );
+    // Where file tools keep to the workspace (the desktop's backend), another checkout of
+    // its repository counts as the workspace: read, searched and changed without a grant
+    if (options.fileMutations) {
+      this.sandbox.worktrees = () => repositoryWorktrees(options.workspace);
+      this.policy.worktree = (path) => !!this.sandbox.worktreeRoot(path);
+    }
     this.jobs = new JobRegistry(
       this.sandbox,
       (kind, job) => {

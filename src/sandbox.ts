@@ -1,5 +1,5 @@
 import { spawn, execFile } from 'node:child_process';
-import { posix, relative, resolve, sep, win32 } from 'node:path';
+import { isAbsolute, posix, relative, resolve, sep, win32 } from 'node:path';
 import { canonicalPath, expandUser } from './paths.js';
 import {
   classifyCommand,
@@ -88,6 +88,39 @@ export class Sandbox {
         ? resolve(expandUser(raw))
         : resolve(this.workspace, virtual);
     return resolvedTarget(full);
+  }
+  /**
+   * Set by a runtime whose file tools keep to the workspace (the desktop's): the other
+   * checkouts of the workspace's repository (src/worktrees.ts), which its file tools treat
+   * as the workspace itself. Unset, there are none.
+   */
+  worktrees?: () => string[];
+  private worktreeCache?: { roots: string[]; at: number };
+  /**
+   * The checkout of this repository, other than the workspace, that a resolved path is in.
+   * The list is read again when it is two seconds old, or a quarter second old on a miss,
+   * so a worktree a command just made is found on the next call.
+   */
+  worktreeRoot(path: string): string | undefined {
+    if (!this.worktrees) return undefined;
+    const find = (roots: string[]) =>
+      roots.find((root) => {
+        const rel = relative(root, path);
+        return (
+          rel === '' ||
+          (rel !== '..' && !rel.startsWith('..' + sep) && !isAbsolute(rel))
+        );
+      });
+    const age = this.worktreeCache
+      ? Date.now() - this.worktreeCache.at
+      : Infinity;
+    if (age > 2000) this.worktreeCache = undefined;
+    let found = this.worktreeCache && find(this.worktreeCache.roots);
+    if (!found && age > 250) {
+      this.worktreeCache = { roots: this.worktrees(), at: Date.now() };
+      found = find(this.worktreeCache.roots);
+    }
+    return found;
   }
   isInside(raw: string): boolean {
     const rel = relative(this.workspace, this.resolvePath(raw));

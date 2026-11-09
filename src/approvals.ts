@@ -768,6 +768,11 @@ export class ApprovalPolicy {
   // call asks, and no "allow for this session" covers one) or read-only (it asks only when a
   // call sends the server a local file or a secret, and the card says so)
   private hints: (tool: string) => ToolHint | undefined = () => undefined;
+  /**
+   * Set by a runtime whose file tools treat another checkout of the workspace's repository
+   * as the workspace (the desktop's): a change there is a change in the workspace.
+   */
+  worktree?: (path: string) => boolean;
   constructor(
     readonly store: ApprovalStore,
     readonly workspace: string,
@@ -1027,19 +1032,18 @@ export class ApprovalPolicy {
       const inside =
         paths.length > 0 &&
         paths.every((path) => {
-          const rel = relative(
-            root,
-            canonicalPath(
-              this.resolvePath
-                ? this.resolvePath(path)
-                : resolve(this.workspace, path),
-            ),
+          const target = canonicalPath(
+            this.resolvePath
+              ? this.resolvePath(path)
+              : resolve(this.workspace, path),
           );
+          const rel = relative(root, target);
           return (
             Boolean(path) &&
-            !isAbsolute(rel) &&
-            rel !== '..' &&
-            !rel.startsWith('..' + sep)
+            ((!isAbsolute(rel) &&
+              rel !== '..' &&
+              !rel.startsWith('..' + sep)) ||
+              this.worktree?.(target) === true)
           );
         });
       return review(
