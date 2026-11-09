@@ -87,6 +87,7 @@ export const conversation: Record<string, string> = {
   'summary did not complete': '摘要未完成',
   'compaction failed: {message}': '压缩失败：{message}',
   compacting: '正在压缩',
+  'compaction progress': '压缩进度',
   'compacting {done}/{total}': '正在压缩 {done}/{total}',
   'recovering {done}/{total}': '正在恢复 {done}/{total}',
   'some usage unreported': '部分用量未返回',

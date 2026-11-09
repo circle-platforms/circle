@@ -245,13 +245,15 @@ try {
     );
     assert.equal((await copied()).at(-1), 'npm test');
     // A failure's details copy from its head, beside what failed
-    const failure = page.locator('.runtime-failure');
+    const failure = page.locator('.failure-row');
     const failureCopy = failure.getByRole('button', {
       name: word('copy error details', '复制错误详情'),
       exact: true,
     });
     assert.equal(
-      await failureCopy.evaluate((button) => !!button.closest('.head-row')),
+      await failureCopy.evaluate(
+        (button) => !!button.closest('.failure-row-head'),
+      ),
       true,
     );
     await failureCopy.click();

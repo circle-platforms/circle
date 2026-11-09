@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { CompactionStatus } from '../src/features/CompactionStatus.tsx';
+import { CompactionRow } from '../src/features/CompactionStatus.tsx';
 import { TurnClock } from '../src/components/TurnClock.tsx';
 import { compactionOutcomeText } from '../src/model/compaction.ts';
 import { setLanguage } from '../src/i18n/index.ts';
@@ -27,20 +27,24 @@ const progress: CompactionSnapshot = {
   usage: { input_tokens: 1000, output_tokens: 100, cache_read_tokens: 0 },
   unknownCalls: 0,
   liveTokens: 12,
+  progress: 0.483,
   recoverable: false,
 };
 test('manual desktop compaction renders without a normal turn in both interface languages', () => {
   setLanguage('en');
   const english = renderToStaticMarkup(
-    createElement(CompactionStatus, { state: progress }),
+    createElement(CompactionRow, { state: progress }),
   );
   assert.match(english, /merging 2\/3/);
   assert.doesNotMatch(english, /↑|↓|1000|112|usage/);
-  // How long it has run, as the terminal's line says it, so a slow summary is seen to move
-  assert.match(english, /merging 2\/3<\/span><span[^>]*> · 12\.\ds</);
+  // A line in the conversation: how far the summary has got, and how long it has run
+  assert.match(english, /^<div class="line-row compaction-row"/);
+  assert.match(english, /role="progressbar"[^>]*aria-valuenow="48"/);
+  assert.match(english, /<i style="width:48%"><\/i>/);
+  assert.match(english, />48% · 12\.\ds</);
   // One part to summarize has no count that would sit at 0/1 until the end
   const single = renderToStaticMarkup(
-    createElement(CompactionStatus, {
+    createElement(CompactionRow, {
       state: { ...progress, stage: 'summarizing', completed: 0, total: 1 },
     }),
   );
@@ -61,7 +65,7 @@ test('manual desktop compaction renders without a normal turn in both interface 
     /正在压缩/,
   );
   const chinese = renderToStaticMarkup(
-    createElement(CompactionStatus, {
+    createElement(CompactionRow, {
       state: { ...progress, trigger: 'auto' },
     }),
   );
@@ -69,7 +73,7 @@ test('manual desktop compaction renders without a normal turn in both interface 
   assert.doesNotMatch(chinese, /自动|↑|↓|用量/);
   assert.match(
     renderToStaticMarkup(
-      createElement(CompactionStatus, {
+      createElement(CompactionRow, {
         state: { ...progress, stage: 'summarizing' },
       }),
     ),
@@ -77,7 +81,7 @@ test('manual desktop compaction renders without a normal turn in both interface 
   );
   assert.doesNotMatch(
     renderToStaticMarkup(
-      createElement(CompactionStatus, {
+      createElement(CompactionRow, {
         state: { ...progress, stage: 'summarizing', completed: 0, total: 1 },
       }),
     ),
@@ -106,7 +110,7 @@ test('manual desktop compaction renders without a normal turn in both interface 
   );
   assert.equal(
     renderToStaticMarkup(
-      createElement(CompactionStatus, {
+      createElement(CompactionRow, {
         state: { ...progress, status: 'succeeded' },
       }),
     ),

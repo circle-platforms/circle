@@ -54,14 +54,20 @@ try {
           exact: true,
         });
         assert.equal(await alert.count(), 1, 'the card is one alert');
-        // Its head says what failed, with the copy of its details at the right end
-        assert.match(
-          (await alert.locator('> .head-row > strong').textContent()) ?? '',
-          word(/Circle did not answer/, /Circle 没有应答/),
+        // A line of the conversation: what failed and the runtime's cause, folded, with
+        // the copy of its details at the line's end
+        const line = alert.getByRole('button', { expanded: false });
+        const cause = (await line.textContent()) ?? '';
+        assert.match(cause, word(/Circle did not answer/, /Circle 没有应答/));
+        assert.ok(
+          cause.includes(
+            await page.evaluate(() => window.waitFixture.failure.message),
+          ),
+          cause,
         );
         assert.equal(
           await alert
-            .locator('> .head-row')
+            .locator('.failure-row-head')
             .getByRole('button', {
               name: word('copy error details', '复制错误详情'),
               exact: true,
@@ -69,11 +75,7 @@ try {
             .count(),
           1,
         );
-        assert.equal(
-          (await alert.locator('p.runtime-failure-cause').textContent()) ?? '',
-          await page.evaluate(() => window.waitFixture.failure.message),
-        );
-        await alert.locator('summary').click();
+        await line.click();
         assert.equal(
           (await alert.locator('pre').textContent()) ?? '',
           await page.evaluate(() => window.waitFixture.failure.detail),
