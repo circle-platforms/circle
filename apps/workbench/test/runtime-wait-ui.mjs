@@ -54,9 +54,20 @@ try {
           exact: true,
         });
         assert.equal(await alert.count(), 1, 'the card is one alert');
+        // Its head says what failed, with the copy of its details at the right end
         assert.match(
-          (await alert.locator('> strong').textContent()) ?? '',
+          (await alert.locator('> .head-row > strong').textContent()) ?? '',
           word(/Circle did not answer/, /Circle 没有应答/),
+        );
+        assert.equal(
+          await alert
+            .locator('> .head-row')
+            .getByRole('button', {
+              name: word('copy error details', '复制错误详情'),
+              exact: true,
+            })
+            .count(),
+          1,
         );
         assert.equal(
           (await alert.locator('p.runtime-failure-cause').textContent()) ?? '',
