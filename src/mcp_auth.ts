@@ -11,6 +11,7 @@ import { realpathSync } from 'node:fs';
 import lockfile from 'proper-lockfile';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ensureHome } from './paths.js';
+import { DEVICE_CODE_GRANT, deviceEndpoint } from './mcp_device.js';
 import { abortable } from './watch.js';
 import { refreshAuthorization } from '@modelcontextprotocol/sdk/client/auth.js';
 import { OAuthTokensSchema } from '@modelcontextprotocol/sdk/shared/auth.js';
@@ -87,6 +88,51 @@ export function forgetAuthorization(home: string, server: string): void {
   change(home, server, () => ({}));
 }
 
+/**
+ * Signs out of a server: its tokens are revoked at the revocation endpoint its metadata names (RFC 7009), then its
+ * authorization is forgotten. A revocation that fails or that the server does not offer still forgets it here; the
+ * answer says whether the server took every revocation.
+ */
+export async function revokeAuthorization(
+  home: string,
+  server: string,
+  fetcher: FetchLike = fetch,
+): Promise<boolean> {
+  const kept = keptFor(home, server);
+  const endpoint = (
+    kept.discovery?.authorizationServerMetadata as
+      Record<string, unknown> | undefined
+  )?.revocation_endpoint;
+  const tokens = [
+    ...(kept.tokens?.refresh_token
+      ? [['refresh_token', kept.tokens.refresh_token]]
+      : []),
+    ...(kept.tokens?.access_token
+      ? [['access_token', kept.tokens.access_token]]
+      : []),
+  ];
+  let revoked = typeof endpoint === 'string' && tokens.length > 0;
+  if (typeof endpoint === 'string')
+    for (const [hint, token] of tokens) {
+      const response = await fetcher(endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          token: token!,
+          token_type_hint: hint!,
+          ...(kept.client?.client_id
+            ? { client_id: kept.client.client_id }
+            : {}),
+        }),
+        redirect: 'error',
+        signal: AbortSignal.timeout(10_000),
+      }).catch(() => undefined);
+      if (!response?.ok) revoked = false;
+    }
+  forgetAuthorization(home, server);
+  return revoked;
+}
+
 function listenable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const probe = createServer();
@@ -146,10 +192,14 @@ export class McpAuthProvider implements OAuthClientProvider {
   }
   get clientMetadata(): OAuthClientMetadata {
     const host = (hostname().split('.')[0] ?? '').slice(0, 60);
+    // The SDK keeps the server's metadata before it registers: the device code is asked for only where it is offered
+    const device = deviceEndpoint(keptFor(this.home, this.server).discovery)
+      ? [DEVICE_CODE_GRANT]
+      : [];
     return {
       client_name: host ? `Circle on ${host}` : 'Circle',
       redirect_uris: [this.redirectUrl],
-      grant_types: ['authorization_code', 'refresh_token'],
+      grant_types: ['authorization_code', 'refresh_token', ...device],
       response_types: ['code'],
       token_endpoint_auth_method: 'none',
     };

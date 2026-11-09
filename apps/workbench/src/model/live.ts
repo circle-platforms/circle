@@ -1158,6 +1158,8 @@ export class LiveRuntime implements RuntimePort {
         'check-update': 'check-update',
         'dismiss-whats-new': 'dismiss-whats-new',
         'link-opened': 'link-opened',
+        'hub-connect': 'hub-connect',
+        'hub-disconnect': 'hub-disconnect',
         'discover-models': 'discover-models',
         'launch-options': 'launch-options',
         'trust-workspace': 'trust',
@@ -1202,6 +1204,9 @@ export class LiveRuntime implements RuntimePort {
         'revoke-external-file-grant',
         // The card says why its command was not typed.
         'run-in-terminal',
+        // The Hub card shows why it could not connect or disconnect.
+        'hub-connect',
+        'hub-disconnect',
       ].includes(kind)
     )
       void result.catch((error) => this.report(error, sessionId));

@@ -993,11 +993,11 @@ try {
   await page
     .getByRole('button', { name: 'interface components', exact: true })
     .click();
-  // Two plain components (files and changes, the browser) and GitHub, which is
-  // paired with its runtime extension and stays off in preview. The activity and
+  // Two plain components (files and changes, the browser), and GitHub and Hub, which
+  // are paired with their runtime extensions and stay off in preview. The activity and
   // device terminal components went with their panels: the overview and the
   // terminal mode, which are Circle's own, hold that work now.
-  assert.equal(await page.getByRole('checkbox').count(), 3);
+  assert.equal(await page.getByRole('checkbox').count(), 4);
   for (const name of ['file and diff inspector', 'browser pane'])
     assert.equal(
       await page
@@ -1009,14 +1009,18 @@ try {
       true,
     );
   // Each switch is named by the interface's shown title.
-  assert.equal(
-    await page
-      .getByRole('checkbox', { name: 'enable GitHub interface', exact: true })
-      .isChecked(),
-    false,
-  );
+  for (const name of ['GitHub', 'Hub'])
+    assert.equal(
+      await page
+        .getByRole('checkbox', {
+          name: `enable ${name} interface`,
+          exact: true,
+        })
+        .isChecked(),
+      false,
+    );
   checks.push(
-    "the Circle interface lists its own components and GitHub's, which stays off in preview",
+    "the Circle interface lists its own components and GitHub's and Hub's, which stay off in preview",
   );
   await reset();
   await route('/page/settings');

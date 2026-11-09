@@ -421,6 +421,8 @@ export interface McpServer {
     'sample' | 'not connected' | 'connected' | 'error' | 'reload required';
   tools: { name: string; description: string; schema: unknown }[];
   error?: string;
+  /** A sign-in under way: its page, and the code to type there when it is a device sign-in. */
+  signIn?: { url: string; code?: string };
 }
 export interface RuntimeExtension {
   id: string;

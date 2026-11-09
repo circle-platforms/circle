@@ -6,6 +6,7 @@ import { once } from 'node:events';
 import { randomUUID, createHash } from 'node:crypto';
 import { FakeSyncServer } from './fake-server.js';
 import { McpAuthProvider, redirectPort } from '../../../src/mcp_auth.js';
+import { DEVICE_CODE_GRANT } from '../../../src/mcp_device.js';
 
 export interface TeamDocument {
   id: string;
@@ -59,6 +60,12 @@ export class AuthorizedServer {
   renamedTools = false;
   /** The tool name of every tools/call, as the client sent it. */
   readonly toolNames: string[] = [];
+  /** Offer the device code (RFC 8628) and a revocation endpoint, as a Circle Hub does. */
+  device = false;
+  /** Set when a person approved the device code on the server's page. */
+  deviceApproved = false;
+  readonly deviceRequests: URLSearchParams[] = [];
+  readonly revocations: URLSearchParams[] = [];
   constructor(home: string) {
     this.peer = new FakeSyncServer(home);
     this.peer.now = Date.now();
@@ -176,13 +183,21 @@ export class AuthorizedServer {
           'cache-control': 'no-store',
         })
         .end(JSON.stringify(body));
-    const body = raw && url.pathname !== '/token' ? JSON.parse(raw) : raw;
+    const formBody = ['/token', '/device_authorization', '/revoke'].includes(
+      url.pathname,
+    );
+    const body = raw && !formBody ? JSON.parse(raw) : raw;
     this.requests.push({ path: url.pathname, headers: req.headers, body });
     if (url.pathname === '/token') {
       const form = new URLSearchParams(raw);
       this.tokenRequests.push(form);
       await this.gateRefresh?.();
-      if (form.get('grant_type') === 'authorization_code') {
+      if (form.get('grant_type') === DEVICE_CODE_GRANT) {
+        if (form.get('device_code') !== 'synthetic-device-code')
+          return json(400, { error: 'invalid_grant' });
+        if (!this.deviceApproved)
+          return json(400, { error: 'authorization_pending' });
+      } else if (form.get('grant_type') === 'authorization_code') {
         const code = this.codes.get(form.get('code') ?? '');
         if (
           !code ||
@@ -217,14 +232,40 @@ export class AuthorizedServer {
         resource: this.origin + '/mcp',
         authorization_servers: [this.origin],
       });
+    if (url.pathname === '/device_authorization' && this.device) {
+      this.deviceRequests.push(new URLSearchParams(raw));
+      return json(200, {
+        device_code: 'synthetic-device-code',
+        user_code: 'BCDF-GHJK',
+        verification_uri: this.origin + '/device',
+        verification_uri_complete: this.origin + '/device?user_code=BCDF-GHJK',
+        expires_in: 600,
+        interval: 1,
+      });
+    }
+    if (url.pathname === '/revoke') {
+      this.revocations.push(new URLSearchParams(raw));
+      return res.writeHead(200).end();
+    }
     if (url.pathname === '/.well-known/oauth-authorization-server')
       return json(200, {
         issuer: this.origin,
         authorization_endpoint: this.origin + '/authorize',
         token_endpoint: this.origin + '/token',
         registration_endpoint: this.origin + '/register',
+        revocation_endpoint: this.origin + '/revoke',
+        ...(this.device
+          ? {
+              device_authorization_endpoint:
+                this.origin + '/device_authorization',
+            }
+          : {}),
         response_types_supported: ['code'],
-        grant_types_supported: ['authorization_code', 'refresh_token'],
+        grant_types_supported: [
+          'authorization_code',
+          'refresh_token',
+          ...(this.device ? [DEVICE_CODE_GRANT] : []),
+        ],
         code_challenge_methods_supported: ['S256'],
         token_endpoint_auth_methods_supported: ['none'],
       });

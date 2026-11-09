@@ -21,13 +21,29 @@ export function register(api) {
   };
 
   // An object is sent to the model as JSON.
-  api.registerTool('echo_ro', 'Echo the arguments back. Read-only.', schema,
-    (args) => ({ ok: true, echo: args }), { readOnly: true });
-  api.registerTool('always_fails', 'Fails on purpose.', schema,
-    (args) => { throw new api.ToolError('boom: ' + (args.why ?? '')); }, { readOnly: true });
+  api.registerTool(
+    'echo_ro',
+    'Echo the arguments back. Read-only.',
+    schema,
+    (args) => ({ ok: true, echo: args }),
+    { readOnly: true },
+  );
+  api.registerTool(
+    'always_fails',
+    'Fails on purpose.',
+    schema,
+    (args) => {
+      throw new api.ToolError('boom: ' + (args.why ?? ''));
+    },
+    { readOnly: true },
+  );
   api.registerTool('writer', 'Changes something.', schema, () => 'written');
-  api.registerCommand('hello', 'Say hello', (args, ctx) => ctx.toast('hello ' + args));
-  api.registerRenderer('tool_result:echo_ro', (update) => ['ECHO ' + update.output]);
+  api.registerCommand('hello', 'Say hello', (args, ctx) =>
+    ctx.toast('hello ' + args),
+  );
+  api.registerRenderer('tool_result:echo_ro', (update) => [
+    'ECHO ' + update.output,
+  ]);
   api.on('turn_start', (payload) => {});
 }
 ```
@@ -38,11 +54,11 @@ Start Circle and run `/extensions`. You should see the extension with its tool a
 
 ## Where extensions live
 
-| Folder | When it loads |
-|---|---|
-| Shipped with Circle (`dist/extensions/` in a release) | Only once you turn it on with `/extensions enable <name>` |
-| `~/.circle/extensions/<name>/` | Always |
-| `<project>/.circle/extensions/<name>/` | When the project is [trusted](security.md#workspace-trust), which it must be for Circle to work in it |
+| Folder                                                | When it loads                                                                                         |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Shipped with Circle (`dist/extensions/` in a release) | Only once you turn it on with `/extensions enable <name>`                                             |
+| `~/.circle/extensions/<name>/`                        | Always                                                                                                |
+| `<project>/.circle/extensions/<name>/`                | When the project is [trusted](security.md#workspace-trust), which it must be for Circle to work in it |
 
 A project extension replaces one of yours with the same name, and yours replaces one shipped with Circle. Folder names use letters, digits, `_` and `-` (up to 64 characters, starting with a letter or digit); other folders, and folders without one of the three files, are skipped without a message.
 
@@ -70,32 +86,34 @@ The desktop starts loading integrations for its trusted startup workspace withou
 
 The GitHub connection is the shipped example of a page like this. Its `github_*` tools read a task's checks and failed logs and publish its draft pull request through the connection given in the plugin. They carry no review threads: reading and answering a review runs the GitHub CLI in the conversation, the way the built-in [skills](skills.md#built-in-skills) do, and the terminal has no connection backend at all.
 
+The Hub extension is the other shipped page. It keeps the MCP server entry named `Hub` for the address typed on its page and shows that server's sign-in; the Hub's tools are the server's own MCP tools. In the terminal, `/hub` says how to add that entry to `mcp_servers` by hand.
+
 ## The `api` object
 
-| Member | Purpose |
-|---|---|
-| `api.name` | The extension's folder name. |
-| `api.ToolError` | Throw it from a tool to report a failed call to the model. |
-| `api.Watch` | `new api.Watch(title, poll, options)`: return it from a tool to have Circle wait for something slow. See [Waiting for something slow](#waiting-for-something-slow). |
-| `api.setStatus(text, lamp)` | One line at the right of the footer while it holds, such as what the extension is connected to. `lamp` is `running` (yellow), `ok` (green), `error` (red), `wait` (cyan) or `none`. The text is one line of up to 60 characters, with [secrets](#secrets) masked; `null` removes it. The terminal shows it at the right of the footer; the desktop application, above the footer of its sidebar. |
-| `api.openUrl(url)` | Open an `http` or `https` address. The terminal opens it in the system's browser, passed to the system's opener as one argument and never through a shell. The desktop application opens it in its own browser, beside the session, or in the browser's window when the browser is in [a window of its own](desktop.md#in-a-window-of-its-own); with that browser turned off, or no window, the system's browser opens it. An address with a user name or password, or of another kind, is refused. |
-| `api.setView(data)` | Publish data for the extension's own [interface in the desktop application](#an-interface-in-the-desktop-application): JSON only, up to 64 KB, with [secrets](#secrets) masked. `null` removes it. |
-| `api.workspace` | The folder Circle works in, for a tool that reads or saves the user's files there. |
-| `api.settings` | A copy of the extension's own entry under `extensions` in `settings.json`, as it was when the extension loaded, such as `{ "enabled": true, "url": "…" }`. Changing the copy saves nothing. |
-| `api.saveSettings(patch)` | Merge keys into that entry on disk and into the running copy. `enabled` is left as it is unless the patch sets it. |
-| `api.conceal(value)` | Hide a value in status and views, the way a secret from `askSecret` is hidden. |
-| `api.dataDir` | A folder of the extension's own, `~/.circle/extension_data/<name>/` (`0700`), made the first time it is read. For what the extension keeps that is not secret. |
-| `api.secrets` | Values the extension keeps between runs, such as a token. See [Secrets](#secrets). |
-| `api.askSecret(question, options)` | Ask you for a value on a masked card; it goes back to the extension only. See [Secrets](#secrets). |
-| `api.signal` | An `AbortSignal` that fires when Circle closes the extension: when Circle leaves, and before extensions are loaded again. Pass it to requests and timers, and end loops on it. |
-| `api.background(promise)` | Work that goes on after a tool or command returned, such as following something until it ends. Circle waits for it when it closes the extension, after `api.signal` fired, for up to two seconds; an error in it is shown under the extension in `/extensions`. |
-| `registerTool(name, description, parameters, execute, options)` | Add a tool. It can also be called later, for example once a service tells the extension what it offers: the model gets the tool from its next turn, never in the middle of one. |
-| `unregisterTool(name)` | Remove a tool this extension added; returns `false` if it has none of that name. The model stops seeing it from its next turn. |
-| `registerCommand(name, description, handler)` | Add a slash command. |
-| `registerMiddleware(handler, slot)` | Wrap model calls or tool calls. `slot` defaults to `tool_boundary`. |
-| `registerSubagent(spec, tools)` | Add a subagent for `task`. A [subagent file](agents.md) of the same name is replaced by it. |
-| `registerRenderer('tool_result:<tool>', renderer)` | Change how a tool's result is shown. |
-| `on(event, handler)` | React to `session_start`, `turn_start`, `turn_end` or `tool_result`. |
+| Member                                                          | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.name`                                                      | The extension's folder name.                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `api.ToolError`                                                 | Throw it from a tool to report a failed call to the model.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `api.Watch`                                                     | `new api.Watch(title, poll, options)`: return it from a tool to have Circle wait for something slow. See [Waiting for something slow](#waiting-for-something-slow).                                                                                                                                                                                                                                                                                                                                 |
+| `api.setStatus(text, lamp)`                                     | One line at the right of the footer while it holds, such as what the extension is connected to. `lamp` is `running` (yellow), `ok` (green), `error` (red), `wait` (cyan) or `none`. The text is one line of up to 60 characters, with [secrets](#secrets) masked; `null` removes it. The terminal shows it at the right of the footer; the desktop application, above the footer of its sidebar.                                                                                                    |
+| `api.openUrl(url)`                                              | Open an `http` or `https` address. The terminal opens it in the system's browser, passed to the system's opener as one argument and never through a shell. The desktop application opens it in its own browser, beside the session, or in the browser's window when the browser is in [a window of its own](desktop.md#in-a-window-of-its-own); with that browser turned off, or no window, the system's browser opens it. An address with a user name or password, or of another kind, is refused. |
+| `api.setView(data)`                                             | Publish data for the extension's own [interface in the desktop application](#an-interface-in-the-desktop-application): JSON only, up to 64 KB, with [secrets](#secrets) masked. `null` removes it.                                                                                                                                                                                                                                                                                                  |
+| `api.workspace`                                                 | The folder Circle works in, for a tool that reads or saves the user's files there.                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `api.settings`                                                  | A copy of the extension's own entry under `extensions` in `settings.json`, as it was when the extension loaded, such as `{ "enabled": true, "url": "…" }`. Changing the copy saves nothing.                                                                                                                                                                                                                                                                                                         |
+| `api.saveSettings(patch)`                                       | Merge keys into that entry on disk and into the running copy. `enabled` is left as it is unless the patch sets it.                                                                                                                                                                                                                                                                                                                                                                                  |
+| `api.conceal(value)`                                            | Hide a value in status and views, the way a secret from `askSecret` is hidden.                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `api.dataDir`                                                   | A folder of the extension's own, `~/.circle/extension_data/<name>/` (`0700`), made the first time it is read. For what the extension keeps that is not secret.                                                                                                                                                                                                                                                                                                                                      |
+| `api.secrets`                                                   | Values the extension keeps between runs, such as a token. See [Secrets](#secrets).                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `api.askSecret(question, options)`                              | Ask you for a value on a masked card; it goes back to the extension only. See [Secrets](#secrets).                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `api.signal`                                                    | An `AbortSignal` that fires when Circle closes the extension: when Circle leaves, and before extensions are loaded again. Pass it to requests and timers, and end loops on it.                                                                                                                                                                                                                                                                                                                      |
+| `api.background(promise)`                                       | Work that goes on after a tool or command returned, such as following something until it ends. Circle waits for it when it closes the extension, after `api.signal` fired, for up to two seconds; an error in it is shown under the extension in `/extensions`.                                                                                                                                                                                                                                     |
+| `registerTool(name, description, parameters, execute, options)` | Add a tool. It can also be called later, for example once a service tells the extension what it offers: the model gets the tool from its next turn, never in the middle of one.                                                                                                                                                                                                                                                                                                                     |
+| `unregisterTool(name)`                                          | Remove a tool this extension added; returns `false` if it has none of that name. The model stops seeing it from its next turn.                                                                                                                                                                                                                                                                                                                                                                      |
+| `registerCommand(name, description, handler)`                   | Add a slash command.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `registerMiddleware(handler, slot)`                             | Wrap model calls or tool calls. `slot` defaults to `tool_boundary`.                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `registerSubagent(spec, tools)`                                 | Add a subagent for `task`. A [subagent file](agents.md) of the same name is replaced by it.                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `registerRenderer('tool_result:<tool>', renderer)`              | Change how a tool's result is shown.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `on(event, handler)`                                            | React to `session_start`, `turn_start`, `turn_end` or `tool_result`.                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 Any error while an extension loads (a bad name, a duplicate, an exception in `register`) turns that one extension off, removes everything it registered, and shows the reason in `/extensions`. Other extensions are not affected.
 
@@ -113,13 +131,22 @@ Any error while an extension loads (a bad name, a duplicate, an exception in `re
 A tool that starts something slow (a run on another machine, a sign-in the user finishes in a browser) can return an `api.Watch` instead of making the model call it again or `sleep`:
 
 ```js
-api.registerTool('submit_run', 'Start a run and wait for it.', schema, async (args) => {
-  const task = await startRun(args.case);
-  return new api.Watch(`run ${args.case}`, async (signal) => {
-    const status = await checkRun(task, { signal });
-    return status.state === 'finished' ? status : null;
-  }, { interval_s: 10, deadline_s: 2400, result: { task, state: 'pending' } });
-});
+api.registerTool(
+  'submit_run',
+  'Start a run and wait for it.',
+  schema,
+  async (args) => {
+    const task = await startRun(args.case);
+    return new api.Watch(
+      `run ${args.case}`,
+      async (signal) => {
+        const status = await checkRun(task, { signal });
+        return status.state === 'finished' ? status : null;
+      },
+      { interval_s: 10, deadline_s: 2400, result: { task, state: 'pending' } },
+    );
+  },
+);
 ```
 
 - The tool call returns at once with `result` (text, or an object sent as JSON) and a note that Circle is watching it as a [background job](background-jobs.md).
@@ -146,11 +173,11 @@ An extension that signs in somewhere needs to keep a token, and sometimes to ask
 
 ### Middleware
 
-| Slot | Handler | What it can do |
-|---|---|---|
-| `model_call` | `async (request, next) => response` | Change the request (`request.system`, `request.messages`, `request.tools`) before calling `next(request)`, or change what it returns. |
-| `tool_boundary` | `async (invocation, next) => text` | Run code around a tool call, after it was approved, and change the text it returns. `invocation` has `tool`, `args` and `context`; passing a different tool, arguments or context to `next` is refused. |
-| `after_model` | `(response, request) => response \| undefined` | Look at each response; return a new one to replace it. |
+| Slot            | Handler                                        | What it can do                                                                                                                                                                                          |
+| --------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `model_call`    | `async (request, next) => response`            | Change the request (`request.system`, `request.messages`, `request.tools`) before calling `next(request)`, or change what it returns.                                                                   |
+| `tool_boundary` | `async (invocation, next) => text`             | Run code around a tool call, after it was approved, and change the text it returns. `invocation` has `tool`, `args` and `context`; passing a different tool, arguments or context to `next` is refused. |
+| `after_model`   | `(response, request) => response \| undefined` | Look at each response; return a new one to replace it.                                                                                                                                                  |
 
 Handlers of one slot run in the order they were registered, the first outermost. They apply to the main agent and its subagents.
 
@@ -166,19 +193,19 @@ Handlers of one slot run in the order they were registered, the first outermost.
 
 ### Events
 
-| Event | Payload |
-|---|---|
+| Event           | Payload                                                                                                                           |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `session_start` | `{ workspace, session_id }`. Fires when extensions load (start, `/reload`, `/extensions reload`), and after `/new` and `/import`. |
-| `turn_start` | `{ message, session_id }`. A turn Circle started for finished [background jobs](background-jobs.md) has no `message`. |
-| `turn_end` | `{ answer, session_id, usage }`. Not sent for a turn that failed or was stopped. |
-| `tool_result` | `{ id, name, status, output, session_id }`. |
+| `turn_start`    | `{ message, session_id }`. A turn Circle started for finished [background jobs](background-jobs.md) has no `message`.             |
+| `turn_end`      | `{ answer, session_id, usage }`. Not sent for a turn that failed or was stopped.                                                  |
+| `tool_result`   | `{ id, name, status, output, session_id }`.                                                                                       |
 
 Subagents' turns and tool results fire the same events. Handlers may be `async`. An exception is shown under the extension in `/extensions` and does not stop anything.
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `/extensions` (`/ext`) | List extensions with their tool and command counts, load errors and handler errors. |
-| `/extensions reload` | Re-read settings, reconnect MCP servers and reload every extension. Not while a turn runs. |
+| Command                                                   | What it does                                                                                                                       |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `/extensions` (`/ext`)                                    | List extensions with their tool and command counts, load errors and handler errors.                                                |
+| `/extensions reload`                                      | Re-read settings, reconnect MCP servers and reload every extension. Not while a turn runs.                                         |
 | `/extensions enable <name>`, `/extensions disable <name>` | Save `enabled` for that extension in `settings.json` and reload, so the choice holds in later sessions too. Not while a turn runs. |

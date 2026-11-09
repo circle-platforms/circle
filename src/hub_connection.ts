@@ -1,0 +1,145 @@
+// Connecting a Circle Hub by its address, for the bundled Hub extension. Nothing here signs in: the Hub is an ordinary
+// MCP server entry named HUB_SERVER, and its sign-in is the MCP authorization of any server (mcp_loader.ts), by device
+// code where the Hub offers it. This only finds the Hub's MCP endpoint from what a person typed, and writes, or removes,
+// that entry. No address is built in: there is none until a person types one.
+import type { CircleSettings } from './settings.js';
+
+/** The name of the MCP server entry the Hub extension keeps. */
+export const HUB_SERVER = 'Hub';
+/** How long finding a Hub at an address may take. */
+const FIND_TIMEOUT_MS = 10_000;
+
+export class HubAddressError extends Error {}
+
+/**
+ * The addresses to try for what a person typed: as typed when it names http or https, otherwise https first and then
+ * http, since a Hub on an internal address often serves plain HTTP. A path of `/` or `/mcp` is the Hub itself.
+ */
+export function hubCandidates(typed: string): URL[] {
+  const value = typed.trim();
+  if (!value || value.length > 2048 || /\s/.test(value))
+    throw new HubAddressError('type the address of a Circle Hub');
+  const schemed = /^[a-z][a-z0-9+.-]*:\/\//i.test(value);
+  const raw = schemed ? [value] : [`https://${value}`, `http://${value}`];
+  return raw.map((candidate) => {
+    let url: URL;
+    try {
+      url = new URL(candidate);
+    } catch {
+      throw new HubAddressError('that is not a web address');
+    }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:')
+      throw new HubAddressError(
+        'a Hub address starts with https:// or http://',
+      );
+    if (url.username || url.password)
+      throw new HubAddressError(
+        'a Hub address carries no user name or password',
+      );
+    if (url.search || url.hash)
+      throw new HubAddressError('a Hub address has no query or fragment');
+    if (url.pathname !== '/' && url.pathname !== '/mcp')
+      throw new HubAddressError('type the Hub address without a path');
+    return new URL(url.origin);
+  });
+}
+
+/** The MCP endpoint a Hub's discovery names, when it is on the Hub's own origin. */
+function sameOrigin(raw: unknown, origin: URL): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  try {
+    const url = new URL(raw);
+    return url.origin === origin.origin ? url.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function json(
+  url: string,
+  fetcher: typeof fetch,
+  signal: AbortSignal,
+): Promise<Record<string, unknown> | undefined> {
+  const response = await fetcher(url, {
+    headers: { accept: 'application/json' },
+    redirect: 'error',
+    signal,
+  }).catch(() => undefined);
+  if (!response?.ok) return undefined;
+  const body: unknown = await response.json().catch(() => undefined);
+  return body && typeof body === 'object' && !Array.isArray(body)
+    ? (body as Record<string, unknown>)
+    : undefined;
+}
+
+/**
+ * The MCP endpoint of the Hub at `typed`. A Hub publishes it in its knowledge-sync discovery
+ * (`/.well-known/knowledge-sync`, `mcp.endpoint`); a server that answers only the protected-resource metadata of its
+ * `/mcp` (RFC 9728) is taken by that. Anything else is not a Hub.
+ */
+export async function findHub(
+  typed: string,
+  fetcher: typeof fetch = fetch,
+  signal: AbortSignal = AbortSignal.timeout(FIND_TIMEOUT_MS),
+): Promise<string> {
+  const candidates = hubCandidates(typed);
+  for (const origin of candidates) {
+    const discovery = await json(
+      new URL('/.well-known/knowledge-sync', origin).href,
+      fetcher,
+      signal,
+    );
+    const mcp = discovery?.mcp as Record<string, unknown> | undefined;
+    const endpoint =
+      discovery?.schema === 'knowledge-sync-discovery@1'
+        ? sameOrigin(mcp?.endpoint, origin)
+        : undefined;
+    if (endpoint) return endpoint;
+    const resource = await json(
+      new URL('/.well-known/oauth-protected-resource/mcp', origin).href,
+      fetcher,
+      signal,
+    );
+    const protectedMcp = sameOrigin(resource?.resource, origin);
+    if (protectedMcp) return protectedMcp;
+    signal.throwIfAborted();
+  }
+  throw new HubAddressError(
+    `no Circle Hub answers at ${candidates.map((url) => url.origin).join(' or ')}`,
+  );
+}
+
+/** The Hub entry's endpoint in `settings`, if there is one. */
+export function hubEndpoint(settings: CircleSettings): string | undefined {
+  const url = settings.mcp_servers.find((row) => row.name === HUB_SERVER)?.url;
+  return typeof url === 'string' && url ? url : undefined;
+}
+
+/**
+ * Puts the Hub entry for `endpoint` into `settings` (as saveSettingsChange changes them), keeping that entry's id when
+ * there was one, and keeps the extension on.
+ */
+export function addHub(settings: CircleSettings, endpoint: string): void {
+  const before = settings.mcp_servers.find((row) => row.name === HUB_SERVER);
+  settings.mcp_servers = [
+    ...settings.mcp_servers.filter((row) => row.name !== HUB_SERVER),
+    {
+      ...(typeof before?.id === 'string' ? { id: before.id } : {}),
+      name: HUB_SERVER,
+      url: endpoint,
+      transport: 'streamable_http',
+      enabled: true,
+    },
+  ];
+  settings.extensions = {
+    ...settings.extensions,
+    hub: { ...settings.extensions.hub, enabled: true },
+  };
+}
+
+/** Takes the Hub entry out of `settings`. */
+export function removeHub(settings: CircleSettings): void {
+  settings.mcp_servers = settings.mcp_servers.filter(
+    (row) => row.name !== HUB_SERVER,
+  );
+}

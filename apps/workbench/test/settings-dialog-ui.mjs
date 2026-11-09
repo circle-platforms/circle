@@ -526,7 +526,8 @@ try {
     await page.evaluate(() => delete window.circleDesktop);
     checks.push('Linux update confirmation works inside the settings dialog');
 
-    // Extensions: GitHub is one, and its details open in the dialog too.
+    // Extensions: GitHub is one, and its details open in the dialog too. Hub has
+    // details as well, so GitHub's link is the one that leads to its page.
     await pick(page, 'extensions');
     await page
       .locator('.settings-sections')
@@ -535,6 +536,7 @@ try {
     await page
       .locator('.settings-sections')
       .getByRole('link', { name: 'plugin details', exact: true })
+      .and(page.locator('[href$="plugin=github"]'))
       .click();
     await page.waitForFunction(
       () => location.hash === '#/page/extensions?plugin=github',

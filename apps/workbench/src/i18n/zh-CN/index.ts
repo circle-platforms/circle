@@ -3,6 +3,7 @@ import { externalFileAccess } from './external-file-access.ts';
 import { fileUndo } from './file-undo.ts';
 import { drawerShell } from './drawer-shell.ts';
 import { githubConnection } from './github-connection.ts';
+import { hubConnection } from './hub-connection.ts';
 import { nativeGit } from './native-git.ts';
 import { agentTools } from './agent-tools.ts';
 import { taskPanel } from './task-panel.ts';
@@ -28,6 +29,7 @@ export const ZH_CN: Record<string, string> = {
   ...fileUndo,
   ...agentTools,
   ...githubConnection,
+  ...hubConnection,
   ...taskPanel,
   ...nativeGit,
   ...developer,
