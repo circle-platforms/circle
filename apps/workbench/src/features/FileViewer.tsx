@@ -1,3 +1,4 @@
+import { useSources } from '../components/SourceNavigation';
 import { desktopHost } from '../host';
 import { macKeyboard } from '../model/shortcuts';
 import { useEffect, useRef, useState } from 'react';
@@ -150,6 +151,8 @@ export function FileViewer({
     : (sourceWorkspace?.name ?? t('workspace'));
   const sourceDirectory = sourceWorkspace?.path;
   const fileName = path.split('/').at(-1) || path;
+  // A PDF that opened here can still be read as a page, in the browser
+  const sources = useSources();
   const fileFolder = path.includes('/')
     ? path.slice(0, path.lastIndexOf('/'))
     : '';
@@ -709,8 +712,17 @@ export function FileViewer({
     return (
       <div className="empty-state" role="alert">
         <h3>{t('{file} is not a text file', { file: fileName })}</h3>
-        <p>{t('Circle opens text files and pictures here.')}</p>
+        <p>
+          {t(
+            'Circle opens text files and pictures here, and pages and PDFs in the browser.',
+          )}
+        </p>
         <span className="empty-state-actions">
+          {/\.pdf$/i.test(path) && sources && (
+            <Button onClick={() => sources.openFile(path)}>
+              {t('open in browser')}
+            </Button>
+          )}
           {desktopHost()?.revealWorkspace && (
             <Button
               onClick={() =>

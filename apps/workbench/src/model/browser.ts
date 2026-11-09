@@ -74,12 +74,25 @@ export function downloadProgress(download: {
 }
 /**
  * An address as Chrome's address bar shows it while you are not typing: without
- * http:// or https://, with the host to emphasise. Anything else is shown whole.
+ * http:// or https://, with the host to emphasise. A workspace page shows its path in the
+ * workspace, and a PDF its file, never the token they are served under. Anything else is
+ * shown whole.
  */
 export function addressParts(url: string): {
   host: string;
   rest: string;
 } {
+  const decoded = (text: string) => {
+    try {
+      return decodeURIComponent(text);
+    } catch {
+      return text;
+    }
+  };
+  const local = /^circle-local:\/\/[^/]*\/([^?#]*)/i.exec(url);
+  if (local) return { host: '', rest: decoded(local[1]!) };
+  const file = /^file:\/\/[^/]*(\/[^?#]*)/i.exec(url);
+  if (file) return { host: '', rest: decoded(file[1]!) };
   const match = /^https?:\/\/([^/?#]*)(.*)$/i.exec(url);
   if (!match) return { host: '', rest: url };
   // A host's own credentials never show; the browser refuses them anyway
@@ -95,11 +108,12 @@ export function connectionKind(
     insecure?: boolean;
     failure?: { url: string };
   } | null,
-): 'warning' | 'insecure' | 'http' | 'https' | 'none' {
+): 'warning' | 'insecure' | 'http' | 'https' | 'local' | 'none' {
   if (!state) return 'none';
   if (state.warning) return 'warning';
   if (state.insecure) return 'insecure';
   const url = state.failure?.url ?? state.url ?? '';
+  if (/^(circle-local|file):/i.test(url)) return 'local';
   if (/^https:/i.test(url)) return 'https';
   if (/^http:/i.test(url)) return 'http';
   return 'none';

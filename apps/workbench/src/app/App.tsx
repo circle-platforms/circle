@@ -896,6 +896,8 @@ export function App() {
     line?: number,
     column?: number,
     sourceOwner?: SourceResourceOwner,
+    /** Opened from the conversation, where a page or PDF is shown in the browser. */
+    asPage = false,
   ) => {
     commandRequest.current++;
     const sourceSessionId = session.id;
@@ -948,6 +950,30 @@ export function App() {
       );
       return;
     }
+    // A page or PDF of the workspace opens in the conversation's browser, where it reads
+    // only the workspace and nothing on the network (apps/desktop/src/local-pages.ts)
+    const host = desktopHost();
+    if (
+      asPage &&
+      /\.(html?|pdf)$/i.test(result.source.path) &&
+      runtime.mode === 'live' &&
+      host?.browserLocalPage
+    ) {
+      try {
+        const url = await host.browserLocalPage(
+          sourceSessionId,
+          result.source.path,
+          sourceOwner?.sessionId,
+        );
+        if (poppedModes.has('browser')) {
+          popOut('browser');
+          await host.browserNavigate(sourceSessionId, url);
+        } else onPanel('browser', url);
+      } catch (error) {
+        notify(error instanceof Error ? error.message : String(error));
+      }
+      return;
+    }
     setFileOwner(sourceOwner ?? undefined);
     setFile(result.source.path);
     setSourceLine(result.source.line);
@@ -981,11 +1007,16 @@ export function App() {
     setPanel('files');
     showDrawer();
   };
-  const onFile = (path: string, line?: number, column?: number) => {
+  const onFile = (
+    path: string,
+    line?: number,
+    column?: number,
+    asPage = false,
+  ) => {
     const named = path.replace(/^\/*/, '/');
     if (session.plan && named === session.plan.file) return openPlan();
     if (planFolderFile(named)) return openPlanFolderFile(named);
-    return openSource(path, line, column);
+    return openSource(path, line, column, undefined, asPage);
   };
   // When Circle writes the plan, it opens: once in a turn, so a plan closed while Circle
   // works stays closed until the plan card asks about it, and then it opens again. It
@@ -1658,7 +1689,9 @@ export function App() {
   const surface = (
     <Tooltip.Provider delayDuration={300}>
       <SourceNavigation
-        onFile={onFile}
+        // A link in the conversation shows a page or PDF as the page; the files and changes
+        // modes open the file itself, so a page's source stays editable there
+        onFile={(path, line, column) => onFile(path, line, column, true)}
         onChange={(path) => onPanel('changes', path)}
       >
         <div

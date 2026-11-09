@@ -1,5 +1,6 @@
 import { createRoot } from 'react-dom/client';
 import { CircleWorkbench } from '../src/workbench';
+import { circlePlugins } from '../src/plugins/builtins';
 import { LiveRuntime } from '../src/model/live';
 import { setLanguage } from '../src/i18n';
 import { createFixtures } from '../src/preview/fixtures';
@@ -27,7 +28,7 @@ const messages: Message[] = [
     parentId: 'ask',
     role: 'assistant',
     at,
-    text: 'See [the picture](.tmp/designs/a-light.png) and [the data](data/blob.bin).',
+    text: 'See [the picture](.tmp/designs/a-light.png), [the data](data/blob.bin), [the page](.tmp/designs/editor-a.html) and [the spec](docs/spec.pdf).',
   },
 ];
 Object.assign(session, {
@@ -56,6 +57,9 @@ const update = (): RuntimeUpdate => ({
   },
 });
 const calls: { call: string; params: unknown }[] = [];
+// The conversation's browser as main reports it, to those listening
+let browser: unknown;
+const browserListeners = new Set<(state: unknown) => void>();
 const noop = async () => {};
 const host = new Proxy(
   {
@@ -65,9 +69,60 @@ const host = new Proxy(
     onRuntime: () => () => {},
     onRuntimeDelta: () => () => {},
     onRuntimeWait: () => () => {},
-    listWorkspace: async () => null,
+    // The files mode lists the PDF, which opens there as a file, not as a page
+    listWorkspace: async (workspaceId: string) => ({
+      id: workspaceId,
+      name: 'orbit-api',
+      path: '/workspace/orbit-api',
+      files: [{ id: 'spec', path: 'docs/spec.pdf', language: 'plaintext' }],
+      truncated: false,
+      complete: true,
+    }),
     revealWorkspace: async (workspaceId: string, path?: string) => {
       calls.push({ call: 'revealWorkspace', params: { workspaceId, path } });
+    },
+    // The desktop's local pages: an address for a workspace page, and the browser loading it
+    browserLocalPage: async (
+      sessionId: string,
+      path: string,
+      ownerSessionId?: string,
+    ) => {
+      calls.push({
+        call: 'browserLocalPage',
+        params: { sessionId, path, ownerSessionId },
+      });
+      return path.endsWith('.pdf')
+        ? `file:///workspace/orbit-api/${path}`
+        : `circle-local://${'a'.repeat(32)}/${path}`;
+    },
+    browserNavigate: async (sessionId: string, url: string) => {
+      calls.push({ call: 'browserNavigate', params: { sessionId, url } });
+      browser = {
+        sessionId: 'browser:' + sessionId,
+        url,
+        title: url.split('/').pop(),
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+      };
+      // As main does, the page's state follows the navigation, after the first answer
+      setTimeout(() => {
+        for (const listener of browserListeners) listener(browser);
+      }, 50);
+      return browser;
+    },
+    browserState: async (sessionId: string) =>
+      browser ?? {
+        sessionId: 'browser:' + sessionId,
+        url: 'about:blank',
+        title: '',
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+      },
+    onBrowserEvent: (listener: (state: unknown) => void) => {
+      browserListeners.add(listener);
+      return () => browserListeners.delete(listener);
     },
     runtimeCommand: async (command: any) => {
       const { service, method, params } = command.payload ?? {};
@@ -107,9 +162,16 @@ const host = new Proxy(
 ) as unknown as DesktopBridge;
 window.circleDesktop = host;
 Object.assign(window, {
-  fileTypesFixture: { calls, workspaceId: session.workspaceId },
+  fileTypesFixture: {
+    calls,
+    workspaceId: session.workspaceId,
+    sessionId: session.id,
+  },
 });
 location.hash = `/session/${session.id}`;
 createRoot(document.getElementById('root')!).render(
-  <CircleWorkbench runtime={new LiveRuntime(host, update())} plugins={[]} />,
+  <CircleWorkbench
+    runtime={new LiveRuntime(host, update())}
+    plugins={circlePlugins}
+  />,
 );

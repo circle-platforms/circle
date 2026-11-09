@@ -147,6 +147,13 @@ export interface DesktopBridge {
   /** Opens a human-requested HTTPS link; credentials are never accepted. */
   openExternal?: (url: string) => Promise<void>;
   browserState: (sessionId: string) => Promise<BrowserState>;
+  /** The address a page or PDF of the session's workspace opens at in its browser. */
+  browserLocalPage: (
+    sessionId: string,
+    path: string,
+    /** The conversation whose workspace has the file, a task's own included. */
+    ownerSessionId?: string,
+  ) => Promise<string>;
   browserNavigate: (sessionId: string, url: string) => Promise<BrowserState>;
   browserBounds: (
     sessionId: string,
