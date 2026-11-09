@@ -58,15 +58,18 @@ export class CompactionProgress {
     return this.trigger === 'tool' ? 'compacting' : 'auto-compacting';
   }
   fraction(): number {
+    // The engine's own measure, which follows a part as it is written; an older engine's
+    // snapshot has only what is already summarized
     if (this.snapshot)
       return this.snapshot.status === 'succeeded'
         ? 1
-        : Math.min(
-            0.9,
-            this.snapshot.sourceSize
-              ? (this.snapshot.covered / this.snapshot.sourceSize) * 0.9
-              : 0,
-          );
+        : (this.snapshot.progress ??
+            Math.min(
+              0.9,
+              this.snapshot.sourceSize
+                ? (this.snapshot.covered / this.snapshot.sourceSize) * 0.9
+                : 0,
+            ));
     return Math.min(
       1,
       0.05 +
@@ -140,6 +143,12 @@ export interface CompactionSnapshot {
   usage: Usage;
   unknownCalls: number;
   liveTokens: number;
+  /**
+   * How far the summary has got, 0 to 1, as near as can be told: the source already
+   * summarized, and of each part being written, how much of its target length is written.
+   * A model thinking before it writes moves it not at all. Complete only when it succeeds.
+   */
+  progress?: number;
   budget?: RequestBudgetSnapshot;
   error?: string;
   failureCode?: string;

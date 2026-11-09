@@ -354,6 +354,12 @@ export class CompactionEngine {
       persist = true,
     ) => {
       if (phase !== 'done') snapshot.updatedAt = Date.now();
+      // A bar that never steps back: a part leaves the live set just before its source
+      // counts as summarized
+      snapshot.progress =
+        snapshot.status === 'succeeded'
+          ? 1
+          : Math.max(snapshot.progress ?? 0, progress());
       if (persist) this.store.compactions.saveOperation(operation);
       try {
         this.options.progress?.({
@@ -405,13 +411,46 @@ export class CompactionEngine {
         inFlight.delete(promise);
       }
     };
-    const liveOutput = new Map<string, number>();
-    const live = (id: string, tokens?: number) => {
+    // Each request being written: its tokens so far, the length it is asked for, and the
+    // source it summarizes (none for a merge)
+    const liveOutput = new Map<
+      string,
+      { tokens: number; written: number; target: number; source: number }
+    >();
+    const live = (
+      id: string,
+      tokens?: number,
+      part?: { written: number; target: number; source: number },
+    ) => {
       if (tokens === undefined) liveOutput.delete(id);
-      else liveOutput.set(id, tokens);
+      else
+        liveOutput.set(id, {
+          tokens,
+          written: part?.written ?? liveOutput.get(id)?.written ?? 0,
+          target: part?.target ?? liveOutput.get(id)?.target ?? 1,
+          source: part?.source ?? liveOutput.get(id)?.source ?? 0,
+        });
       snapshot.liveTokens = [...liveOutput.values()].reduce(
-        (sum, n) => sum + n,
+        (sum, item) => sum + item.tokens,
         0,
+      );
+    };
+    // The source summarized and the share written of each part under way carry the bar to
+    // 95%; the merges of parts carry the rest. Saving it is the end.
+    const progress = () => {
+      let written = 0;
+      let merging = 0;
+      for (const item of liveOutput.values()) {
+        const share = Math.min(1, item.written / Math.max(1, item.target));
+        if (item.source) written += item.source * share;
+        else merging = Math.max(merging, share);
+      }
+      const summarized = snapshot.sourceSize
+        ? Math.min(1, (snapshot.covered + written) / snapshot.sourceSize)
+        : 1;
+      return Math.min(
+        0.99,
+        summarized < 1 ? 0.95 * summarized : 0.95 + 0.04 * merging,
       );
     };
     const settle = (attempt: CompactionAttempt) => {
@@ -547,11 +586,8 @@ export class CompactionEngine {
       let shorter = false;
       while (true) {
         check();
-        const frame = requestFor(
-          values,
-          output,
-          shorter ? Math.max(1, Math.floor(target / 2)) : target,
-        );
+        const asked = shorter ? Math.max(1, Math.floor(target / 2)) : target;
+        const frame = requestFor(values, output, asked);
         const budget = requestBudget(model, frame, this.options.contextWindow);
         snapshot.budget = budget;
         snapshot.stage =
@@ -720,6 +756,12 @@ export class CompactionEngine {
                       Math.ceil(streamedChars / 4) -
                         (current?.usage?.output_tokens ?? 0),
                     ),
+                    {
+                      written: Math.ceil(streamedChars / 4),
+                      target: asked,
+                      source:
+                        stage === 'summarizing' ? chars(coveredRanges) : 0,
+                    },
                   );
                   chunks++;
                   const now = Date.now();
