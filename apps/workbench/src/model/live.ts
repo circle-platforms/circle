@@ -1561,6 +1561,12 @@ export class LiveRuntime implements RuntimePort {
       await native('custom-command', { name, args });
       return {};
     }
+    // Compaction runs at once, as /compact does in the terminal: what follows the command
+    // is what the summary should keep, and its progress shows under the message box
+    if (name === 'compact') {
+      await native('compact', { hint: args.trim() });
+      return {};
+    }
     const dialogs: Record<string, CommandResult['dialog']> = {
       login: 'connect',
       trust: 'trust',
@@ -1568,7 +1574,6 @@ export class LiveRuntime implements RuntimePort {
       session: 'session',
       tree: 'tree',
       fork: 'fork',
-      compact: 'compact',
       export: 'export',
       share: 'export',
       unshare: 'export',

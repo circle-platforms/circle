@@ -106,7 +106,6 @@ export const COMMAND_UI: Record<string, string> = {
   name: 'rename',
   session: 'session',
   models: 'models',
-  compact: 'compact',
   plan: 'mode',
   mode: 'mode',
   skill: 'skills',
@@ -659,12 +658,16 @@ export class PreviewRuntime implements RuntimePort {
       return {
         notice: 'wait for the current turn, or pause the local conversation',
       };
+    // Compaction runs at once; the preview has no runtime to summarize with
+    if (name === 'compact') {
+      this.request('compact', { hint: args.trim() });
+      return { notice: t('compaction requested; raw history is unchanged') };
+    }
     const dialogs: Record<string, CommandResult['dialog']> = {
       hotkeys: 'hotkeys',
       login: 'connect',
       name: 'rename',
       session: 'session',
-      compact: 'compact',
       tree: 'tree',
       fork: 'fork',
       export: 'export',

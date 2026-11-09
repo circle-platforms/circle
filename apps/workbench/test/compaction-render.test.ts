@@ -15,7 +15,8 @@ const progress: CompactionSnapshot = {
   trigger: 'tool',
   status: 'running',
   stage: 'merging',
-  startedAt: 1,
+  // Started twelve seconds ago, as the line's clock shows it
+  startedAt: Date.now() - 12_400,
   updatedAt: 2,
   completed: 2,
   total: 3,
@@ -35,6 +36,16 @@ test('manual desktop compaction renders without a normal turn in both interface 
   );
   assert.match(english, /merging 2\/3/);
   assert.doesNotMatch(english, /↑|↓|1000|112|usage/);
+  // How long it has run, as the terminal's line says it, so a slow summary is seen to move
+  assert.match(english, /merging 2\/3<\/span><span[^>]*> · 12\.\ds</);
+  // One part to summarize has no count that would sit at 0/1 until the end
+  const single = renderToStaticMarkup(
+    createElement(CompactionStatus, {
+      state: { ...progress, stage: 'summarizing', completed: 0, total: 1 },
+    }),
+  );
+  assert.match(single, />compacting<\/span>/);
+  assert.doesNotMatch(single, /0\/1/);
   setLanguage('zh-CN');
   assert.match(
     renderToStaticMarkup(
@@ -63,6 +74,14 @@ test('manual desktop compaction renders without a normal turn in both interface 
       }),
     ),
     /正在压缩 2\/3/,
+  );
+  assert.doesNotMatch(
+    renderToStaticMarkup(
+      createElement(CompactionStatus, {
+        state: { ...progress, stage: 'summarizing', completed: 0, total: 1 },
+      }),
+    ),
+    /0\/1/,
   );
   assert.match(
     compactionOutcomeText({

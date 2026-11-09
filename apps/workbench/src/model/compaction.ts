@@ -13,6 +13,8 @@ export function compactionStageText(state: CompactionSnapshot): string {
     done: state.completed,
     total: Math.max(state.completed, state.total),
   };
+  // One part to summarize has nothing to count: `0/1` would sit still until the end
+  if (state.stage !== 'merging' && counts.total <= 1) return t('compacting');
   return state.stage === 'merging'
     ? t('merging {done}/{total}', counts)
     : t('compacting {done}/{total}', counts);
