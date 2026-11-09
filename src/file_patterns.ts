@@ -20,6 +20,17 @@ export function matchPattern(
 }
 
 /**
+ * What Circle says when one of those names keeps a path out: for `.git`, also where the
+ * answer is instead, since the model reaches for `.git/HEAD` to learn the branch.
+ */
+export function protectedNameMessage(name: string): string {
+  const refused = `file is not available in this workspace: ${name}`;
+  return name.toLowerCase() === '.git'
+    ? `${refused}; Circle's file tools do not open the repository's internals, so use git commands such as git status, git log, git show or git rev-parse`
+    : refused;
+}
+
+/**
  * Whether one name in a path inside the workspace keeps that path from the desktop
  * application's file access: `.git`, `.circle` or a credential file name. On macOS and
  * Windows, whose file systems usually ignore case, case is ignored here too, so `.ENV` is

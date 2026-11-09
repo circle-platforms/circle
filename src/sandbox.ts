@@ -60,8 +60,16 @@ export class Sandbox {
     this.workspace = canonicalPath(workspace);
   }
   resolvePath(raw: string): string {
-    if (raw.replace(/\\/g, '/').split('/').includes('..'))
-      throw new Error('Path traversal not allowed');
+    if (raw.replace(/\\/g, '/').split('/').includes('..')) {
+      // The same place, named without `..`: what the model can give instead. Whether that
+      // place may be read is decided where every absolute path is.
+      const absolute = isHostAbsolutePath(raw)
+        ? resolve(expandUser(raw))
+        : resolve(this.workspace, raw);
+      throw new Error(
+        `Path traversal not allowed: give the absolute path ${absolute} instead of one with '..'`,
+      );
+    }
     let full: string;
     const virtual = raw.replace(/^\/+/, '').replace(/\\/g, '/');
     const top = virtual.split('/')[0];

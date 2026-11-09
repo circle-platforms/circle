@@ -2,7 +2,10 @@ import { constants, statSync } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import { relative, sep } from 'node:path';
 import type { FileMutationTools } from './file_mutations.js';
-import { protectedWorkspaceName } from './file_patterns.js';
+import {
+  protectedNameMessage,
+  protectedWorkspaceName,
+} from './file_patterns.js';
 import { mediaType } from './media.js';
 import type { Sandbox } from './sandbox.js';
 import type { ToolContext } from './types.js';
@@ -32,6 +35,33 @@ export async function authorizeFileRead(
 }
 
 /**
+ * Where ls, glob and grep may look, as the desktop lets read_file read: what they return is
+ * the same names and lines a read would show. Without a native backend (the terminal), and
+ * in Circle's own folders, anywhere. Inside the workspace, not into `.git`, `.circle` or a
+ * credential name, as read_file is refused there. Outside it, only what the backend allows:
+ * an exact grant names one existing text file, which grep may search; a folder outside is
+ * refused with the backend's own words, which tell the model what it can do instead.
+ */
+export async function authorizeSearch(
+  sandbox: Sandbox,
+  mutations: FileMutationTools | undefined,
+  path: string,
+  context: ToolContext,
+): Promise<void> {
+  if (!mutations || sandbox.isOffloadOutput(path)) return;
+  if (sandbox.isInside(path)) {
+    for (const name of relative(sandbox.workspace, path).split(sep))
+      if (
+        name &&
+        protectedWorkspaceName(name, sandbox.credentialFiles, process.platform)
+      )
+        throw new Error(protectedNameMessage(name));
+    return;
+  }
+  await mutations.authorize(path, context, 'read');
+}
+
+/**
  * The bytes of a file a tool sends on, read under read_file's rules: the path taken as the
  * file tools take it (a `..` is refused), a credential file refused by name, and with a
  * native backend a file outside the workspace only with the person's grant. With a native
@@ -58,7 +88,7 @@ export async function readFileBytes(
       if (
         protectedWorkspaceName(name, sandbox.credentialFiles, process.platform)
       )
-        throw new Error(`file is not available in this workspace: ${name}`);
+        throw new Error(protectedNameMessage(name));
   const tooLarge = (size: number) =>
     new Error(
       `${raw} is ${size} bytes; this server takes files of at most ${limit} bytes`,

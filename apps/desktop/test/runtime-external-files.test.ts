@@ -265,6 +265,52 @@ test("a command's output written into the folder the prompt names is read back, 
   assert.match(String(refused?.content), /grant one existing text file/);
 });
 
+test('grep, glob and ls do not show a folder outside the workspace that read_file may not read', async (t) => {
+  let outside = '';
+  const f = await fixture(t, [
+    async () =>
+      assistant('grep', 'grep', {
+        pattern: 'SYNTHETIC',
+        path: outside,
+        output_mode: 'content',
+      }),
+    async () => assistant('ls', 'ls', { path: outside }),
+    async () => assistant('glob', 'glob', { pattern: '*', path: outside }),
+    assistant('end'),
+  ]);
+  outside = join(f.root, 'outside');
+  await mkdir(outside);
+  await writeFile(join(outside, 'private.txt'), 'SYNTHETIC-PRIVATE-LINE\n');
+  const owner = f.controller.snapshot().activeSessionId;
+  assert.equal(
+    (await f.call('prompt', { text: 'look outside the workspace' })).ok,
+    true,
+  );
+  await f.until(
+    () =>
+      f.model.requests.length >= 4 &&
+      f.controller.snapshot().sessions.find((s) => s.id === owner)?.state !==
+        'waiting',
+  );
+  const results = f.model.requests[3]!.messages.filter(
+    (m) => m.role === 'tool',
+  );
+  assert.equal(results.length, 3);
+  for (const result of results) {
+    assert.equal(result.status, 'error', JSON.stringify(result));
+    assert.match(
+      String(result.content),
+      /outside this session workspace or lacks an exact-file grant/,
+    );
+    assert.doesNotMatch(
+      String(result.content),
+      /SYNTHETIC-PRIVATE-LINE|private\.txt/,
+    );
+  }
+  // Refused, not asked: no card was shown for any of them
+  assert.deepEqual(f.controller.snapshot().interactions, []);
+});
+
 test('opening a project folder starts a session whose file reads need no external grant', async (t) => {
   let path = '';
   const f = await fixture(t, [
