@@ -1073,8 +1073,10 @@ export class Harness {
       this.pendingTitle = { display: shown.display, fallback };
     }
     this.bus.emit('run_start', { payload: { message: prompt } });
-    // A step the endpoint refused as too long is tried again once, after compaction
-    let refusedForContext = false;
+    // A step the endpoint refuses as too long is compacted and tried again, for as long as
+    // each try is smaller than the one refused before it: with automatic compaction on,
+    // a person never meets a full context that compaction could have made room in
+    let refused: { input: number; times: number } | undefined;
     try {
       for (let step = 0; step < (this.options.maxSteps ?? 9999); step++) {
         signal.throwIfAborted();
@@ -1165,9 +1167,11 @@ export class Harness {
             // The model's endpoint refused the request as too long, before any of an
             // answer came: the context it has is smaller than the one Circle measured.
             // The refused size is noted as the limit, so the step's next preparation
-            // compacts the conversation to fit, and the step is tried once more.
+            // compacts the conversation to fit, and the step is tried again. A try no
+            // smaller than the last refused one, or a sixth, ends the turn with the error.
+            const input = requestBudget(this.model, request).input;
             if (
-              !refusedForContext &&
+              (!refused || (input < refused.input && refused.times < 5)) &&
               !stepSignal.aborted &&
               isContextLimitError(error) &&
               // Circle's own measure, not the endpoint's refusal: nothing to learn
@@ -1175,15 +1179,13 @@ export class Harness {
               !this.streamed.trim() &&
               !this.streamedThinking.trim()
             ) {
-              refusedForContext = true;
-              this.model.noteContextRefusal?.(
-                requestBudget(this.model, request).input,
-              );
+              refused = { input, times: (refused?.times ?? 0) + 1 };
+              this.model.noteContextRefusal?.(input);
               continue;
             }
             throw error;
           }
-          refusedForContext = false;
+          refused = undefined;
           stepSignal.throwIfAborted();
           const originalCalls = response.message.tool_calls;
           response.message.tool_calls = originalCalls?.map(

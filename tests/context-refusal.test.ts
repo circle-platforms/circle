@@ -5,6 +5,7 @@ import { CheckpointStore } from '../src/checkpoint_store.js';
 import { GatewayModel } from '../src/model.js';
 import { ModelCompletionFailure } from '../src/model_completion.js';
 import { AgentRuntime } from '../src/runtime.js';
+import { ScriptedModel } from '../src/testing.js';
 import { defaultSettings, saveCredentials } from '../src/settings.js';
 import { cleanup, cleanupServer, scratch } from './helpers.js';
 
@@ -124,20 +125,52 @@ test('a request the endpoint refuses as too long is compacted and sent once more
   assert.equal(compaction?.snapshot.trigger, 'auto');
 });
 
-test('a step refused again after compaction ends the turn instead of trying forever', async (t) => {
+test('a step refused again and again ends the turn once compaction can make it no smaller', async (t) => {
   const { runtime, turns } = await world(t, true);
-  const errors: Record<string, unknown>[] = [];
-  runtime.harness.bus.subscribe((event) => {
-    if (event.kind === 'run_error') errors.push(event.payload);
-  });
   await assert.rejects(
     runtime.harness.run('go on'),
     (error: unknown) =>
       error instanceof ModelCompletionFailure && error.code === 'context_limit',
   );
-  assert.equal(turns.length, 2, JSON.stringify(turns));
+  // Each try was compacted to less than the one refused before it, and the turn stopped
+  // within the bound instead of trying forever
+  assert.ok(turns.length >= 2 && turns.length <= 6, JSON.stringify(turns));
   assert.ok(turns.every((turn) => turn.refused));
-  // The failure carries the endpoint's own words, for the person to read and report
+  for (let index = 1; index < turns.length; index++)
+    assert.ok(
+      turns[index]!.size < turns[index - 1]!.size,
+      JSON.stringify(turns),
+    );
+});
+
+test('a failed turn carries the words the endpoint said, for the person to read and report', async (t) => {
+  const home = scratch(t);
+  const workspace = scratch(t);
+  // A model that refuses as too long and learns nothing from it: the same request goes
+  // again, is refused again, and the turn ends with the endpoint's own words
+  const refuse = async () => {
+    const failure = new ModelCompletionFailure('context_limit');
+    failure.providerError = {
+      code: REFUSAL.error.code,
+      message: `400 ${REFUSAL.error.message}`,
+    };
+    throw failure;
+  };
+  const runtime = new AgentRuntime({
+    workspace,
+    home,
+    settings: defaultSettings(),
+    model: new ScriptedModel([refuse, refuse]),
+    headless: true,
+    localContext: false,
+    bundledExtensions: false,
+  });
+  cleanup(t, () => runtime.close());
+  const errors: Record<string, unknown>[] = [];
+  runtime.harness.bus.subscribe((event) => {
+    if (event.kind === 'run_error') errors.push(event.payload);
+  });
+  await assert.rejects(runtime.harness.run('go on'));
   assert.equal(errors.length, 1);
   assert.equal(errors[0]!.completion_failure, 'context_limit');
   assert.deepEqual(errors[0]!.provider_error, {
