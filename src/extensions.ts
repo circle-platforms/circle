@@ -932,6 +932,24 @@ export class ExtensionHost {
       get imageInput() {
         return base.imageInput;
       },
+      // The request budget as the model itself measures it. Without these, compaction and the
+      // context notice judged a request by the bare window and a generic estimate, while the
+      // model refused it by its input limit and its own estimate.
+      get inputLimit() {
+        return base.inputLimit;
+      },
+      get outputLimit() {
+        return base.outputLimit;
+      },
+      get budgetIdentity() {
+        return base.budgetIdentity;
+      },
+      get inputEstimateFactor() {
+        return base.inputEstimateFactor;
+      },
+      get estimateInput() {
+        return base.estimateInput?.bind(base);
+      },
       complete: async (request) => {
         let next = (request: ModelRequest) => base.complete(request);
         for (const item of middleware
