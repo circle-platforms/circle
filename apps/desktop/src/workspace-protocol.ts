@@ -40,6 +40,7 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
     'applyEdits',
     'refresh',
     'resolveSource',
+    'readPlanFolder',
   ]),
   terminal: new Set([
     'resolveCommand',

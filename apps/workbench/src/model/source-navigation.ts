@@ -4,6 +4,14 @@ export interface SourceLocation {
   line?: number;
   column?: number;
 }
+/**
+ * Whether a path names a file of the conversation's plan folder as the model names it,
+ * `/session_plans/<name>` (src/plan_file.ts): Circle's own folder, in its data folder,
+ * which no workspace path reaches.
+ */
+export function planFolderFile(path: string): boolean {
+  return /^\/session_plans\/[^/\\]+$/.test(path.replace(/^\/*/, '/'));
+}
 export function sourceLocation(href: string): SourceLocation | null {
   if (
     !href ||

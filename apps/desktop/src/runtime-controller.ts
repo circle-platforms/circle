@@ -17,6 +17,7 @@ import {
 } from '../../../src/runtime_notice.js';
 import { commandExecutionReceipt } from '../../../src/command_process.js';
 import { canonicalPath } from '../../../src/paths.js';
+import { readPlanFolderFile } from './plan-folder.js';
 import type { ResolveInputsRequest } from '../../../src/input_outbox.js';
 import { spawnPty } from './workspace/native-pty.js';
 import { createTerminalCommandLauncher } from './workspace/command-terminal.js';
@@ -1998,7 +1999,7 @@ export class RuntimeController {
     action: () => Promise<unknown>,
   ): Promise<unknown> {
     const reads: Record<string, string[]> = {
-      documents: ['read', 'refresh', 'resolveSource'],
+      documents: ['read', 'refresh', 'resolveSource', 'readPlanFolder'],
       terminal: ['list', 'replay', 'resolveCommand'],
       git: ['status', 'snapshot', 'changes', 'diff', 'branches'],
       tasks: ['list', 'events', 'artifacts', 'readArtifact'],
@@ -2237,6 +2238,13 @@ export class RuntimeController {
           existing.call(id, request.method, request.params),
         );
     }
+    // A file the model wrote in the conversation's plan folder: Circle's own, read only
+    if (request.service === 'documents' && request.method === 'readPlanFolder')
+      return readPlanFolderFile(
+        row.workspace,
+        this.home,
+        text(request.params?.path, 'path', 4096),
+      );
     const workspace = this.trustedWorkspace(row.workspace);
     if (request.service === 'operations') {
       const ledger = await this.ledger();

@@ -95,6 +95,11 @@ export class Sandbox {
    * as the workspace itself. Unset, there are none.
    */
   worktrees?: () => string[];
+  /**
+   * Set by a runtime: this conversation's plan, the one file of the plan folder it may
+   * write, as the model names it and where it is kept. Unset, any file there may be.
+   */
+  ownPlan?: () => { file: string; path: string };
   private worktreeCache?: { roots: string[]; at: number };
   /**
    * The checkout of this repository, other than the workspace, that a resolved path is in.
@@ -184,6 +189,17 @@ export class Sandbox {
     this.checkCredentialPath(path);
     if (this.isJobOutput(path))
       throw new Error('Background job output is read-only');
+    // The plan folder keeps one plan for each conversation, out of the person's sight: a
+    // document written there could not be opened, reviewed or committed
+    const own = this.ownPlan?.();
+    if (
+      own &&
+      this.isPlanFile(path) &&
+      resolvedTarget(path) !== resolvedTarget(own.path)
+    )
+      throw new Error(
+        `/${PLAN_FOLDER}/ holds only this conversation's plan, ${own.file}. Write other documents into the workspace, where the person can open, review and commit them.`,
+      );
   }
   async execute(
     command: string,
