@@ -119,7 +119,13 @@ try {
           .map((card, index) => Math.round(card.top - cards[index].bottom)),
       );
       const frame = getComputedStyle(stacks[0]);
+      const list = group.querySelector('.tool-group-calls');
       return {
+        rule: getComputedStyle(list).borderLeftWidth,
+        indent: Math.round(
+          stacks[0].getBoundingClientRect().left -
+            group.querySelector('.tool-summary').getBoundingClientRect().left,
+        ),
         stacks: calls.map((cards) => cards.length),
         gaps,
         margins: [...new Set(calls.flat().map((card) => card.margin))],
@@ -134,6 +140,9 @@ try {
     );
     assert.deepEqual(measured.margins, ['0px 0px'], JSON.stringify(measured));
     assert.equal(measured.frame, '1px solid');
+    // The frames sit under the line itself, with no rule or indent on their left
+    assert.equal(measured.rule, '0px', JSON.stringify(measured));
+    assert.equal(measured.indent, 0, JSON.stringify(measured));
     // The column and the input box take the room the window gives them, up to 1280 pixels
     const widths = await page.evaluate(() => {
       const column = document

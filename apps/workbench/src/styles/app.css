@@ -4261,10 +4261,10 @@ pre {
   font-size: var(--ui-small);
   color: var(--muted);
 }
+/* An opened line's thinking and frames sit under the line itself: no rule or indent of
+   their own, which said nothing and took width */
 .tool-group-calls {
-  margin: 6px 0 4px 6px;
-  padding-left: 14px;
-  border-left: 2px solid var(--border);
+  margin: 6px 0 4px;
 }
 /* A step's calls, stacked in one frame with a rule between them and no room around each */
 .tool-stack {
