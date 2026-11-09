@@ -59,7 +59,7 @@ Circle is a TypeScript program for Node.js 24, under `src/`, compiled with stric
 | `compaction_engine.ts`       | Content-only serialization, bounded parallel parts, complete coverage, cached nodes and atomic activation.                                                                                                           |
 | `compaction_store.ts`        | Independent SQLite operation, attempt and summary-node records; branch-aware export and restore.                                                                                                                     |
 | `context_middleware.ts`      | What the model sees of a long session: large results kept in files, older messages summarized, older images left out, and the originals read back when needed.                                                       |
-| `middleware/`                | Reminders added to a request: running and polled jobs (`job_notice.ts`), repeated tool calls (`loop_guard.ts`), the plan (`plan_tail.ts`), and pruning of old tool results (`tool_result_prune.ts`).                 |
+| `middleware/`                | Reminders added to a request: running and polled jobs (`job_notice.ts`), repeated tool calls (`loop_guard.ts`), the plan (`plan_tail.ts`), the context nearing compaction (`context_notice.ts`), and pruning of old tool results (`tool_result_prune.ts`). |
 
 Anthropic responses carry an opaque `thinking_scope` derived from the API URL,
 key and requested model. When that identity changes, `model.ts` leaves historical

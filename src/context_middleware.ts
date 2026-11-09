@@ -11,6 +11,11 @@ import {
 } from './middleware/tool_result_prune.js';
 import { planReminder } from './middleware/plan_tail.js';
 import { loopReminder } from './middleware/loop_guard.js';
+import {
+  AUTO_COMPACT_SHARE,
+  compactionPoint,
+  contextReminder,
+} from './middleware/context_notice.js';
 import { isRecord } from './settings.js';
 import type { CompactionEvent } from './compaction.js';
 import {
@@ -280,28 +285,53 @@ export class ContextManager {
       state = next;
     }
     let projected = this.project(sessionId);
-    const budget = requestBudget(
+    let budget = requestBudget(
       model,
       { system, tools, messages: projected },
       this.options.contextWindow,
     );
     const estimate = budget.input;
+    const autoCompact = this.options.autoCompact ?? true;
     if (
-      (this.options.autoCompact ?? true) &&
-      (estimate >= budget.window * 0.85 || !budget.fits)
+      autoCompact &&
+      (estimate >= budget.window * AUTO_COMPACT_SHARE || !budget.fits)
     ) {
       await this.compact(sessionId, model, signal, '', {
         system,
         tools,
-        trigger: estimate >= budget.window * 0.85 ? 'auto' : 'overflow',
+        trigger:
+          estimate >= budget.window * AUTO_COMPACT_SHARE ? 'auto' : 'overflow',
       });
       projected = this.project(sessionId);
-      const after = requestBudget(
+      budget = requestBudget(
         model,
         { system, tools, messages: projected },
         this.options.contextWindow,
       );
-      if (!after.fits) throw new BudgetExceeded(after);
+      if (!budget.fits) throw new BudgetExceeded(budget);
+    }
+    // Told once per context, while there is still room to keep what matters; without
+    // automatic compaction there is no point to tell of. A request with no room for the
+    // notice itself goes without it: the next one is summarized.
+    const notice = autoCompact
+      ? contextReminder(
+          projected,
+          budget,
+          this.store.contextState(sessionId).summary?.cutoffMessageId ??
+            'start',
+          !subagent,
+        )
+      : undefined;
+    const told =
+      notice &&
+      requestBudget(
+        model,
+        { system, tools, messages: [...projected, notice] },
+        this.options.contextWindow,
+      );
+    if (notice && told && told.fits && told.input < compactionPoint(told)) {
+      this.store.append(sessionId, [notice]);
+      projected = this.project(sessionId);
     }
     if (!subagent && this.store.contextState(sessionId).summary) {
       const reminder = runningJobReminder(
