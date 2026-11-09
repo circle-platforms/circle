@@ -10,6 +10,8 @@ import {
   agentLabel,
   outputRows,
   overviewProgress,
+  PLAN_STEPS_SHOWN,
+  shownSteps,
   pendingFor,
   pullRequestAction,
   relativeTo,
@@ -113,11 +115,17 @@ test('in progress lists the plan step, running subagents and tasks that are not 
   ];
   const progress = overviewProgress(top, sessions, agents);
   assert.deepEqual(
-    progress.plan && { ...progress.plan, current: progress.plan.current?.text },
+    progress.plan && {
+      ...progress.plan,
+      current: progress.plan.current?.text,
+      steps: progress.plan.steps.map((step) => step.text),
+    },
     {
       done: 1,
       total: 3,
       current: 'add a test',
+      steps: ['trace', 'add a test', 'run the suite'],
+      shown: { start: 0, end: 3 },
     },
   );
   assert.deepEqual(
@@ -130,6 +138,31 @@ test('in progress lists the plan step, running subagents and tasks that are not 
     'a finished or failed task is not in progress, a task that needs review is',
   );
   assert.equal(overviewProgress(session('s9'), sessions, agents).plan, null);
+});
+
+test('a long plan shows five steps folded, the current one two from the top where it can', () => {
+  assert.equal(PLAN_STEPS_SHOWN, 5);
+  // Short plans show whole
+  assert.deepEqual(shownSteps(4, 3), { start: 0, end: 4 });
+  // Early in a long plan: from the top
+  assert.deepEqual(shownSteps(9, 0), { start: 0, end: 5 });
+  assert.deepEqual(shownSteps(9, 1), { start: 0, end: 5 });
+  // In the middle: two done steps above the current one, two to come below it
+  assert.deepEqual(shownSteps(9, 4), { start: 2, end: 7 });
+  // Near the end: the last five
+  assert.deepEqual(shownSteps(9, 8), { start: 4, end: 9 });
+  const todos: Todo[] = Array.from({ length: 9 }, (_, index) => ({
+    id: String(index),
+    text: 'step ' + index,
+    status: index < 4 ? 'completed' : index === 4 ? 'running' : 'pending',
+  }));
+  const s = session('s1', { todos });
+  const plan = overviewProgress(s, [s], []).plan!;
+  assert.equal(plan.steps.length, 9);
+  assert.deepEqual(
+    plan.steps.slice(plan.shown.start, plan.shown.end).map((step) => step.text),
+    ['step 2', 'step 3', 'step 4', 'step 5', 'step 6'],
+  );
 });
 
 test('the plan step in progress falls back to the next pending one', () => {

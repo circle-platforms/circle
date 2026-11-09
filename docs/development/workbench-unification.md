@@ -84,7 +84,7 @@ The [overview](../../apps/workbench/src/features/Overview.tsx) has these cards, 
 | Needs your review | Operations an interrupted run left for the person to settle ([PendingOperations](../../apps/workbench/src/features/PendingOperations.tsx))                  |
 | Environment       | This machine, the workspace folder and its branch                                                                                                           |
 | Context           | The [context usage](../../apps/workbench/src/model/context-usage.ts) of the last answer, with tokens, cost, cache and the instruction files folded under it |
-| In progress       | The current plan step, the subagents at work with what Circle sent each to do, and unfinished tasks                                                         |
+| In progress       | The plan's steps (five around the current one, the rest folded), the subagents at work with what Circle sent each to do, and unfinished tasks                                                         |
 | Outputs           | The session's recorded text-tool file changes, M, A or D                                                                                                    |
 | Changes           | The repository's lines changed since the last commit, the create or update pull request button and the pull requests, read by the `pulls` service           |
 

@@ -388,3 +388,19 @@ button.overview-row:hover .overview-name {
   min-width: 0;
   border-left: 0;
 }
+/* A plan step's mark sits in a 12-pixel box, so a check, the dot of the step under way and
+   the ring of a step still to do line up; a step that is done reads muted. */
+.overview-plan-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 12px;
+  color: var(--muted);
+}
+.overview-dot[data-state='pending'] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--muted);
+}
+.overview-plan .overview-name[data-step='completed'] {
+  color: var(--muted);
+}
