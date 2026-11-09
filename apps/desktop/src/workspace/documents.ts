@@ -116,6 +116,8 @@ export interface WorkspaceDocumentsOptions {
   access?: WorkspaceDocumentAccess;
   credentialFiles?: string[];
   maxBytes?: number;
+  /** The largest picture the window is sent to draw. */
+  maxPictureBytes?: number;
   maxFiles?: number;
   maxDepth?: number;
   ignoredDirectories?: string[];
@@ -160,6 +162,39 @@ const ignoredDirectories = [
 ];
 const rootQueues = new Map<string, Promise<void>>();
 const decode = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+/** What a read of a file that is not text says; the window shows it in its own words. */
+export const NOT_TEXT = 'binary files cannot be edited as text';
+/** The pictures the window draws where a file opens, by name; their first bytes must agree. */
+const PICTURES: Record<
+  string,
+  { mime: string; is: (bytes: Buffer) => boolean }
+> = {
+  png: {
+    mime: 'image/png',
+    is: (b) => b.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex')),
+  },
+  jpg: {
+    mime: 'image/jpeg',
+    is: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  },
+  jpeg: {
+    mime: 'image/jpeg',
+    is: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  },
+  gif: {
+    mime: 'image/gif',
+    is: (b) => /^GIF8[79]a/.test(b.subarray(0, 6).toString('latin1')),
+  },
+  webp: {
+    mime: 'image/webp',
+    is: (b) =>
+      b.subarray(0, 4).toString('latin1') === 'RIFF' &&
+      b.subarray(8, 12).toString('latin1') === 'WEBP',
+  },
+};
+export function pictureType(path: string): string | undefined {
+  return PICTURES[path.split('.').pop()!.toLowerCase()]?.mime;
+}
 
 function missing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
@@ -213,6 +248,7 @@ export class WorkspaceDocuments {
         ...(options.credentialFiles ?? []),
       ],
       maxBytes: options.maxBytes ?? 4_000_000,
+      maxPictureBytes: options.maxPictureBytes ?? 10_000_000,
       maxFiles: options.maxFiles ?? 2000,
       maxDepth: options.maxDepth ?? 12,
       ignoredDirectories: options.ignoredDirectories ?? ignoredDirectories,
@@ -433,9 +469,15 @@ export class WorkspaceDocuments {
         );
       this.access?.check(path);
       this.access?.checkFile(path, `${after.dev}:${after.ino}`);
-      const content = decode.decode(bytes);
-      if (content.includes('\0'))
-        throw Error('binary files cannot be edited as text');
+      // Bytes that are not UTF-8 are a file that is not text: said in the file view's
+      // words, never the decoder's
+      let content: string;
+      try {
+        content = decode.decode(bytes);
+      } catch {
+        throw Error(NOT_TEXT);
+      }
+      if (content.includes('\0')) throw Error(NOT_TEXT);
       const revision = createHash('sha256')
         .update(
           `${after.dev}:${after.ino}:${after.mtimeNs}:${after.ctimeNs}:${after.size}:`,
@@ -463,6 +505,62 @@ export class WorkspaceDocuments {
     return this.serial(async () => {
       const target = await this.target(path);
       return this.readTarget(target.full, target.path, options.signal);
+    }, options.signal);
+  }
+
+  /**
+   * A picture of the workspace, as the window draws one where a file opens: its bytes, when
+   * its name and its first bytes agree on a type the window draws, within a size limit. The
+   * same grants and checks as a text read apply.
+   */
+  async readImage(
+    path: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<{ path: string; mime: string; data: string; size: number }> {
+    return this.serial(async () => {
+      const target = await this.target(path);
+      const picture = PICTURES[target.path.split('.').pop()!.toLowerCase()];
+      if (!picture) throw Error('not a picture the window shows');
+      const handle = await open(
+        target.full,
+        constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+      );
+      try {
+        const info = await handle.stat({ bigint: true });
+        this.access?.check(path);
+        this.access?.checkFile(path, `${info.dev}:${info.ino}`);
+        if (!info.isFile()) throw new DocumentPathError('not a regular file');
+        if (info.nlink > 1n)
+          throw new DocumentPathError('hard-linked files were not granted');
+        if (info.size > BigInt(this.options.maxPictureBytes))
+          throw Error('picture is too large to show');
+        const bytes = await handle.readFile({ signal: options.signal });
+        if (bytes.length > this.options.maxPictureBytes)
+          throw Error('picture is too large to show');
+        if (!picture.is(bytes))
+          throw Error('file is not the picture its name says');
+        return {
+          path: target.path,
+          mime: picture.mime,
+          data: bytes.toString('base64'),
+          size: bytes.length,
+        };
+      } finally {
+        await handle.close();
+      }
+    }, options.signal);
+  }
+
+  /** That a path names a regular file the window may open, read without decoding it. */
+  async locate(
+    path: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<{ path: string }> {
+    return this.serial(async () => {
+      const target = await this.target(path);
+      if (!(await lstat(target.full)).isFile())
+        throw new DocumentPathError('not a regular file');
+      return { path: target.path };
     }, options.signal);
   }
 

@@ -93,6 +93,33 @@ test('workspace routing preserves revisions, isolates terminal owners and persis
       }),
       { path: 'a.ts' },
     );
+    // A picture is found without being read as text, and read as its bytes
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR4nGP4z8AAQv8BD/kD/YURmXYAAAAASUVORK5CYII=',
+      'base64',
+    );
+    await writeFile(path.join(root, 'design.png'), png);
+    assert.deepEqual(
+      await service.call('session-a', 'documents', 'resolveSource', {
+        path: 'design.png',
+      }),
+      { path: 'design.png' },
+    );
+    assert.deepEqual(
+      await service.call('session-a', 'documents', 'readImage', {
+        path: 'design.png',
+      }),
+      {
+        path: 'design.png',
+        mime: 'image/png',
+        data: png.toString('base64'),
+        size: png.length,
+      },
+    );
+    await assert.rejects(
+      service.call('session-a', 'documents', 'read', { path: 'design.png' }),
+      /binary files cannot be edited as text/,
+    );
     await writeFile(path.join(data, 'outside.ts'), 'outside');
     await assert.rejects(
       service.call('session-a', 'documents', 'resolveSource', {

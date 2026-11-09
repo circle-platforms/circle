@@ -134,6 +134,7 @@ import { ManagementPage } from '../features/Pages';
 import { SettingsDialog } from '../features/SettingsDialog';
 import { DialogHost, InteractionDialog } from '../features/Dialogs';
 import { PlanView } from '../features/PlanView';
+import { PictureView, pictureFile } from '../features/PictureView';
 import { applyTheme } from '../theme';
 import { t } from '../i18n';
 import { shellPageTitle } from '../plugins/labels';
@@ -1410,7 +1411,14 @@ export function App() {
           onClose={closeFile}
         />
       ) : (
-        file && (
+        file &&
+        (pictureFile(file) ? (
+          <PictureView
+            path={file}
+            sessionId={fileOwner?.sessionId}
+            onClose={closeFile}
+          />
+        ) : (
           <NativeResourceBoundary name={t('editor')} resetKey={file}>
             <Suspense fallback={<p role="status">{t('opening file…')}</p>}>
               <FileViewer
@@ -1425,7 +1433,7 @@ export function App() {
               />
             </Suspense>
           </NativeResourceBoundary>
-        )
+        ))
       )}
     </div>
   );

@@ -67,8 +67,8 @@ const bridge: DesktopBridge = {
   requestExternalFileGrant: (sessionId, access) =>
     ipcRenderer.invoke('circle:request-external-file-grant', sessionId, access),
   chooseWorkspace: () => ipcRenderer.invoke('circle:choose-workspace'),
-  revealWorkspace: (workspaceId) =>
-    ipcRenderer.invoke('circle:reveal-workspace', workspaceId),
+  revealWorkspace: (workspaceId, path) =>
+    ipcRenderer.invoke('circle:reveal-workspace', workspaceId, path),
   readWorkspaceFile: (workspaceId, fileId) =>
     ipcRenderer.invoke('circle:read-workspace-file', workspaceId, fileId),
   listWorkspace: (workspaceId, cursor) =>

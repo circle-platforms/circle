@@ -155,7 +155,13 @@ export function assertReadonlyTaskRequest(
 ): void {
   if (
     service === 'documents' &&
-    !['read', 'refresh', 'resolveSource', 'readPlanFolder'].includes(method)
+    ![
+      'read',
+      'refresh',
+      'resolveSource',
+      'readPlanFolder',
+      'readImage',
+    ].includes(method)
   )
     throw Error('read-only agent source cannot modify workspace documents');
 }

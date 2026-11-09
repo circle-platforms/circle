@@ -115,7 +115,8 @@ export interface DesktopBridge {
   ) => Promise<NativeExternalFileGrant | null>;
   chooseWorkspace: () => Promise<NativeWorkspace | null>;
   /** Reveal only a workspace identity already known to the native runtime. */
-  revealWorkspace: (workspaceId: string) => Promise<void>;
+  /** Shows the workspace, or a file in it named by its path there, in Finder or Explorer. */
+  revealWorkspace: (workspaceId: string, path?: string) => Promise<void>;
   readWorkspaceFile: (
     workspaceId: string,
     fileId: string,

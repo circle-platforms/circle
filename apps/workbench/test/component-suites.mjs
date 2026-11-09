@@ -73,6 +73,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'transcript-layout-ui.mjs',
   'row-actions-ui.mjs',
   'plan-folder-links-ui.mjs',
+  'file-types-ui.mjs',
   'diff-block-ui.mjs',
   'notice-timers-ui.mjs',
   'tool-summary-line-ui.mjs',
