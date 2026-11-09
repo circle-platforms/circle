@@ -28,6 +28,7 @@ export async function authorizeFileRead(
   if (
     native &&
     !sandbox.isInside(path) &&
+    !sandbox.worktreeRoot(path) &&
     (statSync(path).isDirectory() || mediaType(path))
   )
     throw Error('native external file grants support existing text files only');
@@ -37,7 +38,8 @@ export async function authorizeFileRead(
 /**
  * Where ls, glob and grep may look, as the desktop lets read_file read: what they return is
  * the same names and lines a read would show. Without a native backend (the terminal), and
- * in Circle's own folders, anywhere. Inside the workspace, not into `.git`, `.circle` or a
+ * in Circle's own folders, anywhere. Inside the workspace, or another checkout of its
+ * repository (a git worktree), not into `.git`, `.circle` or a
  * credential name, as read_file is refused there. Outside it, only what the backend allows:
  * an exact grant names one existing text file, which grep may search; a folder outside is
  * refused with the backend's own words, which tell the model what it can do instead.
@@ -49,8 +51,12 @@ export async function authorizeSearch(
   context: ToolContext,
 ): Promise<void> {
   if (!mutations || sandbox.isOffloadOutput(path)) return;
-  if (sandbox.isInside(path)) {
-    for (const name of relative(sandbox.workspace, path).split(sep))
+  // The workspace, or another checkout of its repository, which counts as the workspace
+  const root = sandbox.isInside(path)
+    ? sandbox.workspace
+    : sandbox.worktreeRoot(path);
+  if (root) {
+    for (const name of relative(root, path).split(sep))
       if (
         name &&
         protectedWorkspaceName(name, sandbox.credentialFiles, process.platform)

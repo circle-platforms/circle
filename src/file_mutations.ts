@@ -79,7 +79,9 @@ export class FileMutationTools {
   ): Promise<void> {
     context.signal.throwIfAborted();
     this.sandbox.checkCredentialPath(path);
-    if (this.sandbox.isInside(path)) return;
+    // Another checkout of the workspace's repository is read and written as the workspace
+    // is; its backend refuses `.git`, `.circle` and credential names there as it does here
+    if (this.sandbox.isInside(path) || this.sandbox.worktreeRoot(path)) return;
     if (!this.backend.authorize)
       throw Error(
         `native file access requires an explicit external file grant: ${path}`,
