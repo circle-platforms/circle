@@ -1537,10 +1537,19 @@ export class RuntimeController {
         'external file grant belongs to an earlier session runtime; select the file again',
       );
     owner.sandbox.checkCredentialPath(path);
-    if (!grantOwner || !this.externalRegistry().allows(sessionId, path, access))
+    if (
+      !grantOwner ||
+      !this.externalRegistry().allows(sessionId, path, access)
+    ) {
+      // The model reads this too: it learns where a command's output can be read back
+      const folder = access === 'read' ? owner.commandOutputFolder() : '';
       throw Error(
-        'file is outside this session workspace or lacks an exact-file grant; open a project folder as a workspace and start a session there, or grant one existing text file in settings → file access for this session',
+        'file is outside this session workspace or lacks an exact-file grant; open a project folder as a workspace and start a session there, or grant one existing text file in settings → file access for this session' +
+          (folder
+            ? `. To read a command's output, have the command write it into ${folder} and read it there`
+            : ''),
       );
+    }
   }
   private fileRewinds = new WeakMap<AgentRuntime, FileRewindJournal>();
   private fileMutations(

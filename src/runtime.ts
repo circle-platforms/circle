@@ -1571,6 +1571,7 @@ export class AgentRuntime {
           headless: this.options.headless,
           mcpInstructions: this.mcp.instructions(),
           githubSetup: Boolean(this.options.githubConnection),
+          outputFolder: this.commandOutputFolder(),
         },
       );
     let cap = SESSION_MEMORY_BYTES;
@@ -2066,6 +2067,20 @@ export class AgentRuntime {
     this.memorySession = undefined;
     await this.knowledge.close();
     await this.initialize();
+  }
+  /**
+   * Where the model's commands put output it reads back, when its file reads are limited to
+   * the workspace and Circle's own folders (the desktop's file backend): this run's folder in
+   * the data folder, made here. Elsewhere read_file reads /tmp and there is none.
+   */
+  commandOutputFolder(): string | undefined {
+    if (!this.options.fileMutations) return undefined;
+    try {
+      mkdirSync(this.jobs.scratchFolder, { recursive: true, mode: 0o700 });
+      return this.jobs.scratchFolder;
+    } catch {
+      return undefined;
+    }
   }
   /** This conversation's plan file: the path the model writes, and where it is kept. */
   get planFile(): { file: string; path: string } {

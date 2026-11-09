@@ -1,6 +1,7 @@
 import { spawn, execFile, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
+  existsSync,
   mkdirSync,
   openSync,
   closeSync,
@@ -240,6 +241,8 @@ export function jobNotice(job: Job): string {
   }
   return `${jobLine(job)}\nLast output:\n${output}`;
 }
+/** The folder in a project's data folder for what commands write for the model, one per run. */
+export const SCRATCH_FOLDER = 'scratch';
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -289,6 +292,11 @@ export class JobRegistry {
   private closed = false;
   private monitor: NodeJS.Timeout;
   readonly folder: string;
+  /**
+   * Where this run's commands put output the model reads back. The desktop's file tools read
+   * Circle's own data folder but not /tmp; the folder is made when the model is told of it.
+   */
+  readonly scratchFolder: string;
   readonly runName = `${process.pid}-${Date.now()}-${randomUUID().slice(0, 8)}`;
   constructor(
     readonly sandbox: Sandbox,
@@ -308,17 +316,22 @@ export class JobRegistry {
     if (!sandbox.offloadRoot)
       throw new Error('background jobs need a data folder');
     const root = join(sandbox.offloadRoot, 'background_jobs');
+    const scratch = join(sandbox.offloadRoot, SCRATCH_FOLDER);
     mkdirSync(root, { recursive: true, mode: 0o700 });
-    for (const name of readdirSync(root)) {
-      const match = /^(\d+)-(\d+)-[a-z0-9]+$/.exec(name);
-      if (
-        match &&
-        Date.now() - Number(match[2]) > 86_400_000 &&
-        !alive(Number(match[1]))
-      )
-        rmSync(join(root, name), { recursive: true, force: true });
-    }
+    // A run's folders go a day after it ended: its jobs' output, and what its commands wrote
+    // there for the model to read back.
+    for (const parent of [root, scratch])
+      for (const name of existsSync(parent) ? readdirSync(parent) : []) {
+        const match = /^(\d+)-(\d+)-[a-z0-9]+$/.exec(name);
+        if (
+          match &&
+          Date.now() - Number(match[2]) > 86_400_000 &&
+          !alive(Number(match[1]))
+        )
+          rmSync(join(parent, name), { recursive: true, force: true });
+      }
     this.folder = join(root, this.runName);
+    this.scratchFolder = join(scratch, this.runName);
     mkdirSync(this.folder, { mode: 0o700 });
     this.monitor = setInterval(() => this.tick(), 100);
     this.monitor.unref();

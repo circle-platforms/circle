@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   existsSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   writeFileSync,
@@ -182,6 +183,30 @@ test(
     assert.equal(existsSync(join(root, 'adopted-late')), false);
   },
 );
+test("a run's job output and command scratch folders go a day after the run ended, and no sooner", async (t) => {
+  const root = scratch(t);
+  const data = join(root, 'data');
+  const ended = '2147483646-1000-aaaaaaaa'; // a process long gone, a run long ago
+  const running = `${process.pid}-1000-bbbbbbbb`; // long ago, but its process is alive
+  const recent = `2147483646-${Date.now() - 60_000}-cccccccc`; // ended a minute ago
+  for (const parent of ['background_jobs', 'scratch'])
+    for (const name of [ended, running, recent, 'kept-by-hand'])
+      mkdirSync(join(data, parent, name), { recursive: true });
+  const jobs = new JobRegistry(new Sandbox(root, data));
+  cleanup(t, () => jobs.close().then(() => {}));
+  for (const parent of ['background_jobs', 'scratch'])
+    assert.deepEqual(
+      readdirSync(join(data, parent))
+        .filter((name) => name !== jobs.runName)
+        .sort(),
+      ['kept-by-hand', running, recent].sort(),
+      parent,
+    );
+  assert.equal(jobs.scratchFolder, join(data, 'scratch', jobs.runName));
+  // Made only when the model is told of it
+  assert.equal(existsSync(jobs.scratchFolder), false);
+});
+
 test('job display discards terminal commands and carriage-return progress while raw log bytes remain intact', () => {
   assert.equal(
     plainJobOutput(
