@@ -106,6 +106,7 @@ export const COMMAND_UI: Record<string, string> = {
   name: 'rename',
   session: 'session',
   models: 'models',
+  compact: 'compact',
   plan: 'mode',
   mode: 'mode',
   skill: 'skills',
