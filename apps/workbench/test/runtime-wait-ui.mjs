@@ -58,12 +58,10 @@ try {
         // the copy of its details at the line's end
         const line = alert.getByRole('button', { expanded: false });
         const cause = (await line.textContent()) ?? '';
-        assert.match(cause, word(/Circle did not answer/, /Circle 没有应答/));
-        assert.ok(
-          cause.includes(
-            await page.evaluate(() => window.waitFixture.failure.message),
-          ),
-          cause,
+        assert.equal(
+          cause.trim(),
+          `✖ ${await page.evaluate(() => window.waitFixture.failure.message)}`,
+          'the cause once, not a heading and then the cause again',
         );
         assert.equal(
           await alert

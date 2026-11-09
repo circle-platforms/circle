@@ -42,7 +42,8 @@ export function CommandFailureCard({
     <FailureRow
       label={t('action failed')}
       testId="command-failure"
-      cause={`✖ ${timedOut ? `${t('Circle did not answer')} · ` : ''}${failure.message}`}
+      // A timeout's message already says Circle did not answer, and for how long
+      cause={`✖ ${failure.message}`}
       detail={
         failure.detail && failure.detail !== failure.message
           ? failure.detail
