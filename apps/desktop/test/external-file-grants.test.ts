@@ -134,8 +134,11 @@ test('symlink hardlink credential binary oversized and private-data grants are r
     await writeFile(p, 'secret');
     await assert.rejects(grants.mint('a', p, 'read'), /credential/);
   }
+  // Bytes that are not UTF-8 are refused in the file view's words, not the decoder's
   await writeFile(path, Buffer.from([0xff, 0x01]));
-  await assert.rejects(grants.mint('a', path, 'read'), /encoded data/);
+  await assert.rejects(grants.mint('a', path, 'read'), {
+    message: 'binary files cannot be edited as text',
+  });
   await writeFile(path, 'a\0b');
   await assert.rejects(grants.mint('a', path, 'read'), /binary/);
   await writeFile(path, 'x'.repeat(100));
