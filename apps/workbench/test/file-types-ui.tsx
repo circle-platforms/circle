@@ -69,7 +69,15 @@ const host = new Proxy(
     onRuntime: () => () => {},
     onRuntimeDelta: () => () => {},
     onRuntimeWait: () => () => {},
-    listWorkspace: async () => null,
+    // The files mode lists the PDF, which opens there as a file, not as a page
+    listWorkspace: async (workspaceId: string) => ({
+      id: workspaceId,
+      name: 'orbit-api',
+      path: '/workspace/orbit-api',
+      files: [{ id: 'spec', path: 'docs/spec.pdf', language: 'plaintext' }],
+      truncated: false,
+      complete: true,
+    }),
     revealWorkspace: async (workspaceId: string, path?: string) => {
       calls.push({ call: 'revealWorkspace', params: { workspaceId, path } });
     },
