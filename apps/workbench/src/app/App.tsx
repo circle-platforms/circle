@@ -82,6 +82,7 @@ import { homePath, openHome, startPath } from '../features/home-selection';
 import '../styles/developer-workbench.css';
 import '../styles/panes.css';
 import {
+  planFolderFile,
   sourceLocation,
   workspaceRelativePath,
 } from '../model/source-navigation';
@@ -122,6 +123,8 @@ import {
 /** In the files mode's document slot, the plan in place of a workspace file. No file's
  * path holds a NUL. */
 const PLAN = '\u0000plan';
+// A file of the plan folder other than the plan, shown read only (planFolderFile)
+const PLAN_FOLDER_FILE = '\u0000plan-folder:';
 const loadFileViewer = () =>
   import('../features/FileViewer').then((module) => ({
     default: module.FileViewer,
@@ -968,10 +971,21 @@ export function App() {
     setFileOwner(undefined);
     if (narrow) setInspectorOpen(false);
   };
-  const onFile = (path: string, line?: number, column?: number) =>
-    session.plan && path.replace(/^\/*/, '/') === session.plan.file
-      ? openPlan()
-      : openSource(path, line, column);
+  // The plan folder is Circle's, in its data folder: the plan opens as the plan, and any
+  // other file the model wrote there opens read only, never as a workspace path
+  const openPlanFolderFile = (path: string) => {
+    sourceOpener.current.cancel();
+    setFileOwner(undefined);
+    setFile(PLAN_FOLDER_FILE + path);
+    setPanel('files');
+    showDrawer();
+  };
+  const onFile = (path: string, line?: number, column?: number) => {
+    const named = path.replace(/^\/*/, '/');
+    if (session.plan && named === session.plan.file) return openPlan();
+    if (planFolderFile(named)) return openPlanFolderFile(named);
+    return openSource(path, line, column);
+  };
   // When Circle writes the plan, it opens: once in a turn, so a plan closed while Circle
   // works stays closed until the plan card asks about it, and then it opens again. It
   // never opens over another page or in a narrow window, where it would cover the
@@ -1390,6 +1404,11 @@ export function App() {
     <div className="session-resource-view" hidden={!file}>
       {file === PLAN ? (
         <PlanView onClose={closeFile} />
+      ) : file?.startsWith(PLAN_FOLDER_FILE) ? (
+        <PlanView
+          file={file.slice(PLAN_FOLDER_FILE.length)}
+          onClose={closeFile}
+        />
       ) : (
         file && (
           <NativeResourceBoundary name={t('editor')} resetKey={file}>

@@ -51,6 +51,8 @@ export const common: Record<string, string> = {
   'stay in plan mode; nothing changes': '留在计划模式，什么也不改',
   'what should change?': '要改什么？',
   'close plan': '关闭计划',
+  'plan folder, read only': '计划文件夹，只读',
+  '{file} could not be opened': '{file} 无法打开',
   'updated {time}': '更新于 {time}',
   'Circle has not written a plan in this conversation yet.':
     'Circle 还没有在这个会话里写计划。',

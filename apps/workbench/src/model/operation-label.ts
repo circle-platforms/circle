@@ -18,6 +18,7 @@ export function operationLabel(service: string, method: string): string {
     applyEdits: t('apply file edits'),
     refresh: t('refresh'),
     resolveSource: t('locate source'),
+    readPlanFolder: t('read a plan folder file'),
     create: t('create'),
     restart: t('restart'),
     write: t('send terminal input'),

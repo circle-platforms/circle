@@ -60,6 +60,7 @@ export const developer: Record<string, string> = {
   'save file': '保存文件',
   'apply file edits': '应用文件编辑',
   'locate source': '定位来源',
+  'read a plan folder file': '读取计划文件夹中的文件',
   'create resource': '创建资源',
   restart: '重新启动',
   'send terminal input': '发送终端输入',
