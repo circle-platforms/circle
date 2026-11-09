@@ -3737,10 +3737,24 @@ pre {
 .diff-block.compact pre {
   max-height: 220px;
 }
+/* A row is its gutter (the sign, and the line number when the difference has one) and its
+   text; a long line wraps under its own text, so nothing scrolls sideways and the row's
+   colour runs the full width. */
 .diff-block pre > span {
-  display: block;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
   padding: 0 10px;
+}
+.diff-block .diff-gutter {
   white-space: pre;
+}
+.diff-block .diff-text {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.diff-block .diff-whole {
+  grid-column: 1 / -1;
 }
 .diff-block .added {
   background: var(--added-bg);
