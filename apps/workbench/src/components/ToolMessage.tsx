@@ -24,7 +24,7 @@ import { agentState } from '../model/activity';
 import { internalToolTitle } from '../model/tool-summary';
 import { useRuntimeActions, useRuntimeSelector } from '../app/context';
 import { DataBlock, IconButton, Status } from './common';
-import { DiffBlock } from './DiffBlock';
+import { DiffBlock, DiffSummary } from './DiffBlock';
 import { t } from '../i18n';
 import { relativePath } from '../model/format';
 import { currentSession } from '../model/state';
@@ -329,7 +329,11 @@ function GenericToolMessage({
             root,
           )}
         </span>
-        {diff && <span className="tool-diff-summary">{diff.summary}</span>}
+        {diff && (
+          <span className="tool-diff-summary">
+            <DiffSummary text={diff.summary} />
+          </span>
+        )}
         <span className="tool-time">{tool.elapsed}</span>
         {tool.status === 'success' ? (
           <Check size={13} />
@@ -342,7 +346,7 @@ function GenericToolMessage({
       </button>
       {diff && !open && (
         <div className="tool-diff">
-          <DiffBlock diff={diff} compact />
+          <DiffBlock diff={diff} compact header={false} />
         </div>
       )}
       {childAgents.length > 0 && (
@@ -350,7 +354,7 @@ function GenericToolMessage({
       )}
       {open && (
         <div className="tool-content">
-          {diff && <DiffBlock diff={diff} />}
+          {diff && <DiffBlock diff={diff} header={false} />}
           <div className="tool-toolbar">
             {((tool.name === 'execute' && openCommandTerminal) ||
               (userShellId && openUserShellTerminal)) && (

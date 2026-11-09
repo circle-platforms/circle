@@ -83,9 +83,10 @@ try {
         if (row.room >= 0.5)
           assert(row.clock.over <= 0, `${where}: the clock is cut first`);
         assert(row.out <= 0.5, `${where}: the row leaves its column`);
-        if (pane === 1000) {
-          // The widest column, as in the report: a long summary does not fit; a short
-          // one does, and is left whole.
+        if (pane === 780) {
+          // A column 780 pixels wide, the widest one at the time of the report (the column
+          // now grows to 1280): a long summary does not fit; a short one does, and is left
+          // whole.
           const fits = variant === '&short=1';
           assert.equal(row.summary.over > 0, !fits, `${where}: summary`);
           assert.equal(row.counts.length, fits ? 0 : 2, `${where}: counts`);

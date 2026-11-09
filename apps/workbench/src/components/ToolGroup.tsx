@@ -204,21 +204,25 @@ function ToolGroupRow({
             </div>
           )}
           <div id={detailsId} className="tool-group-calls">
-            {rows.map((row) =>
-              row.tool ? (
-                <div key={row.id} data-message-id={row.id}>
-                  <GroupCall
-                    tool={row.tool}
-                    ownerSessionId={ownerSessionId}
-                    alone={tools.length === 1}
-                    expanded={expanded}
-                    onAgent={onAgent}
-                    onFile={onFile}
-                  />
+            {stackedCalls(rows, showThinking).map((part) =>
+              part.thinking ? (
+                <GroupThinking key={part.thinking.id} row={part.thinking} />
+              ) : (
+                <div className="tool-stack" key={part.calls[0]!.id}>
+                  {part.calls.map((row) => (
+                    <div key={row.id} data-message-id={row.id}>
+                      <GroupCall
+                        tool={row.tool!}
+                        ownerSessionId={ownerSessionId}
+                        alone={tools.length === 1}
+                        expanded={expanded}
+                        onAgent={onAgent}
+                        onFile={onFile}
+                      />
+                    </div>
+                  ))}
                 </div>
-              ) : row.thinking && showThinking ? (
-                <GroupThinking key={row.id} row={row} />
-              ) : null,
+              ),
             )}
           </div>
         </>
@@ -245,6 +249,30 @@ export const ToolGroup = memo(
     one.turn === other.turn &&
     one.children === other.children,
 );
+
+/**
+ * An opened line's rows as the person reads them: a step's thinking, then its calls stacked
+ * in one frame. A step's thinking that does not show does not part the calls around it.
+ */
+export function stackedCalls(
+  rows: readonly Message[],
+  showThinking: boolean,
+): (
+  { thinking: Message; calls?: never } | { thinking?: never; calls: Message[] }
+)[] {
+  const parts: (
+    | { thinking: Message; calls?: never }
+    | { thinking?: never; calls: Message[] }
+  )[] = [];
+  for (const row of rows) {
+    if (row.tool) {
+      const last = parts.at(-1);
+      if (last?.calls) last.calls.push(row);
+      else parts.push({ calls: [row] });
+    } else if (row.thinking && showThinking) parts.push({ thinking: row });
+  }
+  return parts;
+}
 
 function GroupThinking({ row }: { row: Message }) {
   const [open, setOpen] = useSessionDisclosure('thinking:' + row.id);
