@@ -213,7 +213,8 @@ export function RuntimeNotice({
   // A compaction's outcome sits on the line where it ran
   if (message.compaction && message.compaction.status !== 'running')
     return <CompactionOutcome state={message.compaction} text={message.text} />;
-  if (!message.id.startsWith('failure-'))
+  // A failed turn, as it happened or as restored from the history, is one failure line
+  if (!message.id.startsWith('failure-') && !message.completionFailure)
     return (
       <div className="transcript-notice">
         {message.planCompleted === undefined

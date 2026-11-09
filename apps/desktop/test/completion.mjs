@@ -640,8 +640,9 @@ try {
   const reopened = await app.firstWindow();
   reopened.setDefaultTimeout(patience(12000));
   reopened.on('pageerror', (error) => errors.push(String(error)));
+  // A failure restored from the history is the same line as when it happened
   await reopened
-    .locator('.transcript-notice')
+    .locator('.failure-row')
     .filter({ hasText: /model output limit reached|模型达到输出上限/ })
     .waitFor();
   const restored = await reopened.evaluate(

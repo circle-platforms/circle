@@ -1,4 +1,4 @@
-import { Check, X } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { CompactionSnapshot } from '../../../../src/compaction';
 import { t } from '../i18n';
@@ -59,7 +59,8 @@ export function CompactionRow({ state }: { state?: CompactionSnapshot }) {
   );
 }
 
-/** What a compaction did, on the line where it ran: a check, or a cross when it failed. */
+/** What a compaction did, on the line where it ran: a check when it succeeded. A failure's
+ * words begin with their own cross, and an interruption has no mark. */
 export function CompactionOutcome({
   state,
   text,
@@ -75,7 +76,7 @@ export function CompactionOutcome({
       data-testid="compaction-outcome"
     >
       <div className="line-summary">
-        {done ? <Check size={13} aria-hidden /> : <X size={13} aria-hidden />}
+        {done && <Check size={13} aria-hidden />}
         <span>{text}</span>
       </div>
     </div>
