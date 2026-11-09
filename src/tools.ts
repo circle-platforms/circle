@@ -9,7 +9,7 @@ import {
   writeFileSync,
   rmSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { glob } from 'glob';
 import type { Tool, ToolContext } from './types.js';
@@ -20,7 +20,8 @@ import { QUESTION_SCHEMA } from './questions.js';
 import { JobRegistry, jobLine, jobNotice } from './jobs.js';
 import { readTextWindow, readTextContentWindow } from './file_read.js';
 import { FileMutationTools, type FileMutations } from './file_mutations.js';
-import { authorizeFileRead } from './file_access.js';
+import { authorizeFileRead, authorizeSearch } from './file_access.js';
+import { oldStringMissing } from './edit_miss.js';
 import { mediaType, readMedia } from './media.js';
 import {
   LocalSkillsError,
@@ -207,10 +208,13 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       );
       sandbox.checkCredentialPath(path);
       const native = await authorizeRead(path, context);
-      if (statSync(path).isDirectory())
+      if (statSync(path).isDirectory()) {
+        // A folder is listed as ls lists it, within the same bounds
+        await authorizeSearch(sandbox, mutations, path, context);
         return readdirSync(path, { withFileTypes: true })
           .map((entry) => entry.name + (entry.isDirectory() ? '/' : ''))
           .join('\n');
+      }
       if (mediaType(path)) {
         if (!context.emitAttachments)
           throw new Error('this caller does not accept media attachments');
@@ -301,7 +305,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       const replacement = string(args, 'new_string', 'newString');
       if (!old) throw new Error('old_string cannot be empty');
       const count = content.split(old).length - 1;
-      if (!count) throw new Error('oldString not found in content');
+      if (!count) throw new Error(oldStringMissing(content, old));
       if (count > 1 && !args.replace_all && !args.replaceAll)
         throw new Error(
           'Found multiple matches for oldString. Provide more surrounding lines or use replaceAll.',
@@ -348,21 +352,42 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       tool.prepare = async (args, context) =>
         writesPlan(name, args) ? tool.run : prepare(args, context);
     }
-  add('ls', 'read', schema({ path: text('Directory') }), async (args) => {
-    const path = sandbox.resolvePath(String(args.path || '.'));
-    return readdirSync(path, { withFileTypes: true })
-      .map((entry) => entry.name + (entry.isDirectory() ? '/' : ''))
-      .join('\n');
-  });
+  // Listing and searching show what reading would: they keep to read_file's bounds
+  add(
+    'ls',
+    'read',
+    schema({ path: text('Directory') }),
+    async (args, context) => {
+      const path = sandbox.resolvePath(String(args.path || '.'));
+      await authorizeSearch(sandbox, mutations, path, context);
+      return readdirSync(path, { withFileTypes: true })
+        .map((entry) => entry.name + (entry.isDirectory() ? '/' : ''))
+        .join('\n');
+    },
+  );
   add(
     'glob',
     'read',
     schema({ pattern: text('Glob pattern'), path: text('Search directory') }, [
       'pattern',
     ]),
-    async (args) => {
+    async (args, context) => {
       const cwd = sandbox.resolvePath(String(args.path || '.'));
-      const matches = await glob(string(args, 'pattern'), {
+      const pattern = string(args, 'pattern');
+      // A pattern that starts at the root or climbs out with `..` would match outside
+      // `path`, where the folder's bounds were checked
+      if (
+        mutations &&
+        (isAbsolute(pattern) ||
+          /^[A-Za-z]:/.test(pattern) ||
+          pattern.startsWith('~') ||
+          pattern.replace(/\\/g, '/').split('/').includes('..'))
+      )
+        throw new Error(
+          `the glob pattern is matched inside path: give the folder as path and a pattern without '..', '~' or a leading '/', not ${pattern}`,
+        );
+      await authorizeSearch(sandbox, mutations, cwd, context);
+      const matches = await glob(pattern, {
         cwd,
         nodir: true,
         dot: true,
@@ -376,9 +401,17 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         .join('\n');
     },
   );
-  add('grep', 'read', GREP_SCHEMA, async (args, context) =>
-    grepSearch(sandbox, args, context.signal),
-  );
+  add('grep', 'read', GREP_SCHEMA, async (args, context) => {
+    await authorizeSearch(
+      sandbox,
+      mutations,
+      sandbox.resolvePath(
+        typeof args.path === 'string' && args.path ? args.path : '.',
+      ),
+      context,
+    );
+    return grepSearch(sandbox, args, context.signal);
+  });
   add(
     'execute',
     'execute',

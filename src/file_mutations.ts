@@ -1,6 +1,7 @@
 import { planPatch, patchFilePaths, patchSummary } from './apply_patch.js';
 import type { Sandbox } from './sandbox.js';
 import type { Tool, ToolContext } from './types.js';
+import { oldStringMissing } from './edit_miss.js';
 
 export interface FileMutationSnapshot {
   /** Canonical absolute path in the granted workspace or an exact-file grant. */
@@ -173,7 +174,7 @@ export class FileMutationTools {
     const replacement = argument(args, 'new_string', 'newString');
     if (!old) throw Error('old_string cannot be empty');
     const count = content.split(old).length - 1;
-    if (!count) throw Error('oldString not found in content');
+    if (!count) throw Error(oldStringMissing(content, old));
     if (count > 1 && !args.replace_all && !args.replaceAll)
       throw Error(
         'Found multiple matches for oldString. Provide more surrounding lines or use replaceAll.',

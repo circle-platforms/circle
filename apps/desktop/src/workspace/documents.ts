@@ -32,6 +32,7 @@ import {
 } from 'node:path';
 import {
   DEFAULT_CREDENTIAL_FILES,
+  protectedNameMessage,
   protectedWorkspaceName,
 } from '../../../../src/file_patterns.ts';
 
@@ -320,9 +321,7 @@ export class WorkspaceDocuments {
           process.platform,
         )
       )
-        throw new DocumentPathError(
-          `file is not available in this workspace: ${part}`,
-        );
+        throw new DocumentPathError(protectedNameMessage(part));
     }
     return parts;
   }
