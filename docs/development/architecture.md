@@ -133,7 +133,7 @@ remembered for that model instance like a rejected signature.
 
 | Module            | What it does                                                                                                                        |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `jobs.ts`         | Background jobs: commands and subagents, their output files, their notices to the model, and stopping them.                         |
+| `jobs.ts`         | Background jobs: commands and subagents, their output and `scratch/` folders, their notices to the model, and stopping them.         |
 | `watch.ts`        | `api.Watch`, which an extension tool returns to wait for something slow.                                                            |
 | `schedule.ts`     | Scheduled tasks: the store under `schedules/`, the clocks (`every`, `cron`, `once`), the run records and the per-schedule run lock. |
 | `scheduler.ts`    | Firing them: one headless `circle -p` in a child process per run, the tick loop, the daemon file.                                   |

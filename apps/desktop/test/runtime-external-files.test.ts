@@ -209,6 +209,62 @@ test('an ungranted external read explains project workspaces and exact-file acce
   );
 });
 
+test("a command's output written into the folder the prompt names is read back, and a refused read names that folder", async (t) => {
+  let folder = '';
+  let outside = '';
+  const f = await fixture(t, [
+    // The model learns the folder from its prompt, as a model would
+    async (request) => {
+      folder =
+        /Have a command write output you will read into (.+), not \/tmp/.exec(
+          request.system,
+        )?.[1] ?? '';
+      return assistant('write', 'execute', {
+        command: `echo command output> "${join(folder, 'run.log')}"`,
+      });
+    },
+    async () =>
+      assistant('read', 'read_file', { file_path: join(folder, 'run.log') }),
+    async () => assistant('outside', 'read_file', { file_path: outside }),
+    assistant('end'),
+  ]);
+  outside = join(f.root, 'outside.log');
+  await writeFile(outside, 'written where read_file does not read\n');
+  const owner = f.controller.snapshot().activeSessionId;
+  assert.equal((await f.call('set-mode', { mode: 'auto' })).ok, true);
+  assert.equal(
+    (await f.call('prompt', { text: 'run it and read the log' })).ok,
+    true,
+  );
+  await f.until(
+    () =>
+      f.model.requests.length >= 4 &&
+      f.controller.snapshot().sessions.find((s) => s.id === owner)?.state !==
+        'waiting',
+  );
+  assert.ok(folder, f.model.requests[0]!.system);
+  assert.match(
+    await readFile(join(folder, 'run.log'), 'utf8'),
+    /command output/,
+  );
+  // What the model got back: the log's text, then a refusal that says where output goes
+  const results = f.model.requests[3]!.messages.filter(
+    (m) => m.role === 'tool',
+  );
+  const read = results.find((m) => m.tool_call_id === 'read-call');
+  assert.equal(read?.status, 'success', JSON.stringify(read));
+  assert.match(String(read?.content), /command output/);
+  const refused = results.find((m) => m.tool_call_id === 'outside-call');
+  assert.equal(refused?.status, 'error', JSON.stringify(refused));
+  assert.ok(
+    String(refused?.content).includes(
+      `To read a command's output, have the command write it into ${folder} and read it there`,
+    ),
+    String(refused?.content),
+  );
+  assert.match(String(refused?.content), /grant one existing text file/);
+});
+
 test('opening a project folder starts a session whose file reads need no external grant', async (t) => {
   let path = '';
   const f = await fixture(t, [

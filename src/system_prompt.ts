@@ -162,6 +162,11 @@ export interface PromptCatalog {
   sessionPreferences?: string;
   /** The desktop can connect GitHub: the model learns where the user sets it up. */
   githubSetup?: boolean;
+  /**
+   * The desktop's file tools read no /tmp: the folder where a command puts output the model
+   * reads back.
+   */
+  outputFolder?: string;
 }
 /**
  * One MCP server's instructions, set apart as the server's own words, which rank below the
@@ -250,6 +255,10 @@ export function buildSystemPrompt(
   sections.push(
     `<env>\n  Working directory: ${workspace}\n  Platform: ${platform()}\n  Today's date: ${new Date().toISOString().slice(0, 10)}\n  Is directory a git repo: ${currentBranch(workspace) ? 'yes' : 'no'}\n  Model: ${model}\n  Protocol: ${protocol}\n</env>`,
   );
+  if (catalog.outputFolder)
+    sections.push(
+      `Your file tools read only the working directory, Circle's own folders and files the user granted. Have a command write output you will read into ${catalog.outputFolder}, not /tmp, and quote that path.`,
+    );
   if (catalog.attribution && currentBranch(workspace))
     sections.push(
       attributionSection(catalog.attribution, Boolean(catalog.headless), () =>

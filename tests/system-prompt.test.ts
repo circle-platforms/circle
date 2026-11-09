@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer, type ServerResponse } from 'node:http';
-import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AgentRuntime } from '../src/runtime.js';
 import { ModelCatalog } from '../src/model_catalog.js';
@@ -344,4 +344,60 @@ test('a runtime that can connect GitHub tells the model where the user sets it u
   cleanup(t, () => terminal.close());
   await terminal.harness.run('open a pull request');
   assert.equal(count(terminalModel.requests[0]!.system, '<github>'), 0);
+});
+
+test('a runtime whose file reads stop at the workspace names a folder for command output; the terminal does not', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace, { recursive: true });
+  mkdirSync(home);
+  const settings = defaultSettings();
+  // The desktop's backend: nothing outside the workspace without a grant
+  const fileMutations = {
+    authorize() {
+      throw Error('no grant');
+    },
+    async read() {
+      throw Error('no grant');
+    },
+    async apply() {
+      throw Error('no writes');
+    },
+  };
+  const desktopModel = new ScriptedModel([reply('one')]);
+  const desktop = new AgentRuntime({
+    home,
+    workspace,
+    settings,
+    model: desktopModel,
+    fileMutations,
+  });
+  cleanup(t, () => desktop.close());
+  await desktop.harness.run('run the tests and read the log');
+  const folder = desktop.jobs.scratchFolder;
+  assert.equal(
+    count(
+      desktopModel.requests[0]!.system,
+      `Have a command write output you will read into ${folder}, not /tmp`,
+    ),
+    1,
+  );
+  assert.equal(existsSync(folder), true);
+  // In Circle's own data folder, which the desktop's read_file reads without a grant
+  assert.equal(
+    desktop.sandbox.isOffloadOutput(desktop.sandbox.resolvePath(folder)),
+    true,
+  );
+  const terminalModel = new ScriptedModel([reply('one')]);
+  const terminal = new AgentRuntime({
+    home,
+    workspace,
+    settings,
+    model: terminalModel,
+  });
+  cleanup(t, () => terminal.close());
+  await terminal.harness.run('run the tests and read the log');
+  assert.equal(terminalModel.requests[0]!.system.includes('not /tmp'), false);
+  assert.equal(existsSync(terminal.jobs.scratchFolder), false);
 });
