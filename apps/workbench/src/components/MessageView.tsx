@@ -1,11 +1,9 @@
 import { formatRuntimeNotice } from '../model/runtime-notice';
-import { Brain, ChevronRight, Copy } from 'lucide-react';
-import { useRuntime, useRuntimeActions } from '../app/context';
-import { copyText } from '../host';
+import { Brain, ChevronRight } from 'lucide-react';
 import type { Message } from '../model/types';
 import { formatBusyElapsed } from '../model/format';
 import { fullTime, shownTime } from '../model/time';
-import { Button, FileChip, IconButton } from './common';
+import { Button, CopyButton, FileChip, RowActions } from './common';
 import './runtime-notice.css';
 import {
   cleanThinking,
@@ -62,7 +60,6 @@ export const MessageView = memo(function MessageView({
   day?: string;
 }) {
   useLocale();
-  const { notify } = useRuntimeActions();
   const sources = useSources();
   const [thinkingOpen, setThinkingOpen] = useSessionDisclosure(
     'thinking:' + message.id,
@@ -176,17 +173,7 @@ export const MessageView = memo(function MessageView({
           <footer data-testid="turn-summary">{usageText(message.usage)}</footer>
         )}
         {message.text && (
-          <IconButton
-            label={t('copy message')}
-            onClick={() =>
-              copyText(message.text).then(
-                () => notify(t('copied')),
-                () => notify(t('clipboard unavailable')),
-              )
-            }
-          >
-            <Copy size={12} />
-          </IconButton>
+          <CopyButton text={message.text} label={t('copy message')} size={12} />
         )}
         {footer}
       </div>
@@ -221,7 +208,6 @@ export function RuntimeNotice({
   onConnection: () => void;
   onMessage: () => void;
 }) {
-  const { notify } = useRuntime();
   if (!message.id.startsWith('failure-'))
     return (
       <div className="transcript-notice">
@@ -236,7 +222,12 @@ export function RuntimeNotice({
       role="alert"
       aria-label={t('action failed')}
     >
-      <strong>{t('action failed')}</strong>
+      <header className="head-row">
+        <strong>{t('action failed')}</strong>
+        <RowActions>
+          <CopyButton text={message.text} label={t('copy error details')} />
+        </RowActions>
+      </header>
       {/* The cause in the runtime's own words; the whole text stays folded below. */}
       <p className="runtime-failure-cause">{message.text.split('\n')[0]}</p>
       <p className="panel-note">
@@ -253,16 +244,6 @@ export function RuntimeNotice({
       <div className="runtime-failure-actions">
         <Button onClick={onMessage}>{t('return to message')}</Button>
         <Button onClick={onConnection}>{t('review connection')}</Button>
-        <Button
-          onClick={() =>
-            void copyText(message.text).then(
-              () => notify(t('copied')),
-              () => notify(t('clipboard unavailable')),
-            )
-          }
-        >
-          {t('copy error details')}
-        </Button>
       </div>
     </section>
   );

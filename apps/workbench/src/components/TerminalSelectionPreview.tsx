@@ -1,8 +1,6 @@
 import type { Attachment } from '../model/types';
-import { useRuntime } from '../app/context';
-import { copyText } from '../host';
 import { t } from '../i18n';
-import { Button } from './common';
+import { CopyableText } from './common';
 
 /** Display recognition only. Attachment metadata never grants resource access. */
 export function terminalSelectionDisplay(
@@ -39,7 +37,6 @@ export function terminalSelectionDisplay(
   }
 }
 export function TerminalSelectionPreview({ file }: { file: Attachment }) {
-  const { perform } = useRuntime();
   const display = terminalSelectionDisplay(file);
   if (!display) return <pre>{file.content}</pre>;
   return (
@@ -47,18 +44,19 @@ export function TerminalSelectionPreview({ file }: { file: Attachment }) {
       <p className="panel-note">
         {display.label} · {display.cwd}
       </p>
-      <pre className="terminal-selection-text" tabIndex={0}>
-        {display.text}
-      </pre>
-      <Button onClick={() => perform(() => copyText(display.text))}>
-        {t('copy selected text')}
-      </Button>
+      <CopyableText
+        className="terminal-selection-text"
+        tabIndex={0}
+        text={display.text}
+        label={t('copy selected text')}
+      />
       <details className="context-source terminal-selection-original">
         <summary>{t('original attachment and source details')}</summary>
-        <pre tabIndex={0}>{file.content}</pre>
-        <Button onClick={() => perform(() => copyText(file.content))}>
-          {t('copy original attachment')}
-        </Button>
+        <CopyableText
+          tabIndex={0}
+          text={file.content}
+          label={t('copy original attachment')}
+        />
       </details>
     </>
   );

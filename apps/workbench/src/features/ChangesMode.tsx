@@ -1,7 +1,7 @@
-import { FileDiff, FileText } from 'lucide-react';
+import { FileDiff } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useRuntime } from '../app/context';
-import { Button, PaneEmpty } from '../components/common';
+import { OpenFileButton, PaneEmpty, RowActions } from '../components/common';
 import { DiffBlock } from '../components/DiffBlock';
 import { t } from '../i18n';
 import {
@@ -215,10 +215,9 @@ export function ChangesMode({
                   {current.path}
                 </span>
                 {current.letter !== 'D' && (
-                  <Button onClick={() => onFile(current.path)}>
-                    <FileText size={13} aria-hidden />
-                    {t('open file')}
-                  </Button>
+                  <RowActions>
+                    <OpenFileButton onOpen={() => onFile(current.path)} />
+                  </RowActions>
                 )}
               </header>
               <div className="changes-diff">

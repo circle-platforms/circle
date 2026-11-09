@@ -1,9 +1,9 @@
 import './HubConnectionCard.css';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useRuntime } from '../app/context';
-import { copyText, desktopHost } from '../host';
+import { desktopHost } from '../host';
 import { t, tn } from '../i18n';
-import { Badge, Button, Switch } from './common';
+import { Badge, Button, CopyButton, DeviceCode, Switch } from './common';
 
 /** The MCP entry the Hub extension keeps (src/hub_connection.ts). */
 export const HUB_SERVER = 'Hub';
@@ -34,7 +34,6 @@ export function HubConnectionCard({
   const [address, setAddress] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [copied, setCopied] = useState('');
   const extension = snapshot.extensions.find(
     (item) => item.name === 'hub' && item.scope === 'bundled',
   );
@@ -73,14 +72,6 @@ export function HubConnectionCard({
   async function connect(event: FormEvent) {
     event.preventDefault();
     if (await run('hub-connect', { address })) setAddress('');
-  }
-  async function copy(what: 'code' | 'link', text: string) {
-    try {
-      await copyText(text);
-      setCopied(what);
-    } catch (reason) {
-      setError(String(reason));
-    }
   }
   const https = signIn?.url.startsWith('https://') ?? false;
   return (
@@ -148,10 +139,10 @@ export function HubConnectionCard({
           </p>
         )}
         {available && signIn?.code && (
-          <div className="hub-device-code">
-            <p>{t('enter this code on the Hub’s page')}</p>
-            <code>{signIn.code}</code>
-          </div>
+          <DeviceCode
+            prompt={t('enter this code on the Hub’s page')}
+            code={signIn.code}
+          />
         )}
         {available && signIn && !signIn.code && (
           <p className="hub-status">
@@ -167,11 +158,6 @@ export function HubConnectionCard({
         {error && (
           <p className="hub-message" role="alert">
             {error}
-          </p>
-        )}
-        {copied && (
-          <p className="hub-message" role="status">
-            {copied === 'code' ? t('code copied') : t('link copied')}
           </p>
         )}
         {available && row && (
@@ -191,14 +177,7 @@ export function HubConnectionCard({
                 >
                   {t('open the Hub’s page')}
                 </Button>
-                <Button onClick={() => void copy('link', signIn.url)}>
-                  {t('copy link')}
-                </Button>
-                {signIn.code && (
-                  <Button onClick={() => void copy('code', signIn.code!)}>
-                    {t('copy code')}
-                  </Button>
-                )}
+                <CopyButton text={signIn.url} label={t('copy link')} />
               </>
             )}
             {(row.status === 'error' || row.status === 'reload required') &&

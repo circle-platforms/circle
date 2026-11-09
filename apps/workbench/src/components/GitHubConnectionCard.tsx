@@ -4,9 +4,9 @@ import { NavLink } from 'react-router-dom';
 import { Check } from 'lucide-react';
 import type { GitHubConnectionState } from '../../../../src/github_connection';
 import { useRuntime } from '../app/context';
-import { copyText, desktopHost } from '../host';
+import { desktopHost } from '../host';
 import { t } from '../i18n';
-import { Badge, Button, Switch } from './common';
+import { Badge, Button, CopyableText, DeviceCode, Switch } from './common';
 import { githubPermissions } from '../model/github-permissions';
 
 /** What each GitHub tool lets Circle do, in plain words. */
@@ -57,7 +57,7 @@ export function GitHubConnectionCard({
   onTry?: () => void;
   tryError?: string;
 }) {
-  const { snapshot, runtime, perform } = useRuntime();
+  const { snapshot, runtime } = useRuntime();
   const extension = snapshot.extensions.find(
     (item) => item.name === 'github' && item.scope === 'bundled',
   );
@@ -198,10 +198,10 @@ export function GitHubConnectionCard({
           <NavLink to="/page/extensions">{t('extensions')}</NavLink>
         )}
         {available && code && (
-          <div className="github-device-code">
-            <p>{t('enter this code in your browser')}</p>
-            <code>{code}</code>
-          </div>
+          <DeviceCode
+            prompt={t('enter this code in your browser')}
+            code={code}
+          />
         )}
         {failure && (
           <div className="github-alert" role="alert">
@@ -249,10 +249,11 @@ export function GitHubConnectionCard({
             </p>
             <details className="context-source">
               <summary>{t('technical details')}</summary>
-              <pre tabIndex={0}>{failure}</pre>
-              <Button onClick={() => perform(() => copyText(failure))}>
-                {t('copy error details')}
-              </Button>
+              <CopyableText
+                text={failure}
+                tabIndex={0}
+                label={t('copy error details')}
+              />
             </details>
           </div>
         )}
@@ -275,11 +276,6 @@ export function GitHubConnectionCard({
                     }}
                   >
                     {t('open GitHub')}
-                  </Button>
-                )}
-                {code && (
-                  <Button onClick={() => perform(() => copyText(code))}>
-                    {t('copy code')}
                   </Button>
                 )}
                 <Button

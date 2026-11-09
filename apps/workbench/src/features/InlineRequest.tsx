@@ -6,7 +6,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { useRuntime } from '../app/context';
-import { Button } from '../components/common';
+import { Button, OpenFileButton, RowActions } from '../components/common';
 import { DataBlock } from '../components/ui';
 import { DiffBlock } from '../components/DiffBlock';
 import type { Interaction } from '../model/types';
@@ -392,9 +392,9 @@ export function InlineRequest({
         <div className="request-source">
           <code title={target}>{target}</code>
           {onFile && sourcePath && (
-            <Button onClick={() => onFile(item.target!)}>
-              {t('open file')}
-            </Button>
+            <RowActions>
+              <OpenFileButton onOpen={() => onFile(item.target!)} />
+            </RowActions>
           )}
         </div>
       )}

@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { memo } from 'react';
 import { Code } from 'lucide-react';
 import { splitAutolink } from '../../../../src/autolink.ts';
 import { t, useLocale } from '../i18n';
@@ -7,8 +7,8 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useSources, sourceLocation } from './SourceNavigation';
 import { remarkSourceLinks } from '../model/markdown-source-links';
-import { copyText } from '../host';
 import { highlight } from './highlight';
+import { CopyButton } from './ui';
 
 const LANGUAGE_NAMES: Record<string, string> = {
   ts: 'TypeScript',
@@ -41,7 +41,6 @@ function languageName(language?: string): string {
 }
 
 function CodeBlock({ language, code }: { language?: string; code: string }) {
-  const [copied, setCopied] = useState(false);
   const tokens = highlight(code, language);
   return (
     <div className="code-block">
@@ -50,20 +49,7 @@ function CodeBlock({ language, code }: { language?: string; code: string }) {
           <Code size={12} aria-hidden="true" />
           {languageName(language)}
         </span>
-        <button
-          type="button"
-          onClick={() => {
-            void copyText(code).then(
-              () => {
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1200);
-              },
-              () => {},
-            );
-          }}
-        >
-          {copied ? t('copied') : t('copy')}
-        </button>
+        <CopyButton text={code} label={t('copy code')} />
       </div>
       <pre>
         <code>

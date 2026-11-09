@@ -1,4 +1,12 @@
-import { Search, ShieldAlert, X } from 'lucide-react';
+import {
+  ArrowUpRight,
+  Check,
+  Copy,
+  Search,
+  ShieldAlert,
+  SquareTerminal,
+  X,
+} from 'lucide-react';
 import { Dialog, Tooltip } from 'radix-ui';
 import {
   useEffect,
@@ -14,6 +22,8 @@ import {
 import { runControlAction } from '../model/session-row';
 import { focusDialogField, focusMarkedField } from '../model/dialog-focus';
 import { t } from '../i18n';
+import { useNotify } from '../app/context';
+import { copyText } from '../host';
 /** Handlers for a button that acts as soon as it is pressed and must not act
  * again on that press's click. A press whose click never comes, because the
  * pointer left before the release or the press was cancelled, must not swallow
@@ -386,26 +396,175 @@ export function PermissionState() {
     </div>
   );
 }
+/**
+ * The one copy button: the same icon everywhere, a check for a moment once the text is
+ * copied, and the notice line where a runtime shows one. A copy button sits on the text it
+ * copies (CopyableText), or at the right end of a row's head when that text is folded.
+ */
+export function CopyButton({
+  text,
+  label = t('copy'),
+  size = 13,
+}: {
+  text: string | (() => string);
+  label?: string;
+  size?: number;
+}) {
+  const notify = useNotify();
+  const [done, setDone] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  return (
+    <IconButton
+      className="icon-button copy-button"
+      label={label}
+      onClick={() =>
+        copyText(typeof text === 'function' ? text() : text).then(
+          () => {
+            notify?.(t('copied'));
+            setDone(true);
+            clearTimeout(timer.current);
+            timer.current = setTimeout(() => setDone(false), 1200);
+          },
+          () => notify?.(t('clipboard unavailable')),
+        )
+      }
+    >
+      {done ? <Check size={size} /> : <Copy size={size} />}
+    </IconButton>
+  );
+}
+
+/** Text that copies itself: its copy button in its top right corner, the text clear of it. */
+export function CopyableText({
+  text,
+  copy,
+  label,
+  className,
+  tabIndex,
+  wrap,
+}: {
+  text: string;
+  /** What the button copies when it is not the text shown, such as a command without its `$`. */
+  copy?: string;
+  label?: string;
+  className?: string;
+  tabIndex?: number;
+  wrap?: boolean;
+}) {
+  return (
+    <div className="copyable">
+      <pre
+        className={className}
+        tabIndex={tabIndex}
+        style={wrap === false ? { whiteSpace: 'pre' } : undefined}
+      >
+        {text}
+      </pre>
+      <CopyButton text={copy ?? text} label={label} />
+    </div>
+  );
+}
+
+/**
+ * A one-time code a person types on another site, as the GitHub and Hub cards show one:
+ * the words that say where, the code, and its copy button beside it.
+ */
+export function DeviceCode({ prompt, code }: { prompt: string; code: string }) {
+  return (
+    <div className="device-code">
+      <p>{prompt}</p>
+      <span className="device-code-row">
+        <code>{code}</code>
+        <CopyButton text={code} label={t('copy code')} />
+      </span>
+    </div>
+  );
+}
+
+/** A row's actions: icons at the right end of its head, never a row of buttons of their own. */
+export function RowActions({ children }: { children: ReactNode }) {
+  return <span className="row-actions">{children}</span>;
+}
+
+/** Opens a file in the files mode. */
+export function OpenFileButton({ onOpen }: { onOpen: () => void }) {
+  return (
+    <IconButton label={t('open file')} onClick={onOpen}>
+      <ArrowUpRight size={13} />
+    </IconButton>
+  );
+}
+
+/**
+ * Opens a command in a terminal tab, from a tool call or a background job: busy while it
+ * opens, and what went wrong handed to the row, which says it under itself.
+ */
+export function OpenInTerminalButton({
+  open,
+  onError,
+}: {
+  open: (trigger: HTMLElement) => Promise<unknown>;
+  onError: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <IconButton
+      label={t('open in terminal')}
+      disabled={busy}
+      aria-busy={busy || undefined}
+      onClick={async (event) => {
+        const trigger = event.currentTarget;
+        setBusy(true);
+        onError('');
+        try {
+          await open(trigger);
+        } catch (failure) {
+          onError(
+            failure instanceof Error
+              ? failure.message
+              : t('command terminal could not be opened; try again'),
+          );
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <SquareTerminal size={13} />
+    </IconButton>
+  );
+}
+
+/** A titled block of text that copies itself, as tool calls, approvals and pages show one. */
 export function DataBlock({
   title,
   value,
   tabIndex,
   wrap,
+  copy,
+  copyLabel,
 }: {
   title: string;
   value: unknown;
   tabIndex?: number;
   wrap?: boolean;
+  /** What the button copies when it is not the text shown. */
+  copy?: string;
+  /** The button's name; `copy` when not given. */
+  copyLabel?: string;
 }) {
   return (
     <div className="data-block">
       <h4>{title}</h4>
-      <pre
+      <CopyableText
+        text={
+          typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+        }
+        copy={copy}
+        label={copyLabel}
         tabIndex={tabIndex}
-        style={wrap === false ? { whiteSpace: 'pre' } : undefined}
-      >
-        {typeof value === 'string' ? value : JSON.stringify(value, null, 2)}
-      </pre>
+        wrap={wrap}
+      />
     </div>
   );
 }

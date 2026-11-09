@@ -4,13 +4,11 @@ import {
   useCommandTerminal,
   useUserShellTerminal,
 } from './CommandTerminalNavigation';
-import { copyText } from '../host';
 import { useSessionDisclosure } from '../model/presentation';
 import {
   Check,
   ChevronDown,
   ChevronRight,
-  Copy,
   FileDiff,
   ArrowUpRight,
   Terminal,
@@ -23,7 +21,13 @@ import type { AgentRecord, ToolCall } from '../model/types';
 import { agentState } from '../model/activity';
 import { internalToolTitle } from '../model/tool-summary';
 import { useRuntimeActions, useRuntimeSelector } from '../app/context';
-import { DataBlock, IconButton, Status } from './common';
+import {
+  DataBlock,
+  OpenFileButton,
+  OpenInTerminalButton,
+  RowActions,
+  Status,
+} from './common';
 import { DiffBlock, DiffSummary } from './DiffBlock';
 import { t } from '../i18n';
 import { relativePath } from '../model/format';
@@ -165,7 +169,6 @@ function KnowledgeToolMessage({
   expanded,
 }: Pick<ToolMessageProps, 'tool' | 'expanded'>) {
   const [open, setOpen] = useSessionDisclosure('tool:' + tool.id, expanded);
-  const { notify } = useRuntimeActions();
   const shownOutput = shownToolOutput(tool.output);
   const target = knowledgeToolTarget(tool.name, tool.input, tool.output);
   const result = knowledgeToolResult(tool.name, tool.output, tool.status);
@@ -204,34 +207,15 @@ function KnowledgeToolMessage({
           )}
           <details className="context-source">
             <summary>{t('technical details')}</summary>
-            <div className="tool-toolbar">
-              <IconButton
-                label={t('copy tool output')}
-                onClick={() =>
-                  copyText(
-                    JSON.stringify(
-                      {
-                        tool: tool.name,
-                        input: tool.input,
-                        output: shownOutput,
-                      },
-                      null,
-                      2,
-                    ),
-                  ).then(
-                    () => notify(t('copied')),
-                    () => notify(t('clipboard unavailable')),
-                  )
-                }
-              >
-                <Copy size={13} />
-              </IconButton>
-            </div>
             {hasToolInput(tool.input) && (
               <DataBlock title={t('arguments')} value={tool.input} />
             )}
             {shownOutput.trim() && (
-              <DataBlock title={t('output')} value={shownOutput} />
+              <DataBlock
+                title={t('output')}
+                value={shownOutput}
+                copyLabel={t('copy tool output')}
+              />
             )}
           </details>
         </div>
@@ -250,7 +234,6 @@ function GenericToolMessage({
   const sources = useSources();
   const openCommandTerminal = useCommandTerminal();
   const openUserShellTerminal = useUserShellTerminal();
-  const [terminalBusy, setTerminalBusy] = useState(false);
   const [terminalError, setTerminalError] = useState('');
   const attachments =
     (tool as ToolCall & { attachments?: Attachment[] }).attachments ?? [];
@@ -262,7 +245,11 @@ function GenericToolMessage({
     () => structuredTextOutput(withoutHookAllowedLine(tool.output)),
     [tool.output],
   );
-  const { notify, runtime } = useRuntimeActions();
+  // What opens elsewhere sits at the right end of the head; each block of text copies itself
+  const canOpenTerminal =
+    (tool.name === 'execute' && !!openCommandTerminal) ||
+    (!!userShellId && !!openUserShellTerminal);
+  const { runtime } = useRuntimeActions();
   const childAgents = useRuntimeSelector(
     (snapshot) =>
       mappedToolAgents(
@@ -302,48 +289,69 @@ function GenericToolMessage({
   const diff = tool.diff && tool.status === 'success' ? tool.diff : undefined;
   return (
     <div className={`tool-call tool-${tool.status}`}>
-      <button
-        className="tool-head"
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-      >
-        <span className="tool-icon">
-          <Icon size={14} />
-        </span>
-        <code title={tool.name}>{agentToolTitle(tool.name)}</code>
-        <span className="tool-target">
-          {relativePath(
-            String(
-              tool.input.file_path ??
-                tool.input.path ??
-                (isCommand ? tool.input.description : undefined) ??
-                tool.input.command ??
-                tool.input.description ??
-                tool.input.query ??
-                tool.input.pattern ??
-                tool.input.url ??
-                tool.input.element ??
-                tool.input.key ??
-                '',
-            ),
-            root,
-          )}
-        </span>
-        {diff && (
-          <span className="tool-diff-summary">
-            <DiffSummary text={diff.summary} />
+      <div className="tool-row">
+        <button
+          className="tool-head"
+          onClick={() => setOpen(!open)}
+          aria-expanded={open}
+        >
+          <span className="tool-icon">
+            <Icon size={14} />
           </span>
+          <code title={tool.name}>{agentToolTitle(tool.name)}</code>
+          <span className="tool-target">
+            {relativePath(
+              String(
+                tool.input.file_path ??
+                  tool.input.path ??
+                  (isCommand ? tool.input.description : undefined) ??
+                  tool.input.command ??
+                  tool.input.description ??
+                  tool.input.query ??
+                  tool.input.pattern ??
+                  tool.input.url ??
+                  tool.input.element ??
+                  tool.input.key ??
+                  '',
+              ),
+              root,
+            )}
+          </span>
+          {diff && (
+            <span className="tool-diff-summary">
+              <DiffSummary text={diff.summary} />
+            </span>
+          )}
+          <span className="tool-time">{tool.elapsed}</span>
+          {tool.status === 'success' ? (
+            <Check size={13} />
+          ) : (
+            <Status value={tool.status} />
+          )}
+          <span>
+            {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          </span>
+        </button>
+        {open && (canOpenTerminal || tool.filePath) && (
+          <RowActions>
+            {canOpenTerminal && (
+              <OpenInTerminalButton
+                open={(trigger) => {
+                  const source =
+                    ownerSessionId ?? currentSession(runtime.getSnapshot()).id;
+                  return userShellId
+                    ? openUserShellTerminal!(source, userShellId, trigger)
+                    : openCommandTerminal!(source, tool.id, trigger);
+                }}
+                onError={setTerminalError}
+              />
+            )}
+            {tool.filePath && (
+              <OpenFileButton onOpen={() => onFile(tool.filePath!)} />
+            )}
+          </RowActions>
         )}
-        <span className="tool-time">{tool.elapsed}</span>
-        {tool.status === 'success' ? (
-          <Check size={13} />
-        ) : (
-          <Status value={tool.status} />
-        )}
-        <span>
-          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-        </span>
-      </button>
+      </div>
       {diff && !open && (
         <div className="tool-diff">
           <DiffBlock diff={diff} compact header={false} />
@@ -355,92 +363,14 @@ function GenericToolMessage({
       {open && (
         <div className="tool-content">
           {diff && <DiffBlock diff={diff} header={false} />}
-          <div className="tool-toolbar">
-            {((tool.name === 'execute' && openCommandTerminal) ||
-              (userShellId && openUserShellTerminal)) && (
-              <button
-                className="text-button"
-                disabled={terminalBusy}
-                onClick={async (event) => {
-                  const trigger = event.currentTarget;
-                  setTerminalBusy(true);
-                  setTerminalError('');
-                  try {
-                    const source =
-                      ownerSessionId ??
-                      currentSession(runtime.getSnapshot()).id;
-                    if (userShellId)
-                      await openUserShellTerminal!(
-                        source,
-                        userShellId,
-                        trigger,
-                      );
-                    else await openCommandTerminal!(source, tool.id, trigger);
-                  } catch (error) {
-                    setTerminalError(
-                      error instanceof Error
-                        ? error.message
-                        : t('command terminal could not be opened; try again'),
-                    );
-                  } finally {
-                    setTerminalBusy(false);
-                  }
-                }}
-              >
-                <Terminal size={12} />
-                {terminalBusy ? t('opening terminal…') : t('open in terminal')}
-              </button>
-            )}
-            {tool.filePath && (
-              <button
-                className="text-button"
-                onClick={() => onFile(tool.filePath!)}
-              >
-                {t('open file')}
-                <ArrowUpRight size={12} />
-              </button>
-            )}
-            {commandLine && (
-              <IconButton
-                label={t('copy command')}
-                onClick={() =>
-                  copyText(commandLine).then(
-                    () => notify(t('copied')),
-                    () => notify(t('clipboard unavailable')),
-                  )
-                }
-              >
-                <Terminal size={13} />
-              </IconButton>
-            )}
-            {textOutput && (
-              <IconButton
-                label={t('copy text output')}
-                onClick={() =>
-                  copyText(textOutput.text).then(
-                    () => notify(t('copied')),
-                    () => notify(t('clipboard unavailable')),
-                  )
-                }
-              >
-                <Copy size={13} />
-              </IconButton>
-            )}
-            <IconButton
-              label={t('copy tool output')}
-              onClick={() =>
-                copyText(shownOutput).then(
-                  () => notify(t('copied')),
-                  () => notify(t('clipboard unavailable')),
-                )
-              }
-            >
-              <Copy size={13} />
-            </IconButton>
-          </div>
           {terminalError && <p role="alert">{terminalError}</p>}
           {commandLine && (
-            <DataBlock title={t('command')} value={`$ ${commandLine}`} />
+            <DataBlock
+              title={t('command')}
+              value={`$ ${commandLine}`}
+              copy={commandLine}
+              copyLabel={t('copy command')}
+            />
           )}
           {textOutput ? (
             <>
@@ -450,16 +380,26 @@ function GenericToolMessage({
                   value={textOutput.preview}
                   tabIndex={0}
                   wrap={false}
+                  copy={textOutput.text}
+                  copyLabel={t('copy text output')}
                 />
               </div>
               {/* The response as the tool returned it, folded: the text above is what it says. */}
               <details className="context-source">
                 <summary>{t('full response')}</summary>
-                <DataBlock title={t('full response')} value={shownOutput} />
+                <DataBlock
+                  title={t('full response')}
+                  value={shownOutput}
+                  copyLabel={t('copy tool output')}
+                />
               </details>
             </>
           ) : shownOutput.trim() ? (
-            <DataBlock title={t('output')} value={shownOutput} />
+            <DataBlock
+              title={t('output')}
+              value={shownOutput}
+              copyLabel={t('copy tool output')}
+            />
           ) : (
             <p className="tool-empty">
               {live ? t('no output yet') : t('no output')}

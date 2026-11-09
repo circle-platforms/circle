@@ -1,9 +1,8 @@
 import { useRuntime } from '../app/context';
 import { t } from '../i18n';
 // The row shares the conversation's words for a wait: both say what is held.
-import { copyText } from '../host';
 import type { ActionFailure } from '../model/types';
-import { Button } from './common';
+import { Button, CopyButton, RowActions } from './common';
 
 /** What the runtime is holding right now, said where the person asked for it. */
 export function RuntimeWaitRow({ sessionId }: { sessionId: string }) {
@@ -36,7 +35,7 @@ export function CommandFailureCard({
   sessionId: string;
   failure: ActionFailure;
 }) {
-  const { runtime, notify } = useRuntime();
+  const { runtime } = useRuntime();
   const timedOut = failure.kind === 'timeout';
   return (
     <section
@@ -45,9 +44,17 @@ export function CommandFailureCard({
       role="alert"
       aria-label={t('action failed')}
     >
-      <strong>
-        {timedOut ? t('Circle did not answer') : t('action failed')}
-      </strong>
+      <header className="head-row">
+        <strong>
+          {timedOut ? t('Circle did not answer') : t('action failed')}
+        </strong>
+        <RowActions>
+          <CopyButton
+            text={failure.detail ?? failure.message}
+            label={t('copy error details')}
+          />
+        </RowActions>
+      </header>
       {/* What Circle said, in the interface language; its own words stay below. */}
       <p className="runtime-failure-cause">{failure.message}</p>
       {timedOut && (
@@ -67,16 +74,6 @@ export function CommandFailureCard({
             {t('retry')}
           </Button>
         )}
-        <Button
-          onClick={() =>
-            void copyText(failure.detail ?? failure.message).then(
-              () => notify(t('copied')),
-              () => notify(t('clipboard unavailable')),
-            )
-          }
-        >
-          {t('copy error details')}
-        </Button>
         <Button onClick={() => runtime.dismissActionError?.(sessionId)}>
           {t('dismiss')}
         </Button>
