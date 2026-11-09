@@ -19,6 +19,7 @@ export function operationLabel(service: string, method: string): string {
     refresh: t('refresh'),
     resolveSource: t('locate source'),
     readPlanFolder: t('read a plan folder file'),
+    readImage: t('read a picture'),
     create: t('create'),
     restart: t('restart'),
     write: t('send terminal input'),

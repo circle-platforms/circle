@@ -44,6 +44,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import originalFs from 'original-fs';
 import { join, dirname, basename } from 'node:path';
+import { workspaceFileToReveal } from './reveal';
 import { WorkspaceGrants, nativeFile } from './files';
 import { WorkspaceListings } from './workspace-listings';
 import { selectedFolder } from './folder-dialog';
@@ -1215,14 +1216,23 @@ app
       workspaceSelections.set(selected.id, selected.path);
       return selected;
     });
-    handle('circle:reveal-workspace', (workspaceId) => {
-      if (!runtime || typeof workspaceId !== 'string')
+    handle('circle:reveal-workspace', async (workspaceId, path) => {
+      if (
+        !runtime ||
+        typeof workspaceId !== 'string' ||
+        (path !== undefined && typeof path !== 'string')
+      )
         throw Error('invalid workspace');
       const workspace = runtime
         .state()
         .snapshot.workspaces.find((row) => row.id === workspaceId);
       if (!workspace) throw Error('workspace not found');
-      if (!fixtureProfile) shell.showItemInFolder(workspace.path);
+      // A file of the workspace, named by its path there: shown only when it is still in it
+      const shown =
+        path === undefined
+          ? workspace.path
+          : await workspaceFileToReveal(workspace.path, path);
+      if (!fixtureProfile) shell.showItemInFolder(shown);
     });
     // The files of the folder the runtime works in, when it is trusted: the app's own
     // workspace, or one you opened and trusted. Reads still go through granted handles.

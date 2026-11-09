@@ -337,15 +337,17 @@ export class WorkspaceServices {
         )
           throw Error('source is outside the granted workspace');
         const portable = relative.split(path.sep).join('/');
-        await this.documents.read(portable);
+        // Found without reading it as text: a picture or a page opens by its type
+        await this.documents.locate(portable);
         return { path: portable };
       }
       let result: unknown;
       const file =
-        method === 'read' || method === 'save'
+        method === 'read' || method === 'save' || method === 'readImage'
           ? requiredString(params, 'path')
           : '';
       if (method === 'read') return this.documents.read(file);
+      if (method === 'readImage') return this.documents.readImage(file);
       if (method === 'refresh') return this.documents.refresh();
       if (method === 'save') {
         if (

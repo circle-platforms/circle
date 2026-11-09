@@ -47,3 +47,11 @@ export function contextPercent(
   if (input === null || input === undefined || !window) return null;
   return Math.min(999, (input / window) * 100);
 }
+/** A size as a browser's download bar and a picture's heading show it. */
+export function formatBytes(bytes: number): string {
+  return bytes < 1024
+    ? `${bytes} B`
+    : bytes < 1024 * 1024
+      ? `${(bytes / 1024).toFixed(1)} KB`
+      : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}

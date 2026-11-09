@@ -41,6 +41,7 @@ const methods: Record<WorkspaceService, ReadonlySet<string>> = {
     'refresh',
     'resolveSource',
     'readPlanFolder',
+    'readImage',
   ]),
   terminal: new Set([
     'resolveCommand',

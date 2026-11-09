@@ -1,3 +1,5 @@
+import { desktopHost } from '../host';
+import { macKeyboard } from '../model/shortcuts';
 import { useEffect, useRef, useState } from 'react';
 import { FileText, Save, X } from 'lucide-react';
 import { Tooltip } from 'radix-ui';
@@ -700,6 +702,27 @@ export function FileViewer({
           {t('loading file')}
         </div>
       </section>
+    );
+  // A file that is not text (the desktop's NOT_TEXT, apps/desktop/src/workspace/documents.ts)
+  // is named as such, with the folder it is in, never as missing
+  if (!document && /binary files cannot be edited as text/.test(error))
+    return (
+      <div className="empty-state" role="alert">
+        <h3>{t('{file} is not a text file', { file: fileName })}</h3>
+        <p>{t('Circle opens text files and pictures here.')}</p>
+        <span className="empty-state-actions">
+          {desktopHost()?.revealWorkspace && (
+            <Button
+              onClick={() =>
+                perform(() => desktopHost()!.revealWorkspace(workspaceId, path))
+              }
+            >
+              {macKeyboard() ? t('show in finder') : t('show in folder')}
+            </Button>
+          )}
+          <Button onClick={onClose}>{t('back to conversation')}</Button>
+        </span>
+      </div>
     );
   if (!document)
     return (

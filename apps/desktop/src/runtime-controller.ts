@@ -1999,7 +1999,13 @@ export class RuntimeController {
     action: () => Promise<unknown>,
   ): Promise<unknown> {
     const reads: Record<string, string[]> = {
-      documents: ['read', 'refresh', 'resolveSource', 'readPlanFolder'],
+      documents: [
+        'read',
+        'refresh',
+        'resolveSource',
+        'readPlanFolder',
+        'readImage',
+      ],
       terminal: ['list', 'replay', 'resolveCommand'],
       git: ['status', 'snapshot', 'changes', 'diff', 'branches'],
       tasks: ['list', 'events', 'artifacts', 'readArtifact'],

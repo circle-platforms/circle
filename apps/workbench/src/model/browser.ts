@@ -1,3 +1,4 @@
+import { formatBytes } from './format';
 import type {
   BrowserDialog,
   BrowserState,
@@ -67,15 +68,9 @@ export function downloadProgress(download: {
   received: number;
   total: number;
 }): string {
-  const size = (bytes: number) =>
-    bytes < 1024
-      ? `${bytes} B`
-      : bytes < 1024 * 1024
-        ? `${(bytes / 1024).toFixed(1)} KB`
-        : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   if (download.state === 'progress' && download.total > 0)
     return `${Math.floor((download.received * 100) / download.total)}%`;
-  return size(download.received);
+  return formatBytes(download.received);
 }
 /**
  * An address as Chrome's address bar shows it while you are not typing: without
