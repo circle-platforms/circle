@@ -864,7 +864,7 @@ pre {
   font-size: var(--ui-tiny);
 }
 .tool-content {
-  padding: 0 14px 12px;
+  padding: 0 12px 12px;
   border-top: 1px solid var(--border);
   background: var(--subtle);
 }

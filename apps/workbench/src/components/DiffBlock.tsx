@@ -37,18 +37,23 @@ export function DiffBlock({
   diff,
   path,
   compact = false,
+  header = true,
 }: {
   diff: DiffView;
   path?: string;
   compact?: boolean;
+  /** Off where the row above already says the path and the summary, as a tool call's does. */
+  header?: boolean;
 }) {
   const parts = diffRowParts(diff.rows);
   return (
     <div className={`diff-block${compact ? ' compact' : ''}`}>
-      <header>
-        {path && <code>{path}</code>}
-        <span>{summary(diff.summary)}</span>
-      </header>
+      {header && (
+        <header>
+          {path && <code>{path}</code>}
+          <DiffSummary text={diff.summary} />
+        </header>
+      )}
       {diff.rows.length > 0 && (
         <pre>
           {diff.rows.map((row, index) => {
@@ -79,6 +84,22 @@ export function DiffBlock({
         </pre>
       )}
     </div>
+  );
+}
+/**
+ * A difference's summary as every place shows it: added and removed lines in the colours
+ * and signs of the folded line's count (`+3 −1`), or a new or deleted file's lines in the
+ * interface language.
+ */
+export function DiffSummary({ text }: { text: string }) {
+  const counts = /^\+(\d+) -(\d+)$/.exec(text);
+  return counts ? (
+    <span className="diff-count">
+      <span className="added">+{counts[1]}</span>
+      <span className="removed">−{counts[2]}</span>
+    </span>
+  ) : (
+    <span>{summary(text)}</span>
   );
 }
 // The core writes the summary in English: `+3 -1`, `new file, 4 lines`, `deleted, 2 lines`.

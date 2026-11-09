@@ -66,6 +66,20 @@ const steps = [
       },
     },
   },
+  {
+    ...call('c6', 'edit_file', 'docs/tasks/cache.md'),
+    tool: {
+      ...call('c6', 'edit_file', 'docs/tasks/cache.md').tool,
+      diff: {
+        summary: '+1 -1',
+        rows: [
+          { text: '@@ -1,1 +1,1 @@' },
+          { text: '-  1  # Cache', tone: 'removed' },
+          { text: '+  1  # Cache tiers', tone: 'added' },
+        ],
+      },
+    },
+  },
   { id: 'answer', role: 'assistant', at: '10:32', text: 'Done.' },
 ];
 let browser;
@@ -146,8 +160,8 @@ try {
         frame: frame.borderTopWidth + ' ' + frame.borderTopStyle,
       };
     });
-    // One frame per step: three calls, then two, with no room between the calls of a step
-    assert.deepEqual(measured.stacks, [3, 2], JSON.stringify(measured));
+    // One frame per step: three calls, then three, with no room between the calls of a step
+    assert.deepEqual(measured.stacks, [3, 3], JSON.stringify(measured));
     assert.ok(
       measured.gaps[0].every((gap) => gap >= 0 && gap <= 1),
       JSON.stringify(measured),
@@ -171,6 +185,36 @@ try {
     });
     assert.equal(diff.left, diff.right, JSON.stringify(diff));
     assert.ok(Math.abs(diff.left - diff.iconLeft) <= 1, JSON.stringify(diff));
+    // Every difference's summary reads the same way: a new file's lines in the interface
+    // language, added and removed lines in the folded line's colours; the row says it, so
+    // its block has no header saying it again
+    const summaries = await line.evaluate((group) =>
+      [...group.querySelectorAll('.tool-call')]
+        .filter((card) => card.querySelector('.tool-diff'))
+        .map((card) => ({
+          text: card.querySelector('.tool-diff-summary').textContent,
+          counts: [
+            ...card.querySelectorAll('.tool-diff-summary .diff-count > span'),
+          ].map((span) => [span.className, span.textContent]),
+          headers: card.querySelectorAll('.diff-block > header').length,
+        })),
+    );
+    const zh = language === 'zh-CN';
+    assert.deepEqual(summaries, [
+      {
+        text: zh ? '新文件，2 行' : 'new file, 2 lines',
+        counts: [],
+        headers: 0,
+      },
+      {
+        text: '+1−1',
+        counts: [
+          ['added', '+1'],
+          ['removed', '−1'],
+        ],
+        headers: 0,
+      },
+    ]);
     // The frames sit under the line itself, with no rule or indent on their left
     assert.equal(measured.rule, '0px', JSON.stringify(measured));
     assert.equal(measured.indent, 0, JSON.stringify(measured));
