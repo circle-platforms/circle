@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { test, type TestContext } from 'node:test';
 import type { FileMutations } from '../src/file_mutations.js';
 import { oldStringMissing } from '../src/edit_miss.js';
@@ -150,7 +150,12 @@ test('in the terminal, which reads anywhere, listing and searching do too', asyn
   );
   assert.match(String(await w.run('ls', { path: w.outside })), /private\.txt/);
   assert.match(
-    String(await w.run('glob', { pattern: join(w.outside, '*.txt') })),
+    // A glob pattern takes forward slashes, a Windows drive path included
+    String(
+      await w.run('glob', {
+        pattern: join(w.outside, '*.txt').split(sep).join('/'),
+      }),
+    ),
     /private\.txt/,
   );
 });
