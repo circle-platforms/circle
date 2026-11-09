@@ -853,10 +853,9 @@ try {
   };
   const progress = overview.getByRole('region', { name: /^in progress\b/ });
   const progressFold = progress.getByRole('button', { name: /^in progress\b/ });
+  // The plan step under way: a row of the card's plan, marked as the current step
   const planRow = (text) =>
-    progress.locator('.overview-row', { hasText: text }).filter({
-      has: page.locator('.overview-end', { hasText: /^plan$/ }),
-    });
+    progress.locator('.overview-plan[aria-current="step"]', { hasText: text });
   const message = page.getByRole('textbox', { name: 'message', exact: true });
   // The stored plan, after the conversation writes its state
   const storedPlan = async () => {
@@ -904,11 +903,15 @@ try {
     .getByRole('heading', { name: 'Fix the reconnect race', exact: true })
     .waitFor();
   await showOverview();
-  // The card names the step under way, not the finished ones or the next
+  // The card lists five steps around the one under way, the rest behind show more
   await planRow('Step 6').waitFor();
+  assert.deepEqual(
+    await progress.locator('.overview-plan .overview-name').allInnerTexts(),
+    ['Step 3', 'Step 4', 'Step 5', 'Step 6', 'Step 7'],
+  );
   assert.equal(
-    await progress.locator('.overview-row', { hasText: /^Step \d/ }).count(),
-    1,
+    await progress.locator('.overview-more').innerText(),
+    'show 2 more',
   );
   assert.match(await progressFold.innerText(), /plan 5\/7/);
   const step = await planRow('Step 6').evaluate((row) => {
@@ -924,7 +927,7 @@ try {
   });
   assert.ok(step.inside && step.shown, JSON.stringify(step));
   checks.push(
-    'a long plan keeps the step under way in sight, with how far the plan is',
+    'a long plan shows five steps around the one under way, with how far the plan is',
   );
   await reset();
   await page
