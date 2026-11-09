@@ -412,6 +412,19 @@ export class GatewayModel implements ChatModel {
           windowSource: 'provider',
         };
   }
+  /**
+   * The endpoint refused a request this size as too long without saying its limit, as
+   * OpenAI's "Your input exceeds the context window of this model" does: the context is
+   * no larger than the refused request. Measured as Circle measures a request, so the
+   * next one that size compacts first.
+   */
+  noteContextRefusal(input: number): void {
+    if (!Number.isSafeInteger(input) || input <= 0) return;
+    this.observedContextLimit = Math.min(
+      this.observedContextLimit ?? Infinity,
+      input,
+    );
+  }
   get contextWindow(): number {
     return Math.min(
       this.modelFacts.contextWindow,

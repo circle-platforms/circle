@@ -6,7 +6,6 @@ export const developer: Record<string, string> = {
   'return to message': '返回输入框',
   'review connection': '检查连接配置',
   'copy error details': '复制错误详情',
-  'Circle did not answer': 'Circle 没有应答',
   'Circle did not answer in {seconds}s': 'Circle 在 {seconds} 秒内没有应答',
   'Circle is still working on {command} · {seconds}s':
     'Circle 正在处理 {command} · {seconds} 秒',

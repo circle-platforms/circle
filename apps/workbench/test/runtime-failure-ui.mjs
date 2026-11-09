@@ -48,16 +48,19 @@ try {
             .count(),
           0,
         );
+        // A line of the conversation: the cause in red, folded
+        const line = alert.getByRole('button', { expanded: false });
         assert.equal(
-          await page
-            .locator('.runtime-failure details')
-            .evaluate((el) => el.open),
-          false,
+          (await line.textContent()).trim(),
+          '✖ 404 status code (no body)',
         );
-        await alert.locator('summary').click();
+        assert.equal(await alert.locator('.failure-row-body').count(), 0);
+        // Opened, what was said under the cause, without the cause again
+        await line.click();
+        const error = await page.evaluate(() => window.failureFixture.error);
         assert.equal(
           await alert.locator('pre').textContent(),
-          await page.evaluate(() => window.failureFixture.error),
+          error.split('\n').slice(1).join('\n').trim(),
         );
         await alert
           .getByRole('button', {

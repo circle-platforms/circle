@@ -136,12 +136,7 @@ export const dialogs: Record<string, string> = {
   'trust workspace': '信任项目',
   'workspace trusted': '项目已信任',
   // compact
-  'A connected Circle runtime summarizes older context. The full record is kept.':
-    '已连接的 Circle 运行时会总结较早的上下文。完整记录会保留。',
-  focus: '重点',
   'compaction focus': '压缩重点',
-  'what should the summary preserve?': '摘要应该保留什么？',
-  'request compaction': '请求压缩',
   'compaction requested; raw history is unchanged':
     '已请求压缩；原始会话记录保持不变',
   // keyboard shortcuts

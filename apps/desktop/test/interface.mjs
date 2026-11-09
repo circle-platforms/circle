@@ -218,7 +218,6 @@ const expected = {
   name: ['dialog', 'rename session'],
   session: ['dialog', 'session details'],
   models: ['heading', 'models'],
-  compact: ['dialog', 'compact context'],
   skill: ['heading', 'skills'],
   tree: ['dialog', 'session tree'],
   fork: ['dialog', 'fork session'],
@@ -746,6 +745,12 @@ try {
         await page
           .getByRole('heading', { name: 'output', exact: true })
           .first()
+          .waitFor();
+      else if (command.name === 'compact')
+        // Compaction runs at once, asking nothing; the preview only says it was asked
+        await page
+          .getByRole('status')
+          .filter({ hasText: 'compaction requested' })
           .waitFor();
       else if (command.name === 'undo')
         assert.ok(snapshot.sessions[0].hiddenIds.length);

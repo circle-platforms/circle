@@ -60,7 +60,6 @@ export type DialogId =
   | 'trust'
   | 'preview'
   | 'hotkeys'
-  | 'compact'
   | 'exit'
   | 'secret'
   | 'job-stop'

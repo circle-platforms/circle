@@ -2,7 +2,8 @@ import { useRuntime } from '../app/context';
 import { t } from '../i18n';
 // The row shares the conversation's words for a wait: both say what is held.
 import type { ActionFailure } from '../model/types';
-import { Button, CopyButton, RowActions } from './common';
+import { Button } from './common';
+import { FailureRow } from './FailureRow';
 
 /** What the runtime is holding right now, said where the person asked for it. */
 export function RuntimeWaitRow({ sessionId }: { sessionId: string }) {
@@ -38,46 +39,34 @@ export function CommandFailureCard({
   const { runtime } = useRuntime();
   const timedOut = failure.kind === 'timeout';
   return (
-    <section
-      className="transcript-notice runtime-failure"
-      data-testid="command-failure"
-      role="alert"
-      aria-label={t('action failed')}
-    >
-      <header className="head-row">
-        <strong>
-          {timedOut ? t('Circle did not answer') : t('action failed')}
-        </strong>
-        <RowActions>
-          <CopyButton
-            text={failure.detail ?? failure.message}
-            label={t('copy error details')}
-          />
-        </RowActions>
-      </header>
-      {/* What Circle said, in the interface language; its own words stay below. */}
-      <p className="runtime-failure-cause">{failure.message}</p>
-      {timedOut && (
-        <p className="panel-note">
-          {t('check whether it ran before sending it again')}
-        </p>
-      )}
-      {failure.detail && failure.detail !== failure.message && (
-        <details>
-          <summary>{t('error details')}</summary>
-          <pre>{failure.detail}</pre>
-        </details>
-      )}
-      <div className="runtime-failure-actions">
-        {failure.retry && !timedOut && (
-          <Button onClick={() => void runtime.retryActionFailure?.(sessionId)}>
-            {t('retry')}
+    <FailureRow
+      label={t('action failed')}
+      testId="command-failure"
+      // A timeout's message already says Circle did not answer, and for how long
+      cause={`✖ ${failure.message}`}
+      detail={
+        failure.detail && failure.detail !== failure.message
+          ? failure.detail
+          : undefined
+      }
+      copy={failure.detail ?? failure.message}
+      note={
+        timedOut ? t('check whether it ran before sending it again') : undefined
+      }
+      actions={
+        <>
+          {failure.retry && !timedOut && (
+            <Button
+              onClick={() => void runtime.retryActionFailure?.(sessionId)}
+            >
+              {t('retry')}
+            </Button>
+          )}
+          <Button onClick={() => runtime.dismissActionError?.(sessionId)}>
+            {t('dismiss')}
           </Button>
-        )}
-        <Button onClick={() => runtime.dismissActionError?.(sessionId)}>
-          {t('dismiss')}
-        </Button>
-      </div>
-    </section>
+        </>
+      }
+    />
   );
 }

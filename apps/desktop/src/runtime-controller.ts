@@ -4001,10 +4001,16 @@ export class RuntimeController {
         persisted?.code !== event.payload.completion_failure
       ) {
         const rows = this.failures.get(id) ?? [];
+        // The endpoint's own words go under Circle's, in the details a person copies
+        const provider = event.payload.provider_error as
+          { code?: string; message?: string } | undefined;
+        const said = provider?.message
+          ? `\n${provider.code ? `${provider.code}: ` : ''}${provider.message}`
+          : '';
         rows.push({
           id: `failure-${randomUUID()}`,
           after: runtime.store.get(id)?.head ?? null,
-          text: `✖ ${String(event.payload.message ?? 'the turn failed')}`,
+          text: `✖ ${String(event.payload.message ?? 'the turn failed')}${said}`,
           ...(event.payload.completion_failure
             ? {
                 completionFailure: event.payload

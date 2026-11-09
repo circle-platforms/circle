@@ -1,5 +1,5 @@
 import { SafeFileUndo } from './SafeFileUndo';
-import { CompactionStatus } from './CompactionStatus';
+import { CompactionRow } from './CompactionStatus';
 import {
   preserveNativeCopy,
   preserveNativeEditing,
@@ -1008,6 +1008,8 @@ export function Conversation({
             />
           )}
           {clock && clockAt < 0 && <TurnRow turn={clock} />}
+          {/* A compaction under way: its line where the next message goes */}
+          <CompactionRow state={session.compaction} />
           {session.state === 'waiting' && runtime.mode !== 'live' && (
             <div className="pending-message">
               <i />
@@ -1062,14 +1064,8 @@ export function Conversation({
           </Button>
         </div>
       )}
-      {!composerWritable && session.compaction?.status === 'running' && (
-        <div className="composer-area">
-          <CompactionStatus state={session.compaction} />
-        </div>
-      )}
       {composerWritable && (
         <div className="composer-area">
-          <CompactionStatus state={session.compaction} />
           {snapshot.runtime?.connected && (
             <RecoveredInputs key={session.id} sessionId={session.id} />
           )}

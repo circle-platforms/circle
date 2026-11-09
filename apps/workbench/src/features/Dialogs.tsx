@@ -68,7 +68,6 @@ const NAMES: Record<DialogId, () => string> = {
   trust: () => t('workspace trust'),
   preview: () => t('frontend preview'),
   hotkeys: () => t('keyboard shortcuts'),
-  compact: () => t('compact context'),
   exit: () => t('close session'),
   secret: () => t('secret input'),
   'job-stop': () => t('stop background job'),
@@ -750,7 +749,6 @@ export function DialogHost({
   const [model, setModel] = useState('');
   const [secret, setSecret] = useState('');
   const [resetConfirm, setResetConfirm] = useState(false);
-  const [hint, setHint] = useState('');
   useEffect(() => {
     setTitle(target.title);
     setEditor(current.draft);
@@ -769,7 +767,6 @@ export function DialogHost({
           : 'markdown',
     );
     setResetConfirm(false);
-    setHint('');
   }, [dialog, selection]);
   const selectedJob = snapshot.jobs.find((job) => job.id === selection);
   const selectedSecret = snapshot.interactions.find(
@@ -1433,35 +1430,6 @@ export function DialogHost({
             </Button>
           </div>
         </>
-      )}
-      {dialog === 'compact' && (
-        <form
-          className="form-stack"
-          onSubmit={(event) => {
-            event.preventDefault();
-            runtime.request('compact', { hint });
-            onClose();
-            notify(t('compaction requested; raw history is unchanged'));
-          }}
-        >
-          <p className="dialog-paragraph">
-            {t(
-              'A connected Circle runtime summarizes older context. The full record is kept.',
-            )}
-          </p>
-          <label>
-            {t('focus')}
-            <input
-              aria-label={t('compaction focus')}
-              value={hint}
-              onChange={(event) => setHint(event.target.value)}
-              placeholder={t('what should the summary preserve?')}
-            />
-          </label>
-          <Button type="submit" className="primary">
-            {t('request compaction')}
-          </Button>
-        </form>
       )}
       {dialog === 'hotkeys' && (
         <table className="shortcut-table">

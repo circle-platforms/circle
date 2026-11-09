@@ -953,11 +953,11 @@ try {
   checks.push('the conversation follows a streaming answer unless scrolled up');
   // A request the endpoint refuses stays in the conversation
   await send('refuse this');
-  await page.locator('.transcript-notice').filter({ hasText: '✖' }).waitFor();
-  assert.match(
-    await page.locator('.transcript-notice').last().innerText(),
-    /400/,
-  );
+  // One failure line; opened, it holds what the endpoint said
+  const refused = page.locator('.failure-row').filter({ hasText: '✖' }).last();
+  await refused.waitFor();
+  await refused.locator('.failure-summary').click();
+  assert.match(await refused.innerText(), /400/);
   checks.push('a failed turn leaves its error in the conversation');
   // The default workspace moves only through the settings page and the native
   // dialog's grant, never through a renderer-supplied path.
@@ -1186,7 +1186,9 @@ try {
                   ?.textContent?.includes('screen.png') ?? false,
             },
             notices: [
-              ...document.querySelectorAll('.transcript-notice,.toast'),
+              ...document.querySelectorAll(
+                '.transcript-notice,.failure-row,.toast',
+              ),
             ].map((element) => ({ characters: element.textContent?.length })),
           };
         }),

@@ -92,6 +92,14 @@ test('only typed completion diagnostics translate; model and provider text stay 
     completionNoticeText({ text, completionFailure: 'empty_response' }),
     '✖ 模型返回了空响应',
   );
+  // The endpoint's own words stay under the translated cause, in the details copied
+  assert.equal(
+    completionNoticeText({
+      text: '✖ model context window exhausted; response incomplete\ncontext_length_exceeded: 400 Your input exceeds the context window of this model.',
+      completionFailure: 'context_limit',
+    }),
+    '✖ 模型上下文已满，响应未完成\ncontext_length_exceeded: 400 Your input exceeds the context window of this model.',
+  );
 });
 
 test('a stopped reply keeps one interrupt mark, under the stats', () => {

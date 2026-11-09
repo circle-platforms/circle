@@ -5,6 +5,8 @@ import { orderModeToolResults } from './tool_history.js';
 import type {
   ChatModel,
   Message,
+  ModelRequest,
+  ModelResponse,
   Tool,
   ToolCall,
   Usage,
@@ -50,8 +52,10 @@ import {
 } from './command_process.js';
 import {
   completionFailure,
+  isContextLimitError,
   ModelCompletionFailure,
 } from './model_completion.js';
+import { BudgetExceeded, requestBudget } from './request_budget.js';
 import {
   activeHookSummary,
   hookDeniedMessage,
@@ -1069,6 +1073,10 @@ export class Harness {
       this.pendingTitle = { display: shown.display, fallback };
     }
     this.bus.emit('run_start', { payload: { message: prompt } });
+    // A step the endpoint refuses as too long is compacted and tried again, for as long as
+    // each try is smaller than the one refused before it: with automatic compaction on,
+    // a person never meets a full context that compaction could have made room in
+    let refused: { input: number; times: number } | undefined;
     try {
       for (let step = 0; step < (this.options.maxSteps ?? 9999); step++) {
         signal.throwIfAborted();
@@ -1108,7 +1116,7 @@ export class Harness {
           this.bus.emit('llm_start');
           // After the user message is stored, and not for a title or side request.
           this.options.store.noteTurn(this.sessionId);
-          const response = await this.model.complete({
+          const request: ModelRequest = {
             enforceBudget: true,
             system:
               this.system +
@@ -1151,7 +1159,33 @@ export class Harness {
                 payload: { text, thinking: Boolean(thinking) },
               });
             },
-          });
+          };
+          let response: ModelResponse;
+          try {
+            response = await this.model.complete(request);
+          } catch (error) {
+            // The model's endpoint refused the request as too long, before any of an
+            // answer came: the context it has is smaller than the one Circle measured.
+            // The refused size is noted as the limit, so the step's next preparation
+            // compacts the conversation to fit, and the step is tried again. A try no
+            // smaller than the last refused one, or a sixth, ends the turn with the error.
+            const input = requestBudget(this.model, request).input;
+            if (
+              (!refused || (input < refused.input && refused.times < 5)) &&
+              !stepSignal.aborted &&
+              isContextLimitError(error) &&
+              // Circle's own measure, not the endpoint's refusal: nothing to learn
+              !(error instanceof BudgetExceeded) &&
+              !this.streamed.trim() &&
+              !this.streamedThinking.trim()
+            ) {
+              refused = { input, times: (refused?.times ?? 0) + 1 };
+              this.model.noteContextRefusal?.(input);
+              continue;
+            }
+            throw error;
+          }
+          refused = undefined;
           stepSignal.throwIfAborted();
           const originalCalls = response.message.tool_calls;
           response.message.tool_calls = originalCalls?.map(
@@ -1328,6 +1362,20 @@ export class Harness {
             ? {
                 completion_failure: failure.code,
                 completion_message_id: failure.responseId,
+              }
+            : {}),
+          // What the endpoint itself said, under Circle's words for the failure: its
+          // code and message are what a person reports, and what tells one cause from another
+          ...(!signal.aborted &&
+          failure instanceof ModelCompletionFailure &&
+          failure.providerError
+            ? {
+                provider_error: {
+                  ...(failure.providerError.code
+                    ? { code: failure.providerError.code }
+                    : {}),
+                  message: redact(failure.providerError.message),
+                },
               }
             : {}),
         },

@@ -1,9 +1,11 @@
 import { formatRuntimeNotice } from '../model/runtime-notice';
+import { FailureRow } from './FailureRow';
+import { CompactionOutcome } from '../features/CompactionStatus';
 import { Brain, ChevronRight } from 'lucide-react';
 import type { Message } from '../model/types';
 import { formatBusyElapsed } from '../model/format';
 import { fullTime, shownTime } from '../model/time';
-import { Button, CopyButton, FileChip, RowActions } from './common';
+import { Button, CopyButton, FileChip } from './common';
 import './runtime-notice.css';
 import {
   cleanThinking,
@@ -208,7 +210,11 @@ export function RuntimeNotice({
   onConnection: () => void;
   onMessage: () => void;
 }) {
-  if (!message.id.startsWith('failure-'))
+  // A compaction's outcome sits on the line where it ran
+  if (message.compaction && message.compaction.status !== 'running')
+    return <CompactionOutcome state={message.compaction} text={message.text} />;
+  // A failed turn, as it happened or as restored from the history, is one failure line
+  if (!message.id.startsWith('failure-') && !message.completionFailure)
     return (
       <div className="transcript-notice">
         {message.planCompleted === undefined
@@ -216,35 +222,23 @@ export function RuntimeNotice({
           : t('plan completed · {n} steps', { n: message.planCompleted })}
       </div>
     );
+  // The cause in the interface language on the line; under it, what the endpoint said
+  const [cause, ...said] = message.text.split('\n');
   return (
-    <section
-      className="transcript-notice runtime-failure"
-      role="alert"
-      aria-label={t('action failed')}
-    >
-      <header className="head-row">
-        <strong>{t('action failed')}</strong>
-        <RowActions>
-          <CopyButton text={message.text} label={t('copy error details')} />
-        </RowActions>
-      </header>
-      {/* The cause in the runtime's own words; the whole text stays folded below. */}
-      <p className="runtime-failure-cause">{message.text.split('\n')[0]}</p>
-      <p className="panel-note">
-        {t(
-          'steps that finished before the error stay done; check them before you retry.',
-        )}
-      </p>
-      {message.text.trim().includes('\n') && (
-        <details>
-          <summary>{t('error details')}</summary>
-          <pre>{message.text}</pre>
-        </details>
+    <FailureRow
+      label={t('action failed')}
+      cause={cause!}
+      detail={said.join('\n').trim() || undefined}
+      copy={message.text}
+      note={t(
+        'steps that finished before the error stay done; check them before you retry.',
       )}
-      <div className="runtime-failure-actions">
-        <Button onClick={onMessage}>{t('return to message')}</Button>
-        <Button onClick={onConnection}>{t('review connection')}</Button>
-      </div>
-    </section>
+      actions={
+        <>
+          <Button onClick={onMessage}>{t('return to message')}</Button>
+          <Button onClick={onConnection}>{t('review connection')}</Button>
+        </>
+      }
+    />
   );
 }

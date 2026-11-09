@@ -226,19 +226,28 @@ async function capture(path) {
 }
 async function checkProgressLayout() {
   const status = page.getByTestId('compaction-progress');
-  const composer = page.locator('.composer-area .composer');
-  const progressBox = await status.boundingBox();
-  const inputBox = await composer.boundingBox();
-  assert.ok(progressBox && inputBox);
-  assert.ok(
-    Math.abs(progressBox.x - inputBox.x) < 1,
-    'progress aligns with the input',
-  );
-  assert.ok(Math.abs(progressBox.width - inputBox.width) < 1);
-  assert.ok(
-    Math.abs(inputBox.y - (progressBox.y + progressBox.height) - 8) < 1,
-    'progress sits directly above the input',
-  );
+  // A line of the conversation, where the next message goes, not a status by the input
+  const placed = await status.evaluate((node) => {
+    const rows = [
+      ...document.querySelectorAll('.transcript-column [data-message-id]'),
+    ];
+    const last = rows.at(-1)?.getBoundingClientRect();
+    return {
+      inConversation: !!node.closest('.transcript-column'),
+      byInput: !!node.closest('.composer-area'),
+      belowLast: !last || node.getBoundingClientRect().top >= last.bottom - 1,
+    };
+  });
+  assert.deepEqual(placed, {
+    inConversation: true,
+    byInput: false,
+    belowLast: true,
+  });
+  // How far the summary has got, as a bar and a share
+  const bar = status.getByRole('progressbar');
+  const value = Number(await bar.getAttribute('aria-valuenow'));
+  assert.ok(value >= 0 && value <= 100, String(value));
+  assert.match(await status.innerText(), /\d+%/);
   const footerClock = page
     .locator('.composer-footbar')
     .getByTestId('turn-clock');
@@ -322,9 +331,10 @@ try {
     .getByTestId('compaction-progress')
     .filter({ hasText: '正在压缩' })
     .waitFor();
+  // The stage, with the part it is at when there are several, and how far it has got
   assert.match(
     await page.getByTestId('compaction-progress').innerText(),
-    /正在压缩 \d+\/\d+/,
+    /正在(压缩|合并)( \d+\/\d+)?[\s\S]*\d+%/,
   );
   for (const theme of ['dark', 'light']) {
     assert.equal(
