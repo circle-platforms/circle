@@ -18,6 +18,8 @@ import { t } from '../i18n';
 
 const Sources = createContext<{
   openFile: (path: string, line?: number, column?: number) => void;
+  /** Opens the changes mode at a file the session changed; absent where there is none. */
+  openChange?: (path: string) => void;
   openAttachment: (attachment: Attachment) => void;
 } | null>(null);
 export function useSources() {
@@ -26,17 +28,25 @@ export function useSources() {
 export function SourceNavigation({
   children,
   onFile,
+  onChange,
 }: {
   children: ReactNode;
   onFile: (path: string, line?: number, column?: number) => void;
+  onChange?: (path: string) => void;
 }) {
   const [attachment, setAttachment] = useState<Attachment | null>(null);
   // One value for the life of the window: what reads it must not render with every
   // publication because the application's own render made a new `onFile`.
   const openFile = useStableCallback(onFile);
+  const openChange = useStableCallback((path: string) => onChange?.(path));
+  const changes = !!onChange;
   const sources = useMemo(
-    () => ({ openFile, openAttachment: setAttachment }),
-    [openFile],
+    () => ({
+      openFile,
+      openChange: changes ? openChange : undefined,
+      openAttachment: setAttachment,
+    }),
+    [openFile, openChange, changes],
   );
   const image =
     attachment?.kind === 'image'

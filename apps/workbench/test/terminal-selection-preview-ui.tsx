@@ -1,3 +1,4 @@
+import { Tooltip } from 'radix-ui';
 import { createRoot } from 'react-dom/client';
 import { RuntimeProvider } from '../src/app/context';
 import { PreviewRuntime } from '../src/model/state';
@@ -53,12 +54,15 @@ const checks = [
 ].map((value) => terminalSelectionDisplay(value) === undefined);
 Object.assign(window, { previewFixture: { text, file, copies, checks } });
 createRoot(document.getElementById('root')!).render(
-  <RuntimeProvider runtime={new PreviewRuntime()}>
-    <main className="page">
-      <details className="context-source" open>
-        <summary>{file.name}</summary>
-        <TerminalSelectionPreview file={file} />
-      </details>
-    </main>
-  </RuntimeProvider>,
+  // The window's provider: icon buttons show their names as tips
+  <Tooltip.Provider delayDuration={0}>
+    <RuntimeProvider runtime={new PreviewRuntime()}>
+      <main className="page">
+        <details className="context-source" open>
+          <summary>{file.name}</summary>
+          <TerminalSelectionPreview file={file} />
+        </details>
+      </main>
+    </RuntimeProvider>
+  </Tooltip.Provider>,
 );

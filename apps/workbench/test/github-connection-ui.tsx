@@ -1,3 +1,4 @@
+import { Tooltip } from 'radix-ui';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { RuntimeProvider } from '../src/app/context';
@@ -238,11 +239,14 @@ Object.assign(window, {
 });
 publish();
 createRoot(document.getElementById('root')!).render(
-  <MemoryRouter>
-    <RuntimeProvider runtime={runtime}>
-      <main className="page">
-        <GitHubConnectionCard />
-      </main>
-    </RuntimeProvider>
-  </MemoryRouter>,
+  // The window's provider: icon buttons show their names as tips
+  <Tooltip.Provider delayDuration={0}>
+    <MemoryRouter>
+      <RuntimeProvider runtime={runtime}>
+        <main className="page">
+          <GitHubConnectionCard />
+        </main>
+      </RuntimeProvider>
+    </MemoryRouter>
+  </Tooltip.Provider>,
 );

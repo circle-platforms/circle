@@ -147,7 +147,7 @@ try {
       .locator('.changes-row .overview-letter')
       .evaluateAll((nodes) => nodes.map((node) => node.textContent));
     assert.deepEqual([...letters].sort(), ['A', 'D', 'M', 'M']);
-    // A deleted file has its difference and nothing to open
+    // A deleted file has its difference and a path that opens nothing
     await page
       .locator('.changes-row')
       .filter({ hasText: 'legacy-retry.ts' })
@@ -156,21 +156,13 @@ try {
       .locator('.changes-file header')
       .getByText(/legacy-retry/)
       .waitFor();
-    assert.equal(
-      await page
-        .locator('.changes-file')
-        .getByRole('button', { name: w('open file', '打开文件') })
-        .count(),
-      0,
-    );
+    assert.equal(await page.locator('.changes-file .path-link').count(), 0);
     await page
       .locator('.changes-row')
       .filter({ hasText: 'connection.ts' })
       .click();
-    await page
-      .locator('.changes-file')
-      .getByRole('button', { name: w('open file', '打开文件') })
-      .click();
+    // Its path opens it
+    await page.locator('.changes-file .path-link').click();
 
     // The file opens in the files mode, whose tree marks what changed
     await page.locator('.file-view').waitFor();

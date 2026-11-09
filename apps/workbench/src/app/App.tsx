@@ -1630,7 +1630,10 @@ export function App() {
   // The provider holds the source previews too: an attachment's text copies itself
   const surface = (
     <Tooltip.Provider delayDuration={300}>
-      <SourceNavigation onFile={onFile}>
+      <SourceNavigation
+        onFile={onFile}
+        onChange={(path) => onPanel('changes', path)}
+      >
         <div
           className={`workbench${(sidebarCollapsed && !narrow) || narrowFolded ? ' sidebar-collapsed' : ''}`}
         >

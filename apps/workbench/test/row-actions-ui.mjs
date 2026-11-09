@@ -4,10 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from 'playwright';
 
-// One way to copy and one place to act, everywhere in the conversation: text copies itself
+// One way to copy and one way to open, everywhere in the conversation: text copies itself
 // with the same icon in its top right corner, a folded text is copied from its row's head,
-// and what opens elsewhere (a file) sits at the right end of the row it belongs to. No row
-// holds buttons alone.
+// and a file opens by its own path, at its difference when the session changed it. No row
+// holds buttons alone, and nothing beside a path opens it.
 const server = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
   server: { host: '127.0.0.1', port: 0, hmr: false, watch: null },
@@ -45,6 +45,31 @@ const steps = [
       output: '1 passing',
       status: 'success',
       elapsed: '0.4s',
+    },
+  },
+  {
+    id: 'ra-write',
+    role: 'tool',
+    at: '10:30',
+    text: 'write src/cache.ts',
+    tool: {
+      id: 'tool-ra-write',
+      name: 'write_file',
+      input: {
+        file_path: 'src/cache.ts',
+        content: 'export const tiers = 2;\n',
+      },
+      output: 'Wrote src/cache.ts',
+      status: 'success',
+      elapsed: '0.2s',
+      filePath: 'src/cache.ts',
+      diff: {
+        summary: 'new file, 1 line',
+        rows: [
+          { text: '@@ -0,0 +1,1 @@' },
+          { text: '+  1  export const tiers = 2;', tone: 'added' },
+        ],
+      },
     },
   },
   {
@@ -95,6 +120,15 @@ try {
         session.leafId = parent;
         session.branchIds = session.messages.map((message) => message.id);
         session.state = 'idle';
+        // The session changed the file it wrote
+        session.changes = [
+          {
+            path: 'src/cache.ts',
+            kind: 'added',
+            at: '10:30',
+            diff: steps.find((step) => step.id === 'ra-write').tool.diff,
+          },
+        ];
       });
     }, steps);
     // Open both calls, wherever the line of calls folds them
@@ -115,42 +149,60 @@ try {
     }
     // A call opens to its blocks only: no row of buttons above them
     assert.equal(await page.locator('.tool-toolbar').count(), 0);
-    // Opening the file sits on the call's head, at its right end
+    // A file opens by its own path in the call's row: no button beside it, anywhere
+    assert.equal(
+      await page
+        .getByRole('button', {
+          name: word('open file', '打开文件'),
+          exact: true,
+        })
+        .count(),
+      0,
+    );
     const read = card('public/task-model.mjs');
-    const open = read.getByRole('button', {
-      name: word('open file', '打开文件'),
+    const path = read.getByRole('button', {
+      name: 'public/task-model.mjs',
       exact: true,
     });
-    const placed = await read.evaluate((node) => {
-      const head = node.querySelector('.tool-head').getBoundingClientRect();
-      const button = [...node.querySelectorAll('.tool-row button')].find(
-        (item) => !item.classList.contains('tool-head'),
-      );
-      const box = button.getBoundingClientRect();
-      const cardBox = node.getBoundingClientRect();
-      return {
-        inRow: !!button.closest('.tool-row'),
-        inContent: !!button.closest('.tool-content'),
-        middle: Math.abs(
-          box.top + box.height / 2 - (head.top + head.height / 2),
-        ),
-        right: Math.round(cardBox.right - box.right),
-        text: button.textContent.trim(),
-      };
+    const placed = await path.evaluate((link) => ({
+      inRow: !!link.closest('.tool-row'),
+      inHead: !!link.closest('.tool-head'),
+      text: link.textContent,
+    }));
+    assert.deepEqual(placed, {
+      inRow: true,
+      inHead: false,
+      text: 'public/task-model.mjs',
     });
-    assert.equal(placed.inRow, true, JSON.stringify(placed));
-    assert.equal(placed.inContent, false, JSON.stringify(placed));
-    assert.ok(placed.middle <= 1, JSON.stringify(placed));
-    assert.ok(placed.right <= 12, JSON.stringify(placed));
-    assert.equal(placed.text, '', 'an icon, named by its tip');
-    // A folded call shows no actions on its head
-    await read.locator('.tool-head').click();
-    assert.equal(await open.count(), 0);
-    await read.locator('.tool-head').click();
-    await open.click();
+    // The rest of the row still opens and folds the call
+    const head = read.locator('.tool-head');
+    await read.locator('.tool-time').click();
+    assert.equal(await head.getAttribute('aria-expanded'), 'false');
+    await read.locator('.tool-row-end').click();
+    assert.equal(await head.getAttribute('aria-expanded'), 'true');
+    // A file the call read opens as the file, and the call stays as it was
+    await path.click();
     await page.locator('.file-view').waitFor();
-    await page.goBack();
-    await page.locator('.tool-call').first().waitFor();
+    assert.equal(await head.getAttribute('aria-expanded'), 'true');
+    // A file the call changed opens at its difference in the changes mode
+    const written = card('src/cache.ts');
+    await written
+      .getByRole('button', { name: 'src/cache.ts', exact: true })
+      .click();
+    const change = page.locator('.changes-file');
+    await change.waitFor();
+    assert.equal(
+      await change.locator('.changes-path').textContent(),
+      'src/cache.ts',
+    );
+    await change
+      .locator('.changes-diff')
+      .getByText('export const tiers = 2;')
+      .waitFor();
+    // There the path opens the file itself
+    await change
+      .getByRole('button', { name: 'src/cache.ts', exact: true })
+      .waitFor();
     // A command copies itself without its `$`, from the icon in its own corner
     const run = card('row action');
     if (!(await run.locator('.tool-content').count()))
@@ -233,7 +285,7 @@ try {
     await page.close();
   }
   console.log(
-    'row actions: text copies itself with one icon, a failure copies from its head, and a call opens its file from its head, in English and Chinese',
+    'row actions: text copies itself with one icon, a failure copies from its head, and a file opens by its path, at its difference when changed, in English and Chinese',
   );
 } finally {
   await browser?.close();

@@ -1,3 +1,4 @@
+import { Tooltip } from 'radix-ui';
 import { createRoot } from 'react-dom/client';
 import '../src/styles/app.css';
 import { PendingOperations } from '../src/features/PendingOperations';
@@ -42,5 +43,8 @@ Object.assign(window, {
   },
 });
 createRoot(document.getElementById('root')!).render(
-  <PendingOperations sessionId="s1" />,
+  // The window's provider: icon buttons show their names as tips
+  <Tooltip.Provider delayDuration={0}>
+    <PendingOperations sessionId="s1" />
+  </Tooltip.Provider>,
 );

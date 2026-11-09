@@ -117,7 +117,7 @@ try {
       ['自动模式执行', '手动审批执行', '需要修改', '只保存计划，不做修改'],
     );
     await page.getByRole('button', { name: '关闭计划', exact: true }).click();
-    await card.getByRole('button', { name: '打开计划', exact: true }).click();
+    await card.locator('.path-link').click();
     await plan.waitFor();
     // A change goes only with what should change
     const send = card.getByRole('button', { name: '发送回答', exact: true });
@@ -149,10 +149,7 @@ try {
     await card.waitFor();
     await settle(page);
     assert.equal(await shown(page), false);
-    assert.equal(
-      await card.getByRole('button', { name: 'open plan' }).count(),
-      0,
-    );
+    assert.equal(await card.locator('.path-link').count(), 0);
     assert.equal(
       await card.locator('header strong').innerText(),
       'the plan is ready, what next?',
@@ -183,7 +180,8 @@ try {
     await card.waitFor();
     await settle(page);
     assert.equal(await shown(page), false);
-    await card.getByRole('button', { name: 'open plan', exact: true }).click();
+    // The plan's file name opens it
+    await card.locator('.path-link').click();
     await page.getByRole('region', { name: 'plan', exact: true }).waitFor();
     assert.deepEqual(errors, []);
     await page.close();

@@ -32,7 +32,8 @@ try {
     1,
   );
   const before = await page.evaluate(() => window.fixture.snapshot());
-  await page.getByRole('button', { name: 'open file', exact: true }).click();
+  // The approval's path opens its file
+  await page.locator('.request-source .path-link').click();
   assert.deepEqual(await page.evaluate(() => window.fixture.opened), [
     'src/example.ts',
   ]);

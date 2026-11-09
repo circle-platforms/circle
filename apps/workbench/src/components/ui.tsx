@@ -1,5 +1,4 @@
 import {
-  ArrowUpRight,
   Check,
   Copy,
   Search,
@@ -487,12 +486,35 @@ export function RowActions({ children }: { children: ReactNode }) {
   return <span className="row-actions">{children}</span>;
 }
 
-/** Opens a file in the files mode. */
-export function OpenFileButton({ onOpen }: { onOpen: () => void }) {
+/**
+ * A file named where it is shown, opened by its own name: a call's path, an approval's
+ * target, a change, a plan. Nothing beside it opens it. Its name is what it shows, the
+ * whole path its title.
+ */
+export function PathLink({
+  path,
+  onOpen,
+  className,
+  children,
+}: {
+  path: string;
+  onOpen: () => void;
+  className?: string;
+  children?: ReactNode;
+}) {
   return (
-    <IconButton label={t('open file')} onClick={onOpen}>
-      <ArrowUpRight size={13} />
-    </IconButton>
+    <button
+      type="button"
+      className={className ? `path-link ${className}` : 'path-link'}
+      title={path}
+      onClick={(event) => {
+        // A row that opens or folds on a click leaves this one to the link
+        event.stopPropagation();
+        onOpen();
+      }}
+    >
+      {children ?? path}
+    </button>
   );
 }
 

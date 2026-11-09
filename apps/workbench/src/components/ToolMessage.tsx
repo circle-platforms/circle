@@ -10,7 +10,6 @@ import {
   ChevronDown,
   ChevronRight,
   FileDiff,
-  ArrowUpRight,
   Terminal,
   Users,
   FileText,
@@ -23,8 +22,8 @@ import { internalToolTitle } from '../model/tool-summary';
 import { useRuntimeActions, useRuntimeSelector } from '../app/context';
 import {
   DataBlock,
-  OpenFileButton,
   OpenInTerminalButton,
+  PathLink,
   RowActions,
   Status,
 } from './common';
@@ -32,6 +31,8 @@ import { DiffBlock, DiffSummary } from './DiffBlock';
 import { t } from '../i18n';
 import { relativePath } from '../model/format';
 import { currentSession } from '../model/state';
+import { sessionChangeRows } from '../model/changes';
+import { relativeTo } from '../model/overview';
 import { useSources } from './SourceNavigation';
 import type { Attachment } from '../model/types';
 import { hasToolInput } from '../model/browser';
@@ -120,7 +121,6 @@ export function AgentToolLinks({
           <Users size={12} />
           <span>{agent.name}</span>
           <Status value={agentState(agent)} />
-          <ArrowUpRight size={12} />
         </button>
       ))}
     </div>
@@ -245,7 +245,7 @@ function GenericToolMessage({
     () => structuredTextOutput(withoutHookAllowedLine(tool.output)),
     [tool.output],
   );
-  // What opens elsewhere sits at the right end of the head; each block of text copies itself
+  // A command's terminal opens from the right end of the head; each block of text copies itself
   const canOpenTerminal =
     (tool.name === 'execute' && !!openCommandTerminal) ||
     (!!userShellId && !!openUserShellTerminal);
@@ -287,9 +287,49 @@ function GenericToolMessage({
   // A file change that happened shows its diff under the call; a waiting one shows it in
   // the request below, and one that failed changed nothing.
   const diff = tool.diff && tool.status === 'success' ? tool.diff : undefined;
+  const target = relativePath(
+    String(
+      tool.input.file_path ??
+        tool.input.path ??
+        (isCommand ? tool.input.description : undefined) ??
+        tool.input.command ??
+        tool.input.description ??
+        tool.input.query ??
+        tool.input.pattern ??
+        tool.input.url ??
+        tool.input.element ??
+        tool.input.key ??
+        '',
+    ),
+    root,
+  );
+  // A file the call changed opens at its difference while the session's changes still
+  // hold it; any other opens as the file.
+  const openPath = () => {
+    const path = tool.filePath!;
+    if (diff && sources?.openChange) {
+      const snapshot = runtime.getSnapshot();
+      const session = currentSession(snapshot);
+      const workspace = snapshot.workspaces.find(
+        (item) => item.id === session.workspaceId,
+      )?.path;
+      const relative = relativeTo(path, workspace);
+      const change = sessionChangeRows(session.changes, workspace).find(
+        (row) => row.path === relative,
+      );
+      if (change) return sources.openChange(change.path);
+    }
+    onFile(path);
+  };
   return (
     <div className={`tool-call tool-${tool.status}`}>
-      <div className="tool-row">
+      {/* The row opens and folds the call; its file opens by its own name */}
+      <div
+        className="tool-row"
+        onClick={(event) => {
+          if (!(event.target as HTMLElement).closest('button')) setOpen(!open);
+        }}
+      >
         <button
           className="tool-head"
           onClick={() => setOpen(!open)}
@@ -299,24 +339,19 @@ function GenericToolMessage({
             <Icon size={14} />
           </span>
           <code title={tool.name}>{agentToolTitle(tool.name)}</code>
-          <span className="tool-target">
-            {relativePath(
-              String(
-                tool.input.file_path ??
-                  tool.input.path ??
-                  (isCommand ? tool.input.description : undefined) ??
-                  tool.input.command ??
-                  tool.input.description ??
-                  tool.input.query ??
-                  tool.input.pattern ??
-                  tool.input.url ??
-                  tool.input.element ??
-                  tool.input.key ??
-                  '',
-              ),
-              root,
-            )}
-          </span>
+        </button>
+        {tool.filePath ? (
+          <PathLink
+            className="tool-target"
+            path={tool.filePath}
+            onOpen={openPath}
+          >
+            {target}
+          </PathLink>
+        ) : (
+          <span className="tool-target">{target}</span>
+        )}
+        <span className="tool-row-end">
           {diff && (
             <span className="tool-diff-summary">
               <DiffSummary text={diff.summary} />
@@ -328,27 +363,20 @@ function GenericToolMessage({
           ) : (
             <Status value={tool.status} />
           )}
-          <span>
-            {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          </span>
-        </button>
-        {open && (canOpenTerminal || tool.filePath) && (
+          {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        </span>
+        {open && canOpenTerminal && (
           <RowActions>
-            {canOpenTerminal && (
-              <OpenInTerminalButton
-                open={(trigger) => {
-                  const source =
-                    ownerSessionId ?? currentSession(runtime.getSnapshot()).id;
-                  return userShellId
-                    ? openUserShellTerminal!(source, userShellId, trigger)
-                    : openCommandTerminal!(source, tool.id, trigger);
-                }}
-                onError={setTerminalError}
-              />
-            )}
-            {tool.filePath && (
-              <OpenFileButton onOpen={() => onFile(tool.filePath!)} />
-            )}
+            <OpenInTerminalButton
+              open={(trigger) => {
+                const source =
+                  ownerSessionId ?? currentSession(runtime.getSnapshot()).id;
+                return userShellId
+                  ? openUserShellTerminal!(source, userShellId, trigger)
+                  : openCommandTerminal!(source, tool.id, trigger);
+              }}
+              onError={setTerminalError}
+            />
           </RowActions>
         )}
       </div>

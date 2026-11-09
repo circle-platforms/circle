@@ -12,7 +12,7 @@ export {
   CopyableText,
   DeviceCode,
   RowActions,
-  OpenFileButton,
+  PathLink,
   OpenInTerminalButton,
   EmptyState,
   PaneEmpty,

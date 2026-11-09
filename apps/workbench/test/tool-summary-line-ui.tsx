@@ -1,3 +1,4 @@
+import { Tooltip } from 'radix-ui';
 import { createRoot } from 'react-dom/client';
 import { RuntimeProvider } from '../src/app/context';
 import { MIN_CONVERSATION } from '../src/app/workspace-layout';
@@ -52,22 +53,25 @@ const turn = {
   ...(query.get('retry') ? { retry: query.get('retry')! } : {}),
 };
 createRoot(document.getElementById('root')!).render(
-  <RuntimeProvider runtime={new PreviewRuntime()}>
-    <div
-      id="pane"
-      style={{
-        width: query.get('pane') === 'min' ? MIN_CONVERSATION : 1000,
-      }}
-    >
-      <div className="transcript-column">
-        <ToolGroup
-          rows={rows}
-          expanded={false}
-          onFile={() => {}}
-          onAgent={() => {}}
-          turn={turn}
-        />
+  // The window's provider: icon buttons show their names as tips
+  <Tooltip.Provider delayDuration={0}>
+    <RuntimeProvider runtime={new PreviewRuntime()}>
+      <div
+        id="pane"
+        style={{
+          width: query.get('pane') === 'min' ? MIN_CONVERSATION : 1000,
+        }}
+      >
+        <div className="transcript-column">
+          <ToolGroup
+            rows={rows}
+            expanded={false}
+            onFile={() => {}}
+            onAgent={() => {}}
+            turn={turn}
+          />
+        </div>
       </div>
-    </div>
-  </RuntimeProvider>,
+    </RuntimeProvider>
+  </Tooltip.Provider>,
 );

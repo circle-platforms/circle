@@ -578,9 +578,8 @@ export async function runNativeChildSourceJourney({
       until,
     );
     const source = await openToolCall(page, conversation, sourcePath);
-    await source
-      .getByRole('button', { name: 'open file', exact: true })
-      .click();
+    // The call's path opens the file
+    await source.locator('.tool-row .path-link').click();
     await page
       .locator('.file-view:visible .view-lines')
       .filter({ hasText: childContent.trim() })
