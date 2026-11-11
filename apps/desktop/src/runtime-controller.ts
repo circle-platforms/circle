@@ -51,6 +51,7 @@ import type { HookChange } from '../../../src/hooks.js';
 import { defaultRunOptions } from '../../../src/run_options.js';
 import type { Extension, ExtensionCommand } from '../../../src/extensions.js';
 import { SessionRuntimeManager } from '../../../src/session_manager.js';
+import { listCheckouts, checkoutTarget, createCheckout } from './checkouts';
 import {
   sessionOccupied,
   SessionOccupiedError,
@@ -3330,7 +3331,11 @@ export class RuntimeController {
           row.workspace,
         ),
         title: row.title || 'new session',
-        workspaceId: identity(row.workspace),
+        workspaceId: identity(row.origin_workspace ?? row.workspace),
+        executionPath: row.workspace,
+        executionBranch: this.validWorkspaceRoot(row.workspace)
+          ? this.branch(row.workspace)
+          : '',
         model: selected ? owner.harness.model.model : row.model,
         effort: ((selected
           ? owner.options.settings.default_thinking
@@ -4758,8 +4763,10 @@ export class RuntimeController {
     }
   }
   private workspaceById(id: string): string {
-    for (const row of this.store.list(undefined, true))
-      if (identity(row.workspace) === id) return row.workspace;
+    for (const row of this.store.list(undefined, true)) {
+      const project = row.origin_workspace ?? row.workspace;
+      if (identity(project) === id) return project;
+    }
     if (identity(this.active.options.workspace) === id)
       return this.active.options.workspace;
     for (const owner of this.runtimes.values())
@@ -4790,8 +4797,9 @@ export class RuntimeController {
   ): string[] {
     return [
       ...new Set([
-        ...rows.map((row) => row.workspace),
-        this.active.options.workspace,
+        ...rows.map((row) => row.origin_workspace ?? row.workspace),
+        this.store.get(this.active.session.id)?.origin_workspace ??
+          this.active.options.workspace,
         ...this.opened,
       ]),
     ];
@@ -5094,6 +5102,93 @@ export class RuntimeController {
       case 'prompt':
         await this.submitPrompt(runtime, p, false, command.id);
         return {};
+      case 'checkouts': {
+        const root = this.workspaceById(text(p.workspaceId, 'workspace', 200));
+        this.trustedWorkspace(root);
+        return listCheckouts(root, runtime.options.workspace);
+      }
+      case 'create-checkout': {
+        const root = this.workspaceById(text(p.workspaceId, 'workspace', 200));
+        this.trustedWorkspace(root);
+        return createCheckout(
+          root,
+          join(
+            this.tasksRootFor(loadSettings(this.home)),
+            'worktrees',
+            identity(root),
+          ),
+          text(p.branch, 'branch', 200),
+          text(p.start, 'starting revision', 200),
+        );
+      }
+      case 'switch-checkout': {
+        const id = runtime.session.id;
+        const row = this.store.get(id)!;
+        const origin = row.origin_workspace ?? row.workspace;
+        this.trustedWorkspace(origin);
+        if (this.metadata.archivedAt(id))
+          throw Error('restore this session before continuing');
+        await this.assertArchivable(id, row.workspace, 'moving');
+        if (
+          runtime.harness.queuedMessages.steering.length ||
+          runtime.harness.queuedMessages.followUp.length ||
+          runtime.harness.recoverableInputs.items.length
+        )
+          throw Error(
+            'finish or remove queued messages before switching checkouts',
+          );
+        const target = checkoutTarget(
+          origin,
+          text(p.checkoutId, 'checkout', 200),
+        );
+        if (target.path === row.workspace)
+          return { ...target, switched: false };
+        this.bindWorkspace(target.path);
+        saveSettingsChange(this.home, (settings) =>
+          Object.assign(settings, trustFolder(settings, target.path)),
+        );
+        this.services(target.path);
+        const mode = runtime.mode;
+        const model = runtime.harness.model.model;
+        const effort = runtime.options.settings.default_thinking;
+        const plan = runtime.plan();
+        this.jobWakes.get(runtime)?.snooze();
+        this.externalBlocked.add(id);
+        await this.externalFiles?.revokeSession(id);
+        this.externalGrantOwners.delete(id);
+        try {
+          const owner = await this.runtimes.replace(
+            id,
+            target.path,
+            () =>
+              this.store.bindExecution(id, row.workspace, target.path, origin),
+            () => {
+              const current = this.store.get(id)!;
+              if (current.workspace !== row.workspace)
+                this.store.bindExecution(
+                  id,
+                  current.workspace,
+                  row.workspace,
+                  row.origin_workspace,
+                );
+            },
+          );
+          if (owner.harness.model.model !== model) owner.setModel(model);
+          if (effort) owner.setThinkingLevel(effort);
+          owner.setMode(mode);
+          if (plan?.text) writeFileSync(owner.planFile.path, plan.text);
+          this.workspaceSessions.delete(row.workspace);
+          this.selectRuntime(owner);
+          this.persistLocation();
+          return { ...target, switched: true, changesMoved: false };
+        } catch (error) {
+          const restored = this.runtimes.get(id);
+          if (restored && !restored.isClosing) this.selectRuntime(restored);
+          throw error;
+        } finally {
+          this.externalBlocked.delete(id);
+        }
+      }
       case 'begin-session': {
         const promptText = text(p.text, 'prompt');
         if (!promptText.trim()) throw Error('prompt is empty');
@@ -5108,7 +5203,19 @@ export class RuntimeController {
           throw Error('trust the workspace before running Circle');
         // A root replaced since it was opened is refused, as for every session.
         this.bindWorkspace(workspace);
-        const owner = this.conversationRuntime(workspace);
+        const target =
+          p.checkoutId === undefined
+            ? workspace
+            : checkoutTarget(workspace, text(p.checkoutId, 'checkout', 200))
+                .path;
+        this.bindWorkspace(target);
+        if (target !== workspace)
+          saveSettingsChange(this.home, (settings) =>
+            Object.assign(settings, trustFolder(settings, target)),
+          );
+        const owner = this.conversationRuntime(target);
+        if (target !== workspace)
+          this.store.bindExecution(owner.session.id, target, target, workspace);
         this.selectRuntime(owner);
         this.applyHomeChoices(owner, p);
         const started =

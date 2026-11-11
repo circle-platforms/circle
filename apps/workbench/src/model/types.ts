@@ -191,6 +191,8 @@ export interface Session {
   };
   title: string;
   workspaceId: string;
+  executionPath?: string;
+  executionBranch?: string;
   model: string;
   effort: Effort;
   draft: string;
@@ -603,6 +605,7 @@ export type SessionViewPatch = Partial<
 export interface BeginConversation {
   /** A known project. Omit it, or pass null, to work without a project. */
   workspaceId?: string | null;
+  checkoutId?: string;
   text: string;
   /** Choices from the home composer, applied to the session this message starts. */
   model?: string;

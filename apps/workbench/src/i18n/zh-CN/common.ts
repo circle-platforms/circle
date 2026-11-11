@@ -1,5 +1,13 @@
 // Simplified Chinese for words shared across the window. English is the key.
 export const common: Record<string, string> = {
+  'continue in worktree…': '在工作树中继续…',
+  checkout: '执行位置',
+  'only future execution moves; uncommitted changes stay in their checkout':
+    '仅切换后续执行位置；未提交修改保留在原工作树',
+  'this project is not a Git repository': '此项目不是 Git 仓库',
+  'new branch': '新分支',
+  'starting branch or commit': '起始分支或提交',
+  'create worktree': '新建工作树',
   'changes personal knowledge or memory and always needs your confirmation':
     '变更个人知识或记忆，每次均须本人确认',
   'restarting…': '等待重启中…',

@@ -436,19 +436,23 @@ export function Overview({
         onToggle={() => toggle('environment')}
       >
         <Row icon={Laptop}>{t('this machine')}</Row>
-        <Row icon={Folder} title={workspace?.path}>
+        {/* The folder and branch the conversation runs in: another checkout of the
+          project's repository once it was moved there. */}
+        <Row icon={Folder} title={session.executionPath ?? workspace?.path}>
           <span className="overview-name">
             {workspace ? workspaceLabel(workspace, snapshot.agents) : ''}
           </span>
-          {workspace?.path && (
+          {(session.executionPath ?? workspace?.path) && (
             <small className="overview-path">
-              <bdi dir="ltr">{workspace.path}</bdi>
+              <bdi dir="ltr">{session.executionPath ?? workspace?.path}</bdi>
             </small>
           )}
         </Row>
-        {workspace?.branch && (
+        {(session.executionBranch || workspace?.branch) && (
           <Row icon={GitBranch}>
-            <span className="overview-name">{workspace.branch}</span>
+            <span className="overview-name">
+              {session.executionBranch || workspace?.branch}
+            </span>
           </Row>
         )}
       </Card>

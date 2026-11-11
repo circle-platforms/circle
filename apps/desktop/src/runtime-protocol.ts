@@ -12,6 +12,9 @@ export type RuntimeCommandName =
   | 'background'
   | 'new-session'
   | 'begin-session'
+  | 'checkouts'
+  | 'create-checkout'
+  | 'switch-checkout'
   | 'select-session'
   | 'delete-session'
   | 'rename-session'
@@ -129,6 +132,9 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'background',
   'new-session',
   'begin-session',
+  'checkouts',
+  'create-checkout',
+  'switch-checkout',
   'select-session',
   'delete-session',
   'rename-session',

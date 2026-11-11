@@ -963,6 +963,52 @@ pre {
   display: flex;
   flex-direction: column;
 }
+/* Where a conversation runs: a button and the list that opens under it. */
+.checkout-picker {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+.checkout-options {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: min(420px, 85vw);
+  padding: 12px;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  background: var(--input);
+  color: var(--fg);
+}
+.checkout-options > button,
+.checkout-options label {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: start;
+  padding: 6px;
+  overflow-wrap: anywhere;
+}
+.checkout-options button[aria-pressed='true'] {
+  outline: 1px solid var(--focus-ring);
+}
+.checkout-options input {
+  width: 100%;
+}
+/* The top bar's chip sits at the left of its row: its list opens from its left edge. */
+.topbar .checkout-options {
+  right: auto;
+  left: 0;
+}
+button.project-chip {
+  cursor: pointer;
+}
+button.project-chip:hover,
+button.project-chip[aria-expanded='true'] {
+  background: var(--active);
+  color: var(--fg);
+}
 .composer {
   position: relative;
   border: 1px solid var(--control-border);
