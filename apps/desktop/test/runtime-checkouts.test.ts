@@ -125,7 +125,11 @@ test('a conversation continues in a linked worktree with history kept, future ex
       file_path: 'after.txt',
       content: 'written in the worktree\n',
     }),
-    assistant('where', 'execute', { command: 'pwd' }),
+    assistant('where', 'execute', {
+      // `pwd` is not a Windows command; ask Node for the working directory
+      // instead, which runs on every shell the runtime supports.
+      command: 'node -p "process.cwd()"',
+    }),
     assistant('second-end'),
   ]);
   const session = f.controller.snapshot().activeSessionId;
