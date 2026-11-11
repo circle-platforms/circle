@@ -1,9 +1,13 @@
 import type { Message } from './types.js';
 import { isRecord } from './settings.js';
 
-/** Mode transitions are stored when they happen, including inside a tool batch.
- * APIs need the whole batch of actual results before conversational text. Move only
- * these internal transitions in the request view; never invent a missing result.
+/** Mode transitions, hook notices and job notices are stored when they happen,
+ * including inside a tool batch (a hook decides each call of a parallel batch as it
+ * runs). APIs need the whole batch of actual results before conversational text, and
+ * gateways that check Chat Completions order strictly refuse a note between two
+ * results ("an assistant message with 'tool_calls' must be followed by tool
+ * messages"). Move only these internal notes in the request view; never invent a
+ * missing result.
  */
 export function orderModeToolResults(messages: Message[]): Message[] {
   const ordered: Message[] = [];
@@ -45,6 +49,11 @@ export function orderModeToolResults(messages: Message[]): Message[] {
   }
   return ordered;
 }
+const BATCH_NOTES = new Set(['mode-boundary', 'hook_notice', 'job_notice']);
 function isModeBoundary(message: Message): boolean {
-  return message.role === 'user' && message.internal === 'mode-boundary';
+  return (
+    message.role === 'user' &&
+    message.internal !== undefined &&
+    BATCH_NOTES.has(message.internal)
+  );
 }

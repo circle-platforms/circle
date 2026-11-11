@@ -219,3 +219,70 @@ test('request projection moves only mode boundaries and never fabricates or hide
     [imported, result('a'), boundary('on')],
   );
 });
+
+test('request projection moves hook and job notices recorded inside a parallel batch after all of its results', () => {
+  // The shape of a real session: a before_tool hook allows each call of a parallel batch
+  // as it runs, so its notice lands between two results. A gateway that checks Chat
+  // Completions order refused the whole history with "an assistant message with
+  // 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'".
+  const call: Message = {
+    id: 'ai',
+    role: 'assistant',
+    content: '',
+    tool_calls: [
+      { id: 'a', name: 'skill', args: {} },
+      { id: 'b', name: 'hub_list_task_packs', args: {} },
+      { id: 'c', name: 'read_file', args: {} },
+    ],
+  };
+  const result = (id: string): Message => ({
+    id: 'result-' + id,
+    role: 'tool',
+    tool_call_id: id,
+    content: id,
+  });
+  const note = (id: string, internal: string): Message => ({
+    id,
+    role: 'user',
+    internal,
+    content: `<system-reminder data-source="circle-hooks">\n${id}\n</system-reminder>`,
+  });
+  const raw = [
+    call,
+    result('a'),
+    note('hook allowed skill', 'hook_notice'),
+    result('b'),
+    note('job j1 ended', 'job_notice'),
+    note('hook allowed read_file', 'hook_notice'),
+    result('c'),
+  ];
+  const before = structuredClone(raw);
+  const projected = orderModeToolResults(raw);
+  assert.deepEqual(
+    projected.map((m) => m.id),
+    [
+      'ai',
+      'result-a',
+      'result-b',
+      'result-c',
+      'hook allowed skill',
+      'job j1 ended',
+      'hook allowed read_file',
+    ],
+  );
+  assert.deepEqual(orderModeToolResults(projected), projected);
+  assert.deepEqual(raw, before, 'the stored history is not changed');
+  const ordinary: Message = { id: 'person', role: 'user', content: 'steer' };
+  const unanswered = [call, result('a'), note('n', 'hook_notice'), result('b')];
+  assert.deepEqual(
+    orderModeToolResults(unanswered),
+    unanswered,
+    'an incomplete batch stays as stored',
+  );
+  const steered = [call, result('a'), ordinary, result('b'), result('c')];
+  assert.deepEqual(
+    orderModeToolResults(steered),
+    steered,
+    'only Circle notes move; a person’s message stays where it was',
+  );
+});
