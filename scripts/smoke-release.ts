@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   writeFileSync,
   rmSync,
   cpSync,
@@ -138,21 +139,21 @@ try {
   const workspace = join(temporary, 'workspace');
   mkdirSync(home);
   mkdirSync(workspace);
-  // The skill that ships with Circle, as the relocated release has it: the model must see it.
-  const builtinSkill = parseFrontmatter(
+  const skillsRoot = join(root, 'app/dist/builtin_skills');
+  const builtinSkills = readdirSync(skillsRoot).map((name) => {
+    const { meta } = parseFrontmatter(
+      readFileSync(join(skillsRoot, name, 'SKILL.md'), 'utf8'),
+    );
+    assert.equal(meta.name, name);
+    return meta;
+  });
+  assert.equal(
     readFileSync(
-      join(root, 'app/dist/builtin_skills/create-pr/SKILL.md'),
+      join(skillsRoot, 'circle-help/references/docs/configuration.md'),
       'utf8',
     ),
-  ).meta;
-  assert.equal(builtinSkill.name, 'create-pr');
-  const reviewSkill = parseFrontmatter(
-    readFileSync(
-      join(root, 'app/dist/builtin_skills/pr-review/SKILL.md'),
-      'utf8',
-    ),
-  ).meta;
-  assert.equal(reviewSkill.name, 'pr-review');
+    readFileSync('docs/configuration.md', 'utf8'),
+  );
   let firstSystem = '';
   let calls = 0;
   let titles = 0;
@@ -275,14 +276,11 @@ try {
   assert.match(answer, /release verified/);
   assert.equal(calls, 2);
   assert.ok(titles <= 1, `${titles} title requests`);
-  assert.ok(
-    firstSystem.includes(`\n- create-pr: ${builtinSkill.description}`),
-    'the built-in create-pr skill is listed in the system prompt',
-  );
-  assert.ok(
-    firstSystem.includes(`\n- pr-review: ${reviewSkill.description}`),
-    'the built-in pr-review skill is listed in the system prompt',
-  );
+  for (const skill of builtinSkills)
+    assert.ok(
+      firstSystem.includes(`\n- ${skill.name}: ${skill.description}`),
+      `${skill.name} is listed in the system prompt`,
+    );
   assert.equal(
     readFileSync(join(workspace, 'receipt.txt'), 'utf8'),
     'release smoke',
@@ -428,7 +426,7 @@ try {
       dataPreserved: true,
       defaultLocation: true,
       modelRequests: calls,
-      builtinSkill: builtinSkill.name,
+      builtinSkills: builtinSkills.map((skill) => skill.name),
       sideEffect: 'receipt.txt',
     }) + '\n',
   );

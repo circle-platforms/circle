@@ -106,6 +106,14 @@ export function validateRelease(
     'app/dist/prompts/circle_guidelines.md',
     'app/dist/builtin_skills/create-pr/SKILL.md',
     'app/dist/builtin_skills/pr-review/SKILL.md',
+    'app/dist/builtin_skills/browser-test/SKILL.md',
+    'app/dist/builtin_skills/circle-help/SKILL.md',
+    'app/dist/builtin_skills/code-review/SKILL.md',
+    'app/dist/builtin_skills/debug/SKILL.md',
+    'app/dist/builtin_skills/frontend-design/SKILL.md',
+    'app/dist/builtin_skills/security-review/SKILL.md',
+    'app/dist/builtin_skills/skill-creator/SKILL.md',
+    'app/dist/builtin_skills/verify/SKILL.md',
     'app/package.json',
   ])
     if (!actual[required]) throw new Error(`release is missing ${required}`);

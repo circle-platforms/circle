@@ -5,8 +5,52 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scratch } from './helpers.js';
+import { copyRuntimeAssets } from '../apps/desktop/scripts/runtime-assets.mjs';
 
 const repo = fileURLToPath(new URL('..', import.meta.url));
+
+for (const carrier of ['cli', 'desktop']) {
+  test(`${carrier} ships the same offline help documents and removes stale references`, async (t) => {
+    const out = scratch(t);
+    const docs = join(
+      out,
+      'builtin_skills',
+      'circle-help',
+      'references',
+      'docs',
+    );
+    mkdirSync(docs, { recursive: true });
+    const stale = join(docs, 'removed-page.md');
+    writeFileSync(stale, 'old help');
+    if (carrier === 'desktop') await copyRuntimeAssets(out);
+    else {
+      const result = spawnSync(
+        process.execPath,
+        [
+          join(repo, 'node_modules/tsx/dist/cli.mjs'),
+          'scripts/copy-assets.ts',
+          out,
+        ],
+        { cwd: repo, encoding: 'utf8' },
+      );
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+    }
+    assert.equal(existsSync(stale), false);
+    for (const page of [
+      'configuration.md',
+      'skills.md',
+      'known-issues.md',
+      'tools.md',
+      'development/tui-contract.md',
+      'development/workbench-unification.md',
+    ]) {
+      assert.equal(
+        readFileSync(join(docs, page), 'utf8'),
+        readFileSync(join(repo, 'docs', page), 'utf8'),
+      );
+    }
+  });
+}
 
 test('the build replaces the shipped extensions, so one Circle no longer ships does not stay in the output', (t) => {
   const out = scratch(t);

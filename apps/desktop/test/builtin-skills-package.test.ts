@@ -31,6 +31,18 @@ import { parseFrontmatter } from '../../../src/skills.ts';
 
 const require = createRequire(import.meta.url);
 const electron = require('electron') as string;
+const names = [
+  'browser-test',
+  'circle-help',
+  'code-review',
+  'create-pr',
+  'debug',
+  'frontend-design',
+  'pr-review',
+  'security-review',
+  'skill-creator',
+  'verify',
+];
 const source = fileURLToPath(
   new URL('../../../src/builtin_skills/create-pr/SKILL.md', import.meta.url),
 );
@@ -67,7 +79,7 @@ await import(pathToFileURL(process.argv.at(-1)).href);
 `;
 
 test(
-  'the packaged runtime finds create-pr inside app.asar and lists it to the model',
+  'the packaged runtime loads every bundled skill and reads offline documentation inside app.asar',
   { timeout: 180_000 },
   async () => {
     const root = await realpath(
@@ -142,6 +154,35 @@ test(
           replies: [
             {
               message: {
+                id: 'load-skills',
+                role: 'assistant',
+                content: '',
+                tool_calls: names.map((name) => ({
+                  id: name,
+                  name: 'skill',
+                  args: { name },
+                })),
+              },
+            },
+            {
+              message: {
+                id: 'read-help',
+                role: 'assistant',
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'help-reference',
+                    name: 'skill',
+                    args: {
+                      name: 'circle-help',
+                      reference: 'docs/configuration.md',
+                    },
+                  },
+                ],
+              },
+            },
+            {
+              message: {
                 id: 'answer',
                 role: 'assistant',
                 content: 'packaged skill answered',
@@ -188,6 +229,11 @@ test(
         stdout.match(/^SKILLS=(.*)$/m)?.[1] ?? '[]',
       ) as { name: string; scope: string; path: string }[];
       assert.deepEqual(
+        listed.map((skill) => skill.name),
+        names,
+      );
+      assert.ok(listed.every((skill) => skill.scope === 'bundled'));
+      assert.deepEqual(
         listed.find((skill) => skill.name === 'create-pr'),
         {
           name: 'create-pr',
@@ -204,8 +250,51 @@ test(
       const sent = (await readFile(requests, 'utf8'))
         .trim()
         .split('\n')
-        .map((line) => JSON.parse(line) as { system: string });
-      assert.equal(sent.length, 1);
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              system: string;
+              messages: {
+                role: string;
+                tool_call_id?: string;
+                content: unknown;
+              }[];
+            },
+        );
+      assert.equal(sent.length, 3);
+      for (const name of names) {
+        const original = await readFile(
+          new URL(
+            `../../../src/builtin_skills/${name}/SKILL.md`,
+            import.meta.url,
+          ),
+          'utf8',
+        );
+        assert.ok(
+          sent[0]!.system.includes(
+            `\n- ${name}: ${parseFrontmatter(original).meta.description}`,
+          ),
+        );
+        assert.equal(sent[0]!.system.includes(original.trim()), false);
+        const result = sent[1]!.messages.find(
+          (message) => message.tool_call_id === name,
+        );
+        assert.ok(
+          String(result?.content).includes(original.trim()),
+          `${name} did not load`,
+        );
+      }
+      const help = sent[2]!.messages.find(
+        (message) => message.tool_call_id === 'help-reference',
+      );
+      const documentation = await readFile(
+        new URL('../../../docs/configuration.md', import.meta.url),
+        'utf8',
+      );
+      assert.ok(
+        String(help?.content).includes(documentation.trim()),
+        'the skill tool read the packaged docs',
+      );
       assert.ok(
         sent[0]!.system.includes(
           `\n- create-pr: ${parseFrontmatter(text).meta.description}`,

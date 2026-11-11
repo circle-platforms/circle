@@ -880,8 +880,7 @@ test('/skill lists the skills that ship with Circle as built-in, loads one, and 
     list,
     /\n {2}create-pr {12}Our own pull requests \(Project Circle\)\n/,
   );
-  // Only one skill of the two still ships with Circle: the project folder's row
-  // is not built-in, and the block grouping keeps a wrapped row with its name.
+  // The project row replaces just create-pr; wrapped rows keep their source label.
   const left: string[][] = [];
   for (const row of list.split('\n').slice(2, -2)) {
     if (row[2] !== ' ') left.push([row]);
@@ -893,8 +892,16 @@ test('/skill lists the skills that ship with Circle as built-in, loads one, and 
       block.at(-1)!.endsWith('(Built-in)'),
     ]),
     [
+      ['browser-test', true],
+      ['circle-help', true],
+      ['code-review', true],
       ['create-pr', false],
+      ['debug', true],
+      ['frontend-design', true],
       ['pr-review', true],
+      ['security-review', true],
+      ['skill-creator', true],
+      ['verify', true],
     ],
     list,
   );

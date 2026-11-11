@@ -1,5 +1,3 @@
-Load a specialized skill when the task at hand matches one of the skills listed in the system prompt.
+Load instructions for a skill listed in the system prompt when its task applies.
 
-Use this tool to inject the skill's instructions and resources into current conversation. The output may contain detailed workflow guidance as well as references to scripts, files, etc in the same directory as the skill.
-
-The skill name must match one of the skills listed in your system prompt.
+To read a file under that skill's `references/`, add `reference`, for example `{ "name": "circle-help", "reference": "docs/configuration.md" }`. Files are read, not executed.

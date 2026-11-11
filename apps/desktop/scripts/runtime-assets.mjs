@@ -4,6 +4,7 @@
 import { cp } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
+import { copyBuiltinSkills } from '../../../scripts/builtin-skills.mjs';
 
 const sourceRoot = fileURLToPath(new URL('../../../src/', import.meta.url));
 
@@ -12,6 +13,9 @@ export const RUNTIME_ASSETS = ['prompts', 'data', 'builtin_skills'];
 
 /** Copy the runtime's folders into the folder that holds the bundled runtime. */
 export async function copyRuntimeAssets(dist) {
-  for (const folder of RUNTIME_ASSETS)
+  for (const folder of RUNTIME_ASSETS.filter(
+    (folder) => folder !== 'builtin_skills',
+  ))
     await cp(join(sourceRoot, folder), join(dist, folder), { recursive: true });
+  await copyBuiltinSkills(dist);
 }

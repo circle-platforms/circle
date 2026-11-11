@@ -34,6 +34,8 @@ A skill is a folder below the skills folder, `skills/changelog/SKILL.md`, or one
 
 Circle puts each skill's name and description in the system prompt. When a task matches, the model calls the `skill` tool (or reads the file), and follows it. Skills load only what a task needs.
 
+The `skill` tool can also read a supporting file with `reference`, relative to the selected skill's `references/` directory: `{ "name": "circle-help", "reference": "docs/configuration.md" }`. It reads that file without granting access to other files. Absolute paths, parent traversal, links outside the skill's references directory and configured credential files are refused. This works in the terminal and desktop, including documents inside the packaged application.
+
 You can also load one yourself:
 
 ```text
@@ -48,7 +50,22 @@ Circle reads the skill folders again each time it builds the system prompt: when
 
 ## Built-in skills
 
-Circle ships with two skills of its own.
+Circle ships with ten skills of its own. Their descriptions are available by default, and their instructions load when used.
+
+| Skill             | When to use it                                                                                                                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `circle-help`     | Questions about Circle usage, configuration or troubleshooting. Builds carry the same version's full docs under this skill's `references/docs/`; source checkouts use the repository docs. |
+| `skill-creator`   | Create or improve a skill and check discovery and loading. The default destination is the project's `.circle/skills/`; a global skill goes in the active Circle data folder.               |
+| `verify`          | Validate a change against the requested behavior, with tests and relevant runtime effects.                                                                                                 |
+| `code-review`     | Review a diff, branch or PR for supported correctness issues.                                                                                                                              |
+| `debug`           | Diagnose an error or regression through reproduction and runtime evidence.                                                                                                                 |
+| `security-review` | An explicit security review, audit or secure coding request.                                                                                                                               |
+| `frontend-design` | Create or improve a web or desktop frontend using the project's own design language.                                                                                                       |
+| `browser-test`    | Exercise a web flow with Circle's existing browser tools; save and repeat flows using its recording and replay format when requested.                                                      |
+| `create-pr`       | Open or update a draft pull request.                                                                                                                                                       |
+| `pr-review`       | Address an existing PR's checks and review feedback.                                                                                                                                       |
+
+Code and security reviews report findings by default; when you also ask for repairs they continue with fixes and verification. A skill is guidance for the model, not an extra execution engine. Browser tests need the [browser tools](tools.md#the-browser): desktop, or the full-screen terminal with a supported browser installed. They are unavailable in line and print mode. A skill reports that missing capability rather than treating another kind of check as browser validation.
 
 **`create-pr`** commits the work, pushes the branch and opens a draft pull request, or updates the one already open for the branch. It first checks `git status`, the branch, the default branch and `gh auth status`, and when `gh` is missing or not logged in it stops and tells you to run `gh auth login`. It never opens a pull request from the default branch, stages only the files that belong to the work, and never merges or force-pushes without asking. It ends with the pull request's number and URL. Ask Circle to open a pull request, or load it with `/skill create-pr`.
 

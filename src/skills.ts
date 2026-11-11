@@ -1,4 +1,5 @@
 import { installedPersonalPacks } from './knowledge/packs.js';
+import { DEFAULT_CREDENTIAL_FILES, matchPattern } from './file_patterns.js';
 import {
   existsSync,
   readFileSync,
@@ -7,7 +8,15 @@ import {
   statSync,
   type Dirent,
 } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 export interface SkillInfo {
@@ -178,7 +187,12 @@ export function discoverSkills(
   }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
-export function loadSkillBody(name: string, catalog: SkillInfo[]): string {
+export function loadSkillBody(
+  name: string,
+  catalog: SkillInfo[],
+  reference?: string,
+  credentialFiles: readonly string[] = DEFAULT_CREDENTIAL_FILES,
+): string {
   const skill = catalog.find(
     (skill) => skill.name === name.trim().toLowerCase(),
   );
@@ -193,5 +207,23 @@ export function loadSkillBody(name: string, catalog: SkillInfo[]): string {
     )
   )
     throw new Error('personal pack changed, disabled or unavailable');
-  return `<skill_content name="${skill.name}">\n${readFileSync(skill.path, 'utf8').trim()}\n\nBase directory for this skill: ${dirname(skill.path)}\nRelative paths in this skill are relative to this base directory.\n</skill_content>`;
+  let path = skill.path;
+  if (reference !== undefined) {
+    if (isAbsolute(reference) || reference.split(/[/\\]/).includes('..'))
+      throw Error('reference must stay inside the skill references directory');
+    const root = realpathSync(dirname(skill.path));
+    path = realpathSync(resolve(root, 'references', reference));
+    const rel = relative(root, path);
+    if (isAbsolute(rel) || !rel.startsWith('references' + sep))
+      throw Error('reference must stay inside the skill references directory');
+    if (
+      [basename(reference), basename(path)].some((name) =>
+        credentialFiles.some((pattern) =>
+          matchPattern(pattern, name, process.platform !== 'linux'),
+        ),
+      )
+    )
+      throw Error('skill reference is a credential file');
+  }
+  return `<skill_content name="${skill.name}">\n${readFileSync(path, 'utf8').trim()}\n\nBase directory for this skill: ${dirname(skill.path)}\nRelative paths in this skill are relative to this base directory.\n</skill_content>`;
 }
