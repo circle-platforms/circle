@@ -48,6 +48,11 @@ const unsafe = [
   'ls ||',
 ];
 
+// Verified read-only execution is POSIX-only: the verified command is single-quote
+// quoted for a POSIX shell, so on Windows nothing is verified and every command
+// asks, as the first test asserts. These tests exercise the unasked behavior.
+const posixOnly = { skip: process.platform === 'win32' };
+
 test('verified read-only execution is narrower than display classification on both platforms', () => {
   for (const command of safe)
     assert.equal(
@@ -66,108 +71,123 @@ test('verified read-only execution is narrower than display classification on bo
     assert.equal(readOnlyExecution(command, 'win32'), undefined, command);
 });
 
-test('only accept-edits allows verified queries, with terminal first-use and path scope retained', (t) => {
-  const root = scratch(t);
-  const policy = new ApprovalPolicy(
-    new ApprovalStore(join(root, 'approvals')),
-    root,
-  );
-  assert.equal(policy.needsApproval('execute', { command: 'pwd' }, 's'), true);
-  policy.setMode('s', 'accept-edits');
-  for (const command of safe)
-    assert.equal(
-      policy.needsApproval('execute', { command }, 's'),
-      false,
-      command,
+test(
+  'only accept-edits allows verified queries, with terminal first-use and path scope retained',
+  posixOnly,
+  (t) => {
+    const root = scratch(t);
+    const policy = new ApprovalPolicy(
+      new ApprovalStore(join(root, 'approvals')),
+      root,
     );
-  for (const command of unsafe) {
     assert.equal(
-      policy.readOnlyCommand('execute', { command }),
-      undefined,
-      command,
+      policy.needsApproval('execute', { command: 'pwd' }, 's'),
+      true,
     );
-    if (policy.review('execute', { command }).verdict !== 'DENY')
+    policy.setMode('s', 'accept-edits');
+    for (const command of safe)
       assert.equal(
         policy.needsApproval('execute', { command }, 's'),
-        true,
+        false,
         command,
       );
-  }
-  assert.equal(
-    policy.needsApproval('execute', { command: 'cat ../outside' }, 's'),
-    true,
-  );
-  const local = { terminal: 'local:t1', command: 'pwd' };
-  assert.equal(policy.needsApproval('terminal_send', local, 's'), false);
-  assert.equal(
-    policy.needsApproval('terminal_send', { ...local, first_use: true }, 's'),
-    true,
-  );
-});
+    for (const command of unsafe) {
+      assert.equal(
+        policy.readOnlyCommand('execute', { command }),
+        undefined,
+        command,
+      );
+      if (policy.review('execute', { command }).verdict !== 'DENY')
+        assert.equal(
+          policy.needsApproval('execute', { command }, 's'),
+          true,
+          command,
+        );
+    }
+    assert.equal(
+      policy.needsApproval('execute', { command: 'cat ../outside' }, 's'),
+      true,
+    );
+    const local = { terminal: 'local:t1', command: 'pwd' };
+    assert.equal(policy.needsApproval('terminal_send', local, 's'), false);
+    assert.equal(
+      policy.needsApproval('terminal_send', { ...local, first_use: true }, 's'),
+      true,
+    );
+  },
+);
 
-test('scripted query executes with Git helpers disabled and rejected mixed chain has no effects', async (t) => {
-  const root = scratch(t);
-  const git = (...args: string[]) =>
-    execFileSync('git', args, { cwd: root, encoding: 'utf8' });
-  git('init', '-q');
-  writeFileSync(join(root, 'note.txt'), 'actual query evidence\n');
-  git('config', 'core.fsmonitor', 'touch helper-ran');
-  const store = new CheckpointStore(join(root, 'history'));
-  cleanup(t, () => store.close());
-  const session = store.create(root, 'scripted');
-  const policy = new ApprovalPolicy(
-    new ApprovalStore(join(root, 'approvals')),
-    root,
-  );
-  policy.setMode(session.id, 'accept-edits');
-  const model = new ScriptedModel([
-    {
-      message: {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: '',
-        tool_calls: [
-          {
-            id: 'query',
-            name: 'execute',
-            args: { command: 'git status --short' },
-          },
-          { id: 'read', name: 'execute', args: { command: 'cat note.txt' } },
-          {
-            id: 'mixed',
-            name: 'execute',
-            args: { command: 'git status && touch forbidden' },
-          },
-        ],
+test(
+  'scripted query executes with Git helpers disabled and rejected mixed chain has no effects',
+  posixOnly,
+  async (t) => {
+    const root = scratch(t);
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: root, encoding: 'utf8' });
+    git('init', '-q');
+    writeFileSync(join(root, 'note.txt'), 'actual query evidence\n');
+    git('config', 'core.fsmonitor', 'touch helper-ran');
+    const store = new CheckpointStore(join(root, 'history'));
+    cleanup(t, () => store.close());
+    const session = store.create(root, 'scripted');
+    const policy = new ApprovalPolicy(
+      new ApprovalStore(join(root, 'approvals')),
+      root,
+    );
+    policy.setMode(session.id, 'accept-edits');
+    const model = new ScriptedModel([
+      {
+        message: {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              id: 'query',
+              name: 'execute',
+              args: { command: 'git status --short' },
+            },
+            { id: 'read', name: 'execute', args: { command: 'cat note.txt' } },
+            {
+              id: 'mixed',
+              name: 'execute',
+              args: { command: 'git status && touch forbidden' },
+            },
+          ],
+        },
       },
-    },
-    {
-      message: { id: crypto.randomUUID(), role: 'assistant', content: 'done' },
-    },
-  ]);
-  const cards: string[] = [];
-  await new Harness({
-    model,
-    tools: buildTools(new Sandbox(root)),
-    store,
-    session,
-    policy,
-    system: 'test',
-    approve: async (call) => {
-      cards.push(call.id);
-      return 'reject';
-    },
-  }).run('query');
-  assert.deepEqual(cards, ['mixed']);
-  const results = model.requests[1]!.messages.filter(
-    (message) => message.role === 'tool',
-  );
-  assert.match(String(results[0]!.content), /note.txt/);
-  assert.match(String(results[1]!.content), /actual query evidence/);
-  assert.match(String(results[2]!.content), /rejected/);
-  assert.equal(existsSync(join(root, 'helper-ran')), false);
-  assert.equal(existsSync(join(root, 'forbidden')), false);
-});
+      {
+        message: {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: 'done',
+        },
+      },
+    ]);
+    const cards: string[] = [];
+    await new Harness({
+      model,
+      tools: buildTools(new Sandbox(root)),
+      store,
+      session,
+      policy,
+      system: 'test',
+      approve: async (call) => {
+        cards.push(call.id);
+        return 'reject';
+      },
+    }).run('query');
+    assert.deepEqual(cards, ['mixed']);
+    const results = model.requests[1]!.messages.filter(
+      (message) => message.role === 'tool',
+    );
+    assert.match(String(results[0]!.content), /note.txt/);
+    assert.match(String(results[1]!.content), /actual query evidence/);
+    assert.match(String(results[2]!.content), /rejected/);
+    assert.equal(existsSync(join(root, 'helper-ran')), false);
+    assert.equal(existsSync(join(root, 'forbidden')), false);
+  },
+);
 
 test('a verified query turns off what git and ripgrep would start, and leaves credential files out', () => {
   const run = (command: string) =>
@@ -229,148 +249,168 @@ function repository(t: Parameters<typeof scratch>[0]) {
   return { root, git, policy, asks };
 }
 
-test("a git query asks when the repository's own configuration would start another program", (t) => {
-  const { root, git, asks } = repository(t);
-  assert.equal(asks('git status'), false);
-  assert.equal(asks('git diff'), false);
-  for (const [key, value] of [
-    // Run on a file's content while git compares it with the index.
-    ['filter.evil.clean', 'touch helper-ran'],
-    // A missing object is fetched from it, through whatever its address starts.
-    ['remote.origin.promisor', 'true'],
-    ['extensions.partialClone', 'origin'],
-    // git asks each submodule, which has a configuration of its own.
-    ['submodule.lib.url', './lib'],
-    // The files compared are then somewhere else.
-    ['core.worktree', '/'],
-  ] as const) {
-    git('config', key, value);
-    for (const command of ['git status', 'git diff', 'git log --oneline'])
-      assert.equal(asks(command), true, `${key}: ${command}`);
-    // What is not git does not read that configuration.
-    assert.equal(asks('ls -la'), false, key);
-    git('config', '--unset', key);
-    assert.equal(asks('git status'), false, key);
-  }
-  // A file the configuration includes counts as the configuration.
-  writeFileSync(join(root, 'more.config'), '[filter "x"]\n\tclean = cat\n');
-  git('config', 'include.path', '../more.config');
-  assert.equal(asks('git status'), true);
-  git('config', '--unset', 'include.path');
-  assert.equal(asks('git status'), false);
-  assert.equal(existsSync(join(root, 'helper-ran')), false);
-});
+test(
+  "a git query asks when the repository's own configuration would start another program",
+  posixOnly,
+  (t) => {
+    const { root, git, asks } = repository(t);
+    assert.equal(asks('git status'), false);
+    assert.equal(asks('git diff'), false);
+    for (const [key, value] of [
+      // Run on a file's content while git compares it with the index.
+      ['filter.evil.clean', 'touch helper-ran'],
+      // A missing object is fetched from it, through whatever its address starts.
+      ['remote.origin.promisor', 'true'],
+      ['extensions.partialClone', 'origin'],
+      // git asks each submodule, which has a configuration of its own.
+      ['submodule.lib.url', './lib'],
+      // The files compared are then somewhere else.
+      ['core.worktree', '/'],
+    ] as const) {
+      git('config', key, value);
+      for (const command of ['git status', 'git diff', 'git log --oneline'])
+        assert.equal(asks(command), true, `${key}: ${command}`);
+      // What is not git does not read that configuration.
+      assert.equal(asks('ls -la'), false, key);
+      git('config', '--unset', key);
+      assert.equal(asks('git status'), false, key);
+    }
+    // A file the configuration includes counts as the configuration.
+    writeFileSync(join(root, 'more.config'), '[filter "x"]\n\tclean = cat\n');
+    git('config', 'include.path', '../more.config');
+    assert.equal(asks('git status'), true);
+    git('config', '--unset', 'include.path');
+    assert.equal(asks('git status'), false);
+    assert.equal(existsSync(join(root, 'helper-ran')), false);
+  },
+);
 
-test('a link or a folder does not carry a query to a credential file, to .git or out of the workspace', (t) => {
-  const { root, asks } = repository(t);
-  const outside = scratch(t);
-  writeFileSync(join(outside, 'notes.txt'), 'elsewhere\n');
-  writeFileSync(join(root, '.env'), 'SECRET=1\n');
-  writeFileSync(join(root, 'note.txt'), 'here\n');
-  symlinkSync(join(root, '.env'), join(root, 'settings'));
-  symlinkSync(join(outside, 'notes.txt'), join(root, 'elsewhere'));
-  symlinkSync(join(root, 'missing'), join(root, 'dangling'));
-  assert.equal(asks('cat note.txt'), false);
-  for (const command of [
-    'cat settings',
-    'cat elsewhere',
-    'cat dangling',
-    'cat .git/config',
-    'ls .git',
-    'head -3 .git/HEAD',
-  ])
-    assert.equal(asks(command), true, command);
-});
+test(
+  'a link or a folder does not carry a query to a credential file, to .git or out of the workspace',
+  posixOnly,
+  (t) => {
+    const { root, asks } = repository(t);
+    const outside = scratch(t);
+    writeFileSync(join(outside, 'notes.txt'), 'elsewhere\n');
+    writeFileSync(join(root, '.env'), 'SECRET=1\n');
+    writeFileSync(join(root, 'note.txt'), 'here\n');
+    symlinkSync(join(root, '.env'), join(root, 'settings'));
+    symlinkSync(join(outside, 'notes.txt'), join(root, 'elsewhere'));
+    symlinkSync(join(root, 'missing'), join(root, 'dangling'));
+    assert.equal(asks('cat note.txt'), false);
+    for (const command of [
+      'cat settings',
+      'cat elsewhere',
+      'cat dangling',
+      'cat .git/config',
+      'ls .git',
+      'head -3 .git/HEAD',
+    ])
+      assert.equal(asks(command), true, command);
+  },
+);
 
-test('a terminal tab, whose folder is not known, runs unasked only what names no file', (t) => {
-  const { policy } = repository(t);
-  const asks = (command: string) =>
-    policy.needsApproval(
-      'terminal_send',
-      { terminal: 'local:t1', command },
-      's',
-    );
-  for (const command of ['pwd', 'ls -la', 'pwd && ls'])
-    assert.equal(asks(command), false, command);
-  for (const command of [
-    'cat note.txt',
-    'ls src',
-    'ls | head -3',
-    'git status',
-    'rg needle',
-    'wc -l',
-  ])
-    assert.equal(asks(command), true, command);
-});
+test(
+  'a terminal tab, whose folder is not known, runs unasked only what names no file',
+  posixOnly,
+  (t) => {
+    const { policy } = repository(t);
+    const asks = (command: string) =>
+      policy.needsApproval(
+        'terminal_send',
+        { terminal: 'local:t1', command },
+        's',
+      );
+    for (const command of ['pwd', 'ls -la', 'pwd && ls'])
+      assert.equal(asks(command), false, command);
+    for (const command of [
+      'cat note.txt',
+      'ls src',
+      'ls | head -3',
+      'git status',
+      'rg needle',
+      'wc -l',
+    ])
+      assert.equal(asks(command), true, command);
+  },
+);
 
-test('an unasked search and an unasked patch show nothing of a credential file', async (t) => {
-  const { root, git, policy } = repository(t);
-  writeFileSync(join(root, 'note.txt'), 'needle in the note\n');
-  writeFileSync(join(root, 'server.pem'), 'needle first key\n');
-  git('add', '.');
-  git('commit', '-q', '-m', 'first');
-  writeFileSync(join(root, 'note.txt'), 'needle in the changed note\n');
-  writeFileSync(join(root, 'server.pem'), 'needle second key\n');
-  writeFileSync(join(root, '.env'), 'needle=secret\n');
-  const store = new CheckpointStore(join(root, 'history'));
-  cleanup(t, () => store.close());
-  const session = store.create(root, 'scripted');
-  policy.setMode(session.id, 'accept-edits');
-  // ripgrep is not on every machine that runs this; the command it would run is checked
-  // above either way.
-  const ripgrep = spawnSync('rg', ['--version']).status === 0;
-  const commands = [
-    'git diff',
-    'git show HEAD',
-    'git log -p',
-    'git status --short',
-    ...(ripgrep ? ['rg --hidden --no-ignore needle'] : []),
-  ];
-  const model = new ScriptedModel([
-    {
-      message: {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: '',
-        tool_calls: commands.map((command, index) => ({
-          id: `call-${index}`,
-          name: 'execute',
-          args: { command },
-        })),
+test(
+  'an unasked search and an unasked patch show nothing of a credential file',
+  posixOnly,
+  async (t) => {
+    const { root, git, policy } = repository(t);
+    writeFileSync(join(root, 'note.txt'), 'needle in the note\n');
+    writeFileSync(join(root, 'server.pem'), 'needle first key\n');
+    git('add', '.');
+    git('commit', '-q', '-m', 'first');
+    writeFileSync(join(root, 'note.txt'), 'needle in the changed note\n');
+    writeFileSync(join(root, 'server.pem'), 'needle second key\n');
+    writeFileSync(join(root, '.env'), 'needle=secret\n');
+    const store = new CheckpointStore(join(root, 'history'));
+    cleanup(t, () => store.close());
+    const session = store.create(root, 'scripted');
+    policy.setMode(session.id, 'accept-edits');
+    // ripgrep is not on every machine that runs this; the command it would run is checked
+    // above either way.
+    const ripgrep = spawnSync('rg', ['--version']).status === 0;
+    const commands = [
+      'git diff',
+      'git show HEAD',
+      'git log -p',
+      'git status --short',
+      ...(ripgrep ? ['rg --hidden --no-ignore needle'] : []),
+    ];
+    const model = new ScriptedModel([
+      {
+        message: {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: '',
+          tool_calls: commands.map((command, index) => ({
+            id: `call-${index}`,
+            name: 'execute',
+            args: { command },
+          })),
+        },
       },
-    },
-    {
-      message: { id: crypto.randomUUID(), role: 'assistant', content: 'done' },
-    },
-  ]);
-  const cards: string[] = [];
-  await new Harness({
-    model,
-    tools: buildTools(new Sandbox(root)),
-    store,
-    session,
-    policy,
-    system: 'test',
-    approve: async (call) => {
-      cards.push(call.id);
-      return 'reject';
-    },
-  }).run('query');
-  assert.deepEqual(cards, []);
-  const results = model.requests[1]!.messages.filter(
-    (message) => message.role === 'tool',
-  ).map((message) => String(message.content));
-  const [diff, show, log, status] = results;
-  // The patches carry the note and not a line of the key, in the work tree or in history.
-  for (const patch of [diff, show, log]) {
-    assert.match(patch!, /needle in the/, patch);
-    assert.doesNotMatch(patch!, /key|secret/, patch);
-  }
-  // A list of names shows the names: that is all `git status` says of them.
-  assert.match(status!, /server\.pem/);
-  if (ripgrep) {
-    const search = results[4]!;
-    assert.match(search, /note\.txt/);
-    assert.doesNotMatch(search, /key|secret/, search);
-  }
-});
+      {
+        message: {
+          id: crypto.randomUUID(),
+          role: 'assistant',
+          content: 'done',
+        },
+      },
+    ]);
+    const cards: string[] = [];
+    await new Harness({
+      model,
+      tools: buildTools(new Sandbox(root)),
+      store,
+      session,
+      policy,
+      system: 'test',
+      approve: async (call) => {
+        cards.push(call.id);
+        return 'reject';
+      },
+    }).run('query');
+    assert.deepEqual(cards, []);
+    const results = model.requests[1]!.messages.filter(
+      (message) => message.role === 'tool',
+    ).map((message) => String(message.content));
+    const [diff, show, log, status] = results;
+    // The patches carry the note and not a line of the key, in the work tree or in history.
+    for (const patch of [diff, show, log]) {
+      assert.match(patch!, /needle in the/, patch);
+      assert.doesNotMatch(patch!, /key|secret/, patch);
+    }
+    // A list of names shows the names: that is all `git status` says of them.
+    assert.match(status!, /server\.pem/);
+    if (ripgrep) {
+      const search = results[4]!;
+      assert.match(search, /note\.txt/);
+      assert.doesNotMatch(search, /key|secret/, search);
+    }
+  },
+);
