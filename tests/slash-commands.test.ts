@@ -665,7 +665,7 @@ test('/mode steps through manual, accept edits, plan and auto, and the frame nam
   assert.equal(runtime.policy.mode(id), 'accept-edits');
   assert.equal(
     app.state.notices.at(-1),
-    'Accept edits · workspace file edits run without asking, commands and deletes still ask',
+    'Accept edits · workspace edits and verified read-only commands run without asking; writes and deletes still ask',
   );
   assert.match(word()!, /accept edits/);
   await app.submit('/mode');
@@ -972,7 +972,7 @@ test('/name, /session, /approvals, /themes and /effort answer in the transcript'
   await until(() => runtime.mode === 'accept-edits');
   assert.equal(
     app.state.notices.at(-1),
-    'Accept edits · workspace file edits run without asking, commands and deletes still ask',
+    'Accept edits · workspace edits and verified read-only commands run without asking; writes and deletes still ask',
   );
   // alt+t cycles the thinking depth, for this session only.
   await key('alt+t');
@@ -1109,7 +1109,10 @@ test('/settings picks the mode new sessions start in, and alt+d saves it', async
     app.state.picker!.items.map((item) => [item.label, item.meta]),
     [
       ['manual', 'asking before each change and command'],
-      ['accept edits', 'workspace edits run without asking'],
+      [
+        'accept edits',
+        'workspace edits and verified read-only commands run without asking',
+      ],
       ['read-only', 'writes and shell are blocked · except the plan'],
       [
         'auto',
@@ -1124,7 +1127,7 @@ test('/settings picks the mode new sessions start in, and alt+d saves it', async
   assert.equal(loadSettings(home).default_mode, '');
   assert.equal(
     app.state.notices.at(-1),
-    'Accept edits · workspace file edits run without asking, commands and deletes still ask',
+    'Accept edits · workspace edits and verified read-only commands run without asking; writes and deletes still ask',
   );
   // alt+d writes default_mode and takes the session with it
   await app.submit('/settings');

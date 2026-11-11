@@ -429,7 +429,7 @@ function yolo(host: CommandHost, args: string): void {
 const MODE_NOTICES: Record<SessionMode, string> = {
   manual: 'Manual · asking before each change and command',
   'accept-edits':
-    'Accept edits · workspace file edits run without asking, commands and deletes still ask',
+    'Accept edits · workspace edits and verified read-only commands run without asking; writes and deletes still ask',
   plan: 'Read-only on · writes and shell are blocked, except the plan',
   // Turning it on says what it lets through
   auto: 'Auto on · nothing asks: commands that delete, certificate warnings and uploads go ahead · use it where that is safe',
@@ -443,7 +443,8 @@ const MODE_WORDS: Record<SessionMode, string> = {
 };
 const MODE_META: Record<SessionMode, string> = {
   manual: 'asking before each change and command',
-  'accept-edits': 'workspace edits run without asking',
+  'accept-edits':
+    'workspace edits and verified read-only commands run without asking',
   plan: 'writes and shell are blocked · except the plan',
   auto: 'nothing asks · deletes, certificate warnings and uploads included',
 };

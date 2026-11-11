@@ -1740,8 +1740,15 @@ export class Harness {
         throw new Error('read-only mode: this tool cannot run');
       this.bus.emit('tool_start', { payload: { ...call } });
       const args = resolved;
+      const readOnlyCommand =
+        this.options.policy.mode(
+          this.options.approvalSessionId ?? this.sessionId,
+        ) === 'accept-edits'
+          ? this.options.policy.readOnlyCommand(call.name, resolved)?.command
+          : undefined;
       const context: ToolContext = {
         signal,
+        ...(readOnlyCommand ? { readOnlyCommand } : {}),
         sessionId: this.sessionId,
         callId: call.id,
         ...(used.size ? { rawArgs: structuredClone(raw) } : {}),

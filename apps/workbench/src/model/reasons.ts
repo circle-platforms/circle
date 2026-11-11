@@ -11,6 +11,8 @@ const REASONS: Record<string, () => string> = {
   'changes files in the workspace': () => t('changes files in the workspace'),
   'changes files outside the workspace': () =>
     t('changes files outside the workspace'),
+  "changes git's or Circle's own files": () =>
+    t("changes git's or Circle's own files"),
   'deletes files': () => t('deletes files'),
   'runs a shell command': () => t('runs a shell command'),
   'only reads': () => t('only reads'),

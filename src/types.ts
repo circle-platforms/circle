@@ -170,6 +170,7 @@ export interface Tool {
 }
 export interface ToolContext {
   signal: AbortSignal;
+  readOnlyCommand?: string;
   sessionId: string;
   /** The call being run: a request the tool raises can be shown under it. */
   callId?: string;

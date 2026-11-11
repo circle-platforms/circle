@@ -26,7 +26,9 @@ export const MODE_TEXT: Record<
   'accept-edits': {
     label: () => t('accept edits'),
     detail: () =>
-      t('edits workspace files without asking; commands and deletes still ask'),
+      t(
+        'workspace edits and verified read-only commands run without asking; writes and deletes still ask',
+      ),
     icon: FileCheck,
   },
   plan: {

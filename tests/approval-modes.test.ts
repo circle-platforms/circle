@@ -116,6 +116,103 @@ test('accept-edits answers for edits inside the workspace and asks for the rest'
   assert.equal(rules.needsApproval('write_file', inside, 'other'), true);
 });
 
+test("accept-edits asks before a change to git's or Circle's own files, and no kept answer covers one", (t) => {
+  const root = scratch(t);
+  mkdirSync(join(root, '.git', 'hooks'), { recursive: true });
+  mkdirSync(join(root, '.circle'));
+  const rules = policy(root);
+  const write = (file_path: string) => ({ file_path, content: 'x' });
+  rules.setMode('s', 'accept-edits');
+  // What git or Circle later runs or obeys: a hook, a filter in the repository's
+  // configuration, the project's settings, rules and hooks.
+  for (const path of [
+    '.git/config',
+    '.git/hooks/pre-commit',
+    join(root, '.circle', 'settings.json'),
+    '.circle/hooks.json',
+    // A file system that ignores case opens the same folder.
+    ...(process.platform === 'linux' ? [] : ['.Git/config', '.CIRCLE/x.json']),
+  ])
+    assert.equal(
+      rules.needsApproval('write_file', write(path), 's'),
+      true,
+      path,
+    );
+  // A name that only begins like them is a file like any other.
+  for (const path of [
+    'src/a.ts',
+    '.gitignore',
+    '.gitattributes',
+    '.github/workflows/check.yml',
+    'docs/.gitkeep',
+  ])
+    assert.equal(
+      rules.needsApproval('write_file', write(path), 's'),
+      false,
+      path,
+    );
+  // One such file among a patch's files makes the patch ask.
+  assert.equal(
+    rules.needsApproval(
+      'apply_patch',
+      {
+        patchText:
+          '*** Begin Patch\n*** Update File: src/a.ts\n*** Add File: .git/hooks/post-merge\n*** End Patch',
+      },
+      's',
+    ),
+    true,
+  );
+  assert.equal(
+    rules.review('write_file', write('.git/config')).reason,
+    "changes git's or Circle's own files",
+  );
+  // An answer kept for the workspace's changes is not an answer for these, and none
+  // can be kept for them: each one asks.
+  assert.equal(
+    rules.remember('kept', 'write_file', write('src/a.ts'), 'always'),
+    true,
+  );
+  assert.equal(
+    rules.needsApproval('write_file', write('src/b.ts'), 'kept'),
+    false,
+  );
+  assert.equal(
+    rules.needsApproval('write_file', write('.git/config'), 'kept'),
+    true,
+  );
+  assert.equal(
+    rules.remember('kept', 'write_file', write('.git/config'), 'always'),
+    false,
+  );
+  // Another checkout of the repository counts as the workspace, wherever it lies: its
+  // own top folder is where its names start, not a `.circle` somewhere above it.
+  const other = join(scratch(t), '.circle', 'tasks', 'checkout');
+  mkdirSync(join(other, 'src'), { recursive: true });
+  mkdirSync(join(other, '.circle'));
+  writeFileSync(join(other, '.git'), 'gitdir: elsewhere\n');
+  rules.worktree = (path) => path.startsWith(realpathSync(other));
+  assert.equal(
+    rules.needsApproval('write_file', write(join(other, 'src', 'a.ts')), 's'),
+    false,
+  );
+  for (const path of [
+    join(other, '.git'),
+    join(other, '.circle', 'settings.json'),
+  ])
+    assert.equal(
+      rules.needsApproval('write_file', write(path), 's'),
+      true,
+      path,
+    );
+  // `auto` asks about nothing, these included.
+  rules.setMode('a', 'auto');
+  assert.equal(
+    rules.needsApproval('write_file', write('.git/config'), 'a'),
+    false,
+  );
+});
+
 test('accept-edits answers for edits inside the workspace whichever spelling of its path a symlink gives', (t) => {
   // On macOS a process is given `/var/…` while realpath of the same temporary
   // folder is `/private/var/…`. `temporary` is the folder from `os.tmpdir()`;
@@ -247,6 +344,59 @@ test('in accept-edits the harness writes the file without asking and still asks 
     (message) => message.role === 'tool',
   );
   assert.match(String(results[1]!.content), /Edited/);
+  assert.match(String(results[2]!.content), /rejected/);
+});
+
+test('in accept-edits the harness asks before writing a git hook or project settings, and a rejected one is not written', async (t) => {
+  const root = realpathSync(scratch(t));
+  mkdirSync(join(root, '.git', 'hooks'), { recursive: true });
+  const store = new CheckpointStore(join(root, 'history'));
+  cleanup(t, () => store.close());
+  const session = store.create(root, 'scripted');
+  const rules = policy(root);
+  rules.setMode(session.id, 'accept-edits');
+  const write = (id: string, file_path: string, content: string) => ({
+    id,
+    name: 'write_file',
+    args: { file_path, content },
+  });
+  const model = new ScriptedModel([
+    {
+      message: assistant('', [
+        write('note', 'notes.md', 'a note\n'),
+        // git would run it on the next commit, by whoever makes it.
+        write('hook', '.git/hooks/pre-commit', '#!/bin/sh\ntouch ran\n'),
+        // A project's settings add commands that run without asking.
+        write(
+          'settings',
+          '.circle/settings.json',
+          '{"allowed_commands":["*"]}',
+        ),
+      ]),
+    },
+    { message: assistant('done') },
+  ]);
+  const asked: string[] = [];
+  await new Harness({
+    model,
+    tools: buildTools(new Sandbox(root)),
+    store,
+    session,
+    policy: rules,
+    system: 'test',
+    approve: async (call) => {
+      asked.push(call.id);
+      return 'reject';
+    },
+  }).run('set it up');
+  assert.deepEqual(asked, ['hook', 'settings']);
+  assert.equal(readFileSync(join(root, 'notes.md'), 'utf8'), 'a note\n');
+  assert.equal(existsSync(join(root, '.git', 'hooks', 'pre-commit')), false);
+  assert.equal(existsSync(join(root, '.circle', 'settings.json')), false);
+  const results = model.requests[1]!.messages.filter(
+    (message) => message.role === 'tool',
+  );
+  assert.match(String(results[1]!.content), /rejected/);
   assert.match(String(results[2]!.content), /rejected/);
 });
 
