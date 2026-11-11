@@ -67,6 +67,7 @@ jobs:
             apps/desktop/package-lock.json
       - run: npm ci
       - run: npm --prefix apps/workbench ci
+      - uses: ./.github/actions/electron-cache
       - run: npm --prefix apps/desktop ci
       # The pinned developer tools (Node, gh) from an earlier run, so a build does
       # not download them again; each is used only while its receipt matches it
@@ -213,6 +214,7 @@ jobs:
             apps/desktop/package-lock.json
       - run: npm ci
       - run: npm --prefix apps/workbench ci
+      - uses: ./.github/actions/electron-cache
       - run: npm --prefix apps/desktop ci
       # The browser download is cached between runs; its key follows the
       # workbench lockfile, which pins the Playwright version.
@@ -263,6 +265,7 @@ jobs:
             apps/desktop/package-lock.json
       - run: npm ci
       - run: npm --prefix apps/workbench ci
+      - uses: ./.github/actions/electron-cache
       - run: npm --prefix apps/desktop ci
       # The pinned developer tools (Node, gh) from an earlier run, so a build does
       # not download them again; each is used only while its receipt matches it
@@ -307,6 +310,7 @@ jobs:
             apps/desktop/package-lock.json
       - run: npm ci
       - run: npm --prefix apps/workbench ci
+      - uses: ./.github/actions/electron-cache
       - run: npm --prefix apps/desktop ci
       # The pinned developer tools (Node, gh) from an earlier run, so a build does
       # not download them again; each is used only while its receipt matches it

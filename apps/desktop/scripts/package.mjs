@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { prepareDeveloperTools } from './developer-toolchain.mjs';
 import { packager } from '@electron/packager';
+import { electronDownloadOptions } from './electron-download.mjs';
 import {
   cp,
   mkdir,
@@ -65,6 +66,7 @@ const paths = await packager({
   platform,
   arch,
   electronVersion: manifest.devDependencies.electron,
+  download: await electronDownloadOptions({ platform, arch }),
   appBundleId: channel.id,
   appCategoryType: 'public.app-category.developer-tools',
   icon:
