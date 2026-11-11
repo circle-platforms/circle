@@ -813,9 +813,10 @@ test(
   'a live browser group the process listing leaves out is still stopped',
   { skip: process.platform === 'win32' },
   async (t) => {
-    const root = scratch(t);
     // It answers and lists nothing: the answer that once let a live group go unstopped.
-    writeFileSync(join(root, 'ps'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    // The empty listing is injected in-process: starting a synthetic `ps`
+    // executable inside the inspection deadline is what made this check
+    // unreliable (#505).
     const child = spawn(
       process.execPath,
       ['-e', "process.stdout.write('ready');setInterval(()=>{},1000)"],
@@ -832,7 +833,7 @@ test(
     const browser = new ChromeBrowser({
       executable: process.execPath,
       closeTimeout: 1000,
-      processInspector: join(root, 'ps'),
+      processLister: async () => '',
     });
     const owned = browser as any;
     owned.processGroups.add(child.pid);
