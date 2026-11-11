@@ -41,6 +41,13 @@ let heldReplay:
       release: () => void;
     }
   | undefined;
+let heldWrite:
+  | {
+      pending: boolean;
+      promise: Promise<void>;
+      release: () => void;
+    }
+  | undefined;
 let items = Array.from({ length: 9 }, (_, index) => ({
   id: 'terminal-' + (index + 1),
   owner: 'A',
@@ -139,7 +146,14 @@ window.circleDesktop = {
       items = [...items, item];
       return { ok: true, data: item };
     }
-    if (method === 'write') writes.push({ id: params.id, data: params.data });
+    if (method === 'write') {
+      writes.push({ id: params.id, data: params.data });
+      if (heldWrite && !heldWrite.pending) {
+        const gate = heldWrite;
+        gate.pending = true;
+        await gate.promise;
+      }
+    }
     const item = items.find((item) => item.id === params?.id) ?? items[0];
     if (method === 'close') {
       item.status = 'exited';
@@ -252,6 +266,19 @@ Object.assign(window, {
     releasePaste: () => {
       heldReplay?.release();
       heldReplay = undefined;
+    },
+    deferWrite: () => {
+      let release!: () => void;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      heldWrite = { pending: false, promise, release };
+    },
+    writePending: () => heldWrite?.pending === true,
+    releaseWrite: () => {
+      const gate = heldWrite;
+      heldWrite = undefined;
+      gate?.release();
     },
     accessibility: (enabled: boolean, supported = true) => {
       accessibility = {

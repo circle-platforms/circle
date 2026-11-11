@@ -1,8 +1,25 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { ContextMenu } from 'radix-ui';
-import { X } from 'lucide-react';
+import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import { ContextMenu, DropdownMenu } from 'radix-ui';
+import { Check, ChevronDown, X } from 'lucide-react';
 import { t } from '../i18n';
+import { terminalKeyboardClaimed } from '../model/terminal-keyboard';
 import '../styles/terminal-tabs.css';
+
+function keepSurfaceFocus(event: Event): void {
+  if (
+    terminalKeyboardClaimed() ||
+    document.activeElement?.closest(
+      '.native-terminal-surface, .device-screen, [role="dialog"]:not([data-state="closed"])',
+    )
+  )
+    event.preventDefault();
+}
 
 /** What a tab's dot says: Circle works in it, it waits for you, it failed, it is over. */
 export type TabState = 'run' | 'wait' | 'fail' | 'done';
@@ -63,9 +80,29 @@ export function TerminalTabs({
   /** Buttons the drawer adds: more actions, a window of its own, the full view. */
   end?: ReactNode;
 }) {
+  const bar = useRef<HTMLDivElement>(null);
   const strip = useRef<HTMLDivElement>(null);
+  const more = useRef<HTMLButtonElement>(null);
+  const pressed = useRef('');
+  const menuPicked = useRef('');
   const [dragging, setDragging] = useState('');
+  const [overflowing, setOverflowing] = useState(false);
   const order = tabs.map((tab) => tab.key).join('\n');
+  const tabsSignature = tabs
+    .map(
+      (tab) =>
+        `${tab.key}\t${tab.label}\t${tab.state ?? ''}\t${tab.onClose ? 1 : 0}`,
+    )
+    .join('\n');
+  const measureOverflow = useCallback(() => {
+    const node = strip.current;
+    if (!active || !node || !node.clientWidth || tabs.length < 2) {
+      setOverflowing(false);
+      return;
+    }
+    const reserved = more.current ? more.current.offsetWidth + 2 : 0;
+    setOverflowing(node.scrollWidth > node.clientWidth + reserved + 1);
+  }, [active, tabs.length]);
   useLayoutEffect(() => {
     const node = strip.current;
     if (!active || !node) return;
@@ -94,14 +131,35 @@ export function TerminalTabs({
     return () => observer.disconnect();
     // Output and status changes keep the order, and must not undo a hand-scrolled row.
   }, [active, selected, order]);
+  useLayoutEffect(() => {
+    measureOverflow();
+    if (!active) return;
+    const observer = new ResizeObserver(() => measureOverflow());
+    if (bar.current) observer.observe(bar.current);
+    if (strip.current) observer.observe(strip.current);
+    return () => observer.disconnect();
+  }, [active, measureOverflow, tabsSignature, overflowing]);
   return (
-    <div className="term-tabbar">
+    <div className="term-tabbar" ref={bar}>
       {leading}
       <div
         className="term-tabs"
         ref={strip}
         role="tablist"
         aria-label={t('terminal tabs')}
+        onWheel={(event) => {
+          const node = strip.current;
+          if (
+            !node ||
+            node.scrollWidth <= node.clientWidth + 1 ||
+            event.deltaY === 0 ||
+            event.deltaX !== 0
+          )
+            return;
+          const previous = node.scrollLeft;
+          node.scrollLeft += event.deltaY;
+          if (node.scrollLeft !== previous) event.preventDefault();
+        }}
       >
         {tabs.map((tab) => {
           const on = tab.key === selected;
@@ -110,13 +168,34 @@ export function TerminalTabs({
               key={tab.key}
               className={`term-tab${on ? ' on' : ''}${tab.onClose ? ' closable' : ''}`}
               draggable={!!tab.onMove}
-              onDragStart={(event) => {
-                if (!tab.onMove) return;
-                setDragging(tab.key);
-                event.dataTransfer.effectAllowed = 'move';
-                event.dataTransfer.setData('text/plain', tab.key);
+              onPointerDown={() => {
+                pressed.current = tab.key;
               }}
-              onDragEnd={() => setDragging('')}
+              onPointerUp={() => {
+                pressed.current = '';
+              }}
+              onClick={(event) => {
+                if (
+                  !(event.target instanceof Element) ||
+                  !event.target.closest('button')
+                )
+                  onSelect(tab.key);
+              }}
+              onDragStart={(event) => {
+                const source = pressed.current || tab.key;
+                const sourceTab = tabs.find((one) => one.key === source) ?? tab;
+                if (!sourceTab.onMove) {
+                  event.preventDefault();
+                  return;
+                }
+                setDragging(source);
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', source);
+              }}
+              onDragEnd={() => {
+                pressed.current = '';
+                setDragging('');
+              }}
               onDragOver={(event) => {
                 if (!dragging || dragging === tab.key) return;
                 event.preventDefault();
@@ -124,6 +203,7 @@ export function TerminalTabs({
               }}
               onDrop={(event) => {
                 const from = dragging;
+                pressed.current = '';
                 setDragging('');
                 if (!from || from === tab.key || !tab.onMove) return;
                 event.preventDefault();
@@ -186,7 +266,10 @@ export function TerminalTabs({
             <ContextMenu.Root key={tab.key}>
               <ContextMenu.Trigger asChild>{body}</ContextMenu.Trigger>
               <ContextMenu.Portal>
-                <ContextMenu.Content className="dropdown session-menu">
+                <ContextMenu.Content
+                  className="dropdown session-menu"
+                  onCloseAutoFocus={keepSurfaceFocus}
+                >
                   {tab.menu.map((item, place) =>
                     item.separator ? (
                       <ContextMenu.Separator
@@ -209,6 +292,79 @@ export function TerminalTabs({
           );
         })}
       </div>
+      {overflowing && (
+        <DropdownMenu.Root
+          modal={false}
+          onOpenChange={(open) => {
+            if (open) menuPicked.current = '';
+          }}
+        >
+          <DropdownMenu.Trigger asChild>
+            <button
+              ref={more}
+              type="button"
+              className="icon-button term-tabs-more"
+              aria-label={t('all terminals')}
+              title={t('all terminals')}
+            >
+              <ChevronDown size={14} aria-hidden />
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              className="dropdown term-tabs-menu"
+              align="start"
+              sideOffset={6}
+              onCloseAutoFocus={(event) => {
+                if (menuPicked.current) {
+                  menuPicked.current = '';
+                  if (
+                    terminalKeyboardClaimed() ||
+                    document.activeElement !== document.body
+                  ) {
+                    event.preventDefault();
+                    return;
+                  }
+                }
+                keepSurfaceFocus(event);
+              }}
+            >
+              {tabs.map((tab) => {
+                const on = tab.key === selected;
+                return (
+                  <DropdownMenu.Item
+                    key={tab.key}
+                    className={`term-tabs-menu-item${on ? ' on' : ''}`}
+                    onSelect={() => {
+                      menuPicked.current = tab.key;
+                      onSelect(tab.key);
+                    }}
+                  >
+                    <span className="term-tabs-menu-mark" aria-hidden>
+                      {tab.state && (
+                        <i className="term-dot" data-state={tab.state} />
+                      )}
+                    </span>
+                    <span
+                      className="term-tabs-menu-label"
+                      title={tab.title ?? tab.label}
+                    >
+                      {tab.label}
+                    </span>
+                    {on && (
+                      <Check
+                        size={13}
+                        className="term-tabs-menu-check"
+                        aria-hidden
+                      />
+                    )}
+                  </DropdownMenu.Item>
+                );
+              })}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      )}
       {menu}
       <span className="term-tabbar-end">
         {actions}

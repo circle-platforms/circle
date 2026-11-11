@@ -412,6 +412,147 @@ try {
             .join('') === '\x1b[200~  preserved paste 中文  \x1b[201~\r',
         writes.length,
       );
+      // Issue #499: a burst of typed characters while one write RPC is still in flight
+      // coalesces the remaining keys and Enter into one write without losing a character.
+      const beforeBurst = await page.evaluate(
+        () => window.terminalTabsFixture.writes.length,
+      );
+      const burst =
+        '"C:\\Users\\runneradmin\\AppData\\Local\\Temp\\circle-native-journey\\node.exe" ' +
+        '"C:\\Users\\runneradmin\\AppData\\Local\\Temp\\circle-native-journey\\data\\runtime-home\\workspace\\native-terminal-shortcuts.cjs"';
+      await page.evaluate(() => window.terminalTabsFixture.deferWrite());
+      await page.keyboard.type(burst);
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() =>
+        window.terminalTabsFixture.writePending(),
+      );
+      await page.evaluate(() => window.terminalTabsFixture.releaseWrite());
+      await page.waitForFunction(
+        ({ start, expected }) =>
+          window.terminalTabsFixture.writes
+            .slice(start)
+            .map((row) => row.data)
+            .join('') === expected,
+        { start: beforeBurst, expected: `${burst}\r` },
+      );
+      assert.equal(
+        await page.evaluate(
+          (start) => window.terminalTabsFixture.writes.slice(start).length,
+          beforeBurst,
+        ),
+        2,
+        'in-flight keystroke burst coalesces into the initial write plus one batched write',
+      );
+      // Clicking the tab already in front returns keyboard focus to xterm.
+      await page.evaluate(() => document.body.focus());
+      await strip
+        .getByRole('tab', { name: 'terminal 10', exact: true })
+        .click();
+      assert.equal(
+        await page
+          .locator('#terminal-terminal-10 .xterm-helper-textarea')
+          .evaluate((node) => document.activeElement === node),
+        true,
+        'clicking the selected tab restores xterm focus',
+      );
+      // Issue #500: when tabs overflow the row, the all terminals menu lists every tab,
+      // re-mounts and scrolls to a clipped or evicted tab, and vertical wheel scrolls sideways.
+      const allTerminals = page.getByRole('button', {
+        name: 'all terminals',
+        exact: true,
+      });
+      await allTerminals.waitFor();
+      await allTerminals.click();
+      const overflowItems = page.locator(
+        '.dropdown.term-tabs-menu [role="menuitem"]',
+      );
+      assert.equal(await overflowItems.count(), 10);
+      await overflowItems.filter({ hasText: /^terminal 1$/ }).click();
+      const expandedFirst = await visible();
+      assert.equal(expandedFirst.selected, 'terminal-terminal-1');
+      assert.equal(expandedFirst.label, 'terminal 1');
+      await page
+        .locator('#terminal-terminal-1:not([hidden]) .xterm-helper-textarea')
+        .waitFor();
+      await page.waitForFunction(() => {
+        const active = document.activeElement;
+        return (
+          active?.closest('#terminal-terminal-1') &&
+          !document.querySelector('.dropdown.term-tabs-menu')
+        );
+      });
+      // Also verify picking an already-mounted (non-evicted) tab from all terminals keeps focus
+      // across Radix FocusScope's deferred unmount return-focus timer.
+      await allTerminals.click();
+      await overflowItems.filter({ hasText: /^terminal 9$/ }).click();
+      await page.waitForFunction(
+        () => !document.querySelector('.dropdown.term-tabs-menu'),
+      );
+      await page.evaluate(
+        () => new Promise((done) => setTimeout(() => setTimeout(done, 0), 0)),
+      );
+      assert.equal(
+        await page
+          .locator('#terminal-terminal-9 .xterm-helper-textarea')
+          .evaluate((node) => document.activeElement === node),
+        true,
+        'picking a mounted tab in all terminals keeps xterm focus past menu close',
+      );
+      await allTerminals.click();
+      await overflowItems.filter({ hasText: /^terminal 1$/ }).click();
+      await page.waitForFunction(
+        () => !document.querySelector('.dropdown.term-tabs-menu'),
+      );
+      await page.evaluate(
+        () => new Promise((done) => setTimeout(() => setTimeout(done, 0), 0)),
+      );
+      assert.equal(
+        await page
+          .locator('#terminal-terminal-1 .xterm-helper-textarea')
+          .evaluate((node) => document.activeElement === node),
+        true,
+        'picking an overflowed tab mounts and focuses its terminal',
+      );
+      await strip.evaluate((el) => {
+        el.dispatchEvent(
+          new WheelEvent('wheel', {
+            deltaY: 140,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+      assert.ok(
+        (await strip.evaluate((el) => el.scrollLeft)) > 0,
+        'vertical wheel scrolls the overflowing tab strip horizontally',
+      );
+      // Clicking the 6px left stub of a tab clipped at the right edge selects and reveals it.
+      const stubTarget = await strip.evaluate((el) => {
+        const target = el
+          .querySelector('[aria-controls="terminal-terminal-8"]')
+          ?.closest('.term-tab');
+        const box = el.getBoundingClientRect();
+        const right = box.left + el.clientLeft + el.clientWidth;
+        const initialRect = target.getBoundingClientRect();
+        el.scrollLeft += initialRect.left - right + 6;
+        const rect = target.getBoundingClientRect();
+        return {
+          x:
+            (Math.max(rect.left, box.left + el.clientLeft) +
+              Math.min(rect.right, right)) /
+            2,
+          y: rect.top + rect.height / 2,
+        };
+      });
+      await page.mouse.click(stubTarget.x, stubTarget.y);
+      assert.equal(
+        (await visible()).selected,
+        'terminal-terminal-8',
+        'clicking the clipped edge stub of an overflowed tab selects and reveals it',
+      );
+      await allTerminals.click();
+      await overflowItems.filter({ hasText: /^terminal 10$/ }).click();
+      assert.equal((await visible()).selected, created.selected);
       // Manual history browsing must survive unrelated live output and status renders.
       await strip.evaluate((el) => {
         el.scrollLeft = 0;

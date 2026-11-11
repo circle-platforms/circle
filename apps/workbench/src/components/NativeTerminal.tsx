@@ -58,7 +58,10 @@ import {
   terminalTabNumbers,
 } from '../../../desktop/src/terminal-tabs';
 import { presentHostError, quietWhenTerminalExited } from '../model/host-error';
-import { claimTerminalKeyboard } from '../model/terminal-keyboard';
+import {
+  claimTerminalKeyboard,
+  terminalKeyboardClaimed,
+} from '../model/terminal-keyboard';
 import { TerminalTabs, type TerminalTab } from './TerminalTabs';
 import {
   DeviceNotices,
@@ -76,8 +79,9 @@ import '../styles/terminal.css';
 // A terminal action may already have handed input to xterm or its form before menu exit.
 function keepTerminalActionFocus(event: Event): void {
   if (
+    terminalKeyboardClaimed() ||
     document.activeElement?.closest(
-      '.native-terminal-surface, [role="dialog"]:not([data-state="closed"])',
+      '.native-terminal-surface, .device-screen, [role="dialog"]:not([data-state="closed"])',
     )
   )
     event.preventDefault();
@@ -90,6 +94,7 @@ type Controls = {
     isCurrent: () => boolean,
   ) => Promise<boolean | undefined>;
   focus: () => void;
+  deliver: (text: string) => void;
   selection: () => string;
   captureSelection: () => TerminalSelectionCapture | undefined;
 };
@@ -401,6 +406,9 @@ export function NativeTerminal({
   // keeps it (a page without the desktop application). A tab keeps its number wherever
   // it is dragged.
   const [localOrder, setLocalOrder] = useState<Record<string, string[]>>({});
+  const [deviceChosenBySession, setDeviceChosenBySession] = useState<
+    Record<string, string>
+  >({});
   const [renameFor, setRenameFor] = useState<string | null>(null);
   // A device console waits to be closed on purpose: the wire goes to another machine.
   const [closingDevice, setClosingDevice] = useState<TerminalSessionRow | null>(
@@ -465,16 +473,6 @@ export function NativeTerminal({
         : merged;
     });
   }, []);
-
-  useEffect(() => {
-    if (!selected?.id) return;
-    setOpened((previous) =>
-      [...previous.filter((id) => id !== selected.id), selected.id].slice(-8),
-    );
-    if (active && focusTarget.current === selected.id) {
-      controls.current.get(selected.id)?.focus();
-    }
-  }, [selected?.id, active]);
 
   useEffect(() => {
     let cancelled = false;
@@ -599,6 +597,9 @@ export function NativeTerminal({
     // Picking the tab a restart replaces is a wish for that shell, which is now this one.
     if (last && last.count !== pickedBefore && last.key !== replaced) return;
     focusTarget.current = id;
+    setDeviceChosenBySession((previous) =>
+      previous[session] ? { ...previous, [session]: '' } : previous,
+    );
     setSelected((previous) => ({ ...previous, [session]: id }));
   };
 
@@ -771,6 +772,13 @@ export function NativeTerminal({
     return path ? folderName(path) : '';
   })();
   const deviceRows = commandTerminal ? [] : devices.rows;
+  const deviceChosen = deviceChosenBySession[sessionId] ?? '';
+  const setDeviceChosen = (id: string) =>
+    setDeviceChosenBySession((previous) =>
+      (previous[sessionId] ?? '') === id
+        ? previous
+        : { ...previous, [sessionId]: id },
+    );
   // Cutting a console's wire and dropping its tab: what the dialog confirms and a
   // bulk close both do.
   const disconnectDevice = (row: TerminalSessionRow) => {
@@ -782,7 +790,6 @@ export function NativeTerminal({
       );
   };
 
-  const [deviceChosen, setDeviceChosen] = useState('');
   const [deviceRefresh, setDeviceRefresh] = useState(0);
   const [connectOpen, setConnectOpen] = useState(false);
   const wantsConnect = useRef(false);
@@ -792,19 +799,57 @@ export function NativeTerminal({
     (selected ? undefined : deviceRows[0]);
   // The shell or command in front: none while a device console is.
   const inFront = deviceSelected ? undefined : selected;
+  useEffect(() => {
+    if (!inFront?.id) return;
+    const id = inFront.id;
+    setOpened((previous) =>
+      [...previous.filter((item) => item !== id), id].slice(-8),
+    );
+    if (active && focusTarget.current === id) {
+      const surface = controls.current.get(id);
+      if (surface) {
+        surface.focus();
+        if (document.activeElement?.closest(`#terminal-${id}`)) {
+          focusTarget.current = null;
+        }
+      }
+    }
+  }, [inFront?.id, active]);
   const selectedKey = deviceSelected
     ? `dev:${deviceSelected.id}`
     : selected
       ? `local:${selected.id}`
       : '';
-  const selectDevice = (id: string) => setDeviceChosen(id);
+  const selectDevice = (id: string) => {
+    focusTarget.current = null;
+    setDeviceChosen(id);
+  };
   const selectTab = (key: string, fromKeyboard = false) => {
     picked.current[sessionId] = { count: pickCount(sessionId) + 1, key };
     if (key.startsWith('dev:')) return selectDevice(key.slice(4));
     const id = key.slice(6);
     setDeviceChosen('');
+    if (!fromKeyboard) {
+      claimTerminalKeyboard(
+        () => {
+          controls.current.get(id)?.focus();
+        },
+        (text) => {
+          controls.current.get(id)?.deliver(text);
+        },
+      );
+    }
     // A click hands the keyboard to the terminal; arrows keep it on the tab row, so the
     // next arrow moves along the row instead of reaching a shell.
+    if (!fromKeyboard && active && inFront?.id === id) {
+      const surface = controls.current.get(id);
+      if (surface) {
+        focusTarget.current = null;
+        surface.focus();
+        setSelected((previous) => ({ ...previous, [sessionId]: id }));
+        return;
+      }
+    }
     focusTarget.current = fromKeyboard ? null : id;
     setSelected((previous) => ({ ...previous, [sessionId]: id }));
   };
@@ -1485,9 +1530,15 @@ export function NativeTerminal({
                     if (
                       focusTarget.current === item.id &&
                       active &&
-                      selected?.id === item.id
-                    )
+                      inFront?.id === item.id
+                    ) {
                       value.focus();
+                      if (
+                        document.activeElement?.closest(`#terminal-${item.id}`)
+                      ) {
+                        focusTarget.current = null;
+                      }
+                    }
                   } else controls.current.delete(item.id);
                 }}
               />
@@ -2044,6 +2095,7 @@ function TerminalSurface({
         return found;
       },
       focus: () => terminal.focus(),
+      deliver: (text) => deliverRef.current(text),
       selection: () => terminal.getSelection(),
       captureSelection: () => {
         const text = terminal.getSelection();
@@ -2083,6 +2135,56 @@ function TerminalSurface({
         await call('write', { id: snapshot.id, data: part });
     };
     const noteUserKey = () => onUserKeyRef.current?.();
+    type QueuedInput =
+      { kind: 'data'; data: string } | { kind: 'paste'; text: string };
+    const inputQueue: QueuedInput[] = [];
+    let drainingInput = false;
+    const drainInput = () => {
+      if (drainingInput || !inputQueue.length) return;
+      drainingInput = true;
+      sendInput = sendInput
+        .then(async () => {
+          try {
+            while (inputQueue.length) {
+              const next = inputQueue.shift()!;
+              if (
+                cancelled ||
+                statusRef.current !== 'running' ||
+                !inputAllowedRef.current
+              )
+                continue;
+              try {
+                if (next.kind === 'data') {
+                  await writeInput(next.data);
+                } else {
+                  // Replay terminal modes before encoding paste, including after reopening.
+                  await synchronize();
+                  if (
+                    cancelled ||
+                    statusRef.current !== 'running' ||
+                    !inputAllowedRef.current
+                  )
+                    continue;
+                  const data: string[] = [];
+                  pastedData = data;
+                  try {
+                    terminal.paste(next.text);
+                  } finally {
+                    pastedData = undefined;
+                  }
+                  for (const part of data) await writeInput(part);
+                }
+              } catch (reason) {
+                showError(reason);
+              }
+            }
+          } finally {
+            drainingInput = false;
+            if (inputQueue.length && !cancelled) drainInput();
+          }
+        })
+        .catch(showError);
+    };
     // Keys the claim already wrote. The same character can also arrive from xterm
     // once focus lands in it; that copy is not a second keystroke.
     let claimed = '';
@@ -2097,7 +2199,10 @@ function TerminalSurface({
           claimed = '';
         }, 50);
       }
-      sendInput = sendInput.then(() => writeInput(data)).catch(showError);
+      const tail = inputQueue.at(-1);
+      if (tail?.kind === 'data') tail.data += data;
+      else inputQueue.push({ kind: 'data', data });
+      drainInput();
     };
     deliverRef.current = (text) => deliver(text, true);
     let pastedData: string[] | undefined;
@@ -2125,26 +2230,8 @@ function TerminalSurface({
       event.preventDefault();
       event.stopPropagation();
       noteUserKey();
-      sendInput = sendInput
-        .then(async () => {
-          // Replay terminal modes before encoding paste, including after reopening.
-          await synchronize();
-          if (
-            cancelled ||
-            statusRef.current !== 'running' ||
-            !inputAllowedRef.current
-          )
-            return;
-          const data: string[] = [];
-          pastedData = data;
-          try {
-            terminal.paste(text);
-          } finally {
-            pastedData = undefined;
-          }
-          for (const part of data) await writeInput(part);
-        })
-        .catch(showError);
+      inputQueue.push({ kind: 'paste', text });
+      drainInput();
     };
     const pasteTarget = container.current;
     pasteTarget.addEventListener('paste', paste, true);
