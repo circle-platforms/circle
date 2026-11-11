@@ -978,7 +978,14 @@ test('history with empty tool output, empty prompts and blank partials sends con
       if (protocol === 'openai') openai(response, 'stop', { content: 'ok' });
       else anthropic(response, 'end_turn', [{ type: 'text', text: 'ok' }]);
     });
-    const result = await model(t, base, protocol).complete({
+    // The strict OpenAI-format gateways this is about serve their own models. A Claude
+    // model there gets cache breakpoints on its content: tests/prompt-cache.test.ts.
+    const result = await model(
+      t,
+      base,
+      protocol,
+      protocol === 'openai' ? 'qwen-max' : undefined,
+    ).complete({
       ...request(),
       messages,
     });

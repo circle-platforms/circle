@@ -1,0 +1,13 @@
+name: Electron download cache
+description: Restore verified Electron downloads before installation or lazy resolution
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        CIRCLE_ELECTRON_CACHE_ROOT: ${{ runner.temp }}/circle-electron-cache
+      run: node apps/desktop/scripts/electron-download.mjs --configure-cache
+    - uses: actions/cache@v6
+      with:
+        path: ${{ runner.temp }}/circle-electron-cache
+        key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/package-lock.json') }}

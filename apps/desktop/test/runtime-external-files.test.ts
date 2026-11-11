@@ -360,7 +360,7 @@ test('a worktree of the workspace repository beside it is read, searched and edi
   );
   git(f.workspace, 'add', '-A');
   git(f.workspace, 'commit', '-q', '-m', 'start');
-  side = join(f.root, 'workspace-side');
+  side = join(f.root, '工作树 side');
   git(f.workspace, 'worktree', 'add', '-q', '-b', 'side', side);
   await writeFile(join(side, 'src', 'app.ts'), 'const state = "before";\n');
   outside = join(f.root, 'outside.txt');

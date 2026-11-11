@@ -1000,6 +1000,7 @@ export class LiveRuntime implements RuntimePort {
   };
   beginConversation = async (input: {
     workspaceId?: string | null;
+    checkoutId?: string;
     text: string;
     model?: string;
     effort?: Effort;
@@ -1029,6 +1030,7 @@ export class LiveRuntime implements RuntimePort {
     const folded = promptAttachments(text, input.attachments ?? []);
     const result = (await this.native('begin-session', {
       ...(workspaceId ? { workspaceId } : {}),
+      ...(input.checkoutId ? { checkoutId: input.checkoutId } : {}),
       text: commandInput ? text : folded.text,
       display: commandInput ? text : folded.display,
       ...(commandInput ? { prepareOnly: true } : {}),
@@ -1122,6 +1124,9 @@ export class LiveRuntime implements RuntimePort {
         );
       }
       const names: Record<string, RuntimeCommandName> = {
+        checkouts: 'checkouts',
+        'create-checkout': 'create-checkout',
+        'switch-checkout': 'switch-checkout',
         'list-external-file-grants': 'list-external-file-grants',
         'revoke-external-file-grant': 'revoke-external-file-grant',
         'configure-connection': 'configure',

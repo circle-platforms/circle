@@ -90,6 +90,14 @@ A running turn, pending request or running background job prevents archiving, in
 
 Selecting a conversation owned by another Circle terminal opens its committed history read-only. Execution and deletion stay locked until that terminal releases it; export the saved history or fork a complete checkpoint to work independently. Conversations in the same folder still share its real files.
 
+## Another checkout of the project
+
+A project under git can have more than one checkout: its own folder and the worktrees `git worktree` made for it. A conversation runs in one of them.
+
+On the home page, **checkout** (执行位置) beside the project lists them, each with its branch and folder, and the conversation you start runs in the one you pick. Under the list you can make a new worktree: a new branch name and the branch or commit it starts from. Circle makes it in a folder of its own inside its [tasks folder](#tasks-with-no-project) and trusts that folder as it trusts the project. The list is of the project's repository only; any other folder is opened as a project, as before.
+
+In a conversation, the project and branch in the top bar say where it runs, and open the same list to move it. A conversation moves only while nothing of it is running: it refuses, and says why, during a turn, with a message queued, with a background command, a task or a terminal of the session still running, or with a request waiting for your answer. Moved, it keeps its history, its plan, its mode, its model and its thinking depth; from then on its files, commands, terminal, changes and project instructions are those of the new checkout. Two things do not come along: changes you have not committed stay in the checkout they were made in, and files outside the workspace you had granted the conversation have to be granted again. The conversation stays under its project in the sidebar, and after Circle restarts it is still in the checkout you moved it to.
+
 ## Asking and answering
 
 When Circle wants to change a file or run a command, the request appears in the conversation, right under the call it is for: the command, or the change as a diff with line numbers. Answer it there:
@@ -113,7 +121,7 @@ The button under the input box, on the left, shows how this session asks. Click 
 | Mode         | What it does                                                                                                                                                                                                                          |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | manual       | Asks before each file change and command. The default.                                                                                                                                                                                |
-| accept edits | Changes files inside the workspace without asking. Commands, deletes and changes outside the workspace still ask.                                                                                                                     |
+| accept edits | Changes files inside the workspace and runs commands proved to only read without asking. Other commands, deletes, changes inside `.git` or `.circle` and changes outside the workspace still ask.                                     |
 | plan         | Read-only: Circle researches and writes its plan, and changes nothing else. The plan opens where a file opens. When it is ready a card asks what next: implement it in auto mode or with manual approval, change it, or save it only. |
 | auto         | Runs every call without asking, including the ones Circle always asks about. Read [Security](security.md#auto-mode) first.                                                                                                            |
 

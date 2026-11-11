@@ -963,6 +963,52 @@ pre {
   display: flex;
   flex-direction: column;
 }
+/* Where a conversation runs: a button and the list that opens under it. */
+.checkout-picker {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+.checkout-options {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  width: min(420px, 85vw);
+  padding: 12px;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  background: var(--input);
+  color: var(--fg);
+}
+.checkout-options > button,
+.checkout-options label {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: start;
+  padding: 6px;
+  overflow-wrap: anywhere;
+}
+.checkout-options button[aria-pressed='true'] {
+  outline: 1px solid var(--focus-ring);
+}
+.checkout-options input {
+  width: 100%;
+}
+/* The top bar's chip sits at the left of its row: its list opens from its left edge. */
+.topbar .checkout-options {
+  right: auto;
+  left: 0;
+}
+button.project-chip {
+  cursor: pointer;
+}
+button.project-chip:hover,
+button.project-chip[aria-expanded='true'] {
+  background: var(--active);
+  color: var(--fg);
+}
 .composer {
   position: relative;
   border: 1px solid var(--control-border);
@@ -3459,6 +3505,49 @@ pre {
   opacity: 1;
   background: var(--attention);
 }
+@property --composer-phase {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+/* While a turn works, a rainbow ring runs just inside the frame, so the mode's colour
+   stays around it. It stands still while the turn waits on the person and goes when the
+   turn ends. */
+.composer::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: 8px;
+  padding: 1.5px;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+  background: conic-gradient(from var(--composer-phase), var(--composer-stops));
+  -webkit-mask:
+    linear-gradient(var(--fg) 0 0) content-box,
+    linear-gradient(var(--fg) 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: composer-flow 4s linear infinite;
+  animation-play-state: paused;
+  opacity: 0;
+}
+.composer[data-activity='working']::after,
+.composer[data-activity='waiting']::after {
+  opacity: 1;
+}
+.composer[data-activity='working']::after {
+  animation-play-state: running;
+}
+@keyframes composer-flow {
+  to {
+    --composer-phase: 360deg;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer::after {
+    animation: none;
+  }
+}
 /* The turn's clock on its tools' row. */
 .turn-clock {
   font-variant-numeric: tabular-nums;
@@ -4328,6 +4417,10 @@ pre {
 }
 .composer::before {
   border-radius: 17px;
+}
+/* One pixel inside the frame: the ring's corners follow the frame's. */
+.composer::after {
+  border-radius: 15px;
 }
 /* One line, with the buttons beside it; it grows as lines are typed. */
 .composer textarea {

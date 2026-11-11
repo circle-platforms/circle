@@ -1,5 +1,13 @@
 // Simplified Chinese for words shared across the window. English is the key.
 export const common: Record<string, string> = {
+  'continue in worktree…': '在工作树中继续…',
+  checkout: '执行位置',
+  'only future execution moves; uncommitted changes stay in their checkout':
+    '仅切换后续执行位置；未提交修改保留在原工作树',
+  'this project is not a Git repository': '此项目不是 Git 仓库',
+  'new branch': '新分支',
+  'starting branch or commit': '起始分支或提交',
+  'create worktree': '新建工作树',
   'changes personal knowledge or memory and always needs your confirmation':
     '变更个人知识或记忆，每次均须本人确认',
   'restarting…': '等待重启中…',
@@ -16,8 +24,8 @@ export const common: Record<string, string> = {
   plan: '计划',
   auto: '自动',
   'asks before each change and command': '每次修改和执行命令前都询问',
-  'edits workspace files without asking; commands and deletes still ask':
-    '直接编辑工作区内的文件；命令和删除仍会询问',
+  'workspace edits and verified read-only commands run without asking; writes and deletes still ask':
+    '直接编辑工作区文件并执行已验证的只读命令；写入命令和删除仍会询问',
   'read-only: researches and writes a plan, changes nothing':
     '只读：调研并写出计划，不做任何修改',
   'asks nothing: commands that delete, certificate warnings and uploads go ahead; use it only where that is safe':
@@ -76,6 +84,7 @@ export const common: Record<string, string> = {
   // why the core asks
   'changes files in the workspace': '修改工作区内的文件',
   'changes files outside the workspace': '修改工作区外的文件',
+  "changes git's or Circle's own files": '修改 git 或 Circle 自身的文件',
   'deletes files': '删除文件',
   'runs a shell command': '运行 shell 命令',
   'only reads': '只读取',

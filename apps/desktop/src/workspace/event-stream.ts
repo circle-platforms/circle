@@ -35,6 +35,29 @@ export interface EventStreamOptions {
   beforeWrite?: () => Promise<void>;
 }
 
+/**
+ * How SQLite is told to open the writer lease. On macOS its build picks a way to lock each
+ * file as it opens it, by one question to the kernel; when that question fails it locks
+ * with a `.lock` entry beside the file instead. A holder of that entry and a holder of the
+ * file's own lock do not see each other, so each takes the lease. The lease is exclusion
+ * and nothing else: it names the file's own lock, which is the only one on other systems.
+ */
+export function leaseDatabaseName(
+  leasePath: string,
+  platform: string = process.platform,
+): string {
+  if (platform !== 'darwin') return leasePath;
+  // pathToFileURL resolves a POSIX path against the Windows drive on a Windows
+  // host, so build the URL from the path itself: the platform argument, not
+  // the host, decides the form. Each segment is encoded the way a file URL
+  // encodes it.
+  const encoded = leasePath
+    .split('/')
+    .map((part) => encodeURIComponent(part))
+    .join('/');
+  return `file://${encoded}?vfs=unix-posix`;
+}
+
 /** Append-only evidence journal. Publication happens only after durable append.
  * A short final line from a killed producer is truncated on open; malformed complete
  * records fail closed. The ring is a cache, never the source of replay truth.
@@ -68,7 +91,7 @@ export class WorkspaceEventStream {
       // A separate SQLite RESERVED lock provides cross-process ownership and
       // kernel crash release without stale PID files. The JSONL stays unchanged.
       const leasePath = path + '.owner.sqlite';
-      stream.writerLease = new DatabaseSync(leasePath);
+      stream.writerLease = new DatabaseSync(leaseDatabaseName(leasePath));
       try {
         stream.writerLease.exec('PRAGMA busy_timeout=0; BEGIN IMMEDIATE');
       } catch (cause) {

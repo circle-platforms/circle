@@ -136,6 +136,7 @@ import { DialogHost, InteractionDialog } from '../features/Dialogs';
 import { PlanView } from '../features/PlanView';
 import { PictureView, pictureFile } from '../features/PictureView';
 import { applyTheme } from '../theme';
+import { CheckoutPicker } from '../features/CheckoutPicker';
 import { t } from '../i18n';
 import { shellPageTitle } from '../plugins/labels';
 import {
@@ -1744,27 +1745,46 @@ export function App() {
                     </DropdownMenu.Portal>
                   </DropdownMenu.Root>
                 )}
-                {!home && (
-                  <span
-                    className="project-chip"
-                    title={
-                      taskWorkspaceIds(snapshot.sessions, snapshot.agents).has(
-                        workspace.id,
-                      )
-                        ? undefined
-                        : workspace.path
-                    }
-                  >
-                    <Folder size={12} />
-                    {workspaceLabel(workspace, snapshot.agents)}
-                    {workspace.branch && (
-                      <>
-                        <GitBranch size={11} />
-                        {workspace.branch}
-                      </>
-                    )}
-                  </span>
-                )}
+                {/* The project and the branch the conversation runs on. For a project
+                  under git they are also where it is moved to another checkout of the
+                  repository: the top bar keeps its one row. */}
+                {!home &&
+                  (!page &&
+                  workspace.trusted &&
+                  (session.executionBranch || workspace.branch) ? (
+                    <CheckoutPicker
+                      workspaceId={workspace.id}
+                      sessionId={session.id}
+                      className="project-chip"
+                      title={session.executionPath ?? workspace.path}
+                    >
+                      <Folder size={12} />
+                      {workspaceLabel(workspace, snapshot.agents)}
+                      <GitBranch size={11} />
+                      {session.executionBranch || workspace.branch}
+                    </CheckoutPicker>
+                  ) : (
+                    <span
+                      className="project-chip"
+                      title={
+                        taskWorkspaceIds(
+                          snapshot.sessions,
+                          snapshot.agents,
+                        ).has(workspace.id)
+                          ? undefined
+                          : workspace.path
+                      }
+                    >
+                      <Folder size={12} />
+                      {workspaceLabel(workspace, snapshot.agents)}
+                      {workspace.branch && (
+                        <>
+                          <GitBranch size={11} />
+                          {workspace.branch}
+                        </>
+                      )}
+                    </span>
+                  ))}
               </div>
               <div className="topbar-actions">
                 {!page && !home && (

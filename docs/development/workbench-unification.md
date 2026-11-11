@@ -17,6 +17,7 @@ The owner set these rules on 2026-11-05, after the graphite restyle of #405 was 
 
 - On macOS there is no empty strip above the content. The window's own buttons sit in the first row, which is also the top bar's row (52 pixels). Those rows move the window, and the controls inside them do not.
 - One 1px rule runs under the top bar, across the conversation and the right-hand side.
+- The project and branch chip in the top bar names where the conversation runs: its execution checkout's branch once it was moved to another worktree of the repository. For a trusted project under git the chip is also the button that lists the repository's checkouts and moves the conversation to one, or makes a new worktree. The conversation gets no row of its own for this, above or below the composer (owner's decision, 2026-11-11). On the home page the same list is the **checkout** button beside the project.
 
 **Sidebar**
 
@@ -27,7 +28,7 @@ The owner set these rules on 2026-11-05, after the graphite restyle of #405 was 
 
 **Composer**
 
-- The composer has no ring and no "waiting for Circle" line while a turn runs, and there is no usage line (tokens, context, cache) under it. Those figures are in the overview's context card.
+- The composer keeps its fixed permission-mode frame and overlays a flowing palette rainbow during the actual model turn, including streaming text and tool gaps. Pending interactions and browser/terminal user control pause the rainbow at its current phase; turn completion, cancellation or failure removes it. Reduced motion uses a static rainbow. The tool-row clock stays in place. There is no "waiting for Circle" line while a turn runs, and there is no usage line (tokens, context, cache) under it. Those figures are in the overview's context card.
 - A ChatGPT plan is not marked apart from other connections and shows no cost anywhere.
 - Tool calls of steps with nothing to read between them fold into one line; a thinking-only step joins them. Opened, the line lists the calls with each step's thinking; a call opens to its command and output. A step's calls stack in one frame with a rule between them and no room around each, and the opened list sits under the line with no rule or indent on its left. A call's difference keeps the row's 12-pixel margins on both sides and has no header of its own, since the row already says what changed; a difference's summary reads the same in every place, a new or deleted file's lines in the interface language and added and removed lines in the folded line's colours (`+3 −1`) (owner's decisions, 2026-11-09).
 - The conversation and the input box take the room the window gives them, up to 1280 pixels, with 28-pixel margins; they no longer stop at 780 (owner's decision, 2026-11-09).

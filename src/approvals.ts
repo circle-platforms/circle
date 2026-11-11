@@ -1,4 +1,9 @@
 import { createHash } from 'node:crypto';
+import {
+  gitQueryStartsOnlyGit,
+  readOnlyExecution,
+  type ReadOnlyExecution,
+} from './read_only_command.js';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import {
   basename,
@@ -11,7 +16,11 @@ import {
 } from 'node:path';
 import { canonicalPath, circleHome, normalizeWorkspace } from './paths.js';
 import { isRecord, readJson, writePrivateJson } from './settings.js';
-import { DEFAULT_CREDENTIAL_FILES, matchPattern } from './file_patterns.js';
+import {
+  DEFAULT_CREDENTIAL_FILES,
+  matchPattern,
+  protectedWorkspaceName,
+} from './file_patterns.js';
 import {
   decideRule,
   ruleFileFor,
@@ -284,7 +293,16 @@ export function classifyCommand(
   let forced: Review | undefined;
   let readOnly = tokens.length > 0 && !/\$\(|`|[<>]/.test(command);
   for (const raw of segments(tokens)) {
-    for (const token of raw) {
+    for (const [index, token] of raw.entries()) {
+      // A word that leaves files out of what git or ripgrep goes through names none it
+      // reads: git's `:(exclude)` pathspec, and a `!` glob given to ripgrep.
+      if (
+        (raw[0] === 'git' && token.startsWith(':(exclude')) ||
+        (raw[0] === 'rg' &&
+          token.startsWith('!') &&
+          ['--iglob', '--glob', '-g'].includes(raw[index - 1] ?? ''))
+      )
+        continue;
       for (const candidate of [
         token,
         token.includes('=') ? token.split('=').slice(1).join('=') : '',
@@ -687,6 +705,18 @@ export const isSessionMode = (value: unknown): value is SessionMode =>
   SESSION_MODES.includes(value as SessionMode);
 // browser_record writes a script file as write_file writes any file
 const EDIT_TOOLS = ['write_file', 'edit_file', 'apply_patch', 'browser_record'];
+/**
+ * The names from the top folder of the checkout that holds `target` down to it. Another
+ * checkout of the repository lies outside the workspace, often under a folder such as
+ * `~/.circle`, so its own top is found: the nearest folder above with a `.git` entry.
+ */
+function checkoutNames(target: string): string[] {
+  for (let top = dirname(target); ; top = dirname(top)) {
+    if (existsSync(join(top, '.git'))) return relative(top, target).split(sep);
+    // No checkout above it: only the file's own name says anything.
+    if (dirname(top) === top) return [basename(target)];
+  }
+}
 // The browser tools that act on a page. "Allow for this session" covers them on one site,
 // the one the action acts on (`site`, which the tools add): another site asks again. A rule
 // for every site, from before sites were told apart, still covers them all.
@@ -1029,6 +1059,9 @@ export class ApprovalPolicy {
             ].map((match) => match[1]!)
           : [String(args.file_path || args.path || '')];
       const root = canonicalPath(this.workspace);
+      // What git or Circle will later run or obey: a hook, a filter in the repository's
+      // configuration, the project's own settings, rules, hooks and extensions.
+      let own = false;
       const inside =
         paths.length > 0 &&
         paths.every((path) => {
@@ -1038,14 +1071,18 @@ export class ApprovalPolicy {
               : resolve(this.workspace, path),
           );
           const rel = relative(root, target);
-          return (
-            Boolean(path) &&
-            ((!isAbsolute(rel) &&
-              rel !== '..' &&
-              !rel.startsWith('..' + sep)) ||
-              this.worktree?.(target) === true)
-          );
+          const within =
+            !isAbsolute(rel) && rel !== '..' && !rel.startsWith('..' + sep);
+          if (within || this.worktree?.(target) === true)
+            own ||= (within ? rel.split(sep) : checkoutNames(target)).some(
+              (name) => protectedWorkspaceName(name, [], process.platform),
+            );
+          return Boolean(path) && (within || this.worktree?.(target) === true);
         });
+      // Not a change like any other in the workspace: `accept edits` and an answer kept
+      // for workspace changes do not cover it, so it asks each time.
+      if (inside && own)
+        return review('ASK', "changes git's or Circle's own files");
       return review(
         'ASK',
         inside
@@ -1109,6 +1146,55 @@ export class ApprovalPolicy {
       scope: `every ${tool} call`,
     });
   }
+  /**
+   * The command a shell call may run without a card in `accept edits`, or nothing when the
+   * call asks as before: a command not proved to only read, a word of it that is a path
+   * outside the workspace and its other checkouts, a credential file or `.git` reached
+   * under another name, a git query in a repository whose own configuration would start
+   * another program. A terminal tab's folder is not known, so there only a command that
+   * names no file passes.
+   */
+  readOnlyCommand(
+    tool: string,
+    args: Record<string, unknown>,
+  ): ReadOnlyExecution | undefined {
+    const tab = terminalTabWrite(tool, args);
+    const command = tool === 'execute' ? args.command : tab?.command;
+    if (typeof command !== 'string' || tab?.uncertain || tab?.firstUse) return;
+    const execution = readOnlyExecution(
+      command,
+      process.platform,
+      this.credentialFiles,
+    );
+    if (!execution) return;
+    if (tab) return execution.pathFree ? execution : undefined;
+    try {
+      const root = canonicalPath(this.workspace);
+      for (const word of commandTokens(command) ?? []) {
+        const target = canonicalPath(resolve(this.workspace, word));
+        const rel = relative(root, target);
+        const outside =
+          isAbsolute(rel) || rel === '..' || rel.startsWith('..' + sep);
+        if (outside && !this.worktree?.(target)) return;
+        // The words name what the shell opens; a link may name something else.
+        if (
+          (outside ? [basename(target)] : rel.split(sep)).some((name) =>
+            protectedWorkspaceName(
+              name,
+              this.credentialFiles,
+              process.platform,
+            ),
+          )
+        )
+          return;
+      }
+    } catch {
+      // A word that cannot be resolved, such as a link to nothing, is not proved.
+      return;
+    }
+    if (execution.git && !gitQueryStartsOnlyGit(this.workspace)) return;
+    return execution;
+  }
   needsApproval(
     tool: string,
     args: Record<string, unknown>,
@@ -1138,13 +1224,11 @@ export class ApprovalPolicy {
     // A rule that allows this call answers for it: the person's own file, or what
     // this conversation kept from a card. A project's rule never grants one.
     if (this.allowDecision(tool, args, found, thread)) return false;
-    // accept-edits answers only for file changes that stay in the workspace;
-    // deletes are ASK_FORCED above, and commands still ask.
     if (
       allowYolo &&
       mode === 'accept-edits' &&
-      EDIT_TOOLS.includes(tool) &&
-      found.pattern === 'workspace'
+      ((EDIT_TOOLS.includes(tool) && found.pattern === 'workspace') ||
+        this.readOnlyCommand(tool, args) !== undefined)
     )
       return false;
     // No rule of any layer covers it: the card asks.

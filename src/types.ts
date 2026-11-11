@@ -170,6 +170,7 @@ export interface Tool {
 }
 export interface ToolContext {
   signal: AbortSignal;
+  readOnlyCommand?: string;
   sessionId: string;
   /** The call being run: a request the tool raises can be shown under it. */
   callId?: string;
@@ -219,6 +220,11 @@ export interface ModelRequest {
   effort?: string;
   /** Output cap for this request only. A session title asks for a short reply. */
   maxTokens?: number;
+  /**
+   * Names the conversation to an endpoint that routes requests by it (OpenAI's
+   * `prompt_cache_key`), so each step reaches the machine that cached the one before.
+   */
+  cacheKey?: string;
   /** Enforce the complete provider frame budget after extension/protocol transforms. */
   enforceBudget?: boolean;
   /** Shared with compaction-level recovery; ordinary model retry policy is unchanged. */

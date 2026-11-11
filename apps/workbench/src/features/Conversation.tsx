@@ -38,6 +38,7 @@ import { slashText } from '../model/slash-text';
 import { useRuntime } from '../app/context';
 import { currentSession, visibleMessages, EFFORTS } from '../model/state';
 import { showTurnClock } from '../model/turn-line';
+import { composerActivity } from '../model/composer-activity';
 import { workspaceLabel } from '../model/workspace-label';
 import { fullTime, shownTime } from '../model/time';
 import type { Attachment, DialogId, Message, PanelId } from '../model/types';
@@ -1279,6 +1280,12 @@ export function Conversation({
             className="composer"
             data-mode={sessionMode(session)}
             data-state={session.state}
+            data-activity={composerActivity(
+              session,
+              pending,
+              browser?.waiting === true || browser?.control === 'user',
+              session.controlWaiting,
+            )}
             onDragOver={(event) => {
               if (Array.from(event.dataTransfer.types).includes('Files'))
                 event.preventDefault();

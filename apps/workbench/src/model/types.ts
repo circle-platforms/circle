@@ -191,6 +191,8 @@ export interface Session {
   };
   title: string;
   workspaceId: string;
+  executionPath?: string;
+  executionBranch?: string;
   model: string;
   effort: Effort;
   draft: string;
@@ -203,6 +205,7 @@ export interface Session {
   queue: { id: string; text: string; kind: 'steering' | 'follow-up' }[];
   queueVersion?: number;
   state: 'idle' | 'waiting' | 'paused';
+  controlWaiting?: boolean;
   readOnly: boolean;
   auto: boolean;
   mode?: SessionMode;
@@ -602,6 +605,7 @@ export type SessionViewPatch = Partial<
 export interface BeginConversation {
   /** A known project. Omit it, or pass null, to work without a project. */
   workspaceId?: string | null;
+  checkoutId?: string;
   text: string;
   /** Choices from the home composer, applied to the session this message starts. */
   model?: string;

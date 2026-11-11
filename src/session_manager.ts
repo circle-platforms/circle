@@ -65,6 +65,32 @@ export class SessionRuntimeManager {
     this.runtimes.delete(oldId);
     this.register(runtime);
   }
+  async replace(
+    id: string,
+    workspace: string,
+    bind: () => void,
+    rollback: () => void,
+  ): Promise<AgentRuntime> {
+    const previous = this.runtimes.get(id);
+    if (
+      !previous ||
+      previous.busy ||
+      previous.isClosing ||
+      this.closing ||
+      this.lifecycle(id) !== 'open'
+    )
+      throw Error('session is not idle');
+    await previous.close();
+    this.runtimes.delete(id);
+    try {
+      bind();
+      return this.open(workspace, id);
+    } catch (error) {
+      rollback();
+      this.open(previous.options.workspace, id);
+      throw error;
+    }
+  }
   delete(id: string, options: { confirmed?: boolean } = {}): Promise<void> {
     if (this.closing)
       return Promise.reject(new Error('session manager is closing'));

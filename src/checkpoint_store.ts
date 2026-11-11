@@ -30,6 +30,7 @@ import {
 export interface Session {
   id: string;
   workspace: string;
+  origin_workspace?: string | null;
   title: string;
   model: string;
   head: string | null;
@@ -155,6 +156,8 @@ function openDatabase(
           db.prepare('PRAGMA user_version').get()?.user_version ?? 0,
         );
         const columns = db.prepare('PRAGMA table_info(sessions)').all();
+        if (!columns.some((row) => row.name === 'origin_workspace'))
+          db.exec('ALTER TABLE sessions ADD COLUMN origin_workspace TEXT');
         if (!columns.some((row) => row.name === 'parent_id'))
           db.exec('ALTER TABLE sessions ADD COLUMN parent_id TEXT');
         if (!columns.some((row) => row.name === 'title_locked'))
@@ -520,6 +523,28 @@ export class CheckpointStore {
     if (stored) return stored;
     const pending = this.deferred.get(id);
     return pending ? { ...pending } : undefined;
+  }
+  bindExecution(
+    sessionId: string,
+    expected: string,
+    workspace: string,
+    origin?: string | null,
+  ): void {
+    this.writing([sessionId], () => {
+      const current = this.get(sessionId);
+      if (!current || current.workspace !== normalizeWorkspace(expected))
+        throw Error('session execution location changed');
+      const target = normalizeWorkspace(workspace);
+      const project = origin
+        ? normalizeWorkspace(origin)
+        : (current.origin_workspace ?? current.workspace);
+      this.materialize(sessionId);
+      this.db
+        .prepare(
+          'UPDATE sessions SET workspace=?,origin_workspace=? WHERE id=? AND workspace=?',
+        )
+        .run(target, project, sessionId, current.workspace);
+    });
   }
   find(suffix: string): Session | undefined {
     // list() hides an untitled session with no messages. Opening one by id,

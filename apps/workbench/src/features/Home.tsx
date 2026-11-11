@@ -1,3 +1,4 @@
+import { CheckoutPicker } from './CheckoutPicker';
 import { taskWorkspaceIds } from '../model/session-management';
 import { workspaceHint } from '../model/workspace-label';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -174,6 +175,8 @@ export function Home({
     snapshot.activeSessionId,
     homeProjectRequest(requestedId, remembered.current),
   );
+  const [checkout, setCheckout] = useState<string>();
+  useEffect(() => setCheckout(undefined), [project?.id]);
   const draftRef = useRef(draft);
   const attachmentsRef = useRef(attachments);
   const pendingSend = useRef(false);
@@ -254,6 +257,7 @@ export function Home({
         pendingSend.current = false;
         const result = await runtime.beginConversation({
           workspaceId: project?.id ?? null,
+          ...(checkout ? { checkoutId: checkout } : {}),
           text,
           model,
           effort,
@@ -535,6 +539,13 @@ export function Home({
                 </DropdownMenu.Content>
               </DropdownMenu.Portal>
             </DropdownMenu.Root>
+            {project?.trusted && (
+              <CheckoutPicker
+                workspaceId={project.id}
+                selected={checkout}
+                onChoose={setCheckout}
+              />
+            )}
           </div>
           <div>
             {runtime.mode === 'live' && !snapshot.runtime?.configured ? (

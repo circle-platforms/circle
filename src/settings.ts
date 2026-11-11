@@ -46,6 +46,11 @@ export interface CircleSettings {
   default_mode: SessionMode | '';
   update_check: boolean;
   default_thinking: string;
+  /**
+   * How long an Anthropic endpoint keeps the cached start of a request: five minutes, an
+   * hour (a dearer write), or `off` for no cache breakpoints. A project may not set it.
+   */
+  prompt_cache: '5m' | '1h' | 'off';
   enabled_models: string[];
   models: Record<string, Record<string, unknown>>;
   /**
@@ -100,6 +105,7 @@ export const defaultSettings = (): CircleSettings => ({
   default_mode: '',
   update_check: true,
   default_thinking: '',
+  prompt_cache: '5m',
   enabled_models: [],
   models: {},
   vision: { base_url: '', model: '', api_key_ref: 'vision_key' },
@@ -197,6 +203,13 @@ export function loadSettingsFromDict(
   settings.default_thinking = String(raw.default_thinking || '')
     .trim()
     .toLowerCase();
+  const cache =
+    raw.prompt_cache === false
+      ? 'off'
+      : String(raw.prompt_cache || '')
+          .trim()
+          .toLowerCase();
+  settings.prompt_cache = cache === '1h' || cache === 'off' ? cache : '5m';
   const double = String(raw.double_escape || '')
     .trim()
     .toLowerCase();

@@ -467,7 +467,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
               : {}),
           },
         };
-        const command = string(args, 'command');
+        const command = context.readOnlyCommand ?? string(args, 'command');
         if (args.background === true) {
           context.signal.throwIfAborted();
           const job = await hooks.jobs.startShell(
@@ -491,7 +491,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       if (args.background === true)
         throw new Error('background commands are not available here');
       const result = await sandbox.execute(
-        string(args, 'command'),
+        context.readOnlyCommand ?? string(args, 'command'),
         context.signal,
         Math.max(1, Number(args.timeout) || 120) * 1000,
       );

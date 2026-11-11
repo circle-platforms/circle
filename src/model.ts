@@ -13,6 +13,7 @@ import type {
   ResponseStreamEvent,
 } from 'openai/resources/responses/responses';
 import type {
+  CacheControlEphemeral,
   ContentBlockParam,
   MessageParam,
   MessageCreateParamsNonStreaming,
@@ -598,7 +599,11 @@ export class GatewayModel implements ChatModel {
       this.dropped.add(parameter);
       return true;
     }
-    let root = parameter.split('.')[0]!;
+    // An endpoint names a refused breakpoint by its place (`system.0.cache_control`):
+    // one refused, they all go.
+    let root = parameter.includes('cache_control')
+      ? 'cache_control'
+      : parameter.split('.')[0]!;
     if (root === 'effort')
       root = this.anthropic
         ? 'output_config'
@@ -616,6 +621,8 @@ export class GatewayModel implements ChatModel {
         'parallel_tool_calls',
         'betas',
         'include',
+        'cache_control',
+        'prompt_cache_key',
       ].includes(root) ||
       !this.sent(root)
     )
@@ -714,6 +721,8 @@ export class GatewayModel implements ChatModel {
       messages,
       stream: true,
       stream_options: { include_usage: true },
+      // See `responsesBody`: the conversation's steps reach the machine that cached it.
+      ...(request.cacheKey ? { prompt_cache_key: request.cacheKey } : {}),
     };
     if (request.tools.length)
       body.tools = request.tools.map((tool) => ({
@@ -745,8 +754,47 @@ export class GatewayModel implements ChatModel {
     }
     return body;
   }
+  /** The breakpoint this run's `prompt_cache` setting asks for, or none. */
+  private cacheBreakpoint(): CacheControlEphemeral | undefined {
+    const mode = this.settings.prompt_cache;
+    if (mode === 'off' || this.dropped.has('cache_control')) return undefined;
+    // The five minutes are the endpoint's default, sent without a `ttl` so a gateway that
+    // knows only the plain marker takes it.
+    return mode === '1h'
+      ? { type: 'ephemeral', ttl: '1h' }
+      : { type: 'ephemeral' };
+  }
+  /**
+   * A Claude model behind an OpenAI-format endpoint (OpenRouter, a relay) caches only where
+   * the request says, as on Anthropic's own endpoint; every other model there caches by
+   * itself. The breakpoints go where such endpoints read them: on the text of the system
+   * prompt and of the last user message, and one at the top of the request, which the
+   * endpoint moves to the end of the conversation.
+   */
+  private markChatCache(body: ChatCompletionCreateParamsStreaming): void {
+    const cache = this.cacheBreakpoint();
+    if (!cache || !/claude/i.test(this.model)) return;
+    const mark = (message: ChatCompletionMessageParam | undefined): void => {
+      if (!message || (message.role !== 'system' && message.role !== 'user'))
+        return;
+      const parts =
+        typeof message.content === 'string'
+          ? message.content.trim()
+            ? [{ type: 'text' as const, text: message.content }]
+            : []
+          : [...message.content];
+      const last = parts.findLastIndex((part) => part.type === 'text');
+      if (last < 0) return;
+      parts[last] = { ...parts[last]!, cache_control: cache } as never;
+      message.content = parts as never;
+    };
+    mark(body.messages[0]);
+    mark(body.messages.findLast((message) => message.role === 'user'));
+    (body as unknown as Record<string, unknown>).cache_control = cache;
+  }
   private async completeOpenAI(request: ModelRequest): Promise<ModelResponse> {
     const body = this.openAIBody(request);
+    this.markChatCache(body);
     this.configureBody(body as unknown as Record<string, unknown>);
     const observe = this.observeRequest(request, body);
     const stream = await this.openai!.chat.completions.create(body, {
@@ -961,6 +1009,10 @@ export class GatewayModel implements ChatModel {
       // comes back encrypted and is replayed from history.
       store: false,
       include: ['reasoning.encrypted_content'],
+      // The endpoint caches a prefix by itself, on the machine the request reached. The
+      // key sends the conversation's steps to one machine, away from every other
+      // conversation that starts with the same prompt.
+      ...(request.cacheKey ? { prompt_cache_key: request.cacheKey } : {}),
     };
     const functions = request.tools.map((tool) => ({
       type: 'function' as const,
@@ -1440,9 +1492,50 @@ export class GatewayModel implements ChatModel {
     }
     return body;
   }
+  /**
+   * Marks the two places an Anthropic endpoint may cache up to. It caches nothing unasked,
+   * so without them every step pays for the whole conversation again. The end of the system
+   * prompt holds the tools too, which are rendered before it, and stays readable when the
+   * conversation is compacted or a new one starts in the same folder. The end of the
+   * conversation moves with every request: the next one reads this one back and writes only
+   * what was added. The request's own blocks are marked, never the stored message's.
+   */
+  private markCache(body: MessageCreateParamsNonStreaming): boolean {
+    const cache = this.cacheBreakpoint();
+    if (!cache) return false;
+    let marked = false;
+    if (typeof body.system === 'string' && body.system.trim()) {
+      body.system = [{ type: 'text', text: body.system, cache_control: cache }];
+      marked = true;
+    }
+    for (let at = body.messages.length - 1; at >= 0; at--) {
+      const content = body.messages[at]!.content;
+      if (!Array.isArray(content)) continue;
+      for (let index = content.length - 1; index >= 0; index--) {
+        const block = content[index]!;
+        // Thinking takes no breakpoint, and Anthropic refuses an empty text block.
+        if (
+          !['text', 'image', 'document', 'tool_use', 'tool_result'].includes(
+            block.type,
+          ) ||
+          (block.type === 'text' && !block.text.trim())
+        )
+          continue;
+        content[index] = {
+          ...block,
+          cache_control: cache,
+        } as ContentBlockParam;
+        return true;
+      }
+    }
+    return marked;
+  }
   private async sendAnthropic(request: ModelRequest): Promise<ModelResponse> {
     const body = this.anthropicBody(request);
+    const cached = this.markCache(body);
     this.configureBody(body as unknown as Record<string, unknown>);
+    // Breakpoints sit on blocks, not at the top of the body where the sent fields are read.
+    if (cached) this.sentParameters.getStore()?.add('cache_control');
     const observe = this.observeRequest(request, body);
     // Consume the SDK's raw stream so tool JSON cannot throw inside its message
     // accumulator before later usage and stop events have been read.
