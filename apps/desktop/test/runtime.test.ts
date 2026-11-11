@@ -2573,6 +2573,7 @@ test('saved API configuration, model selection and effort produce actual local g
   const requests: {
     model: string;
     reasoning_effort?: string;
+    max_tokens?: number;
     messages: unknown[];
     auth?: string;
   }[] = [];
@@ -2655,12 +2656,31 @@ test('saved API configuration, model selection and effort produce actual local g
     (await call('prompt', { text: 'use the selected model' })).ok,
     true,
   );
-  await wait(
-    () =>
-      requests.length === 1 &&
-      controller.snapshot().sessions[0]!.state === 'idle',
-    'gateway answer',
-  );
+  try {
+    await wait(
+      () =>
+        requests.length === 1 &&
+        controller.snapshot().sessions[0]!.state === 'idle',
+      'gateway answer',
+    );
+  } catch (error) {
+    // The predicate combines the request count with the session state but
+    // kept neither on failure, so a timeout said nothing about which half
+    // missed. Record both, and tell a foreground request from an auxiliary
+    // title request the way the title checks do: a title request carries
+    // max_tokens TITLE_MAX_TOKENS on the wire (#506).
+    const session = controller.snapshot().sessions[0]!;
+    const isTitle = (request: (typeof requests)[number]) =>
+      request.max_tokens === TITLE_MAX_TOKENS;
+    const foreground = requests.filter((request) => !isTitle(request));
+    const titles = requests.filter(isTitle);
+    const describe = (request: (typeof requests)[number]) =>
+      `model=${request.model} effort=${request.reasoning_effort ?? 'unset'} max_tokens=${request.max_tokens ?? 'unset'} auth=${request.auth ? 'present' : 'absent'}`;
+    throw new Error(
+      `gateway answer wait failed: requests=${requests.length} (foreground=${foreground.length}, title=${titles.length}) session=${session.state} messages=${session.messages.length} [${requests.map(describe).join('; ')}]`,
+      { cause: error },
+    );
+  }
   assert.equal(requests[0]!.auth, 'Bearer local-fixture-secret');
   assert.equal(requests[0]!.model, 'fixture-two');
   assert.equal(requests[0]!.reasoning_effort, 'high');
