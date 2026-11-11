@@ -1,9 +1,9 @@
 import type { Message } from './types.js';
 import { isRecord } from './settings.js';
 
-/** Mode transitions are stored when they happen, including inside a tool batch.
- * APIs need the whole batch of actual results before conversational text. Move only
- * these internal transitions in the request view; never invent a missing result.
+/** Circle notices can be stored inside a tool batch. APIs need all matching results
+ * before conversational text. Move only these notices in the request view; never
+ * invent a missing result or rewrite stored history.
  */
 export function orderModeToolResults(messages: Message[]): Message[] {
   const ordered: Message[] = [];
@@ -26,25 +26,30 @@ export function orderModeToolResults(messages: Message[]): Message[] {
     let end = i + 1;
     while (
       end < messages.length &&
-      (messages[end]!.role === 'tool' || isModeBoundary(messages[end]!))
+      (messages[end]!.role === 'tool' || isBatchNotice(messages[end]!))
     )
       end++;
     const following = messages.slice(i + 1, end);
     const results = following.filter((item) => item.role === 'tool');
-    const boundaries = following.filter(isModeBoundary);
+    const notices = following.filter(isBatchNotice);
     const returned = new Set(results.map((item) => item.tool_call_id));
     if (
-      boundaries.length &&
+      notices.length &&
       results.length === ids.size &&
       returned.size === ids.size &&
       [...ids].every((id) => returned.has(id))
     ) {
-      ordered.push(message, ...results, ...boundaries);
+      ordered.push(message, ...results, ...notices);
     } else ordered.push(message, ...following);
     i = end;
   }
   return ordered;
 }
-function isModeBoundary(message: Message): boolean {
-  return message.role === 'user' && message.internal === 'mode-boundary';
+const BATCH_NOTES = new Set(['mode-boundary', 'hook_notice', 'job_notice']);
+function isBatchNotice(message: Message): boolean {
+  return (
+    message.role === 'user' &&
+    message.internal !== undefined &&
+    BATCH_NOTES.has(message.internal)
+  );
 }
