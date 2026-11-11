@@ -4,6 +4,7 @@ import { open, mkdir, chmod } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import type { FileHandle } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { DesktopDataInUseError } from '../runtime-failure.ts';
 import type { WorkspaceServiceEvent } from '../workspace-protocol.ts';
 
@@ -33,6 +34,22 @@ export interface EventStreamOptions {
   maxPendingBytes?: number;
   /** Fault injection only; production defaults to fsync before publication. */
   beforeWrite?: () => Promise<void>;
+}
+
+/**
+ * How SQLite is told to open the writer lease. On macOS its build picks a way to lock each
+ * file as it opens it, by one question to the kernel; when that question fails it locks
+ * with a `.lock` entry beside the file instead. A holder of that entry and a holder of the
+ * file's own lock do not see each other, so each takes the lease. The lease is exclusion
+ * and nothing else: it names the file's own lock, which is the only one on other systems.
+ */
+export function leaseDatabaseName(
+  leasePath: string,
+  platform: string = process.platform,
+): string {
+  return platform === 'darwin'
+    ? pathToFileURL(leasePath).href + '?vfs=unix-posix'
+    : leasePath;
 }
 
 /** Append-only evidence journal. Publication happens only after durable append.
@@ -68,7 +85,7 @@ export class WorkspaceEventStream {
       // A separate SQLite RESERVED lock provides cross-process ownership and
       // kernel crash release without stale PID files. The JSONL stays unchanged.
       const leasePath = path + '.owner.sqlite';
-      stream.writerLease = new DatabaseSync(leasePath);
+      stream.writerLease = new DatabaseSync(leaseDatabaseName(leasePath));
       try {
         stream.writerLease.exec('PRAGMA busy_timeout=0; BEGIN IMMEDIATE');
       } catch (cause) {

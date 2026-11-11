@@ -8,12 +8,14 @@ import {
   stat,
   appendFile,
   readFile,
+  readdir,
   rm,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
   WorkspaceEventStream,
+  leaseDatabaseName,
   type EventInput,
 } from '../src/workspace/event-stream.ts';
 import { WorkspaceStreamStore } from '../../workbench/src/model/workspace-stream-store.ts';
@@ -360,51 +362,102 @@ test('another process cannot write and a killed owner releases its lease for dur
       '../../../node_modules/tsx/dist/loader.mjs',
       import.meta.url,
     ).href;
-    const script = `const {WorkspaceEventStream}=await import(${JSON.stringify(module)});const stream=await WorkspaceEventStream.open(${JSON.stringify(path)});await stream.append(${JSON.stringify(input('crash survivor'))});console.log('LEASE_READY');setInterval(()=>{},1000);`;
+    const script = `
+      const {stat}=await import('node:fs/promises');
+      const {WorkspaceEventStream}=await import(${JSON.stringify(module)});
+      const path=${JSON.stringify(path)};
+      const stream=await WorkspaceEventStream.open(path);
+      await stream.append(${JSON.stringify(input('crash survivor'))});
+      process.on('message', async (phase)=>{
+        if (phase === 'after-local-contention') {
+          try { await WorkspaceEventStream.open(path); throw Error('local writer accepted'); }
+          catch (error) { if (!String(error).includes('active writer')) throw error; }
+        }
+        const identity=await stat(path+'.owner.sqlite');
+        process.send({phase,pid:process.pid,transaction:stream.writerLease.isTransaction,
+          closed:stream.closed,closing:stream.closing,dev:identity.dev,ino:identity.ino});
+      });
+      process.send({phase:'ready'});
+    `;
     const child = spawn(
       process.execPath,
       ['--import', loader, '--input-type=module', '-e', script],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
+      { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] },
     );
     const exited = once(child, 'close');
     progress('lease-child-spawned', { childPid: child.pid, module, loader });
     child.on('close', (code, signal) =>
       progress('lease-child-close', { code, signal }),
     );
-    try {
-      await new Promise<void>((resolve, reject) => {
-        let stdout = '',
-          stderr = '';
-        const timer = setTimeout(() => {
-          child.kill();
-          reject(Error('journal lease child timed out: ' + stderr));
-        }, 10000);
-        child.stdout.on('data', (chunk) => {
-          stdout += chunk;
-          progress('lease-child-stdout', { text: String(chunk) });
-          if (stdout.includes('LEASE_READY')) {
-            clearTimeout(timer);
-            resolve();
-          }
-        });
-        child.stderr.on('data', (chunk) => {
-          stderr += chunk;
-          progress('lease-child-stderr', { text: String(chunk) });
-        });
-        child.once('error', (error) => {
+    let stderr = '';
+    child.stderr!.on('data', (chunk) => {
+      stderr += chunk;
+      progress('lease-child-stderr', { text: String(chunk) });
+    });
+    const message = (phase: string) =>
+      new Promise<Record<string, unknown>>((resolve, reject) => {
+        const cleanup = () => {
           clearTimeout(timer);
+          child.off('message', received);
+          child.off('close', closed);
+          child.off('error', failed);
+        };
+        const failed = (error: Error) => {
+          cleanup();
           reject(error);
-        });
-        child.once('close', () => {
-          clearTimeout(timer);
-          if (!stdout.includes('LEASE_READY'))
-            reject(Error('journal child exited: ' + stderr));
-        });
+        };
+        const closed = () =>
+          failed(Error(`journal child exited during ${phase}: ${stderr}`));
+        const received = (value: Record<string, unknown>) => {
+          if (value.phase !== phase) return;
+          cleanup();
+          progress('lease-child-state', value);
+          resolve(value);
+        };
+        const timer = setTimeout(
+          () =>
+            failed(Error(`journal child timed out during ${phase}: ${stderr}`)),
+          10000,
+        );
+        child.on('message', received);
+        child.once('close', closed);
+        child.once('error', failed);
+        if (phase !== 'ready') child.send(phase);
       });
-      progress('lease-child-ready');
+    const checkOwner = async (phase: string) => {
+      const state = await message(phase);
+      const identity = await stat(path + '.owner.sqlite');
+      assert.equal(state.pid, child.pid);
+      assert.equal(state.transaction, true);
+      assert.equal(state.closed, false);
+      assert.equal(state.closing, false);
+      assert.equal(state.dev, identity.dev);
+      assert.equal(state.ino, identity.ino);
+      return state;
+    };
+    try {
+      await message('ready');
+      const before = await checkOwner('after-local-contention');
       const original = await readFile(path);
       progress('second-lease-open-start');
-      await assert.rejects(WorkspaceEventStream.open(path), /active writer/);
+      let unexpected: WorkspaceEventStream | undefined;
+      try {
+        await assert.rejects(async () => {
+          unexpected = await WorkspaceEventStream.open(path);
+        }, /active writer/);
+      } finally {
+        const after = await checkOwner('after-contention');
+        // The folder shows which kind of lock each side took: SQLite falls back to a
+        // `.lock` entry of its own when it cannot take a lock on the file itself, and two
+        // sides holding different kinds do not exclude each other.
+        progress('lease-contention-evidence', {
+          before,
+          after,
+          unexpected: !!unexpected,
+          entries: await readdir(dirname(path)),
+        });
+        await unexpected?.close();
+      }
       progress('second-lease-rejected');
       assert.deepEqual(await readFile(path), original);
       progress('lease-child-kill-request');
@@ -482,3 +535,45 @@ test('a directory journal is rejected intact and its failed open releases the wr
       await stream.close();
     }
   }));
+
+test('the writer lease names the lock it takes, on a folder with spaces and marks in its name', async () => {
+  // Elsewhere SQLite has one way to lock a file and takes the path as it is.
+  assert.equal(
+    leaseDatabaseName('/data/a b/x.sqlite', 'linux'),
+    '/data/a b/x.sqlite',
+  );
+  assert.equal(
+    leaseDatabaseName('C:\\data\\x.sqlite', 'win32'),
+    'C:\\data\\x.sqlite',
+  );
+  // On macOS it would pick one per file: the lease asks for the file's own lock.
+  assert.equal(
+    leaseDatabaseName('/data/a b/#1 100%/x.sqlite', 'darwin'),
+    'file:///data/a%20b/%231%20100%25/x.sqlite?vfs=unix-posix',
+  );
+  // Windows allows no question mark in a name.
+  const dir = await mkdtemp(
+    join(
+      tmpdir(),
+      `circle stream 中文 #1 100% ${process.platform === 'win32' ? '' : '?'}-`,
+    ),
+  );
+  try {
+    const path = join(dir, 'events.jsonl');
+    const first = await WorkspaceEventStream.open(path);
+    await first.append(input('named lock'));
+    await assert.rejects(WorkspaceEventStream.open(path), /active writer/);
+    // The name reached SQLite whole: the lease is this file, and no `.lock` entry stands
+    // in for a lock on it.
+    assert.deepEqual(
+      (await readdir(dir)).filter((name) => !name.endsWith('-journal')).sort(),
+      ['events.jsonl', 'events.jsonl.owner.sqlite'],
+    );
+    await first.close();
+    const next = await WorkspaceEventStream.open(path);
+    assert.equal((await next.append(input('next owner'))).seq, 2);
+    await next.close();
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
