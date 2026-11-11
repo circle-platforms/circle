@@ -4,7 +4,6 @@ import { open, mkdir, chmod } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import type { FileHandle } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { DesktopDataInUseError } from '../runtime-failure.ts';
 import type { WorkspaceServiceEvent } from '../workspace-protocol.ts';
 
@@ -47,9 +46,16 @@ export function leaseDatabaseName(
   leasePath: string,
   platform: string = process.platform,
 ): string {
-  return platform === 'darwin'
-    ? pathToFileURL(leasePath).href + '?vfs=unix-posix'
-    : leasePath;
+  if (platform !== 'darwin') return leasePath;
+  // pathToFileURL resolves a POSIX path against the Windows drive on a Windows
+  // host, so build the URL from the path itself: the platform argument, not
+  // the host, decides the form. Each segment is encoded the way a file URL
+  // encodes it.
+  const encoded = leasePath
+    .split('/')
+    .map((part) => encodeURIComponent(part))
+    .join('/');
+  return `file://${encoded}?vfs=unix-posix`;
 }
 
 /** Append-only evidence journal. Publication happens only after durable append.
