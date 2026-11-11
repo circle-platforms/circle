@@ -400,6 +400,9 @@ export interface Skill {
   /** bundled: ships with Circle; a project or user skill of the same name replaces it. */
   scope: 'project' | 'user' | 'bundled';
   content: string;
+  allowedTools?: string[];
+  disallowedTools?: string[];
+  toolProblems?: string[];
 }
 export interface PromptCommand {
   name: string;

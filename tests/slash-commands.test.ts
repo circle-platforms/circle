@@ -816,6 +816,69 @@ test('/skill loads a skill into the conversation without starting a turn', async
   assert.equal(model.requests[0]!.messages.at(-1)!.content, 'write a poem');
 });
 
+test('/skill shows the tool fields under a skill, says which names are no tool, and says what loading one did', async (t) => {
+  const workspace = scratch(t);
+  const skills: Record<string, string> = {
+    ship: 'description: Commit and push\nallowed-tools: Bash(git add *), Read, Wrench\ndisallowed-tools:\n  - AskUserQuestion',
+    plain: 'description: Nothing special',
+  };
+  for (const [name, text] of Object.entries(skills)) {
+    mkdirSync(join(workspace, '.circle', 'skills', name), { recursive: true });
+    writeFileSync(
+      join(workspace, '.circle', 'skills', name, 'SKILL.md'),
+      `---\nname: ${name}\n${text}\n---\nDo ${name}.\n`,
+    );
+  }
+  const { app, model } = await session(t, [answer('ok'), answer('again')], {
+    workspace,
+    userHome: scratch(t),
+  });
+  await app.submit('/skill');
+  const list = app.state.notices.at(-1)!;
+  const under = ' '.repeat(23);
+  // The fields sit under the skill that has them, and the names that are no tool come last
+  assert.ok(
+    list.includes(
+      [
+        `  ship${' '.repeat(17)}Commit and push (Project Circle)`,
+        `${under}allowed-tools: Bash(git add *), Read, Wrench`,
+        `${under}disallowed-tools: AskUserQuestion`,
+        '',
+        'Not applied:',
+        '  ship names tools that do not exist in allowed-tools: Wrench · not applied',
+        '',
+        'Load with /skill <name>',
+      ].join('\n'),
+    ),
+    list,
+  );
+  // a skill without the fields lists as it always did
+  assert.match(
+    list,
+    /\n {2}plain {16}Nothing special \(Project Circle\)\n {2}pr-review /,
+  );
+  await app.submit('/skill ship');
+  assert.equal(
+    app.state.notices.at(-1),
+    [
+      'Loaded skill `ship`',
+      '  pre-approved for your next message: execute(git add *), read_file',
+      '  not offered for your next message: question',
+      '  ship names tools that do not exist in allowed-tools: Wrench · not applied',
+    ].join('\n'),
+  );
+  // It applies to the turn the next message starts
+  await app.submit('go');
+  const offered = model.requests[0]!.tools.map((tool) => tool.name);
+  assert.ok(!offered.includes('question'));
+  assert.ok(offered.includes('read_file'));
+  // and not to the one after
+  await app.submit('and again');
+  assert.ok(model.requests[1]!.tools.some((tool) => tool.name === 'question'));
+  await app.submit('/skill plain');
+  assert.equal(app.state.notices.at(-1), 'Loaded skill `plain`');
+});
+
 test('/skill lists the skills that ship with Circle as built-in, loads one, and lists a project skill of the same name in its place', async (t) => {
   const workspace = scratch(t);
   const userHome = scratch(t);
@@ -2209,4 +2272,11 @@ test('/agents lists the subagents, a single one, and what is wrong with a file',
   );
   await app.submit('/agents nobody');
   assert.match(app.state.notices.at(-1)!, /No subagent nobody/);
+  // Without a tool list an agent has every tool a subagent may have, and only the main
+  // agent asks the person.
+  await app.submit('/agents general-purpose');
+  assert.match(
+    app.state.notices.at(-1)!,
+    /tools: every tool a subagent may have, except question/,
+  );
 });

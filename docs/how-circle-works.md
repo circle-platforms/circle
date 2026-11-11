@@ -51,7 +51,7 @@ When the conversation passes 85% of the model's context window (from models.dev 
 
 | Subagent | What it can do |
 |---|---|
-| `general-purpose` | The same tools as the main agent, without `task`, `compact_conversation` and the plan-mode tools, plus `wait_jobs`. Approvals apply to it exactly as to the main agent. |
+| `general-purpose` | The same tools as the main agent, without `task`, `compact_conversation`, `question` and the plan-mode tools, plus `wait_jobs`. Approvals apply to it exactly as to the main agent. It never asks you a question: only the main agent does. |
 | `explore` | Read-only: list, read and search files, the web and language servers, and load skills. It never asks for approval. |
 
 `task` calls next to each other in one reply run at the same time. While they run, a strip below the input box shows it; `↓` selects it and `enter` opens its full record.

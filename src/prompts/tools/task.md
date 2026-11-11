@@ -4,11 +4,13 @@ Available subagents and their capabilities:
 {available_agents}
 
 Choose one with the required tools. The general-purpose agent has the main agent's
-tools, including registered extension tools; explore is limited to read-only
-search and file inspection.
+tools, including registered extension tools, except `question`; explore is limited
+to read-only search and file inspection.
 
 Use description and subagent_type for each call. Include required context in the
-description. Foreground calls wait for one report and pause for approval when needed.
+description. general-purpose and explore cannot ask the user a question: settle with
+the user, before the call, what only they can decide. Foreground calls wait for one
+report and pause for approval when needed.
 With background: true, the call returns a job id and output path immediately.
 The report arrives as a completion notice; do not poll or sleep. Background agents
 cannot start another subagent. Processes they start are stopped when they finish.

@@ -238,7 +238,7 @@ The model still has `read_file`, `edit_file` and `apply_patch` for the work itse
 | Tool | What it does | Asks |
 |---|---|---|
 | `write_todos` | Keep the plan shown in the plan box. | no |
-| `question` | Ask you one or more questions with options, or ask for a secret. Your answers become the tool result. A question with a `key` keeps your answer as a variable, a secret question as a secret, both written `%KEY%` afterwards. See [Answer a question](usage.md#answer-a-question) and [Secrets](usage.md#secrets). | no |
+| `question` | Ask you one or more questions with options, or ask for a secret. Your answers become the tool result. A question with a `key` keeps your answer as a variable, a secret question as a secret, both written `%KEY%` afterwards. Only the main agent has it; subagents cannot ask questions ([Subagents](agents.md#what-holds-for-every-subagent)). See [Answer a question](usage.md#answer-a-question) and [Secrets](usage.md#secrets). | no |
 | `plan_enter` | Switch to `read-only` mode, as `/plan` does. | no |
 | `plan_exit` | Ask you what to do with the finished plan: implement it in `auto` mode or with manual approval, which leaves `read-only` mode; change it, and the model gets what you write; or save it and change nothing. Only you can answer, so it fails without the full-screen interface or the desktop application. | no |
 

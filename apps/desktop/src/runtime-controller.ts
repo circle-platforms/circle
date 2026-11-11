@@ -3509,21 +3509,31 @@ export class RuntimeController {
       models,
       skills: inspecting
         ? []
-        : runtime.skills.map((skill) => ({
-            id: identity(skill.path),
-            name: skill.name,
-            description: skill.description,
-            path: skill.path,
-            // One that ships with Circle is bundled, as an extension that does is.
-            scope:
-              skill.source_label === BUILTIN_SKILL_SOURCE
-                ? 'bundled'
-                : skill.source_label.startsWith('Project') ||
-                    skill.source_label.startsWith('Ancestor')
-                  ? 'project'
-                  : 'user',
-            content: loadSkillBody(skill.name, runtime.skills),
-          })),
+        : runtime.skills.map((skill) => {
+            const problems = runtime.skillTools(skill).problems;
+            return {
+              id: identity(skill.path),
+              name: skill.name,
+              description: skill.description,
+              path: skill.path,
+              // One that ships with Circle is bundled, as an extension that does is.
+              scope:
+                skill.source_label === BUILTIN_SKILL_SOURCE
+                  ? ('bundled' as const)
+                  : skill.source_label.startsWith('Project') ||
+                      skill.source_label.startsWith('Ancestor')
+                    ? ('project' as const)
+                    : ('user' as const),
+              content: loadSkillBody(skill.name, runtime.skills),
+              ...(skill.allowed_tools
+                ? { allowedTools: skill.allowed_tools }
+                : {}),
+              ...(skill.disallowed_tools
+                ? { disallowedTools: skill.disallowed_tools }
+                : {}),
+              ...(problems.length ? { toolProblems: problems } : {}),
+            };
+          }),
       commands:
         !inspecting && isFolderTrusted(settings, runtime.options.workspace)
           ? [
@@ -6075,6 +6085,7 @@ export class RuntimeController {
         const skill = runtime.skills.find((skill) => skill.name === p.name);
         if (!skill) throw Error('skill not found');
         await runtime.activateSkillHooks(skill.name);
+        runtime.applySkillTools(skill, 'person');
         return {
           name: skill.name,
           content: loadSkillBody(skill.name, runtime.skills),

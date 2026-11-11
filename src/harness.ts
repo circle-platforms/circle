@@ -76,6 +76,7 @@ import type {
   ResolveInputsRequest,
   ResolveInputsResult,
 } from './input_outbox.js';
+import type { SkillScopes } from './skill_tools.js';
 type InputPresentation = Omit<InputPayload, 'text'>;
 const inputPresentation = ({
   text: _text,
@@ -211,6 +212,7 @@ export interface HarnessOptions {
    * about, or approved elsewhere, before the session's hooks are read.
    */
   reviewHooks?: (signal: AbortSignal) => Promise<void>;
+  skills?: Pick<SkillScopes, 'message' | 'withheld' | 'allows'>;
 }
 /** A message that waits for the model, as the input box showed it. */
 export interface QueuedMessage {
@@ -290,6 +292,12 @@ export class Harness {
   }
   get busy(): boolean {
     return Boolean(this.active);
+  }
+  private offered(): Tool[] {
+    const withheld = this.options.skills?.withheld(this.sessionId);
+    return withheld
+      ? this.tools.filter((tool) => !withheld.has(tool.name))
+      : this.tools;
   }
   get pendingMessageCount(): number {
     return this.steering.length + this.followUps.length;
@@ -1055,6 +1063,7 @@ export class Harness {
         this.consumeInput(queued, content);
       } else
         this.save({ id: randomUUID(), role: 'user', ...content, ...shown });
+      this.options.skills?.message(this.sessionId);
     }
     const session = this.options.store.get(this.sessionId)!;
     if (!session.title && shown?.display !== undefined) {
@@ -1104,6 +1113,7 @@ export class Harness {
           if (version !== this.queueVersion || this.steering[0] !== message)
             continue;
           this.consumeInput(input, content);
+          this.options.skills?.message(this.sessionId);
           this.bus.emit('steer', { payload: { message } });
         }
         this.options.beforeStep?.();
@@ -1131,7 +1141,7 @@ export class Harness {
                 ? await this.options.prepareMessages(signal)
                 : this.options.store.projectedMessages(this.sessionId),
             ),
-            tools: this.tools,
+            tools: this.offered(),
             signal: stepSignal,
             notice: (event) =>
               this.bus.emit('info', { payload: { model_notice: event } }),
@@ -1539,7 +1549,7 @@ export class Harness {
   // A task call (its name as the tool table resolves it): its subagent can run beside others.
   private parallel(call: ToolCall): boolean {
     try {
-      return prepareToolCall(call, this.tools).tool.name === 'task';
+      return prepareToolCall(call, this.offered()).tool.name === 'task';
     } catch {
       return false;
     }
@@ -1571,7 +1581,7 @@ export class Harness {
     this.bus.emit('tool_call', { payload: { ...call } });
     try {
       signal.throwIfAborted();
-      const prepared = prepareToolCall(call, this.tools);
+      const prepared = prepareToolCall(call, this.offered());
       call = prepared.call;
       const tool = prepared.tool;
       // The values go in once, before anything is decided: what is checked and approved is
@@ -1656,6 +1666,10 @@ export class Harness {
         this.options.policy.tabAlwaysAsks(call.name, resolved);
       const hookAsk = before?.decision === 'ask';
       const hookAllow = before?.decision === 'allow' && !alwaysAsk;
+      const skillAllowed =
+        !alwaysAsk &&
+        this.options.skills?.allows(this.sessionId, tool.name, resolved) ===
+          true;
       const preparedRun = tool.prepare
         ? await tool.prepare(resolved, {
             signal,
@@ -1675,6 +1689,7 @@ export class Harness {
       const wouldAsk =
         tool.personApproval === true ||
         (!settingsAllowed &&
+          !skillAllowed &&
           !this.options.planFileMutation?.(call) &&
           effect !== 'read' &&
           tool.approval !== false &&

@@ -185,7 +185,7 @@ Handlers of one slot run in the order they were registered, the first outermost.
 
 `spec` is an object with a non-empty `name`, `description` and `system_prompt`, and an optional `model`, a model id on the same endpoint. `name` uses letters, digits, `_` and `-`. A subagent with the name of a built-in one (`general-purpose`, `explore`) or an earlier extension's replaces it.
 
-`tools` lists the tools it gets, by name: built-in tools, MCP tools and extension tools. It gets exactly those, never `task`, `compact_conversation`, `plan_enter` or `plan_exit`. A name that does not exist skips that subagent, and `/extensions` says so. Its calls ask for approval like any other, and its system prompt is yours followed by the main agent's.
+`tools` lists the tools it gets, by name: built-in tools, MCP tools and extension tools. It gets exactly those, never `task`, `compact_conversation`, `question`, `plan_enter` or `plan_exit`. A name that does not exist skips that subagent, and `/extensions` says so. Its calls ask for approval like any other, and its system prompt is yours followed by the main agent's.
 
 ### Renderers
 

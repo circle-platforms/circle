@@ -1,6 +1,13 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -13,7 +20,10 @@ import {
 } from '../../../src/settings.ts';
 import type { RuntimeCommandName } from '../src/runtime-protocol.ts';
 
-async function setup(t: TestContext) {
+async function setup(
+  t: TestContext,
+  replies: ConstructorParameters<typeof ScriptedModel>[0] = [],
+) {
   const root = await mkdtemp(join(tmpdir(), 'circle-skill-ui-'));
   const home = join(root, 'home');
   const workspace = join(root, 'workspace');
@@ -21,11 +31,12 @@ async function setup(t: TestContext) {
   await mkdir(workspace);
   await mkdir(join(workspace, '.git'));
   saveSettings(trustFolder(defaultSettings(), workspace), home);
+  const model = new ScriptedModel(replies);
   const controller = new RuntimeController({
     home,
     workspace,
     userHome: home,
-    model: new ScriptedModel([]),
+    model,
     emit: () => {},
   });
   const call = (
@@ -42,7 +53,7 @@ async function setup(t: TestContext) {
     await controller.close();
     await rm(root, { recursive: true, force: true });
   });
-  return { workspace, controller, call };
+  return { workspace, controller, call, model };
 }
 
 test('the skill that ships with Circle is listed as bundled until a project skill of the same name replaces it', async (t) => {
@@ -114,4 +125,43 @@ test('create-skill writes a project skill and lists it after reload', async (t) 
     body: 'y',
   });
   assert.equal(bad.ok, false);
+});
+
+test('a skill’s tool fields show on the skills page, and adding it to the session applies them to the next message', async (t) => {
+  const { workspace, controller, call, model } = await setup(t, [
+    {
+      message: { id: randomUUID(), role: 'assistant', content: 'done' },
+    },
+  ]);
+  const folder = join(workspace, '.circle', 'skills', 'ship');
+  await mkdir(folder, { recursive: true });
+  await writeFile(
+    join(folder, 'SKILL.md'),
+    '---\nname: ship\ndescription: Commit and push\nallowed-tools: Bash(git add *), Wrench\ndisallowed-tools:\n  - AskUserQuestion\n---\nShip it.\n',
+  );
+  assert.equal((await call('reload')).ok, true);
+  const listed = controller
+    .snapshot()
+    .skills.find((skill) => skill.name === 'ship')!;
+  assert.deepEqual(listed.allowedTools, ['Bash(git add *)', 'Wrench']);
+  assert.deepEqual(listed.disallowedTools, ['AskUserQuestion']);
+  assert.match(
+    (listed.toolProblems ?? []).join('\n'),
+    /ship names tools that do not exist in allowed-tools: Wrench/,
+  );
+  // a skill without the fields lists without them
+  assert.equal(
+    controller.snapshot().skills.find((skill) => skill.name === 'create-pr')!
+      .allowedTools,
+    undefined,
+  );
+  assert.equal((await call('load-skill', { name: 'ship' })).ok, true);
+  assert.equal((await call('prompt', { text: 'go' })).ok, true);
+  for (let wait = 0; model.requests.length < 1 && wait < 500; wait++)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(model.requests.length, 1);
+  assert.ok(
+    !model.requests[0]!.tools.some((tool) => tool.name === 'question'),
+    'the skill kept question from the model for the turn its next message started',
+  );
 });

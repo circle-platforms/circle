@@ -188,4 +188,4 @@ A skill folder may contain `hooks.json` beside `SKILL.md`. Installing the skill 
 
 A `session_start` hook in the skill runs with the session when the skill was loaded first, and runs once when the skill is loaded later. The other events apply to tool calls after that moment.
 
-This is optional. A skill with no `hooks.json` is unchanged, and Circle still does not run other scripts bundled in the skill.
+This is optional. A skill with no `hooks.json` is unchanged, and Circle still does not run other scripts bundled in the skill. A skill's `allowed-tools` and `disallowed-tools` are not hooks and do not last the session: they end with your next message ([Skills](skills.md#tools-a-skill-pre-approves-or-withholds)).

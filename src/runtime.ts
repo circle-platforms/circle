@@ -64,7 +64,18 @@ import {
 import { EventBus } from './events.js';
 import { defaultRunOptions, type RunOptions } from './run_options.js';
 import type { CircleSettings } from './settings.js';
-import { discoverSkills, loadSkillBody, type SkillInfo } from './skills.js';
+import {
+  discoverSkills,
+  findSkill,
+  loadSkillBody,
+  type SkillInfo,
+} from './skills.js';
+import {
+  SkillScopes,
+  describeSkillTools,
+  resolveSkillTools,
+  type SkillTools,
+} from './skill_tools.js';
 import { fromJsonl, toSessionBundle } from './session_export.js';
 import { projectDataDir, circleHome, normalizeWorkspace } from './paths.js';
 import { repositoryWorktrees } from './worktrees.js';
@@ -441,6 +452,7 @@ export class AgentRuntime {
   }
   // Read again with every system prompt, see systemPrompt().
   skills: SkillInfo[] = [];
+  private readonly skillScopes: SkillScopes;
   private hookRunner?: HookRunner;
   /** The hooks this session would run. Reloaded with the harness. */
   get hookCatalog() {
@@ -517,6 +529,7 @@ export class AgentRuntime {
       home: circleHome(options.home),
     };
     options = this.options;
+    this.skillScopes = new SkillScopes(options.workspace);
     this.runOptions = options.run ?? defaultRunOptions();
     this.catalog = options.catalog ?? new ModelCatalog(options.home);
     this.store = new CheckpointStore(
@@ -878,9 +891,17 @@ export class AgentRuntime {
         this.todos = todos;
         this.bus.emit('todo_list', { payload: { todos } });
       },
-      skill: async (name, signal) => {
+      skill: async (name, signal, context) => {
         await this.activateSkillHooks(name, signal);
-        return loadSkillBody(name, this.skills);
+        const body = loadSkillBody(name, this.skills);
+        const { problems } = this.applySkillTools(
+          findSkill(name, this.skills)!,
+          'model',
+          context?.sessionId,
+        );
+        return problems.length
+          ? `${body}\n\nCircle did not apply:\n${problems.map((line) => `- ${line}`).join('\n')}`
+          : body;
       },
       question: async (args, context) =>
         askQuestions(this.options.home, this.sandbox, args, context.signal, {
@@ -1028,6 +1049,8 @@ export class AgentRuntime {
             parent_run_id: parentSessionId,
           });
         });
+        // Subagents inherit restrictions, but must load a skill to receive its grants.
+        const withheld = this.skillScopes.withheld(parentSessionId);
         const childTools = (custom?.tools ?? this.allTools).filter(
           (tool) =>
             tool.subagents !== false &&
@@ -1035,6 +1058,8 @@ export class AgentRuntime {
             tool.name !== 'compact_conversation' &&
             tool.name !== 'plan_enter' &&
             tool.name !== 'plan_exit' &&
+            tool.name !== 'question' &&
+            !withheld?.has(tool.name) &&
             (name !== 'explore' ||
               custom !== undefined ||
               EXPLORE_TOOLS.has(tool.name)),
@@ -1143,6 +1168,7 @@ export class AgentRuntime {
                 )
             : undefined,
           hooks: this.ensureHooks(),
+          skills: this.skillScopes,
           sessionHooks: false,
           headless: this.options.headless,
           approvalSessionId: parentSessionId,
@@ -1209,6 +1235,7 @@ export class AgentRuntime {
             signal.removeEventListener('abort', abort);
             await this.jobs.stopOwned(backgroundJob?.id ?? session.id);
             this.childJobOwners.delete(session.id);
+            this.skillScopes.drop(session.id);
           }
         };
         if (args.background === true) {
@@ -1290,6 +1317,7 @@ export class AgentRuntime {
       headless: this.options.headless,
       approve: this.options.approve,
       hooks: this.ensureHooks(),
+      skills: this.skillScopes,
       reviewHooks: (signal) => this.reviewHooks(signal),
       priceUsage: (model, usage) =>
         priceCall(this.catalog.facts(model, this.options.settings), usage),
@@ -2058,6 +2086,25 @@ export class AgentRuntime {
     if (this.harness && armed.length)
       await this.harness.skillHooksArmed(armed, signal);
   }
+  skillTools(skill: SkillInfo): SkillTools {
+    return resolveSkillTools(
+      skill,
+      new Map(
+        [...this.allTools, ...(this.options.deferredTools ?? [])].map(
+          (tool) => [tool.name, tool.effect] as const,
+        ),
+      ),
+    );
+  }
+  applySkillTools(
+    skill: SkillInfo,
+    by: 'model' | 'person',
+    sessionId: string = this.session.id,
+  ): SkillTools & { lines: string[] } {
+    const tools = this.skillTools(skill);
+    this.skillScopes.load(sessionId, tools, by === 'model' ? 'now' : 'next');
+    return { ...tools, lines: describeSkillTools(tools, by === 'person') };
+  }
   /** Read hooks again. /reload uses this so a changed file applies to the next call. */
   reloadHooks(): void {
     this.hookRunner = undefined;
@@ -2634,6 +2681,7 @@ export class AgentRuntime {
     this.memorySession = undefined;
     this.todos = [];
     this.armedSkills.clear();
+    this.skillScopes.clear();
     this.hookRunner = undefined;
     this.harness = this.createHarness(this.options.model);
     this.todos = restoredTodos(this.harness.messages);
@@ -2661,6 +2709,7 @@ export class AgentRuntime {
     const repaired = this.store.get(session.id);
     if (repaired) this.session = repaired;
     this.armedSkills.clear();
+    this.skillScopes.clear();
     this.hookRunner = undefined;
     this.harness = this.createHarness(this.options.model);
     this.todos = restoredTodos(this.harness.messages);
@@ -2685,6 +2734,7 @@ export class AgentRuntime {
       this.store.claimSession(session.id, (error) => this.ownershipLost(error));
       this.session = session;
       this.armedSkills.clear();
+      this.skillScopes.clear();
       this.hookRunner = undefined;
       this.harness = this.createHarness(this.options.model);
       this.todos = restoredTodos(this.harness.messages);

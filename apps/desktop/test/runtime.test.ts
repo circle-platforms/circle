@@ -2400,7 +2400,7 @@ test('subagent interaction remains bound to its actual parent and child sessions
           id: 'task-parent',
           name: 'task',
           args: {
-            description: 'ask which target',
+            description: 'write the note',
             subagent_type: 'general-purpose',
           },
         },
@@ -2409,18 +2409,16 @@ test('subagent interaction remains bound to its actual parent and child sessions
     {
       message: assistant('', [
         {
-          id: 'question-child',
-          name: 'question',
-          args: {
-            questions: [{ question: 'Child target?', options: ['local'] }],
-          },
+          id: 'write-child',
+          name: 'write_file',
+          args: { file_path: 'child-note.txt', content: 'from the child' },
         },
       ]),
     },
     { message: assistant('child done') },
     { message: assistant('parent received child') },
   ]);
-  await f.call('prompt', { text: 'delegate this question' });
+  await f.call('prompt', { text: 'delegate this write' });
   await wait(
     () =>
       f.controller
@@ -2434,12 +2432,16 @@ test('subagent interaction remains bound to its actual parent and child sessions
   assert.equal(row.sessionId, f.controller.snapshot().activeSessionId);
   assert(row.origin?.agent);
   assert.notEqual(row.origin.agent, row.sessionId);
-  await f.call('answer', { id: row.id, revision: 1, answer: 'local' });
+  await f.call('answer', { id: row.id, revision: 1, answer: 'approve' });
   await wait(
     () =>
       f.model.requests.length === 4 &&
       f.controller.snapshot().sessions[0]!.state === 'idle',
     'parent finish',
+  );
+  assert.equal(
+    readFileSync(join(f.workspace, 'child-note.txt'), 'utf8'),
+    'from the child',
   );
   assert(
     f.controller

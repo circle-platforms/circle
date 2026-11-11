@@ -72,7 +72,11 @@ export interface ToolHooks {
     args: Record<string, unknown>,
     context: ToolContext,
   ) => Promise<string>;
-  skill?: (name: string, signal?: AbortSignal) => Promise<string>;
+  skill?: (
+    name: string,
+    signal?: AbortSignal,
+    context?: ToolContext,
+  ) => Promise<string>;
   compact?: (hint: string, context: ToolContext) => Promise<string>;
   /** The installer/runner of the local tools an MCP server publishes: settings and the saved secrets it may use. */
   localSkills?: {
@@ -772,7 +776,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       'read',
       schema({ name: text('Skill name') }, ['name']),
       async (args, context) =>
-        hooks.skill!(string(args, 'name'), context.signal),
+        hooks.skill!(string(args, 'name'), context.signal, context),
     );
   if (hooks.compact)
     add(

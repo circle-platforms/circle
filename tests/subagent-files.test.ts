@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { AgentRuntime } from '../src/runtime.js';
+import { AgentRuntime, type InteractionContext } from '../src/runtime.js';
 import { discoverSubagents } from '../src/subagent_files.js';
 import { defaultSettings } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
@@ -268,4 +268,151 @@ test('an agent naming a tool that does not exist is not offered, and says why', 
     listed.problems.join('\n'),
     /ghost names tools that do not exist: no_such_tool · not offered/,
   );
+});
+
+/** One `task` call for a named subagent, a `question` call by the subagent, then the answers. */
+function askingModel(name: string): ScriptedModel {
+  return new ScriptedModel([
+    {
+      message: assistant('', [
+        {
+          id: 'task',
+          name: 'task',
+          args: { description: 'decide', subagent_type: name },
+        },
+      ]),
+    },
+    {
+      message: assistant('', [
+        {
+          id: 'ask',
+          name: 'question',
+          args: {
+            questions: [{ question: 'Which colour?', options: ['blue'] }],
+          },
+        },
+      ]),
+    },
+    { message: assistant('child done') },
+    { message: assistant('main done') },
+  ]);
+}
+/** A runtime whose questions are written down with who asked, and answered `blue`. */
+function asking(
+  dirs: { home: string; workspace: string; userHome: string },
+  model: ScriptedModel,
+) {
+  const asked: {
+    args: Record<string, unknown>;
+    origin?: InteractionContext;
+  }[] = [];
+  const runtime = new AgentRuntime({
+    ...dirs,
+    settings: defaultSettings(),
+    model,
+    bundledExtensions: false,
+    question: async (args, _signal, origin) => {
+      asked.push({ args, origin });
+      return JSON.stringify([['blue']]);
+    },
+  });
+  return { runtime, asked };
+}
+const toolNames = (model: ScriptedModel, request: number): string[] =>
+  model.requests[request]!.tools.map((tool) => tool.name);
+
+test('only the main agent asks the person: general-purpose, explore and a file with no tool list get no question tool', async (t) => {
+  const root = scratch(t);
+  const dirs = harness(root);
+  agentFile(
+    join(dirs.home, 'agents'),
+    'plain.md',
+    '---\nname: plain\ndescription: Works alone.\n---\n\nplain prompt\n',
+  );
+  for (const name of ['general-purpose', 'explore', 'plain']) {
+    const model = askingModel(name);
+    const { runtime, asked } = asking(dirs, model);
+    cleanup(t, () => runtime.close());
+    const result = await runtime.harness.run('go');
+    assert.equal(result.answer, 'main done');
+    assert.ok(
+      toolNames(model, 0).includes('question'),
+      'the main agent has it',
+    );
+    assert.ok(!toolNames(model, 1).includes('question'), `${name} does not`);
+    assert.ok(
+      toolNames(model, 1).includes('read_file'),
+      `${name} keeps the rest`,
+    );
+    // The call it makes anyway is answered like a call to any tool it does not have,
+    // and nobody is asked.
+    assert.match(
+      String(
+        model.requests[2]!.messages.findLast(
+          (message) => message.tool_call_id === 'ask',
+        )?.content,
+      ),
+      /tool is not available: question/,
+    );
+    assert.equal(asked.length, 0);
+  }
+  // A file may still replace a built-in, and without a tool list it is the default set too.
+  agentFile(
+    join(dirs.home, 'agents'),
+    'general-purpose.md',
+    '---\nname: general-purpose\ndescription: My own.\n---\n\nmy prompt\n',
+  );
+  const model = askingModel('general-purpose');
+  const { runtime } = asking(dirs, model);
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('go');
+  assert.match(model.requests[1]!.system, /my prompt/);
+  assert.ok(!toolNames(model, 1).includes('question'));
+  assert.ok(toolNames(model, 1).includes('write_file'));
+});
+
+test('a subagent file cannot enable question with its tools list', async (t) => {
+  const root = scratch(t);
+  const dirs = harness(root);
+  agentFile(
+    join(dirs.home, 'agents'),
+    'asker.md',
+    '---\nname: asker\ndescription: Asks.\ntools: read_file, question\n---\n\nasker prompt\n',
+  );
+  const model = askingModel('asker');
+  const { runtime, asked } = asking(dirs, model);
+  cleanup(t, () => runtime.close());
+  const result = await runtime.harness.run('go');
+  assert.equal(result.answer, 'main done');
+  assert.deepEqual(toolNames(model, 1), ['read_file']);
+  assert.equal(asked.length, 0);
+  assert.match(
+    String(
+      model.requests[2]!.messages.findLast(
+        (message) => message.tool_call_id === 'ask',
+      )?.content,
+    ),
+    /tool is not available: question/,
+  );
+});
+
+test('an extension’s subagent cannot enable question with its tools list', async (t) => {
+  for (const [name, list] of [
+    ['ext-asker', '["read_file","question"]'],
+    ['ext-quiet', '["read_file"]'],
+  ] as const) {
+    const root = scratch(t);
+    const dirs = harness(root);
+    extension(
+      join(dirs.home, 'extensions'),
+      name,
+      `export function register(api){api.registerSubagent({name:"${name}",description:"x",system_prompt:"ext marker"},${list})}`,
+    );
+    const model = askingModel(name);
+    const { runtime, asked } = asking(dirs, model);
+    cleanup(t, () => runtime.close());
+    await runtime.harness.run('go');
+    assert.equal(toolNames(model, 1).includes('question'), false, name);
+    assert.equal(asked.length, 0, name);
+  }
 });

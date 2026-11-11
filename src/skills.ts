@@ -16,15 +16,44 @@ export interface SkillInfo {
   path: string;
   source_label: string;
   personal_home?: string;
+  allowed_tools?: string[];
+  disallowed_tools?: string[];
+}
+const unquoted = (text: string): string => text.replace(/^['"]|['"]$/g, '');
+function listItem(text: string): string {
+  const quoted = text.match(/^(['"])(.*?)\1(?:\s+#.*)?$/);
+  return quoted ? quoted[2]! : text.replace(/\s+#.*$/, '').trim();
+}
+function splitOutside(raw: string, separator: (char: string) => boolean) {
+  const parts: string[] = [];
+  let part = '';
+  let depth = 0;
+  for (const char of raw) {
+    if (char === '(') depth++;
+    else if (char === ')' && depth > 0) depth--;
+    if (depth === 0 && separator(char)) {
+      parts.push(part);
+      part = '';
+    } else part += char;
+  }
+  parts.push(part);
+  return parts.map((item) => item.trim()).filter(Boolean);
+}
+export function splitToolList(raw: string): string[] {
+  return [
+    ...new Set(splitOutside(raw, (char) => char === ',' || /\s/.test(char))),
+  ];
 }
 export function parseFrontmatter(text: string): {
   meta: Record<string, string>;
+  lists: Record<string, string[]>;
   body: string;
 } {
   const match = text.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/);
-  if (!match) return { meta: {}, body: text };
+  if (!match) return { meta: {}, lists: {}, body: text };
   const meta: Record<string, string> = {};
-  const lines = match[1]!.split('\n');
+  const lists: Record<string, string[]> = {};
+  const lines = match[1]!.replace(/\r$/, '').split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     if (!line.trim() || line.trimStart().startsWith('#')) continue;
@@ -45,10 +74,40 @@ export function parseFrontmatter(text: string): {
             .filter(Boolean)
             .join(' ')
         : block.join('\n').trim();
+    } else if (!value) {
+      const items: string[] = [];
+      let next = i;
+      while (next + 1 < lines.length) {
+        const following = lines[next + 1]!;
+        const item = following.match(/^\s*-(?:\s+(.*))?$/);
+        if (item) items.push(listItem((item[1] ?? '').trim()));
+        else if (following.trim() && !following.trimStart().startsWith('#'))
+          break;
+        next++;
+      }
+      if (items.length) {
+        lists[key] = items.filter(Boolean);
+        meta[key] = '';
+        i = next;
+        continue;
+      }
     }
-    meta[key] = value.replace(/^['"]|['"]$/g, '');
+    const flow = value.match(/^\[(.*)\]$/);
+    if (flow)
+      lists[key] = splitOutside(flow[1]!, (char) => char === ',').map(listItem);
+    meta[key] = unquoted(value);
   }
-  return { meta, body: text.slice(match[0].length) };
+  return { meta, lists, body: text.slice(match[0].length) };
+}
+function toolEntries(
+  meta: Record<string, string>,
+  lists: Record<string, string[]>,
+  key: string,
+): string[] | undefined {
+  const entries = [
+    ...new Set((lists[key] ?? [meta[key] ?? '']).flatMap(splitToolList)),
+  ];
+  return entries.length ? entries : undefined;
 }
 // The skills that ship with Circle: src/builtin_skills in a checkout, dist/builtin_skills in
 // a build and a release, beside the bundled runtime in the desktop application (inside its
@@ -157,7 +216,7 @@ export function discoverSkills(
       } catch {
         continue;
       }
-      const { meta } = parseFrontmatter(text);
+      const { meta, lists } = parseFrontmatter(text);
       let name = (meta.name || basename(directory)).toLowerCase().trim();
       if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))
         name = basename(directory)
@@ -165,7 +224,9 @@ export function discoverSkills(
           .replace(/[^a-z0-9-]+/g, '-')
           .replace(/^-+|-+$/g, '')
           .slice(0, 64);
-      if (name)
+      if (name) {
+        const allowed = toolEntries(meta, lists, 'allowed-tools');
+        const disallowed = toolEntries(meta, lists, 'disallowed-tools');
         byName.set(name, {
           name,
           description: (
@@ -173,15 +234,22 @@ export function discoverSkills(
           ).slice(0, 1024),
           path,
           source_label: label,
+          ...(allowed ? { allowed_tools: allowed } : {}),
+          ...(disallowed ? { disallowed_tools: disallowed } : {}),
         });
+      }
     }
   }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
+export function findSkill(
+  name: string,
+  catalog: SkillInfo[],
+): SkillInfo | undefined {
+  return catalog.find((skill) => skill.name === name.trim().toLowerCase());
+}
 export function loadSkillBody(name: string, catalog: SkillInfo[]): string {
-  const skill = catalog.find(
-    (skill) => skill.name === name.trim().toLowerCase(),
-  );
+  const skill = findSkill(name, catalog);
   if (!skill)
     throw new Error(
       `skill '${name}' not found. Available: ${catalog.map((skill) => skill.name).join(', ') || '(none)'}`,

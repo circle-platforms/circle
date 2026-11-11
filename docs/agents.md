@@ -26,7 +26,7 @@ the file and the line. Change nothing.
 |---|---|---|
 | `name` | no: the file name is used | how `task` calls it: letters, digits, `_` and `-`, up to 64 |
 | `description` | yes | the line the model reads to decide when to use the agent |
-| `tools` | no | the exact tool names it may use; without the key it gets everything a subagent may have |
+| `tools` | no | the exact tool names it may use, except `question`; without the key it gets everything a subagent may have |
 | `model` | no | an id on the same endpoint; without it the agent uses the conversation's model |
 
 ## Where the files live
@@ -62,7 +62,9 @@ The desktop application's `/agents` opens the subagents panel, which lists the a
 
 - `task` runs it to the end and returns its report. A subagent cannot start another: no `task`, no `compact_conversation`, no `plan_enter` or `plan_exit`.
 - Approvals apply exactly as they do to the main agent: a write or a command asks you, `auto` runs it, `read-only` refuses it. See [Security](security.md).
+- **Only the main agent asks you questions.** Subagents have no `question` tool, even when a file's `tools` key or an extension names it. They work from the description `task` gives them, so the main agent settles with you what only you can answer before it starts one.
 - Its context is its own. It sees the description `task` gives it, not your conversation, and its work stays in its own record until it answers. See [How Circle works](how-circle-works.md#subagents).
+- When `task` starts a subagent while a [skill](skills.md#tools-a-skill-pre-approves-or-withholds) is withholding tools with `disallowed-tools`, the subagent is not offered them either, for as long as it runs. The skill's `allowed-tools` are not given to it: its calls ask as they do.
 - With `background: true` it keeps running and its report arrives as a notice. See [Background jobs](background-jobs.md).
 - A file naming a tool that does not exist is skipped rather than run with a broken set, so load the MCP server or the extension first.
 

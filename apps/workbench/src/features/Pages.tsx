@@ -609,6 +609,21 @@ export function SkillsPage() {
                   </Button>
                 </div>
                 <code className="file-path">{selected.path}</code>
+                {selected.allowedTools?.length ? (
+                  <p className="panel-note">
+                    allowed-tools: {selected.allowedTools.join(', ')}
+                  </p>
+                ) : null}
+                {selected.disallowedTools?.length ? (
+                  <p className="panel-note">
+                    disallowed-tools: {selected.disallowedTools.join(', ')}
+                  </p>
+                ) : null}
+                {selected.toolProblems?.map((line) => (
+                  <p className="panel-note" key={line}>
+                    {line}
+                  </p>
+                ))}
                 <Markdown text={selected.content} />
               </>
             )}
