@@ -81,7 +81,21 @@ A change applies from the next message. When the model has a depth, the header s
 - **OpenAI protocol**: nothing is sent unless you choose a depth; then it is sent as `reasoning_effort`.
 - **Responses protocol**: nothing is sent unless you choose a depth; then it is sent as `reasoning: {effort, summary: "auto"}`, and the reasoning summary is shown as thinking. An endpoint that rejects `reasoning` is asked again without it.
 
-If an endpoint rejects a parameter Circle sent (thinking, reasoning effort, stream options and a few others), Circle drops that parameter, sends the request again, and does not send it again for the rest of the session. You see one line saying so. A request drops at most four parameters.
+If an endpoint rejects a parameter Circle sent (thinking, reasoning effort, stream options, cache breakpoints and a few others), Circle drops that parameter, sends the request again, and does not send it again for the rest of the session. You see one line saying so. A request drops at most four parameters.
+
+## Prompt caching
+
+An endpoint that has cached the start of a request charges less for that part and answers sooner. Circle keeps the start the same from one step to the next: the tools, then the system prompt, then the conversation, which it only adds to. How it asks for the cache depends on the protocol.
+
+**Anthropic protocol.** The endpoint caches only up to a breakpoint (`cache_control`) the request carries. Circle sends two: one at the end of the system prompt, which also covers the tools before it, and one at the end of the conversation. The second moves with every request, so each step reads back what the step before wrote and writes only what was added. Third-party endpoints that speak this protocol differ: some honour the breakpoints, others cache by themselves and ignore them.
+
+**OpenAI protocols** (`openai`, `responses`, `chatgpt`). The endpoint caches by itself. Circle sends the session's id as `prompt_cache_key`, which keeps a conversation's requests on the machine that holds its cache. On the `openai` protocol, a Claude model behind an OpenAI-format endpoint (OpenRouter, a relay) caches only where it is told, so its requests also carry breakpoints in that format: on the system prompt, on the last user message, and one at the top of the request that the endpoint places at the end of the conversation.
+
+`prompt_cache` in [settings](settings.md#keys) sets how long a breakpoint asks the endpoint to keep the cache. `"5m"`, the default, is five minutes from the last request that used it. `"1h"` asks for an hour: Anthropic charges twice the input price to write it instead of 1.25 times, which pays when you often come back to a conversation after more than five minutes. `"off"` sends no breakpoints; the `prompt_cache_key` is still sent.
+
+An endpoint that refuses the breakpoints or the key gets the same request again without them, as with any other rejected parameter.
+
+The cache holds only while the start of the request stays the same. The next request writes it anew after you switch the model or the thinking depth, enter or leave plan mode, after a tool set changes (the browser or knowledge tools on first use, an MCP server connecting), after the system prompt changes (instruction files, memory, variables) and after a compaction. The footer's cache hit rate is the share of input tokens the endpoint read from its cache.
 
 ## When a request fails
 

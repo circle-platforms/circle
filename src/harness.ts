@@ -1118,6 +1118,7 @@ export class Harness {
           this.options.store.noteTurn(this.sessionId);
           const request: ModelRequest = {
             enforceBudget: true,
+            cacheKey: this.sessionId,
             system:
               this.system +
               (this.hookPreface ? `\n\n${this.hookPreface}` : '') +

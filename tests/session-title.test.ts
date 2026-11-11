@@ -825,6 +825,12 @@ const TITLE_EVENTS: [string, unknown][] = [
   ['message_stop', { type: 'message_stop' }],
 ];
 
+/** An Anthropic request's system prompt: a string, or text blocks carrying a cache breakpoint. */
+function systemText(system: unknown): string {
+  return Array.isArray(system)
+    ? system.map((block: { text?: string }) => block.text ?? '').join('')
+    : String(system ?? '');
+}
 function anthropicStream(text: string): string {
   const events: [string, unknown][] = [
     TITLE_EVENTS[0]!,
@@ -861,7 +867,7 @@ test('an Anthropic title request through the terminal replaces the fallback', as
     for await (const chunk of request) text += chunk;
     const body = JSON.parse(text) as { max_tokens?: number; system?: string };
     bodies.push(body);
-    const titleCall = String(body.system ?? '').includes('title generator');
+    const titleCall = systemText(body.system).includes('title generator');
     if (titleCall && rejectTitle) {
       response.writeHead(400, { 'content-type': 'application/json' });
       response.end(
@@ -940,11 +946,11 @@ test('an Anthropic title request through the terminal replaces the fallback', as
     titleWait,
   );
   const title = bodies.find((body) =>
-    String(body.system).includes('title generator'),
+    systemText(body.system).includes('title generator'),
   );
   assert.ok(title, JSON.stringify(bodies.map((body) => body.max_tokens)));
-  assert.match(String(title.system), /title generator/);
-  assert.match(String(title.system), /Do not answer it/);
+  assert.match(systemText(title.system), /title generator/);
+  assert.match(systemText(title.system), /Do not answer it/);
   assert.match(JSON.stringify(title.messages), /<conversation>\\nlist all/);
   assert.match(
     JSON.stringify(title.messages),
@@ -984,7 +990,7 @@ test('an Anthropic title reply that is only thinking keeps the fallback', async 
     for await (const chunk of request) text += chunk;
     const body = JSON.parse(text) as { system?: string };
     bodies.push(body);
-    const titleCall = String(body.system ?? '').includes('title generator');
+    const titleCall = systemText(body.system).includes('title generator');
     const events: [string, unknown][] = titleCall
       ? [
           [
@@ -1114,13 +1120,13 @@ test('an Anthropic title reply that is only thinking keeps the fallback', async 
     titleWait,
   );
   const title = bodies.find((body) =>
-    String(body.system).includes('title generator'),
+    systemText(body.system).includes('title generator'),
   );
   assert.ok(title);
   assert.deepEqual(title.thinking, { type: 'disabled' });
   assert.equal(title.max_tokens, Harness.titleOutputTokens);
   assert.equal(title.output_config, undefined);
-  assert.match(String(title.system), /Do not answer it/);
+  assert.match(systemText(title.system), /Do not answer it/);
   assert.match(JSON.stringify(title.messages), /<conversation>\\nlook at/);
   const stored = runtime.store.get(runtime.session.id)!.title;
   assert.equal(stored, fallbackTitle(prompt));
@@ -1142,7 +1148,7 @@ test('Chinese prompts are titled from the model over a real HTTP server', async 
     for await (const chunk of request) text += chunk;
     const body = JSON.parse(text) as { system?: string; messages?: unknown };
     bodies.push(body);
-    const titleCall = String(body.system ?? '').includes('title generator');
+    const titleCall = systemText(body.system).includes('title generator');
     const conversation = JSON.stringify(body.messages ?? '');
     const answer = !titleCall
       ? '好的。'
@@ -1214,11 +1220,11 @@ test('Chinese prompts are titled from the model over a real HTTP server', async 
   );
   assert.notEqual(second.store.get(secondId)?.title, fallbackTitle(go));
   const titles = bodies.filter((body) =>
-    String(body.system).includes('title generator'),
+    systemText(body.system).includes('title generator'),
   );
   assert.equal(titles.length, 2);
-  assert.match(String(titles[0]!.system), /Chinese title/);
-  assert.match(String(titles[1]!.system), /Do not answer it/);
+  assert.match(systemText(titles[0]!.system), /Chinese title/);
+  assert.match(systemText(titles[1]!.system), /Do not answer it/);
   assert.deepEqual(titles[0]!.thinking, { type: 'disabled' });
   assert.deepEqual(titles[1]!.thinking, { type: 'disabled' });
   assert.equal(titles[0]!.max_tokens, Harness.titleOutputTokens);

@@ -345,6 +345,15 @@ export function rejectedParameters(error: unknown): string[] {
     return [];
   if (![400, 422].includes(statusOf(error) ?? 0)) return [];
   const text = String(record(error).message || error).toLowerCase();
+  // A cache breakpoint makes the system prompt a list of blocks. A gateway that reads only
+  // a string there names `system` and the type it wanted, not the breakpoint.
+  if (
+    /\bsystem\b/.test(text) &&
+    /\b(?:valid string|(?:must|should) be a string|expected (?:a )?string|str type expected|string_type)\b/.test(
+      text,
+    )
+  )
+    return ['cache_control'];
   if (
     ![
       'invalid',
@@ -379,6 +388,9 @@ export function rejectedParameters(error: unknown): string[] {
   );
   if (match) return [match[1]!];
   return [
+    // Before `thinking`: a breakpoint's place may name the block it sits on.
+    'cache_control',
+    'prompt_cache_key',
     'betas',
     'anthropic-beta',
     'reasoning_effort',
