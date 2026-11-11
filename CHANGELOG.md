@@ -4,6 +4,46 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+## 1.16.0 - 2026-11-11
+
+### Added
+- **Prompt caching reuses the prompt prefix across turns.** Anthropic requests place cache breakpoints on the system prompt and near the end of the conversation; OpenAI-format requests use a conversation-specific cache key. The `prompt_cache` setting controls breakpoint lifetime (`5m`, `1h`, or `off`). (#507)
+- **Eight built-in workflow skills.** Circle help, skill authoring, verification, code review, debugging, security review, frontend design, and browser testing join the existing PR workflows, discoverable on demand and overridable by user or project skills. (#504)
+- **Choose a checkout for a conversation.** Pick or create a checkout from the home page, or move an idle session to another worktree of the same repository from its project and branch chip; the conversation and its settings move with it. (#507)
+- **Sign in to a Circle Hub from Extensions with a one-time code.** (#474)
+- **The model says once when its context nears the point where Circle summarizes it.** (#478)
+- **The overview's in-progress card lists the plan's steps**, folded to five around the current one. (#481)
+- **The desktop workspace's git worktrees are readable, searchable, and changeable as the workspace itself.** (#485)
+- **Open a workspace page or PDF a link names in the desktop browser, local and offline.** (#496)
+- **A linked picture shows as a picture**, and a file that is not text says so in words, with its folder a click away. (#495)
+- **The composer shows a ring while a turn works**, pausing while Circle waits for input and clearing when the turn ends. (#507)
+- **An `all terminals` overflow menu lists every terminal tab** with its status, when tabs overflow the panel. (#501)
+
+### Changed
+- **The desktop conversation takes the window's room up to 1280 pixels, and a step's calls stack in one frame.** (#489)
+- **Copy from the text itself, and open files and terminals from the row's head**, with shared components. (#491)
+- **A difference's long lines wrap under their text**, with the sign and line number in a column of their own. (#487)
+- **The plan folder holds only the conversation's own plan**; other documents go to the workspace. (#494)
+- **Internal notices stay after a complete tool-result batch**, so strict gateways no longer reject the next request. (#504)
+- **Compaction and failed turns show as lines of the conversation**, compaction with how far it has got; a request the endpoint refuses as too long is compacted and sent again. (#498)
+- **In accept-edits mode, proven read-only commands run without asking**; changes under `.git` and `.circle` still ask each time. (#507)
+
+### Fixed
+- **A command typed into the terminal no longer stops arriving partway through.** In-flight input coalesces into one batched write in causal order, and clicking a terminal tab claims keyboard focus for it. (#501, fixes #499)
+- **Collapsed terminal items can be expanded again** when many terminals are open. (#501, fixes #500)
+- **A live browser group is stopped even when the process listing leaves it out.** (#462)
+- **The journeys' outside edit is written in place**, so a mapped file cannot refuse it. (#463)
+- **Desktop packaging tools move onto patched minimatch and glob.** (#466, #469)
+- **The packaged launch check waits while Chromium writes its debugging port.** (#468)
+- **The desktop model's command output goes to a folder it can read back.** (#476)
+- **An MCP server's sign-in page opens in the desktop even when sign-in starts before the window loads.** (#472)
+- **The desktop's grep, glob, and ls stay inside read_file's bounds**, and a refused path or edit says what to do. (#483)
+- **Electron downloads are reused from the CI cache and verified against the installed package's checksums**, so a GitHub release-download outage no longer fails packaging. (#507, refs #479)
+- **The workspace journal takes its writer lease with the lease file's own lock on macOS.** (#507, refs #471)
+- **Linux display packages install first**, and the package index refreshes only if that fails. (#457)
+- **Two tests no longer leave folders in the system temp folder.** (#459)
+- **A background job's name is checked with a command that holds no paths.** (#461)
+
 ## 1.15.1 - 2026-11-06
 
 ### Changed
