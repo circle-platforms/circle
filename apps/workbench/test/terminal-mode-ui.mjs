@@ -535,7 +535,29 @@ try {
         .textContent(),
       zh ? '终端 1' : 'terminal 1',
     );
-    await page.getByRole('tab', { name: zh ? '终端 1' : 'terminal 1' }).click();
+    // Switching back from a device console via the overflow menu expands and focuses the shell.
+    const allTerminals = page.getByRole('button', {
+      name: zh ? '所有终端' : 'all terminals',
+      exact: true,
+    });
+    await allTerminals.waitFor();
+    await allTerminals.click();
+    await page
+      .locator('.dropdown.term-tabs-menu [role="menuitem"]')
+      .filter({ hasText: zh ? /^终端 1$/ : /^terminal 1$/ })
+      .click();
+    await page
+      .locator('.native-terminal-surface:not([hidden]) .xterm-helper-textarea')
+      .waitFor();
+    assert.equal(
+      await page
+        .locator(
+          '.native-terminal-surface:not([hidden]) .xterm-helper-textarea',
+        )
+        .evaluate((node) => document.activeElement === node),
+      true,
+      'switching from a device console back to a local shell focuses xterm',
+    );
     await page.evaluate(() =>
       window.terminalModeFixture.circle(1, { state: 'operating' }),
     );
@@ -556,6 +578,30 @@ try {
     await page.screenshot({
       path: `${output}/tab-operating-${theme}-${locale}.png`,
     });
+    // Creating a new local shell while a device console is in front clears deviceChosen
+    // and brings the new shell to the front.
+    await allTerminals.click();
+    await page
+      .locator('.dropdown.term-tabs-menu [role="menuitem"]')
+      .filter({ hasText: /rack-pdu/ })
+      .click();
+    await page
+      .getByRole('button', {
+        name: zh ? '新建终端或连接设备' : 'new terminal or device',
+        exact: true,
+      })
+      .click();
+    await page
+      .getByRole('menuitem', {
+        name: zh ? /新建本地终端/ : /new local terminal/,
+      })
+      .click();
+    const thirdTab = page.getByRole('tab', {
+      name: zh ? '终端 3' : 'terminal 3',
+      exact: true,
+    });
+    await thirdTab.waitFor();
+    assert.equal(await thirdTab.getAttribute('aria-selected'), 'true');
     assert.deepEqual(errors, []);
     await page.close();
   }

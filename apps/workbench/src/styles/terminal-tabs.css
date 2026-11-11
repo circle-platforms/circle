@@ -28,10 +28,10 @@
   display: flex;
   flex: none;
   align-items: center;
-  gap: 4px;
+  gap: 0;
   max-width: 190px;
   height: 28px;
-  padding: 0 10px;
+  padding: 0;
   border-radius: 6px;
   color: var(--secondary);
   font-size: var(--ui-small);
@@ -54,9 +54,12 @@
   gap: 6px;
   min-width: 0;
   height: 100%;
-  padding: 0;
+  padding: 0 10px;
   color: inherit;
   font: inherit;
+}
+.term-tab.closable .term-tab-main {
+  padding-right: 4px;
 }
 .term-tab-label {
   min-width: 0;
@@ -100,6 +103,44 @@
 }
 .term-tabbar > .icon-button {
   flex: none;
+}
+.term-tabs-more {
+  width: 24px;
+  height: 28px;
+}
+.dropdown.term-tabs-menu {
+  min-width: 180px;
+  max-width: min(280px, calc(100vw - 24px));
+  max-height: min(320px, calc(100vh - 80px));
+  overflow-y: auto;
+}
+.dropdown.term-tabs-menu [role='menuitem'].term-tabs-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.dropdown.term-tabs-menu [role='menuitem'].term-tabs-menu-item.on {
+  color: var(--fg);
+  font-weight: 500;
+}
+.term-tabs-menu-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 8px;
+}
+.term-tabs-menu-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.term-tabs-menu-check {
+  flex: none;
+  color: var(--muted);
 }
 .term-tabbar-end {
   display: flex;

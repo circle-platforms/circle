@@ -153,10 +153,27 @@ export async function runNativeTerminalShortcutsJourney({
   const panel = () => page.locator('.native-terminal:visible');
   const input = () =>
     page.locator(`#terminal-${terminal.id} .xterm-helper-textarea:visible`);
-  const select = async () => {
+  const focusWindow = () =>
+    app.evaluate(({ app, BrowserWindow }) => {
+      app.focus({ steal: true });
+      const win = BrowserWindow.getAllWindows().find(
+        (window) => !window.isDestroyed(),
+      );
+      win?.focus();
+      win?.webContents.focus();
+    });
+  const select = async (requireFocus = true) => {
+    if (requireFocus) await focusWindow();
     await openNativeTerminalInspector(page);
     await panel().locator(`[aria-controls="terminal-${terminal.id}"]`).click();
-    await input().focus();
+    if (!requireFocus) return;
+    await until(
+      async () =>
+        input().evaluate(
+          (node) => document.hasFocus() && document.activeElement === node,
+        ),
+      'clicking the terminal tab hands keyboard focus to xterm',
+    );
   };
   try {
     await select();
@@ -319,13 +336,92 @@ export async function runNativeTerminalShortcutsJourney({
     failure = error;
     receipt.status = 'failed';
     receipt.error = String(error);
+    receipt.failureDiagnostics = await (async () => {
+      const dom = await page
+        .evaluate((id) => {
+          const active = document.activeElement;
+          const surface = document.getElementById(`terminal-${id}`);
+          const textarea = surface?.querySelector('.xterm-helper-textarea');
+          const banner = surface?.querySelector('.native-terminal-error');
+          return {
+            documentHasFocus: document.hasFocus(),
+            activeElement: active
+              ? {
+                  tag: active.tagName,
+                  id: active.id || undefined,
+                  className:
+                    typeof active.className === 'string'
+                      ? active.className
+                      : undefined,
+                  role: active.getAttribute('role') ?? undefined,
+                  ariaLabel: active.getAttribute('aria-label') ?? undefined,
+                  inTargetTerminal: Boolean(
+                    surface && surface.contains(active),
+                  ),
+                }
+              : null,
+            textarea:
+              textarea instanceof HTMLTextAreaElement
+                ? {
+                    focused: active === textarea,
+                    disabled: textarea.disabled,
+                    readOnly: textarea.readOnly,
+                  }
+                : null,
+            surfaceHidden: surface ? surface.hidden : null,
+            surfaceError: banner?.textContent?.trim() || undefined,
+          };
+        }, terminal.id)
+        .catch((reason) => ({ error: String(reason) }));
+      const snapshot = await query('terminal', 'list')
+        .then((items) => items.find((item) => item.id === terminal.id))
+        .catch((reason) => ({ error: String(reason) }));
+      const writes = await query('operations', 'list', { limit: 250 })
+        .then((items) => {
+          const list = (Array.isArray(items) ? items : []).filter(
+            (op) => op.service === 'terminal' && op.method === 'write',
+          );
+          const durations = list
+            .filter((op) => op.state === 'completed')
+            .map((op) =>
+              Math.max(0, (op.updatedAt ?? 0) - (op.createdAt ?? 0)),
+            );
+          return {
+            total: list.length,
+            completed: list.filter((op) => op.state === 'completed').length,
+            started: list.filter((op) => op.state === 'started').length,
+            otherStates: list
+              .filter(
+                (op) => op.state !== 'completed' && op.state !== 'started',
+              )
+              .map((op) => op.state),
+            maxDurationMs: durations.length ? Math.max(...durations) : 0,
+          };
+        })
+        .catch((reason) => ({ error: String(reason) }));
+      const replay = await query('terminal', 'replay', {
+        id: terminal.id,
+        afterSequence: 0,
+        limit: 128,
+      })
+        .then((log) => ({
+          eventCount: log?.events?.length ?? 0,
+          lastSequence: log?.events?.at(-1)?.sequence ?? 0,
+          outputChars: (log?.events ?? []).reduce(
+            (sum, event) => sum + (event.data?.length ?? 0),
+            0,
+          ),
+        }))
+        .catch((reason) => ({ error: String(reason) }));
+      return { dom, snapshot, writes, replay };
+    })();
     await page
       .screenshot({ path: join(output, 'terminal-shortcuts-failure.png') })
       .catch(() => {});
   } finally {
     // Stop is only teardown, after the independent Control+C oracle above.
     try {
-      await select();
+      await select(false);
       // The tab's × stops the shell and takes its tab out of the row.
       await panel()
         .locator('.term-tab')

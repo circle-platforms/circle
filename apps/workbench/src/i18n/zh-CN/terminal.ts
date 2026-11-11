@@ -41,6 +41,7 @@ export const terminal: Record<string, string> = {
   'more terminal output is available; navigate the terminal to read it':
     '还有更多终端输出，请移动到对应行阅读',
   'terminal tabs': '终端标签页',
+  'all terminals': '所有终端',
   'new terminal': '新建终端',
   'interrupt command': '中断命令',
   'stop terminal': '停止终端',
