@@ -171,6 +171,7 @@ for (const theme of ['dark', 'light'] as const) {
           ...new Set([
             ...mappings.map(([name]) => '--' + name),
             '--logo-gradient',
+            '--composer-stops',
             '--ui-size',
             '--code-size',
           ]),
@@ -190,6 +191,9 @@ for (const theme of ['dark', 'light'] as const) {
         values.get('--logo-gradient'),
         'conic-gradient(' + stops.join(',') + ')',
       );
+      // The ring round the composer while a turn works turns the same colours, from an
+      // angle of its own, so it takes the stops alone.
+      assert.equal(values.get('--composer-stops'), stops.join(','));
     },
   );
 

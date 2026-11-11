@@ -203,6 +203,7 @@ export interface Session {
   queue: { id: string; text: string; kind: 'steering' | 'follow-up' }[];
   queueVersion?: number;
   state: 'idle' | 'waiting' | 'paused';
+  controlWaiting?: boolean;
   readOnly: boolean;
   auto: boolean;
   mode?: SessionMode;

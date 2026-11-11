@@ -69,6 +69,7 @@ export function applyTheme(choice: Theme, size: TextSize = 'default') {
     ([at], index) => `${p.desktop[brand[index]!]} ${at * 100}%`,
   ).join(',');
   root.style.setProperty('--logo-gradient', `conic-gradient(${stops})`);
+  root.style.setProperty('--composer-stops', stops);
   const [ui, code] = TEXT_SIZES[size] ?? TEXT_SIZES.default;
   root.style.setProperty('--ui-size', ui + 'px');
   root.style.setProperty('--code-size', code + 'px');

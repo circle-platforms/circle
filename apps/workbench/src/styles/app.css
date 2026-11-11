@@ -3459,6 +3459,49 @@ pre {
   opacity: 1;
   background: var(--attention);
 }
+@property --composer-phase {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+/* While a turn works, a rainbow ring runs just inside the frame, so the mode's colour
+   stays around it. It stands still while the turn waits on the person and goes when the
+   turn ends. */
+.composer::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: 8px;
+  padding: 1.5px;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+  background: conic-gradient(from var(--composer-phase), var(--composer-stops));
+  -webkit-mask:
+    linear-gradient(var(--fg) 0 0) content-box,
+    linear-gradient(var(--fg) 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: composer-flow 4s linear infinite;
+  animation-play-state: paused;
+  opacity: 0;
+}
+.composer[data-activity='working']::after,
+.composer[data-activity='waiting']::after {
+  opacity: 1;
+}
+.composer[data-activity='working']::after {
+  animation-play-state: running;
+}
+@keyframes composer-flow {
+  to {
+    --composer-phase: 360deg;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer::after {
+    animation: none;
+  }
+}
 /* The turn's clock on its tools' row. */
 .turn-clock {
   font-variant-numeric: tabular-nums;
@@ -4328,6 +4371,10 @@ pre {
 }
 .composer::before {
   border-radius: 17px;
+}
+/* One pixel inside the frame: the ring's corners follow the frame's. */
+.composer::after {
+  border-radius: 15px;
 }
 /* One line, with the buttons beside it; it grows as lines are typed. */
 .composer textarea {

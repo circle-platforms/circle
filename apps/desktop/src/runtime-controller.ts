@@ -3359,6 +3359,9 @@ export class RuntimeController {
           })),
         ],
         state: selected && owner.busy ? 'waiting' : 'idle',
+        controlWaiting: this.terminalTabs
+          .rows(row.id)
+          .some((terminal) => terminal.state === 'held'),
         readOnly: selected ? owner.harness.planMode : false,
         auto: selected ? owner.policy.yoloEnabled(row.id) : false,
         mode: selected ? owner.mode : 'manual',
