@@ -17,6 +17,7 @@ import {
   commandAllowed,
   SESSION_MODES,
 } from '../src/approvals.js';
+import { canonicalPath } from '../src/paths.js';
 import { CheckpointStore } from '../src/checkpoint_store.js';
 import { Harness } from '../src/harness.js';
 import { AgentRuntime } from '../src/runtime.js';
@@ -191,7 +192,7 @@ test("accept-edits asks before a change to git's or Circle's own files, and no k
   mkdirSync(join(other, 'src'), { recursive: true });
   mkdirSync(join(other, '.circle'));
   writeFileSync(join(other, '.git'), 'gitdir: elsewhere\n');
-  rules.worktree = (path) => path.startsWith(realpathSync(other));
+  rules.worktree = (path) => path.startsWith(canonicalPath(other));
   assert.equal(
     rules.needsApproval('write_file', write(join(other, 'src', 'a.ts')), 's'),
     false,
