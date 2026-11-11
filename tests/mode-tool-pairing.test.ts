@@ -14,6 +14,8 @@ import {
 import { pairingGateway, pairingRows } from './tool-pairing-fixture.js';
 import { orderModeToolResults } from '../src/tool_history.js';
 import { TITLE_MAX_TOKENS } from '../src/session_title.js';
+import { CheckpointStore } from '../src/checkpoint_store.js';
+import { cleanup, scratch } from './helpers.js';
 import type { Message } from '../src/types.js';
 
 for (const protocol of ['anthropic', 'openai'] as const)
@@ -217,5 +219,151 @@ test('request projection moves only mode boundaries and never fabricates or hide
   assert.deepEqual(
     orderModeToolResults([imported, boundary('on'), result('a')]),
     [imported, result('a'), boundary('on')],
+  );
+});
+
+for (const protocol of ['anthropic', 'openai'] as const)
+  test(`${protocol}: hook and job notices keep tool results adjacent on the wire without rewriting history`, async (t) => {
+    const home = scratch(t);
+    const store = new CheckpointStore(home);
+    cleanup(t, () => store.close());
+    const session = store.create(home, 'gateway');
+    const raw: Message[] = [
+      { id: 'user', role: 'user', content: 'Read the files' },
+      {
+        id: 'calls',
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'a', name: 'read_file', args: { file_path: 'a.txt' } },
+          { id: 'b', name: 'read_file', args: { file_path: 'b.txt' } },
+        ],
+      },
+      { id: 'a-result', role: 'tool', tool_call_id: 'a', content: 'alpha' },
+      {
+        id: 'hook',
+        role: 'user',
+        internal: 'hook_notice',
+        content: 'Hook allowed the read',
+      },
+      {
+        id: 'job',
+        role: 'user',
+        internal: 'job_notice',
+        content: 'A job finished',
+      },
+      { id: 'b-result', role: 'tool', tool_call_id: 'b', content: 'beta' },
+    ];
+    store.append(session.id, raw);
+    const before = await pairingRows(home, session.id);
+    const gateway = await pairingGateway(protocol);
+    cleanup(t, gateway.close);
+    const settings = defaultSettings();
+    settings.auth = {
+      ...settings.auth,
+      protocol,
+      base_url: gateway.base,
+      model: 'gateway',
+    };
+    saveCredentials({ api_key: 'fixture' }, home);
+    const model = new GatewayModel(settings, home);
+    await model.complete({
+      system: 'system',
+      messages: store.messages(session.id),
+      tools: [],
+      signal: new AbortController().signal,
+      token: () => {},
+    });
+    assert.equal(gateway.requests.length, 1);
+    assert.equal(gateway.requests[0]!.error, undefined);
+    const sent = gateway.requests[0]!.body.messages;
+    if (protocol === 'openai') {
+      const index = sent.findIndex((message) => message.tool_calls?.length);
+      assert.deepEqual(
+        sent.slice(index + 1, index + 3).map((message) => message.tool_call_id),
+        ['a', 'b'],
+      );
+    } else {
+      const index = sent.findIndex(
+        (message) =>
+          Array.isArray(message.content) &&
+          message.content.some((block: any) => block.type === 'tool_use'),
+      );
+      assert.deepEqual(
+        sent[index + 1]!.content.slice(0, 2).map(
+          (block: any) => block.tool_use_id,
+        ),
+        ['a', 'b'],
+      );
+    }
+    assert.ok(JSON.stringify(sent).includes('Hook allowed the read'));
+    assert.ok(JSON.stringify(sent).includes('A job finished'));
+    assert.deepEqual(await pairingRows(home, session.id), before);
+  });
+
+test('request projection moves hook and job notices recorded inside a parallel batch after all of its results', () => {
+  // The shape of a real session: a before_tool hook allows each call of a parallel batch
+  // as it runs, so its notice lands between two results. A gateway that checks Chat
+  // Completions order refused the whole history with "an assistant message with
+  // 'tool_calls' must be followed by tool messages responding to each 'tool_call_id'".
+  const call: Message = {
+    id: 'ai',
+    role: 'assistant',
+    content: '',
+    tool_calls: [
+      { id: 'a', name: 'skill', args: {} },
+      { id: 'b', name: 'hub_list_task_packs', args: {} },
+      { id: 'c', name: 'read_file', args: {} },
+    ],
+  };
+  const result = (id: string): Message => ({
+    id: 'result-' + id,
+    role: 'tool',
+    tool_call_id: id,
+    content: id,
+  });
+  const note = (id: string, internal: string): Message => ({
+    id,
+    role: 'user',
+    internal,
+    content: `<system-reminder data-source="circle-hooks">\n${id}\n</system-reminder>`,
+  });
+  const raw = [
+    call,
+    result('a'),
+    note('hook allowed skill', 'hook_notice'),
+    result('b'),
+    note('job j1 ended', 'job_notice'),
+    note('hook allowed read_file', 'hook_notice'),
+    result('c'),
+  ];
+  const before = structuredClone(raw);
+  const projected = orderModeToolResults(raw);
+  assert.deepEqual(
+    projected.map((m) => m.id),
+    [
+      'ai',
+      'result-a',
+      'result-b',
+      'result-c',
+      'hook allowed skill',
+      'job j1 ended',
+      'hook allowed read_file',
+    ],
+  );
+  assert.deepEqual(orderModeToolResults(projected), projected);
+  assert.deepEqual(raw, before, 'the stored history is not changed');
+  const ordinary: Message = { id: 'person', role: 'user', content: 'steer' };
+  const unanswered = [call, result('a'), note('n', 'hook_notice'), result('b')];
+  assert.deepEqual(
+    orderModeToolResults(unanswered),
+    unanswered,
+    'an incomplete batch stays as stored',
+  );
+  const steered = [call, result('a'), ordinary, result('b'), result('c')];
+  assert.deepEqual(
+    orderModeToolResults(steered),
+    steered,
+    'only Circle notes move; a person’s message stays where it was',
   );
 });

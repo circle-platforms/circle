@@ -878,9 +878,14 @@ export class AgentRuntime {
         this.todos = todos;
         this.bus.emit('todo_list', { payload: { todos } });
       },
-      skill: async (name, signal) => {
+      skill: async (name, signal, reference) => {
         await this.activateSkillHooks(name, signal);
-        return loadSkillBody(name, this.skills);
+        return loadSkillBody(
+          name,
+          this.skills,
+          reference,
+          this.sandbox.credentialFiles,
+        );
       },
       question: async (args, context) =>
         askQuestions(this.options.home, this.sandbox, args, context.signal, {

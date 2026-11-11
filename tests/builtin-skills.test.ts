@@ -33,8 +33,6 @@ const repo = fileURLToPath(new URL('..', import.meta.url));
 const source = join(repo, 'src', 'builtin_skills', 'create-pr', 'SKILL.md');
 const text = readFileSync(source, 'utf8');
 const { meta, body } = parseFrontmatter(text);
-// How the system prompt lists it (system_prompt.ts skillLine).
-const line = `- create-pr: ${meta.description}`;
 // The other skill that ships with Circle.
 const prReviewSource = join(
   repo,
@@ -46,9 +44,33 @@ const prReviewSource = join(
 const prReviewText = readFileSync(prReviewSource, 'utf8');
 const prReview = parseFrontmatter(prReviewText);
 // Built-in skills reach the prompt sorted by name, one line each.
-const skillLines = [line, `- pr-review: ${prReview.meta.description}`].join(
-  '\n',
-);
+const names = [
+  'browser-test',
+  'circle-help',
+  'code-review',
+  'create-pr',
+  'debug',
+  'frontend-design',
+  'pr-review',
+  'security-review',
+  'skill-creator',
+  'verify',
+];
+function expectedSkillLines() {
+  return names
+    .map((name) => {
+      const { meta } = parseFrontmatter(
+        readFileSync(
+          join(repo, 'src', 'builtin_skills', name, 'SKILL.md'),
+          'utf8',
+        ),
+      );
+      assert.equal(meta.name, name);
+      assert.ok(meta.description && meta.description.length <= 160, name);
+      return `- ${name}: ${meta.description}`;
+    })
+    .join('\n');
+}
 // A data folder, a workspace and a user home with no skill folder in any of them.
 function folders(root: string) {
   return {
@@ -57,6 +79,149 @@ function folders(root: string) {
     userHome: join(root, 'user'),
   };
 }
+
+test('skill references stay inside the selected skill, including through symlinks', (t) => {
+  const { home, workspace, userHome } = folders(scratch(t));
+  const folder = join(workspace, '.circle', 'skills', 'guide');
+  mkdirSync(join(folder, 'references'), { recursive: true });
+  writeFileSync(
+    join(folder, 'SKILL.md'),
+    '---\nname: guide\ndescription: A guide\n---\nRead the reference.',
+  );
+  writeFileSync(join(folder, 'references', 'usage.md'), 'The reference body.');
+  writeFileSync(
+    join(folder, 'references', 'token.json'),
+    'synthetic credential',
+  );
+  const outsideFolder = scratch(t);
+  const outside = join(outsideFolder, 'private.md');
+  writeFileSync(outside, 'outside the skill');
+  symlinkSync(outsideFolder, join(folder, 'references', 'outside'), 'junction');
+  const catalog = discoverSkills(workspace, home, userHome);
+  assert.ok(
+    loadSkillBody('guide', catalog, 'usage.md').includes('The reference body.'),
+  );
+  for (const reference of ['../SKILL.md', outside, 'outside/private.md']) {
+    assert.throws(
+      () => loadSkillBody('guide', catalog, reference),
+      /inside the skill/,
+    );
+  }
+  assert.throws(
+    () => loadSkillBody('guide', catalog, 'token.json'),
+    /credential/,
+  );
+  assert.throws(
+    () => loadSkillBody('guide', catalog, 'usage.md', ['usage.md']),
+    /credential/,
+  );
+});
+
+test('a reference alias cannot bypass the credential rule for its requested name', (t) => {
+  const root = scratch(t);
+  const { home, workspace, userHome } = folders(root);
+  const folder = join(workspace, '.circle', 'skills', 'guide');
+  mkdirSync(join(folder, 'references'), { recursive: true });
+  writeFileSync(
+    join(folder, 'SKILL.md'),
+    '---\nname: guide\ndescription: guide\n---\nRead the reference.',
+  );
+  writeFileSync(
+    join(folder, 'references', 'usage.md'),
+    'synthetic private value',
+  );
+  symlinkSync('usage.md', join(folder, 'references', 'token.json'), 'file');
+  const catalog = discoverSkills(workspace, home, userHome);
+  assert.throws(
+    () => loadSkillBody('guide', catalog, 'token.json'),
+    /credential/,
+  );
+});
+
+test('a skill-creator command writes a project skill that the next turn can discover and load', async (t) => {
+  const { home, workspace, userHome } = folders(scratch(t));
+  for (const folder of [home, workspace, userHome]) mkdirSync(folder);
+  const content =
+    '---\nname: project-check\ndescription: Check this project\n---\nRead the project test instructions.';
+  const code = `const fs = require('node:fs'); fs.mkdirSync('.circle/skills/project-check', {recursive:true}); fs.writeFileSync('.circle/skills/project-check/SKILL.md', Buffer.from('${Buffer.from(content).toString('base64')}', 'base64'), {flag:'wx'});`;
+  const command = `node -e "${code}"`;
+  const model = new ScriptedModel([
+    {
+      message: {
+        id: 'creator',
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'creator-skill',
+            name: 'skill',
+            args: { name: 'skill-creator' },
+          },
+        ],
+      },
+    },
+    {
+      message: {
+        id: 'create',
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'create-file', name: 'execute', args: { command } }],
+      },
+    },
+    { message: { id: 'created', role: 'assistant', content: 'created' } },
+    {
+      message: {
+        id: 'load-created',
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'created-skill',
+            name: 'skill',
+            args: { name: 'project-check' },
+          },
+        ],
+      },
+    },
+    {
+      message: {
+        id: 'loaded-created',
+        role: 'assistant',
+        content: 'loaded project skill',
+      },
+    },
+  ]);
+  const settings = trustFolder(defaultSettings(), workspace);
+  const runtime = new AgentRuntime({
+    home,
+    workspace,
+    userHome,
+    settings,
+    model,
+  });
+  cleanup(t, () => runtime.close());
+  runtime.setMode('auto');
+  await runtime.harness.run('Create a project skill');
+  assert.equal(
+    readFileSync(
+      join(workspace, '.circle/skills/project-check/SKILL.md'),
+      'utf8',
+    ),
+    content,
+  );
+  runtime.refreshPrompt();
+  await runtime.harness.run('Use project-check');
+  assert.ok(
+    model.requests[3]!.system.includes('- project-check: Check this project'),
+  );
+  assert.ok(
+    model.requests[4]!.messages.some(
+      (message) =>
+        message.tool_call_id === 'created-skill' &&
+        String(message.content).includes(content),
+    ),
+  );
+});
 
 test('the skills that ship with Circle are found when there is no skill folder at all', (t) => {
   const { home, workspace, userHome } = folders(scratch(t));
@@ -81,7 +246,7 @@ test('the skills that ship with Circle are found when there is no skill folder a
   );
   assert.deepEqual(
     skills.map((found) => found.name),
-    ['create-pr', 'pr-review'],
+    names,
   );
   assert.match(
     loadSkillBody('create-pr', skills),
@@ -166,8 +331,8 @@ test('the next model request lists the skills that ship with Circle, and the ski
   const system = model.requests[0]!.system;
   assert.equal(
     system.split('Available skills:\n')[1]?.split('\n\n')[0],
-    skillLines,
-    'the skill list is the two lines of the skills that ship with Circle',
+    expectedSkillLines(),
+    'the skill list contains every bundled skill',
   );
   assert.ok(
     model.requests[0]!.tools.some((tool) => tool.name === 'skill'),
@@ -280,7 +445,7 @@ test('pr-review says what it does and when, and suggests only commands every she
       command,
     );
 });
-test('a dist build carries both built-in skills, and the compiled program finds them beside itself and lists them to the model', async (t) => {
+test('a dist build carries the built-in skills, and the compiled program finds them beside itself and lists them to the model', async (t) => {
   const root = scratch(t);
   const dist = join(root, 'dist');
   // An installed program finds its packages in the folder above dist, as app/ in a release.
@@ -325,6 +490,21 @@ test('a dist build carries both built-in skills, and the compiled program finds 
   )) as typeof import('../src/skills.js');
   const { home, workspace, userHome } = folders(root);
   for (const folder of [home, workspace, userHome]) mkdirSync(folder);
+  assert.deepEqual(
+    compiled
+      .discoverSkills(workspace, home, userHome)
+      .map((skill) => skill.name),
+    names,
+  );
+  for (const name of names) {
+    assert.equal(
+      readFileSync(join(dist, 'builtin_skills', name, 'SKILL.md'), 'utf8'),
+      readFileSync(
+        join(repo, 'src', 'builtin_skills', name, 'SKILL.md'),
+        'utf8',
+      ),
+    );
+  }
   assert.equal(
     compiled
       .discoverSkills(workspace, home, userHome)
@@ -420,6 +600,62 @@ test('a dist build carries both built-in skills, and the compiled program finds 
   assert.equal(system.role, 'system');
   assert.equal(
     String(system.content).split('Available skills:\n')[1]?.split('\n\n')[0],
-    skillLines,
+    expectedSkillLines(),
   );
 });
+
+for (const name of names.filter(
+  (name) => !['create-pr', 'pr-review'].includes(name),
+)) {
+  test(`${name} loads through the runtime and remains in stored history`, async (t) => {
+    const { home, workspace, userHome } = folders(scratch(t));
+    for (const folder of [home, workspace, userHome]) mkdirSync(folder);
+    const settings = trustFolder(defaultSettings(), workspace);
+    const model = new ScriptedModel([
+      {
+        message: {
+          id: 'load',
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: 'skill-call', name: 'skill', args: { name } }],
+        },
+      },
+      { message: { id: 'answer', role: 'assistant', content: 'loaded' } },
+    ]);
+    const runtime = new AgentRuntime({
+      home,
+      workspace,
+      userHome,
+      settings,
+      model,
+    });
+    cleanup(t, () => runtime.close());
+    await runtime.harness.run(`Use the ${name} skill`);
+    const source = readFileSync(
+      join(repo, 'src', 'builtin_skills', name, 'SKILL.md'),
+      'utf8',
+    ).trim();
+    assert.equal(model.requests[0]!.system.includes(source), false);
+    const result = runtime.harness.messages.find(
+      (message) =>
+        message.role === 'tool' && message.tool_call_id === 'skill-call',
+    );
+    assert.ok(String(result?.content).includes(source));
+    assert.ok(
+      model.requests[1]!.messages.some(
+        (message) => message.content === result?.content,
+      ),
+    );
+    const folder = join(workspace, '.circle', 'skills', name);
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(
+      join(folder, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: Project workflow\n---\nUse project instructions.\n`,
+    );
+    const skills = discoverSkills(workspace, home, userHome);
+    assert.equal(skills.filter((skill) => skill.name === name).length, 1);
+    assert.ok(
+      loadSkillBody(name, skills).includes('Use project instructions.'),
+    );
+  });
+}

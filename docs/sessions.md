@@ -105,6 +105,8 @@ A point where a turn stopped on an approval card cannot be gone back to. Choose 
 
 A fork or clone takes the branch with what Circle knows about it: an earlier compaction, the plan and the subagents' records. It starts with a copy of plan mode's plan, which it then changes on its own. The original session stays in `/resume`. `esc` twice opens `/fork` instead of `/tree`, or nothing, when you set `double_escape` in [settings](settings.md#keys).
 
+Before sending a complete tool-call batch to the model, Circle places its mode changes, hook notices and background-job notices after all matching tool results. The stored history keeps their original order. Missing or duplicate results and ordinary user input are left as stored; Circle does not invent results to repair an incomplete batch.
+
 ## Compaction
 
 Long conversations are summarized when the estimated next request reaches 85% of the model's context window, or sooner when its input, output reservation and safety margin would not fit (see [Models](models.md#cost-and-context-in-the-footer)). Circle normally keeps the most recent tenth of the window, retains the latest user input verbatim, and cuts only between balanced tool rounds. A large completed round can be summarized in full when necessary. The originals are saved under `projects/<folder>-<id>/conversation_history/` and remain readable by the model at `/conversation_history/`. Stored messages are never rewritten.
