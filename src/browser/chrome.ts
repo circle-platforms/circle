@@ -157,6 +157,12 @@ export interface ChromeOptions {
   /** The process-list executable; an absolute fixture path avoids PATH lookup. */
   processInspector?: string;
   /**
+   * The process listing, read in-process instead of from the inspector
+   * executable: for tests, which inject an empty or fixed listing without
+   * starting a synthetic executable inside the inspection deadline (#505).
+   */
+  processLister?: () => Promise<string>;
+  /**
    * Host names mapped to addresses, as Chrome's --host-resolver-rules: for tests, which reach
    * a local site by a public name.
    */
@@ -659,18 +665,23 @@ export class ChromeBrowser implements BrowserPort {
     // Signal 0 checks permission too; a refused probe does not tell us whether
     // live owned descendants remain. Read actual process state instead: a zombie
     // cannot run or write. Failure to read state or stop a live member still rejects.
-    const output = await new Promise<string>((resolve, reject) =>
-      execFile(
-        this.options.processInspector ?? 'ps',
-        ['-A', '-o', 'pgid=,stat='],
-        {
-          timeout: Math.max(1, this.options.processInspectionTimeout ?? 3000),
-          // A stalled inspector must not outlive this check by ignoring SIGTERM.
-          killSignal: 'SIGKILL',
-        },
-        (error, stdout) => (error ? reject(error) : resolve(stdout)),
-      ),
-    );
+    const output = this.options.processLister
+      ? await this.options.processLister()
+      : await new Promise<string>((resolve, reject) =>
+          execFile(
+            this.options.processInspector ?? 'ps',
+            ['-A', '-o', 'pgid=,stat='],
+            {
+              timeout: Math.max(
+                1,
+                this.options.processInspectionTimeout ?? 3000,
+              ),
+              // A stalled inspector must not outlive this check by ignoring SIGTERM.
+              killSignal: 'SIGKILL',
+            },
+            (error, stdout) => (error ? reject(error) : resolve(stdout)),
+          ),
+        );
     // A member runs unless it is a zombie (Z) or, in BSD ps, trying to exit (E): macOS
     // lists a killed member as exiting, `?E`, while it refuses to signal it (#416).
     return output.split('\n').some((line) => {
