@@ -278,6 +278,7 @@ export function HooksSection() {
                     : `${t('skill')}${hook.skill ? ` ${hook.skill}` : ''}`}
                 {' · '}
                 {hook.event}
+                {hook.screenshot ? ` · ${t('with screenshot')}` : ''}
                 {hook.tools !== '*' ? ` · ${hook.tools}` : ''}
                 {hook.active === false ? ` · ${t('waits for the skill')}` : ''}
               </small>

@@ -120,6 +120,7 @@ import {
 } from '../../../src/session_export.js';
 import {
   browserTools,
+  hookScreenshot,
   runtimeBrowserOptions,
   type BrowserPort,
 } from '../../../src/browser/tools.js';
@@ -2399,6 +2400,10 @@ export class RuntimeController {
     const create = (session?: string) =>
       new AgentRuntime({
         workspace,
+        // An after_tool hook that asks for a screenshot gets the page this conversation's browser shows
+        ...(this.options.browser
+          ? { hookScreenshot: hookScreenshot(this.options.browser) }
+          : {}),
         // The recovered-input panel offers a closed runtime's queue back.
         preserveQueuedInputs: true,
         fileMutations: fileRewind.files,
@@ -3690,6 +3695,7 @@ export class RuntimeController {
           tools: hook.tools === '*' ? '*' : hook.tools.join(', '),
           paths: hook.paths.join(', '),
           ...(hook.skill ? { skill: hook.skill } : {}),
+          ...(hook.screenshot ? { screenshot: true } : {}),
           active,
         })),
         projectHooksIgnored: runtime.hookCatalog.projectIgnored,

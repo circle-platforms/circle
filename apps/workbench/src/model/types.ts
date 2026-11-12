@@ -373,6 +373,8 @@ export interface Interaction {
     name: string;
     event: string;
     command: string;
+    /** The hook also gets a screenshot of the page the browser shows. */
+    screenshot?: boolean;
     mark: 'new' | 'changed' | 'unchanged' | 'removed';
   }[];
   choices?: string[];
@@ -501,6 +503,8 @@ export interface HookSetting {
   paths: string;
   /** The skill that ships this hook. It runs only after that skill is loaded. */
   skill?: string;
+  /** after_tool: the hook also gets a screenshot of the browser's page. */
+  screenshot?: boolean;
   /** False for a skill hook this session has not loaded. Omitted means running. */
   active?: boolean;
 }

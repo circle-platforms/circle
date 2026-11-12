@@ -3231,6 +3231,77 @@ test('a server whose tools could not be listed again shows as connected, with th
   assert.equal(row().status, 'error');
 });
 
+test("an after_tool hook that asks for a screenshot gets the conversation browser's page, and the model does not (#502)", async (t) => {
+  const { PNG } = await import('pngjs');
+  const { createHash } = await import('node:crypto');
+  const page = PNG.sync.write(new PNG({ width: 4, height: 3 }));
+  const asked: string[] = [];
+  const port: BrowserPort = {
+    async request(_sessionId, action) {
+      asked.push(action);
+      return action === 'capture'
+        ? { text: 'captured', image: page.toString('base64') }
+        : { text: 'url: https://example.test/\n[e1] button sign in' };
+    },
+  };
+  const f = await setup(
+    t,
+    [
+      {
+        message: assistant('', [
+          { id: 'look', name: 'browser_snapshot', args: {} },
+        ]),
+      },
+      { message: assistant('page read') },
+    ],
+    true,
+    port,
+  );
+  const script = join(f.root, 'keep.mjs');
+  await writeFile(
+    script,
+    `import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+const file = input.files?.[0];
+writeFileSync(${JSON.stringify(join(f.root, 'keep.json'))}, JSON.stringify({
+  files: input.files,
+  read: file && existsSync(file.path) ? createHash('sha256').update(readFileSync(file.path)).digest('hex') : null,
+}));
+`,
+  );
+  await writeFile(
+    join(f.home, 'hooks.json'),
+    JSON.stringify({
+      hooks: {
+        after_tool: [
+          {
+            name: 'keep the page',
+            command: `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`,
+            tools: 'browser_snapshot',
+            screenshot: true,
+          },
+        ],
+      },
+    }),
+  );
+  // Hooks are read when the runtime starts; this one was written after
+  assert.equal((await f.call('reload')).ok, true);
+  await f.call('prompt', { text: 'look at the page' });
+  await wait(
+    () => f.model.requests.length === 2 && activeSession(f).state === 'idle',
+    'the turn after the hook',
+  );
+  const kept = JSON.parse(await readFile(join(f.root, 'keep.json'), 'utf8'));
+  assert.equal(kept.files?.[0]?.kind, 'screenshot');
+  assert.equal(kept.read, createHash('sha256').update(page).digest('hex'));
+  assert.deepEqual(asked, ['snapshot', 'capture']);
+  // The model's next request has the page's text, and nothing of the picture
+  const next = JSON.stringify(f.model.requests[1]!.messages);
+  assert.match(next, /\[e1\] button sign in/);
+  assert.doesNotMatch(next, /image\/png|iVBORw0KGgo/);
+});
+
 test('attached pictures go as mentioned ones do: a large PNG is scaled down and both sizes named, and a text-only model gets where the picture was saved', async (t) => {
   const { PNG } = await import('pngjs');
   const picture = (width: number, height: number) => {

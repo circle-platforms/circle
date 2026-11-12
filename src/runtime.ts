@@ -222,6 +222,14 @@ export interface RuntimeOptions {
    * The terminal keeps browser tool schemas here until a page is requested.
    */
   deferredTools?: Tool[];
+  /**
+   * A PNG of the page a session's browser shows, for an after_tool hook that asks for one (`screenshot`); the front
+   * end that owns the browser gives it. Never starts a browser.
+   */
+  hookScreenshot?: (
+    sessionId: string,
+    signal: AbortSignal,
+  ) => Promise<Buffer | undefined>;
   /** Where the extensions that ship with Circle are; false for none (tests). */
   bundledExtensions?: string | false;
   /** An extension's status line changed. */
@@ -1150,6 +1158,7 @@ export class AgentRuntime {
                 )
             : undefined,
           hooks: this.ensureHooks(),
+          hookScreenshot: this.options.hookScreenshot,
           sessionHooks: false,
           headless: this.options.headless,
           approvalSessionId: parentSessionId,
@@ -1297,6 +1306,7 @@ export class AgentRuntime {
       headless: this.options.headless,
       approve: this.options.approve,
       hooks: this.ensureHooks(),
+      hookScreenshot: this.options.hookScreenshot,
       reviewHooks: (signal) => this.reviewHooks(signal),
       priceUsage: (model, usage) =>
         priceCall(this.catalog.facts(model, this.options.settings), usage),
