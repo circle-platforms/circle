@@ -2309,6 +2309,13 @@ try {
             if (['', 'about:blank'].includes(await address.inputValue())) {
               await address.fill(origin);
               await address.press('Enter');
+              // Once the page loads the box shows the browser's own form of the address, a slash after the port:
+              // wait for it, so that update cannot land between the acceptance's two reads of the box (#518)
+              const loaded = new URL(origin).href;
+              await until(
+                async () => (await address.inputValue()) === loaded,
+                'the browser panel shows the address it navigated to',
+              );
             }
             await address.waitFor();
           }
