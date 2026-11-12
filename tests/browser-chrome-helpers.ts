@@ -1,18 +1,12 @@
 import { spawnSync, type ChildProcess } from 'node:child_process';
-import {
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
 import { type Server } from 'node:http';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ChromeBrowser, findBrowser } from '../src/browser/chrome.js';
 import type { CdpPipe } from '../src/browser/cdp.js';
 import { listenForBrowser } from './browser-port.mjs';
+// Every real browser a test starts takes one of the shared slots (#503)
+import { acquireChromeSlot } from './browser-slots.js';
 import {
   BrowserFixture,
   type BrowserFixtureRecord,
@@ -29,104 +23,7 @@ export const skip = !executable
     : false;
 
 export const listen = (server: Server) => listenForBrowser(server);
-
-const slotRoot = join(tmpdir(), 'circle-test-chrome-slots');
-const maxChromeSlots = process.platform === 'win32' ? 3 : 4;
-const heldSlots = new WeakMap<ChromeBrowser, Promise<string | undefined>>();
-const processSlots = new Set<string>();
-
-function pidAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
-  }
-}
-
-async function claimSlot(): Promise<string> {
-  mkdirSync(slotRoot, { recursive: true });
-  for (;;) {
-    for (let i = 0; i < maxChromeSlots; i++) {
-      const slot = join(slotRoot, `slot-${i}`);
-      const pidFile = join(slot, 'pid');
-      try {
-        mkdirSync(slot);
-        writeFileSync(pidFile, String(process.pid));
-        processSlots.add(slot);
-        return slot;
-      } catch {
-        try {
-          const owner = Number(readFileSync(pidFile, 'utf8').trim());
-          if (!pidAlive(owner)) rmSync(slot, { recursive: true, force: true });
-        } catch {
-          try {
-            if (Date.now() - statSync(slot).mtimeMs > 2000)
-              rmSync(slot, { recursive: true, force: true });
-          } catch {}
-        }
-      }
-    }
-    await delay(100);
-  }
-}
-
-export async function acquireChromeSlot(chrome: ChromeBrowser): Promise<void> {
-  const options = (chrome as unknown as { options?: { executable?: string } })
-    .options;
-  if (!executable || options?.executable !== executable) return;
-  let pending = heldSlots.get(chrome);
-  if (!pending) {
-    pending = claimSlot();
-    heldSlots.set(chrome, pending);
-  }
-  await pending;
-}
-
-async function releaseChromeSlot(chrome: ChromeBrowser): Promise<void> {
-  const pending = heldSlots.get(chrome);
-  if (!pending) return;
-  heldSlots.delete(chrome);
-  const slot = await pending.catch(() => undefined);
-  if (slot) {
-    processSlots.delete(slot);
-    try {
-      rmSync(slot, { recursive: true, force: true });
-    } catch {}
-  }
-}
-
-process.on('exit', () => {
-  for (const slot of processSlots) {
-    try {
-      rmSync(slot, { recursive: true, force: true });
-    } catch {}
-  }
-});
-
-const proto = ChromeBrowser.prototype as unknown as {
-  start: () => Promise<unknown>;
-  close: () => Promise<void>;
-};
-const originalStart = proto.start;
-proto.start = async function (this: ChromeBrowser) {
-  await acquireChromeSlot(this);
-  try {
-    return await originalStart.call(this);
-  } catch (error) {
-    await releaseChromeSlot(this);
-    throw error;
-  }
-};
-const originalClose = proto.close;
-proto.close = async function (this: ChromeBrowser) {
-  try {
-    return await originalClose.call(this);
-  } finally {
-    await releaseChromeSlot(this);
-  }
-};
+export { acquireChromeSlot };
 
 /** The simulated person hands back a page they have actually finished opening. */
 export async function humanNavigation(
