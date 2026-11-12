@@ -332,6 +332,13 @@ export function knowledgeApproval(
         {
           text: `${plural(Number(change.retained_local_items) || 0, 'local item')} will sync with this account`,
         },
+        // The first time this account syncs on this device: where its content goes, and how to keep it here (#502)
+        ...(change.first_sync === true
+          ? [
+              { text: 'first sync on this device' },
+              { text: 'local only any time: /knowledge mode local' },
+            ]
+          : []),
         { text: 'local files stay', tone: 'faint' as const },
       ],
     };

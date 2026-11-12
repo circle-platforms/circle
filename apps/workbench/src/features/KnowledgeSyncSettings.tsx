@@ -321,6 +321,14 @@ export function KnowledgeSyncSettings() {
                       'retained local content is used for this account’s personal sync',
                     )}
                   </p>
+                  {/* The first time this account syncs on this device (#502) */}
+                  {preview.firstSync && (
+                    <p className="knowledge-first-sync">
+                      {t(
+                        'personal content will sync to this server; you can switch to only on this device at any time',
+                      )}
+                    </p>
+                  )}
                 </>
               )}
               {error && <p role="alert">{error}</p>}

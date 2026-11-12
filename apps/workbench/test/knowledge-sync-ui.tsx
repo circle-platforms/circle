@@ -57,6 +57,18 @@ const host = {
         ok: true,
         data: { sync, connections: [{ name: 'team-server' }] },
       };
+    // Connecting an account that has never synced on this device
+    if (op === 'prepare')
+      return {
+        id: command.id,
+        ok: true,
+        data: {
+          ticket: 'synthetic-ticket',
+          action: 'connect',
+          title: 'team-server',
+          firstSync: true,
+        },
+      };
     // The server refused: the window says so by kind; its words are in the status
     if (op === 'sync')
       return { id: command.id, ok: false, error: 'knowledge-sync-refused' };

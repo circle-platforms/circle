@@ -12,7 +12,7 @@ import {
   loadSettings,
   type CircleSettings,
 } from '../settings.js';
-import { KnowledgeSync } from './sync.js';
+import { KnowledgeSync, syncedBefore } from './sync.js';
 import { formatJcs } from './canonical.js';
 import {
   SyncHttp,
@@ -147,9 +147,21 @@ export class KnowledgeConnection {
       )
       .map((c) => ({ name: c.name, origin: new URL(c.url!).origin }));
   }
-  preview(name: string): { name: string; origin: string; binding: string } {
+  /** What selecting a connection means, from local records: no request is sent before the person selects it. */
+  preview(name: string): {
+    name: string;
+    origin: string;
+    binding: string;
+    /** This account has never finished a sync on this device: its personal content is about to go to the server. */
+    firstSync: boolean;
+  } {
     const port = this.port(name);
-    return { name, origin: new URL(port.server).origin, binding: port.binding };
+    return {
+      name,
+      origin: new URL(port.server).origin,
+      binding: port.binding,
+      firstSync: !syncedBefore(this.home, port.binding),
+    };
   }
   private port(name: string): McpBearerConnection {
     const connection = buildMcpConnections(

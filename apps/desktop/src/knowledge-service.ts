@@ -982,7 +982,11 @@ export class DesktopKnowledge {
       const selected = runtime.knowledge.preview(p.server);
       return this.hold(
         runtime,
-        { action: 'connect', title: p.server },
+        {
+          action: 'connect',
+          title: p.server,
+          ...(selected.firstSync ? { firstSync: true } : {}),
+        },
         async () => {
           await runtime.knowledge.select(p.server, selected.binding);
           return { saved: true };
