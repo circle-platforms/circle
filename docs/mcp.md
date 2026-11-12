@@ -79,6 +79,8 @@ Every request to a `streamable_http` or `sse` server carries a `Circle-Session-I
 
 A tool call has no time limit, so a tool that waits for a login or a long job can take as long as it needs. `esc` sends the server a cancellation; what the server does with it is up to the server. Images and PDFs a tool returns go to the model as attachments.
 
+The model reads a tool's text. A result with no text gives its structured content as JSON instead, and so does an error with no text. Circle never throws a result away because its structured content does not match the output schema the server listed for the tool when Circle connected, as happens when a server adds a field after an upgrade. Such a result arrives whole: its text, then the line `structured result, as the server sent it: it does not match the output schema the server listed for this tool when Circle connected`, then the structured content. That is all Circle says of it; whether the result is right is the server's to say. An error's structured content is not checked at all, and a schema Circle cannot compile is not used. The tools are not listed again for such a result: `/mcp reload` lists them again.
+
 ## Files a tool takes
 
 A tool can take a file as an argument: a top-level property of its input that is a JSON Schema string with `"contentEncoding": "base64"` (with or without `contentMediaType`). Circle shows the model that tool with the same schema, except that the property's description says it takes a local file path, and its `pattern`, `format`, `minLength` and `maxLength`, which describe the encoded text, are left out. The model gives a path. Circle reads the file and sends its bytes, base64-encoded, as that argument.
