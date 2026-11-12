@@ -13,6 +13,8 @@ import { ScriptedModel } from '../src/testing.js';
 import { defaultSettings, trustFolder } from '../src/settings.js';
 import { cleanup, cleanupServer, scratch } from './helpers.js';
 import { listenForBrowser } from './browser-port.mjs';
+// Its real browser takes a slot like every other test's (#503)
+import './browser-slots.js';
 import {
   assertNothingLeft,
   fakeBrowser,
