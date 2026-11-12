@@ -9,6 +9,7 @@ import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import {
   CallToolResultSchema,
   ListToolsResultSchema,
+  ToolListChangedNotificationSchema,
   type CallToolResult,
   type Implementation,
 } from '@modelcontextprotocol/sdk/types.js';
@@ -673,6 +674,11 @@ interface Connected {
   open: boolean;
 }
 type ServerTool = Awaited<ReturnType<Client['listTools']>>['tools'][number];
+/** How long after a server says its tools changed Circle lists them, so several notices in a row list them once. */
+export const TOOLS_CHANGED_WAIT_MS = 300;
+/** What a server whose tools changed shows while Circle keeps its earlier tools. */
+export const TOOLS_NOT_LISTED_AGAIN =
+  'the server changed its tools and listing them again failed; the earlier tools stay until a reload';
 export class McpManager {
   tools: Tool[] = [];
   status: McpStatus[] = [];
@@ -688,6 +694,11 @@ export class McpManager {
   private lifetime = new AbortController();
   // A sign-in under way, by server address: its page
   private signingIn = new Map<string, SignInShown>();
+  // A server's tools to list again after it said they changed: the wait, the listing under way, and another notice
+  private relisting = new Map<
+    Connected,
+    { wait?: NodeJS.Timeout; running?: Promise<void>; again?: boolean }
+  >();
   // `timeout` bounds connecting and listing tools. A tool call has no limit unless `callTimeout`
   // is given: a tool may wait minutes (a login), and an interrupt cancels it.
   constructor(
@@ -1027,53 +1038,13 @@ export class McpManager {
         }),
         combined,
       );
-      const registered: Tool[] = [];
-      const said = new Map<string, ToolHint>();
-      // One per connection: a schema with an $id is kept by it, and a server that changed has new schemas
-      const validator = new AjvJsonSchemaValidator();
-      let cursor: string | undefined;
-      const cursors = new Set<string>();
-      do {
-        // Listed by Circle itself: the SDK's listTools would also compile every output schema for its own checks of
-        // results, and fail the whole server on one it cannot compile
-        const listed = await client.request(
-          { method: 'tools/list', params: cursor ? { cursor } : undefined },
-          ListToolsResultSchema,
-          { signal: combined, timeout: this.timeout },
-        );
-        for (const spec of listed.tools) {
-          const name = mcpToolName(connection.name, spec.name);
-          if (
-            reserved.has(name) ||
-            taken(name) ||
-            registered.some((tool) => tool.name === name)
-          )
-            throw new Error(`tool '${name}' already exists`);
-          const hints = toolHints(
-            spec.annotations,
-            connection.trustAnnotations !== false,
-          );
-          if (hints.destructive) said.set(name, 'destructive');
-          else if (hints.readOnly) said.set(name, 'read-only');
-          registered.push(
-            this.serverTool(
-              connection,
-              client,
-              spec,
-              name,
-              hints,
-              filled.filled,
-              validator,
-            ),
-          );
-        }
-        cursor = listed.nextCursor;
-        if (cursor) {
-          if (cursors.has(cursor))
-            throw new Error('MCP tools pagination repeated a cursor');
-          cursors.add(cursor);
-        }
-      } while (cursor);
+      const { registered, said } = await this.listServerTools(
+        connection,
+        client,
+        filled.filled,
+        (name) => reserved.has(name) || taken(name),
+        combined,
+      );
       combined.throwIfAborted();
       const server: Connected = {
         name: connection.name,
@@ -1091,6 +1062,12 @@ export class McpManager {
         this.results.forget(connection.name);
         this.services.onChange?.();
       };
+      // A server that says its tools can change is listed again when it says they did: the next turn has the new
+      // tools, and the turn under way keeps the ones it started with
+      if (client.getServerCapabilities()?.tools?.listChanged)
+        client.setNotificationHandler(ToolListChangedNotificationSchema, () =>
+          this.toolsChanged(server, filled.filled),
+        );
       state.tools = registered.map((tool) => tool.name);
       return { state, server, tools: registered, said };
     } catch (error) {
@@ -1239,6 +1216,128 @@ export class McpManager {
       })
       .finally(() => this.signingIn.delete(provider.server));
   }
+  /**
+   * A server's tools as it lists them now, page by page. Listed by Circle itself: the SDK's listTools would also compile
+   * every output schema for its own checks of results, and fail the whole server on one it cannot compile. One
+   * validator per listing: a schema with an $id is kept by it, and a server that changed has new schemas.
+   */
+  private async listServerTools(
+    connection: McpConnection,
+    client: Client,
+    filled: Map<string, string>,
+    taken: (name: string) => boolean,
+    signal: AbortSignal,
+  ): Promise<{ registered: Tool[]; said: Map<string, ToolHint> }> {
+    const registered: Tool[] = [];
+    const said = new Map<string, ToolHint>();
+    const validator = new AjvJsonSchemaValidator();
+    let cursor: string | undefined;
+    const cursors = new Set<string>();
+    do {
+      const listed = await client.request(
+        { method: 'tools/list', params: cursor ? { cursor } : undefined },
+        ListToolsResultSchema,
+        { signal, timeout: this.timeout },
+      );
+      for (const spec of listed.tools) {
+        const name = mcpToolName(connection.name, spec.name);
+        if (taken(name) || registered.some((tool) => tool.name === name))
+          throw new Error(`tool '${name}' already exists`);
+        const hints = toolHints(
+          spec.annotations,
+          connection.trustAnnotations !== false,
+        );
+        if (hints.destructive) said.set(name, 'destructive');
+        else if (hints.readOnly) said.set(name, 'read-only');
+        registered.push(
+          this.serverTool(
+            connection,
+            client,
+            spec,
+            name,
+            hints,
+            filled,
+            validator,
+          ),
+        );
+      }
+      cursor = listed.nextCursor;
+      if (cursor) {
+        if (cursors.has(cursor))
+          throw new Error('MCP tools pagination repeated a cursor');
+        cursors.add(cursor);
+      }
+    } while (cursor);
+    return { registered, said };
+  }
+  /** A server said its tools changed: they are listed again a moment later, once for several notices in a row. */
+  private toolsChanged(server: Connected, filled: Map<string, string>): void {
+    if (!server.open) return;
+    let pending = this.relisting.get(server);
+    if (!pending) this.relisting.set(server, (pending = {}));
+    if (pending.running) {
+      pending.again = true;
+      return;
+    }
+    clearTimeout(pending.wait);
+    const own = pending;
+    own.wait = setTimeout(() => {
+      own.wait = undefined;
+      own.running = this.listAgain(server, filled).finally(() => {
+        own.running = undefined;
+        if (own.again) {
+          own.again = false;
+          this.toolsChanged(server, filled);
+        } else if (this.relisting.get(server) === own)
+          this.relisting.delete(server);
+      });
+    }, TOOLS_CHANGED_WAIT_MS);
+    own.wait.unref?.();
+  }
+  /**
+   * The server's tools, status and kept results replaced by what it lists now, all at once. When the listing fails, its
+   * earlier tools stay and its status says so.
+   */
+  private async listAgain(
+    server: Connected,
+    filled: Map<string, string>,
+  ): Promise<void> {
+    const current = () => server.open && this.servers.includes(server);
+    if (!current()) return;
+    const state = this.status.find((item) => item.name === server.name);
+    const own = new Set(state?.tools ?? []);
+    try {
+      const { registered, said } = await this.listServerTools(
+        server.connection,
+        server.client,
+        filled,
+        (name) =>
+          this.reserved.has(name) ||
+          this.tools.some((tool) => tool.name === name && !own.has(name)),
+        AbortSignal.any([
+          AbortSignal.timeout(this.timeout),
+          this.lifetime.signal,
+        ]),
+      );
+      if (!current()) return;
+      this.tools = [
+        ...this.tools.filter((tool) => !own.has(tool.name)),
+        ...registered,
+      ];
+      for (const name of own) this.hinted.delete(name);
+      for (const [name, hint] of said) this.hinted.set(name, hint);
+      if (state) {
+        state.tools = registered.map((tool) => tool.name);
+        if (state.error === TOOLS_NOT_LISTED_AGAIN) state.error = '';
+      }
+    } catch {
+      if (!current()) return;
+      if (state) state.error = TOOLS_NOT_LISTED_AGAIN;
+    }
+    // What a tool of the server returned before may not hold for the tools it has now
+    this.results.forget(server.name);
+    this.services.onChange?.();
+  }
   /** After a sign-in: the server connected again with its tokens; its status, connection and tools replace the old. */
   private async connectAgain(
     connection: McpConnection,
@@ -1279,6 +1378,7 @@ export class McpManager {
     this.services.onChange?.();
   }
   private static async disconnect(servers: Connected[]): Promise<void> {
+    // A server closed by Circle is not listed again: listAgain sees it is no longer open
     for (const server of servers) server.open = false;
     await Promise.all(
       servers.map((server) => server.client.close().catch(() => {})),
@@ -1375,7 +1475,7 @@ export class McpManager {
       this.status
         .map(
           (server) =>
-            `  · ${server.name}  ${server.connection}${server.headers?.length ? '\n    headers: ' + server.headers.join(', ') : ''}${server.notSent?.length ? '\n    not sent, Circle sets them: ' + server.notSent.join(', ') : ''}${server.authorize ? '\n    ' + server.error + ': ' + server.authorize : server.error === 'disabled' ? '\n    disabled' : server.error ? '\n    failed: ' + server.error : '\n    ' + server.tools.join(', ')}`,
+            `  · ${server.name}  ${server.connection}${server.headers?.length ? '\n    headers: ' + server.headers.join(', ') : ''}${server.notSent?.length ? '\n    not sent, Circle sets them: ' + server.notSent.join(', ') : ''}${server.authorize ? '\n    ' + server.error + ': ' + server.authorize : server.error === 'disabled' ? '\n    disabled' : server.error === TOOLS_NOT_LISTED_AGAIN ? '\n    ' + server.tools.join(', ') + '\n    ' + server.error : server.error ? '\n    failed: ' + server.error : '\n    ' + server.tools.join(', ')}`,
         )
         .join('\n')
     );

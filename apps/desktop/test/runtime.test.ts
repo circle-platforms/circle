@@ -3195,6 +3195,42 @@ test('MCP configuration saves preserve private fields and show pending reload ho
   assert.equal(f.controller.snapshot().mcp[0]!.status, 'reload required');
 });
 
+test('a server whose tools could not be listed again shows as connected, with the note, not as an error', async (t) => {
+  const { TOOLS_NOT_LISTED_AGAIN } = await import('../../../src/mcp_loader.js');
+  const f = await setup(t, []);
+  const spec = {
+    name: 'fixture',
+    transport: 'stdio',
+    command: 'unused-fixture',
+  };
+  const settings = loadSettings(f.home);
+  settings.mcp_servers = [spec];
+  saveSettings(settings, f.home);
+  // The runtime's own state, as a server connected with these settings and then failed to list its tools again
+  const runtime = (
+    f.controller as unknown as {
+      runtime(workspace: string): {
+        options: { settings: { mcp_servers: unknown[] } };
+        mcp: { status: import('../../../src/mcp_loader.js').McpStatus[] };
+      };
+    }
+  ).runtime(f.workspace);
+  runtime.options.settings.mcp_servers = [{ ...spec }];
+  runtime.mcp.status.splice(0, runtime.mcp.status.length, {
+    name: 'fixture',
+    connection: 'unused-fixture',
+    tools: ['fixture_kept'],
+    error: TOOLS_NOT_LISTED_AGAIN,
+  });
+  const row = () =>
+    f.controller.snapshot().mcp.find((item) => item.name === 'fixture')!;
+  assert.equal(row().status, 'connected');
+  assert.equal(row().error, TOOLS_NOT_LISTED_AGAIN);
+  // Any other note is still an error
+  runtime.mcp.status[0]!.error = 'synthetic failure';
+  assert.equal(row().status, 'error');
+});
+
 test('attached pictures go as mentioned ones do: a large PNG is scaled down and both sizes named, and a text-only model gets where the picture was saved', async (t) => {
   const { PNG } = await import('pngjs');
   const picture = (width: number, height: number) => {
