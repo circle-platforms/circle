@@ -12,6 +12,8 @@ import {
   writeFileSync,
   readFileSync,
   existsSync,
+  mkdirSync,
+  rmSync,
 } from 'node:fs';
 import { readFile, writeFile, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -881,8 +883,10 @@ test('a genuinely unwritable original log cannot prevent transport failure from 
           ],
           { encoding: 'utf8' },
         );
-  await rm(path);
-  await mkdir(path);
+  // Replaced in one go: the job's output monitor checks the log every 100 ms, and a log it finds missing between the
+  // removal and the folder is a stop of its own ('output unavailable'), not the write failure this test is about
+  rmSync(path);
+  mkdirSync(path);
   trigger.resolve();
   // The real failing write is the only event allowed to stop this command.
   const outcome = await running;
