@@ -178,21 +178,35 @@ export class KnowledgeStore {
   read(id: string): SyncObject {
     return decodeSyncObject(this.readBytes(id), id);
   }
+  /** A batch as sync transfers it: within a sync batch's object and byte limits. */
   putBatch(inputs: readonly unknown[]): string[] {
     if (inputs.length > SYNC_LIMITS.batchObjects)
       throw new RangeError('knowledge batch object limit');
     let total = 0;
-    const encoded = inputs.map((input) => {
-      const bytes = encodeSyncObject(input);
-      total += bytes.length;
-      if (total > SYNC_LIMITS.objectBytes)
-        throw new RangeError('knowledge batch byte limit');
-      return {
-        bytes,
-        id: sha256(bytes),
-        kind: (input as SyncObject).kind,
-      };
-    });
+    return this.publish(
+      inputs.map((input) => {
+        const encoded = this.encode(input);
+        total += encoded.bytes.length;
+        if (total > SYNC_LIMITS.objectBytes)
+          throw new RangeError('knowledge batch byte limit');
+        return encoded;
+      }),
+    );
+  }
+  /**
+   * The objects of a local change with those it generates, in one transaction. A change is not a sync batch: sync
+   * uploads in batches of its own, so only each object's own limits apply here (#525).
+   */
+  putChange(inputs: readonly unknown[]): string[] {
+    return this.publish(inputs.map((input) => this.encode(input)));
+  }
+  private encode(input: unknown) {
+    const bytes = encodeSyncObject(input);
+    return { bytes, id: sha256(bytes), kind: (input as SyncObject).kind };
+  }
+  private publish(
+    encoded: readonly { bytes: Buffer; id: string; kind: string }[],
+  ): string[] {
     return this.transaction(() =>
       encoded.map(({ id, bytes, kind }) => {
         this.files.publish(id, bytes);

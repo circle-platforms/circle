@@ -513,6 +513,87 @@ test('the knowledge write tool publishes a confirmed revision and the next model
   assert.equal(service.search('synthetic').items[0]!.status, 'unverified');
 });
 
+test('a change of as many objects as the write tool accepts commits once the person approves it (#525)', async (t) => {
+  const { computeObjectDigest } = await import('../src/knowledge/canonical.js');
+  const { SYNC_LIMITS } = await import('../src/knowledge/protocol.js');
+  const { randomUUID } = await import('node:crypto');
+  const root = scratch(t),
+    service = new KnowledgeService(join(root, 'personal')),
+    store = new CheckpointStore(root);
+  cleanup(t, () => store.close());
+  const session = store.create(root, 'scripted'),
+    policy = new ApprovalPolicy(
+      new ApprovalStore(join(root, 'approvals')),
+      root,
+    );
+  policy.setMode(session.id, 'auto');
+  const directory = randomUUID(),
+    objects = [
+      {
+        schema: 'personal-sync-object@1',
+        kind: 'directory_revision',
+        body: {
+          item_id: directory,
+          parents: [],
+          parent_directory: null,
+          name: '',
+        },
+      },
+      // As many as a change may hold: the commit adds an inventory page and the snapshot to them
+      ...Array.from({ length: SYNC_LIMITS.batchObjects - 1 }, (_, n) => ({
+        schema: 'personal-sync-object@1',
+        kind: 'entry_revision',
+        body: {
+          item_id: randomUUID(),
+          parents: [],
+          directory_id: directory,
+          content: {
+            kind: 'observation',
+            statement: 'synthetic batch entry ' + n,
+            data: {},
+            applicability: null,
+          },
+          grounds: [],
+        },
+      })),
+    ];
+  let asked = 0;
+  const model = new ScriptedModel([
+    {
+      message: reply([
+        {
+          id: 'write',
+          name: 'knowledge_write',
+          args: { expected_head: null, objects },
+        },
+      ]),
+    },
+    { message: reply([], 'done') },
+  ]);
+  await new Harness({
+    model,
+    store,
+    session,
+    policy,
+    system: 'synthetic',
+    tools: knowledgeTools(service),
+    approve: async () => {
+      asked++;
+      return 'approve';
+    },
+  }).run('save this knowledge');
+  assert.equal(asked, 1);
+  const result = model.requests[1]!.messages.find(
+    (message) => message.tool_call_id === 'write',
+  )!;
+  assert.equal(result.status, 'success', result.content);
+  const snapshot = JSON.parse(result.content).snapshot;
+  for (const object of objects.slice(1)) {
+    const id = computeObjectDigest(object);
+    assert.equal(service.read(snapshot, id).object, id);
+  }
+});
+
 const KNOWLEDGE_TOOLS = [
   'knowledge_search',
   'knowledge_read',
