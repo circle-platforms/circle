@@ -1197,7 +1197,13 @@ export class LiveRuntime implements RuntimePort {
       }
       const name = names[kind];
       if (!name) throw Error(t('{kind} is not connected yet', { kind }));
-      return this.native(name, payload, sessionId);
+      // The Hub card says why it could not connect or disconnect, in its own words: no notice says it again
+      return this.native(
+        name,
+        payload,
+        sessionId,
+        kind !== 'hub-connect' && kind !== 'hub-disconnect',
+      );
     };
     const result = operation();
     // This settings action reports its Promise result in its original row,

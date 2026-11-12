@@ -45,6 +45,11 @@ export interface WorkbenchPlugin {
   title: string;
   description: string;
   icon: LucideIcon;
+  /**
+   * The mark of the service it connects, drawn on its cards on the extensions page in place of `icon`, `size` pixels
+   * square (components/marks.tsx).
+   */
+  mark?: ComponentType<{ size?: number }>;
   requires?: string[];
   /**
    * The runtime extension that is this plugin's other half, by name. A paired plugin shows
@@ -53,6 +58,11 @@ export interface WorkbenchPlugin {
    * it off turns the extension off only when no other page of that extension stays on.
    */
   runtimeExtension?: string;
+  /**
+   * The MCP server entry that extension keeps, by name. The entry is the extension's connection: its card on the
+   * extensions page shows the entry's state and tools, and the MCP servers page does not list it.
+   */
+  mcpServer?: string;
   detail?: ComponentType<PluginDetailProps>;
   pages?: PluginPage[];
   widgets?: PluginWidget[];

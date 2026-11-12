@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
-import { Blocks } from 'lucide-react';
 import { useRuntime } from '../app/context';
+import { Blocks } from 'lucide-react';
 import { GitHubConnectionCard } from '../components/GitHubConnectionCard';
+import { GitHubMark } from '../components/marks';
 import {
   prepareGitHubExample,
   type PreparedGitHubExample,
@@ -99,5 +100,6 @@ export const githubPlugin: WorkbenchPlugin = {
     );
   },
   icon: Blocks,
+  mark: GitHubMark,
   detail: GitHubPluginDetails,
 };
