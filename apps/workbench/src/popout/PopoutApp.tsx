@@ -61,12 +61,13 @@ export function PopoutApp({
   const { snapshot, notice, notify } = useRuntime();
   const session = snapshot.sessions.find((item) => item.id === sessionId);
   const dock = () => void desktopHost()?.popoutDock(kind, sessionId);
+  const workspaceId = session?.executionWorkspaceId ?? session?.workspaceId;
   useEffect(() => {
-    if (!session) return;
-    return connectWorkspaceStreams(session.workspaceId, session.id, (error) =>
+    if (!workspaceId) return;
+    return connectWorkspaceStreams(workspaceId, sessionId, (error) =>
       notify(String(error)),
     );
-  }, [session?.id, session?.workspaceId]);
+  }, [sessionId, workspaceId]);
   // The theme and the text size the main window has, and the system's light or dark
   // while the theme follows it.
   const { theme, textSize } = snapshot.settings;
@@ -77,21 +78,30 @@ export function PopoutApp({
     media.addEventListener('change', apply);
     return () => media.removeEventListener('change', apply);
   }, [theme, textSize]);
-  // An address the main window opened for this browser, as its drawer would have. Taking
-  // one hands it over once, so what was taken is kept even by an effect run again.
+  // The main window can open a page or select a new shell here, as in the drawer.
   const [address, setAddress] = useState<{ url: string; request: number }>();
+  const [requestedTerminal, setRequestedTerminal] = useState<string>();
   useEffect(() => {
     const host = desktopHost();
-    if (kind !== 'browser' || !host?.popoutAddress) return;
+    const read =
+      kind === 'browser' ? host?.popoutAddress : host?.popoutTerminal;
+    const listen =
+      kind === 'browser' ? host?.onPopoutAddress : host?.onPopoutTerminal;
+    if (!read) return;
     const take = () =>
-      void host.popoutAddress!().then(
-        (url) => {
-          if (url)
-            setAddress((last) => ({ url, request: (last?.request ?? 0) + 1 }));
+      void read().then(
+        (target) => {
+          if (!target) return;
+          if (kind === 'terminal') setRequestedTerminal(target);
+          else
+            setAddress((last) => ({
+              url: target,
+              request: (last?.request ?? 0) + 1,
+            }));
         },
         () => {},
       );
-    const stop = host.onPopoutAddress?.(take) ?? (() => {});
+    const stop = listen?.(take);
     take();
     return stop;
   }, [kind]);
@@ -135,7 +145,11 @@ export function PopoutApp({
                     targetRequest={address?.request}
                   />
                 ) : (
-                  <TerminalMode sessionId={sessionId} visible />
+                  <TerminalMode
+                    sessionId={sessionId}
+                    requestedTerminal={requestedTerminal}
+                    visible
+                  />
                 )}
               </div>
             </div>

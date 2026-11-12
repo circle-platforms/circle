@@ -1,4 +1,3 @@
-import { CheckoutPicker } from './CheckoutPicker';
 import { taskWorkspaceIds } from '../model/session-management';
 import { workspaceHint } from '../model/workspace-label';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -39,6 +38,11 @@ import {
 } from '../components/CommandFailure';
 import { commandCompletions, ownsHomeSubmission } from './composer-interaction';
 import {
+  HomeWorktreeMenus,
+  WorktreeCheckbox,
+  useHomeBranches,
+} from './HomeWorktrees';
+import {
   forgetHomeComposer,
   homeComposerMemory,
   homeProjectRequest,
@@ -46,6 +50,7 @@ import {
   openHome,
   rememberHomeComposer,
   selectedHomeProject,
+  type HomeWorktree,
 } from './home-selection';
 
 export function Home({
@@ -175,8 +180,28 @@ export function Home({
     snapshot.activeSessionId,
     homeProjectRequest(requestedId, remembered.current),
   );
-  const [checkout, setCheckout] = useState<string>();
-  useEffect(() => setCheckout(undefined), [project?.id]);
+  const gitProject =
+    runtime.mode === 'live' && project?.trusted && project.branch
+      ? project
+      : undefined;
+  const [worktreeChoice, setWorktreeChoice] = useState(() => ({
+    projectId: remembered.current?.projectId,
+    target: remembered.current?.worktree,
+  }));
+  const worktree =
+    gitProject && worktreeChoice.projectId === gitProject.id
+      ? worktreeChoice.target
+      : undefined;
+  const selectWorktree = (target?: HomeWorktree) =>
+    setWorktreeChoice({ projectId: gitProject?.id, target });
+  useEffect(() => {
+    setWorktreeChoice((choice) =>
+      choice.projectId === gitProject?.id
+        ? choice
+        : { projectId: gitProject?.id, target: undefined },
+    );
+  }, [gitProject?.id]);
+  const { branches, refreshBranches } = useHomeBranches(gitProject);
   const draftRef = useRef(draft);
   const attachmentsRef = useRef(attachments);
   const pendingSend = useRef(false);
@@ -189,7 +214,8 @@ export function Home({
       model !== baseline.current.model ||
       effort !== baseline.current.effort ||
       mode !== baseline.current.mode ||
-      requestedId !== baseline.current.requestedId;
+      requestedId !== baseline.current.requestedId ||
+      !!worktree;
     if (
       remembered.current === null &&
       draft === '' &&
@@ -204,9 +230,19 @@ export function Home({
       effort,
       mode,
       projectId: project?.id ?? null,
+      ...(worktree ? { worktree } : {}),
     };
     rememberHomeComposer(remembered.current);
-  }, [draft, attachments, model, effort, mode, project?.id, requestedId]);
+  }, [
+    draft,
+    attachments,
+    model,
+    effort,
+    mode,
+    project?.id,
+    requestedId,
+    worktree,
+  ]);
   const taskFolders = taskWorkspaceIds(snapshot.sessions, snapshot.agents);
   // Every project, so a name two folders share is told apart the same way
   // whether or not the search has narrowed the list.
@@ -257,7 +293,13 @@ export function Home({
         pendingSend.current = false;
         const result = await runtime.beginConversation({
           workspaceId: project?.id ?? null,
-          ...(checkout ? { checkoutId: checkout } : {}),
+          ...(worktree &&
+            ('checkout' in worktree
+              ? {
+                  checkoutId: worktree.checkout.id,
+                  expectedTargetBranch: worktree.checkout.branch,
+                }
+              : { worktreeBase: worktree.base })),
           text,
           model,
           effort,
@@ -370,6 +412,7 @@ export function Home({
                 effort,
                 mode,
                 projectId: project?.id ?? null,
+                ...(worktree ? { worktree } : {}),
               };
               remembered.current = next;
               rememberHomeComposer(next);
@@ -475,7 +518,7 @@ export function Home({
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
                 <DropdownMenu.Content
-                  className="dropdown composer-menu project-menu home-menu"
+                  className={`dropdown composer-menu project-menu home-menu${gitProject ? ' home-git-project-menu' : ''}`}
                   side="bottom"
                   avoidCollisions={false}
                   collisionPadding={8}
@@ -499,30 +542,32 @@ export function Home({
                       onChange={(event) => setQuery(event.target.value)}
                     />
                   </div>
-                  {query.trim() && projects.length === 0 && (
-                    <p className="project-picker-empty" role="status">
-                      {t('no matching projects')}
-                    </p>
-                  )}
-                  {projects.map((item) => {
-                    const hint = workspaceHint(item, everyProject);
-                    return (
-                      <DropdownMenu.Item
-                        key={item.id}
-                        title={item.path}
-                        onSelect={() => choose(item.id)}
-                      >
-                        <Folder size={14} />
-                        <span>
-                          {item.name}
-                          {hint && (
-                            <small className="project-hint">{hint}</small>
-                          )}
-                        </span>
-                        {item.id === project?.id && <Check size={14} />}
-                      </DropdownMenu.Item>
-                    );
-                  })}
+                  <div className="project-picker-projects">
+                    {query.trim() && projects.length === 0 && (
+                      <p className="project-picker-empty" role="status">
+                        {t('no matching projects')}
+                      </p>
+                    )}
+                    {projects.map((item) => {
+                      const hint = workspaceHint(item, everyProject);
+                      return (
+                        <DropdownMenu.Item
+                          key={item.id}
+                          title={item.path}
+                          onSelect={() => choose(item.id)}
+                        >
+                          <Folder size={14} />
+                          <span>
+                            {item.name}
+                            {hint && (
+                              <small className="project-hint">{hint}</small>
+                            )}
+                          </span>
+                          {item.id === project?.id && <Check size={14} />}
+                        </DropdownMenu.Item>
+                      );
+                    })}
+                  </div>
                   <DropdownMenu.Separator className="dropdown-separator" />
                   <DropdownMenu.Item
                     disabled={!desktopHost()}
@@ -536,14 +581,28 @@ export function Home({
                     <span>{t('no project')}</span>
                     {!project && <Check size={14} />}
                   </DropdownMenu.Item>
+                  {gitProject && (
+                    <>
+                      <DropdownMenu.Separator className="dropdown-separator" />
+                      <HomeWorktreeMenus
+                        key={gitProject.id}
+                        project={gitProject}
+                        worktree={worktree}
+                        branches={branches}
+                        refreshBranches={refreshBranches}
+                        onChoose={selectWorktree}
+                      />
+                    </>
+                  )}
                 </DropdownMenu.Content>
               </DropdownMenu.Portal>
             </DropdownMenu.Root>
-            {project?.trusted && (
-              <CheckoutPicker
-                workspaceId={project.id}
-                selected={checkout}
-                onChoose={setCheckout}
+            {gitProject && (
+              <WorktreeCheckbox
+                worktree={worktree}
+                branches={branches}
+                disabled={submitting}
+                onChoose={selectWorktree}
               />
             )}
           </div>

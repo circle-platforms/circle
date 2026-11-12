@@ -1,151 +1,367 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { useRuntime } from '../app/context';
+import { useEffect, useRef, useState } from 'react';
+import {
+  Check,
+  ChevronDown,
+  Copy,
+  Folder,
+  GitBranch,
+  Plus,
+  SquareTerminal,
+} from 'lucide-react';
+import { DropdownMenu } from 'radix-ui';
+import { useRuntimeActions } from '../app/context';
+import { Button, Modal, SearchInput } from '../components/common';
+import { copyText } from '../host';
 import { t } from '../i18n';
 import type { Checkout } from '../../../desktop/src/checkouts';
 
-/**
- * Where a conversation runs: the project's own checkout or another checkout of its
- * repository. On the home page it chooses for the conversation about to start. With a
- * session it moves that conversation, and its button is whatever already names the place
- * (the top bar's project and branch), so the conversation gets no row of its own for it.
- */
-export function CheckoutPicker({
-  workspaceId,
-  selected,
-  onChoose,
+type MoveStatus = { reason?: string };
+
+function moveError(message: string) {
+  switch (message) {
+    case 'restore this session before continuing':
+      return t('restore this session before continuing');
+    case 'task conversations use their own worktree':
+      return t('task conversations use their own worktree');
+    case "stop this session's native resources and tasks before moving it":
+      return t(
+        "stop this session's native resources and tasks before moving it",
+      );
+    case "stop this session's tasks before moving it":
+      return t("stop this session's tasks before moving it");
+    case 'stop this session before moving it':
+      return t('stop this session before moving it');
+    case 'finish or remove queued messages before switching checkouts':
+      return t('finish or remove queued messages before switching checkouts');
+    case 'execution location changed; reopen the worktree menu':
+      return t('execution location changed; reopen the worktree menu');
+    case 'execution branch changed; reopen the worktree menu':
+      return t('execution branch changed; reopen the worktree menu');
+    case 'destination branch changed; reopen the worktree menu':
+      return t('destination branch changed; reopen the worktree menu');
+    case 'wait for the worktree switch to finish':
+      return t('wait for the worktree switch to finish');
+    case 'wait for workspace actions to finish before moving this session':
+      return t(
+        'wait for workspace actions to finish before moving this session',
+      );
+    default:
+      return message;
+  }
+}
+
+/** The current project and branch stay in the top bar's single row. */
+export function SessionCheckoutMenu({
   sessionId,
-  className = 'footbar-button',
-  title,
-  children,
+  project,
+  branch,
+  path,
+  onMove,
+  onTerminal,
 }: {
-  workspaceId: string;
-  selected?: string;
-  onChoose?: (id: string) => void;
-  sessionId?: string;
-  /** The button's class, and its content in place of the word. */
-  className?: string;
-  title?: string;
-  children?: ReactNode;
+  sessionId: string;
+  project: string;
+  branch: string;
+  path: string;
+  onMove: () => void;
+  onTerminal: () => void;
 }) {
-  const { runtime, perform } = useRuntime();
+  const { runtime, perform, notify } = useRuntimeActions();
   const [open, setOpen] = useState(false);
-  const [rows, setRows] = useState<Checkout[]>([]);
-  const [branch, setBranch] = useState('');
-  const [start, setStart] = useState('HEAD');
-  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<MoveStatus>();
   useEffect(() => {
-    setOpen(false);
-    setRows([]);
-  }, [workspaceId, sessionId]);
-  const refresh = async () => {
-    const result = await runtime.request(
-      'checkouts',
-      { workspaceId },
-      sessionId,
+    if (!open) return;
+    let current = true;
+    void Promise.resolve(
+      runtime.request('checkout-move-status', {}, sessionId),
+    ).then(
+      (result) => {
+        if (current) setStatus(result as MoveStatus);
+      },
+      (error) => {
+        if (current) setStatus({ reason: (error as Error).message });
+      },
     );
-    if (Array.isArray(result)) setRows(result);
-  };
-  const choose = async (id: string) => {
-    if (sessionId)
-      await runtime.request('switch-checkout', { checkoutId: id }, sessionId);
-    else onChoose?.(id);
-    setOpen(false);
-  };
-  const run = (action: () => Promise<void>) =>
-    perform(async () => {
-      setBusy(true);
-      try {
-        await action();
-      } finally {
-        setBusy(false);
-      }
-    });
+    return () => {
+      current = false;
+    };
+  }, [runtime, sessionId, open]);
+
   return (
-    <div className="checkout-picker">
-      <button
-        className={className}
-        type="button"
-        title={title}
-        aria-expanded={open}
-        aria-haspopup="true"
-        onClick={() =>
-          run(async () => {
-            await refresh();
-            setOpen(!open);
-          })
-        }
-      >
-        {children ?? t('checkout')}
-      </button>
-      {open && (
-        <div
-          className="checkout-options"
-          role="group"
-          aria-label={sessionId ? t('continue in worktree…') : t('checkout')}
+    <DropdownMenu.Root
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) setStatus(undefined);
+      }}
+    >
+      <DropdownMenu.Trigger asChild>
+        <button
+          type="button"
+          className="project-chip"
+          aria-label={t('branch {branch}', { branch })}
+          title={`${project} · ${branch}
+${path}`}
         >
-          {sessionId && <strong>{t('continue in worktree…')}</strong>}
-          {sessionId && (
-            <p>
-              {t(
-                'only future execution moves; uncommitted changes stay in their checkout',
-              )}
+          <Folder size={12} />
+          <span>{project}</span>
+          <GitBranch size={11} />
+          <span>{branch}</span>
+          <ChevronDown size={11} />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          className="dropdown checkout-menu"
+          align="start"
+          sideOffset={6}
+        >
+          <DropdownMenu.Item
+            onSelect={() =>
+              perform(async () => {
+                await copyText(branch);
+                notify(t('copied'));
+              })
+            }
+          >
+            <Copy size={14} />
+            {t('copy branch name')}
+          </DropdownMenu.Item>
+          <DropdownMenu.Item onSelect={onTerminal}>
+            <SquareTerminal size={14} />
+            {t('open in terminal')}
+          </DropdownMenu.Item>
+          <DropdownMenu.Separator className="dropdown-separator" />
+          <DropdownMenu.Item disabled={!!status?.reason} onSelect={onMove}>
+            <GitBranch size={14} />
+            {t('continue in worktree…')}
+          </DropdownMenu.Item>
+          {status?.reason && (
+            <p role="status" className="checkout-menu-reason">
+              {moveError(status.reason)}
             </p>
           )}
-          {!rows.length && <p>{t('this project is not a Git repository')}</p>}
-          {rows.map((row) => (
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+/** Choosing a destination first shows the effect of moving this conversation. */
+export function MoveCheckoutDialog({
+  sessionId,
+  workspaceId,
+  path,
+  branch,
+  onClose,
+}: {
+  sessionId: string;
+  workspaceId: string;
+  path: string;
+  branch: string;
+  onClose: () => void;
+}) {
+  const { runtime } = useRuntimeActions();
+  const [source] = useState({ path, branch });
+  const [rows, setRows] = useState<Checkout[]>();
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
+  const [target, setTarget] = useState<Checkout | 'new'>();
+  const [moving, setMoving] = useState(false);
+  const confirm = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    let current = true;
+    void Promise.all([
+      runtime.request(
+        'checkout-move-status',
+        {},
+        sessionId,
+      ) as Promise<MoveStatus>,
+      runtime.request('checkouts', { workspaceId }, sessionId) as Promise<
+        Checkout[]
+      >,
+    ]).then(
+      ([status, checkouts]) => {
+        if (!current) return;
+        setReason(status.reason ? moveError(status.reason) : '');
+        setRows(checkouts);
+      },
+      (failure) => {
+        if (current) setError(moveError((failure as Error).message));
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [runtime, sessionId, workspaceId]);
+  useEffect(() => {
+    if (target) confirm.current?.focus({ preventScroll: true });
+  }, [target]);
+
+  const query = search.trim().toLowerCase();
+  const visible = rows?.filter((row) =>
+    (row.branch + ' ' + row.path).toLowerCase().includes(query),
+  );
+  const move = async () => {
+    if (!target || moving) return;
+    setError('');
+    setMoving(true);
+    try {
+      await runtime.request(
+        'switch-checkout',
+        {
+          expectedPath: source.path,
+          ...(target === 'new'
+            ? { createWorktree: true, expectedBranch: source.branch }
+            : { checkoutId: target.id, expectedTargetBranch: target.branch }),
+        },
+        sessionId,
+      );
+      onClose();
+    } catch (failure) {
+      setError(moveError((failure as Error).message));
+    } finally {
+      setMoving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onOpenChange={(open) => {
+        if (!open && !moving) onClose();
+      }}
+      title={t('continue in worktree…')}
+      className="checkout-dialog"
+      restoreFocus
+    >
+      {target ? (
+        <>
+          <dl className="checkout-locations">
+            <dt>{t('current location')}</dt>
+            <dd>
+              <bdi>{source.branch}</bdi>
+              <small title={source.path}>
+                <bdi dir="ltr">{source.path}</bdi>
+              </small>
+            </dd>
+            <dt>{t('destination')}</dt>
+            <dd>
+              {target === 'new' ? (
+                t('new worktree from {branch}', { branch: source.branch })
+              ) : (
+                <>
+                  <bdi>{target.branch}</bdi>
+                  <small title={target.path}>
+                    <bdi dir="ltr">{target.path}</bdi>
+                  </small>
+                </>
+              )}
+            </dd>
+          </dl>
+          <p className="checkout-move-note">
+            {t(
+              'only future execution moves; uncommitted changes stay in their checkout',
+            )}
+          </p>
+        </>
+      ) : reason ? (
+        <p className="dialog-paragraph" role="status">
+          {reason}
+        </p>
+      ) : rows ? (
+        <>
+          <SearchInput
+            label={t('search worktrees')}
+            placeholder={t('search worktrees')}
+            value={search}
+            onChange={setSearch}
+            autoFocus
+          />
+          <ul className="checkout-choices">
+            {visible?.map((row) => {
+              const ambiguous = rows.some(
+                (other) => other.id !== row.id && other.branch === row.branch,
+              );
+              return (
+                <li key={row.id}>
+                  <button
+                    type="button"
+                    title={row.path}
+                    aria-current={row.current ? 'true' : undefined}
+                    disabled={row.current}
+                    onClick={() => setTarget(row)}
+                  >
+                    <GitBranch size={14} />
+                    <span>
+                      <bdi>{row.branch}</bdi>
+                      {ambiguous && (
+                        <small>
+                          <bdi>{row.path}</bdi>
+                        </small>
+                      )}
+                    </span>
+                    {row.current && <Check size={14} />}
+                  </button>
+                </li>
+              );
+            })}
+            {!visible?.length && (
+              <li className="checkout-move-note">
+                {t('no matching worktrees')}
+              </li>
+            )}
+          </ul>
+          {!query && (
             <button
+              className="checkout-create"
               type="button"
-              key={row.id}
-              disabled={busy}
-              aria-pressed={selected ? selected === row.id : row.current}
-              title={row.path}
-              onClick={() => run(() => choose(row.id))}
+              onClick={() => setTarget('new')}
             >
-              <strong>{row.branch}</strong>
-              <span>{row.path}</span>
+              <Plus size={14} />
+              {t('create worktree')}
             </button>
-          ))}
-          {!!rows.length && (
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                run(async () => {
-                  const created = (await runtime.request(
-                    'create-checkout',
-                    { workspaceId, branch, start },
-                    sessionId,
-                  )) as Checkout;
-                  await refresh();
-                  await choose(created.id);
-                });
+          )}
+        </>
+      ) : !error ? (
+        <p role="status">{t('loading…')}</p>
+      ) : null}
+      {error && (
+        <p role="alert" className="checkout-move-note">
+          {error}
+        </p>
+      )}
+      <div className="dialog-actions">
+        {target ? (
+          <>
+            <Button
+              type="button"
+              disabled={moving}
+              onClick={() => {
+                setTarget(undefined);
+                setError('');
               }}
             >
-              <label>
-                {t('new branch')}
-                <input
-                  value={branch}
-                  onChange={(event) => setBranch(event.target.value)}
-                  required
-                />
-              </label>
-              <label>
-                {t('starting branch or commit')}
-                <input
-                  value={start}
-                  onChange={(event) => setStart(event.target.value)}
-                  required
-                />
-              </label>
-              <button disabled={busy || !branch.trim() || !start.trim()}>
-                {t('create worktree')}
-              </button>
-            </form>
-          )}
-          <button type="button" disabled={busy} onClick={() => setOpen(false)}>
+              {t('back')}
+            </Button>
+            <Button
+              type="button"
+              ref={confirm}
+              className="primary"
+              disabled={moving}
+              onClick={() => void move()}
+            >
+              {moving ? t('moving conversation…') : t('continue')}
+            </Button>
+          </>
+        ) : (
+          <Button type="button" onClick={onClose}>
             {t('cancel')}
-          </button>
-        </div>
-      )}
-    </div>
+          </Button>
+        )}
+      </div>
+    </Modal>
   );
 }

@@ -59,6 +59,31 @@ export function validPopoutAddress(value: unknown): string {
   return url.href;
 }
 
+type PopoutTarget = { kind: PopoutKind; value: string };
+
+export function validPopoutTarget(
+  kind: PopoutKind,
+  address: unknown,
+  terminalId: unknown,
+): PopoutTarget | undefined {
+  if (address !== undefined && kind !== 'browser')
+    throw Error('invalid address');
+  if (terminalId !== undefined) {
+    if (
+      kind !== 'terminal' ||
+      typeof terminalId !== 'string' ||
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(
+        terminalId,
+      )
+    )
+      throw Error('invalid terminal selection');
+    return { kind, value: terminalId };
+  }
+  return address === undefined
+    ? undefined
+    : { kind, value: validPopoutAddress(address) };
+}
+
 const keyOf = (kind: PopoutKind, sessionId: string) => `${kind}:${sessionId}`;
 const stateOf = (key: string): PopoutState => {
   const [kind, ...rest] = key.split(':');
@@ -88,7 +113,11 @@ export class Popouts<W extends PopoutWindow> {
   private ready = new Set<string>();
   /** Windows on their way out, with the mode each showed. */
   private closing = new Map<W, string>();
-  private opening = new Map<string, { made?: Promise<void> }>();
+  private opening = new Map<
+    string,
+    { made?: Promise<void>; target?: PopoutTarget }
+  >();
+  private targets = new WeakMap<W, PopoutTarget>();
   constructor(
     private options: {
       /** Makes the window and loads its page. */
@@ -99,6 +128,7 @@ export class Popouts<W extends PopoutWindow> {
         hooks: PopoutHooks<W>,
       ) => Promise<W>;
       onChange: (event: PopoutEvent) => void;
+      onTarget?: (window: W, kind: PopoutKind) => void;
     },
   ) {}
 
@@ -126,20 +156,43 @@ export class Popouts<W extends PopoutWindow> {
     return key === undefined ? undefined : stateOf(key);
   }
 
+  /** Only the window that owns this mode and session can take its pending target. */
+  takeTarget(window: W, kind: PopoutKind): string | null {
+    const target = this.targets.get(window);
+    if (target?.kind !== kind || this.owner(window)?.kind !== kind) return null;
+    this.targets.delete(window);
+    return target.value;
+  }
+
+  private setTarget(window: W, target?: PopoutTarget): void {
+    if (!target) return;
+    this.targets.set(window, target);
+    this.options.onTarget?.(window, target.kind);
+  }
+
   /** Opens the window, or brings it forward when it is open already. */
-  open(kind: PopoutKind, sessionId: string, title: string): Promise<void> {
+  open(
+    kind: PopoutKind,
+    sessionId: string,
+    title: string,
+    target?: PopoutTarget,
+  ): Promise<void> {
     const key = keyOf(kind, sessionId);
-    // Two presses before the first window is up make one window.
-    const pending = this.opening.get(key)?.made;
-    if (pending) return pending;
+    // Two presses before the first window is up make one window. Its latest target wins.
+    const pending = this.opening.get(key);
+    if (pending?.made) {
+      if (target) pending.target = target;
+      return pending.made;
+    }
     const open = this.windows.get(key);
     if (open && !open.isDestroyed()) {
       open.setTitle(title);
       open.show();
       open.focus();
+      this.setTarget(open, target);
       return Promise.resolve();
     }
-    const attempt: { made?: Promise<void> } = {};
+    const attempt: { made?: Promise<void>; target?: PopoutTarget } = { target };
     this.opening.set(key, attempt);
     let window: W | undefined;
     let ended = false;
@@ -147,6 +200,7 @@ export class Popouts<W extends PopoutWindow> {
     // taken its place meanwhile.
     const gone = () => {
       ended = true;
+      if (window) this.targets.delete(window);
       if (this.opening.get(key) === attempt) this.opening.delete(key);
       if (!window || this.windows.get(key) !== window) return;
       this.windows.delete(key);
@@ -173,6 +227,7 @@ export class Popouts<W extends PopoutWindow> {
       this.windows.set(key, loaded);
       this.ready.add(key);
       this.options.onChange({ kind, sessionId, open: true });
+      this.setTarget(loaded, attempt.target);
     })().finally(() => {
       if (this.opening.get(key) === attempt) this.opening.delete(key);
     });

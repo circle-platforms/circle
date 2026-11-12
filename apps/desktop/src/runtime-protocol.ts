@@ -13,6 +13,8 @@ export type RuntimeCommandName =
   | 'new-session'
   | 'begin-session'
   | 'checkouts'
+  | 'checkout-branches'
+  | 'checkout-move-status'
   | 'create-checkout'
   | 'switch-checkout'
   | 'select-session'
@@ -133,6 +135,8 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'new-session',
   'begin-session',
   'checkouts',
+  'checkout-branches',
+  'checkout-move-status',
   'create-checkout',
   'switch-checkout',
   'select-session',

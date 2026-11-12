@@ -132,6 +132,9 @@ export class WorkspaceStreamConnection {
     // Defer execution one microtask so synchronous live callbacks also buffer.
     const pending = Promise.resolve()
       .then(run)
+      .catch((error: unknown) => {
+        if (!this.stopped && generation === this.generation) throw error;
+      })
       .finally(() => {
         if (this.replaying === pending) this.replaying = undefined;
       });
@@ -154,7 +157,7 @@ export interface WorkspaceJournalTransport {
 export class WorkspaceStreamRegistry {
   private stores = new Map<string, WorkspaceStreamStore>();
   private connections = new Map<string, WorkspaceStreamConnection>();
-  private sessions = new Map<string, string>();
+  private sessions = new Map<string, Set<string>>();
   private receivers = new Map<string, (event: WorkspaceStreamEvent) => void>();
   private unsubscribe: () => void;
   private transport: WorkspaceJournalTransport;
@@ -185,7 +188,22 @@ export class WorkspaceStreamRegistry {
     return store;
   }
   connect(workspaceId: string, sessionId: string): Promise<void> {
-    this.sessions.set(workspaceId, sessionId);
+    // A moved session can no longer authorize replay of its previous checkout.
+    for (const [previous, sessions] of this.sessions) {
+      if (
+        previous === workspaceId ||
+        !sessions.delete(sessionId) ||
+        sessions.size
+      )
+        continue;
+      this.connections.get(previous)?.stop();
+      this.connections.delete(previous);
+      this.sessions.delete(previous);
+    }
+    const sessions = this.sessions.get(workspaceId) ?? new Set<string>();
+    sessions.delete(sessionId);
+    sessions.add(sessionId);
+    this.sessions.set(workspaceId, sessions);
     let connection = this.connections.get(workspaceId);
     if (!connection) {
       connection = new WorkspaceStreamConnection(
@@ -199,30 +217,32 @@ export class WorkspaceStreamRegistry {
             };
           },
           replay: async (after, limit) => {
-            const authorization = this.sessions.get(workspaceId)!;
-            let page: WorkspaceReplayPage;
+            const recentSession = () =>
+              [...(this.sessions.get(workspaceId) ?? [])].at(-1);
+            const read = async (session: string) => {
+              const page = await this.transport.replay(
+                workspaceId,
+                session,
+                after,
+                limit,
+              );
+              if (
+                page.events.some((event) => event.workspaceId !== workspaceId)
+              )
+                throw Error('workspace replay returned a different journal');
+              return page;
+            };
+            const authorization = recentSession();
+            if (!authorization)
+              throw Error('workspace has no replay authorization');
             try {
-              page = await this.transport.replay(
-                workspaceId,
-                authorization,
-                after,
-                limit,
-              );
+              return await read(authorization);
             } catch (error) {
-              const current = this.sessions.get(workspaceId)!;
-              if (current === authorization) throw error;
-              // A session switch can retire an in-flight authorization. Retry
-              // once under the newly selected known session, never indefinitely.
-              page = await this.transport.replay(
-                workspaceId,
-                current,
-                after,
-                limit,
-              );
+              const current = recentSession();
+              if (!current || current === authorization) throw error;
+              // Retry once under another known session if the first one moved or closed.
+              return read(current);
             }
-            if (page.events.some((event) => event.workspaceId !== workspaceId))
-              throw Error('workspace replay returned a different journal');
-            return page;
           },
         },
         this.applied,
@@ -237,6 +257,7 @@ export class WorkspaceStreamRegistry {
     this.unsubscribe();
     for (const connection of this.connections.values()) connection.stop();
     this.connections.clear();
+    this.sessions.clear();
     this.receivers.clear();
   }
 }

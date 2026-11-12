@@ -11,13 +11,11 @@ import type {
 import { RuntimeTokenBuffer } from '../../../desktop/src/runtime-token-stream';
 import type {
   ActionFailure,
-  Attachment,
+  BeginConversation,
   BeginResult,
   CommandResult,
-  Effort,
   Message,
   RuntimePort,
-  SessionMode,
   WorkbenchSnapshot,
   Session,
   SessionViewPatch,
@@ -315,7 +313,8 @@ export class LiveRuntime implements RuntimePort {
     for (const listener of this.listeners) listener();
     // A file tool or a finished turn may have added files: list the folder again.
     const kind = update.event?.kind;
-    const workspace = currentSession(this.snapshot).workspaceId;
+    const session = currentSession(this.snapshot);
+    const workspace = session.executionWorkspaceId ?? session.workspaceId;
     if (
       workspace !== this.listed ||
       this.snapshot.activeSessionId !== this.listingSession ||
@@ -404,11 +403,15 @@ export class LiveRuntime implements RuntimePort {
     this.listingSession = this.snapshot.activeSessionId;
     const epoch = ++this.listingEpoch;
     const sourceSession = this.snapshot.activeSessionId;
-    const active = () =>
-      !this.disposed &&
-      epoch === this.listingEpoch &&
-      this.snapshot.activeSessionId === sourceSession &&
-      currentSession(this.snapshot).workspaceId === workspaceId;
+    const active = () => {
+      const session = currentSession(this.snapshot);
+      return (
+        !this.disposed &&
+        epoch === this.listingEpoch &&
+        this.snapshot.activeSessionId === sourceSession &&
+        (session.executionWorkspaceId ?? session.workspaceId) === workspaceId
+      );
+    };
     const publish = () => {
       this.snapshot = {
         ...this.snapshot,
@@ -715,7 +718,16 @@ export class LiveRuntime implements RuntimePort {
       // from that same runtime epoch) proves the effect reached this renderer.
       if (!this.disposed && !this.coversAppliedState(reply))
         this.receive(await this.host.runtimeState());
-      if (!reply.ok) throw Error(reply.error ?? t('runtime action failed'));
+      if (!reply.ok) {
+        if (
+          name === 'begin-session' &&
+          reply.error === 'destination branch changed; reopen the worktree menu'
+        )
+          throw Error(
+            t('destination branch changed; reopen the worktree menu'),
+          );
+        throw Error(reply.error ?? t('runtime action failed'));
+      }
       return reply.data;
     })().catch((error) => {
       throw new SessionActionError(
@@ -998,15 +1010,9 @@ export class LiveRuntime implements RuntimePort {
     }
     return id;
   };
-  beginConversation = async (input: {
-    workspaceId?: string | null;
-    checkoutId?: string;
-    text: string;
-    model?: string;
-    effort?: Effort;
-    mode?: SessionMode;
-    attachments?: Attachment[];
-  }): Promise<BeginResult> => {
+  beginConversation = async (
+    input: BeginConversation,
+  ): Promise<BeginResult> => {
     const text = input.text.trim();
     if (!text) throw Error(t('prompt is empty'));
     if (
@@ -1031,6 +1037,10 @@ export class LiveRuntime implements RuntimePort {
     const result = (await this.native('begin-session', {
       ...(workspaceId ? { workspaceId } : {}),
       ...(input.checkoutId ? { checkoutId: input.checkoutId } : {}),
+      ...(input.expectedTargetBranch !== undefined
+        ? { expectedTargetBranch: input.expectedTargetBranch }
+        : {}),
+      ...(input.worktreeBase ? { worktreeBase: input.worktreeBase } : {}),
       text: commandInput ? text : folded.text,
       display: commandInput ? text : folded.display,
       ...(commandInput ? { prepareOnly: true } : {}),
@@ -1125,7 +1135,8 @@ export class LiveRuntime implements RuntimePort {
       }
       const names: Record<string, RuntimeCommandName> = {
         checkouts: 'checkouts',
-        'create-checkout': 'create-checkout',
+        'checkout-branches': 'checkout-branches',
+        'checkout-move-status': 'checkout-move-status',
         'switch-checkout': 'switch-checkout',
         'list-external-file-grants': 'list-external-file-grants',
         'revoke-external-file-grant': 'revoke-external-file-grant',
@@ -1205,6 +1216,11 @@ export class LiveRuntime implements RuntimePort {
     if (
       ![
         'extension.enabled',
+        // Checkout menus show failures at the control that made the request.
+        'checkouts',
+        'checkout-branches',
+        'checkout-move-status',
+        'switch-checkout',
         'list-external-file-grants',
         'revoke-external-file-grant',
         // The card says why its command was not typed.

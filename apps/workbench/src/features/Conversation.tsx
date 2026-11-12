@@ -410,7 +410,8 @@ export function Conversation({
       ? snapshot.files
           .filter(
             (file) =>
-              file.workspaceId === session.workspaceId &&
+              file.workspaceId ===
+                (session.executionWorkspaceId ?? session.workspaceId) &&
               file.path.includes(mention),
           )
           .map((file) => ({

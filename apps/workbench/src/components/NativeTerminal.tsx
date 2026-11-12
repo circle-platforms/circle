@@ -312,6 +312,7 @@ function rememberDismissed(ids: Set<string>) {
 /** Keep mounted while the Inspector is hidden. Its PTYs and reading position persist. */
 export function NativeTerminal({
   sessionId: parentSessionId,
+  requestedTerminal,
   commandTerminal,
   onExitCommandTerminal,
   active = true,
@@ -319,6 +320,7 @@ export function NativeTerminal({
   onAddToDraft,
 }: {
   sessionId: string;
+  requestedTerminal?: string;
   commandTerminal?: CommandTerminalView;
   onExitCommandTerminal?: () => void;
   active?: boolean;
@@ -401,6 +403,11 @@ export function NativeTerminal({
   const searchInput = useRef<HTMLInputElement>(null);
   const selectedId = selectedBySession[sessionId];
   const { snapshot: appSnapshot, notify } = useRuntime();
+  const executionWorkspaceId = appSnapshot.sessions.find(
+    (session) => session.id === sessionId,
+  )?.executionWorkspaceId;
+  const workspaceId =
+    commandTerminal?.resolved.workspaceId ?? executionWorkspaceId;
   const [dismissed, setDismissed] = useState(readDismissed);
   // The row's order as the person dragged it, per conversation, where no main process
   // keeps it (a page without the desktop application). A tab keeps its number wherever
@@ -521,12 +528,18 @@ export function NativeTerminal({
     return () => {
       cancelled = true;
     };
-  }, [sessionId, reload, terminalRequest]);
+  }, [sessionId, reload, terminalRequest, workspaceId]);
 
   useEffect(
     () =>
       subscribeWorkspace((event) => {
-        if (event.service !== 'terminal') return;
+        if (
+          event.service !== 'terminal' ||
+          (event.sessionId === sessionId &&
+            workspaceId &&
+            event.workspaceId !== workspaceId)
+        )
+          return;
         if (
           commandTerminal &&
           (event.sessionId !== sessionId ||
@@ -536,7 +549,7 @@ export function NativeTerminal({
         const update = event.data as unknown as TerminalEvent;
         if (update.snapshot) adopt(update.snapshot);
       }),
-    [adopt, commandKey, sessionId],
+    [adopt, commandKey, sessionId, workspaceId],
   );
 
   // Stopping waits for the shell's console to close, which takes seconds on
@@ -602,6 +615,19 @@ export function NativeTerminal({
     );
     setSelected((previous) => ({ ...previous, [session]: id }));
   };
+
+  // The request and the terminal's creation event travel separately. Select
+  // the requested tab once it belongs to this view, then leave later picks alone.
+  const requestedTabVisible = visible.some(
+    (item) => item.id === requestedTerminal,
+  );
+  const appliedRequest = useRef<string>(undefined);
+  useEffect(() => {
+    if (!requestedTerminal || !requestedTabVisible || commandKey) return;
+    if (appliedRequest.current === requestedTerminal) return;
+    appliedRequest.current = requestedTerminal;
+    bringToFront(sessionId, requestedTerminal, pickCount(sessionId));
+  }, [requestedTerminal, requestedTabVisible, sessionId, commandKey]);
 
   const create = () =>
     run(async () => {
@@ -814,7 +840,7 @@ export function NativeTerminal({
         }
       }
     }
-  }, [inFront?.id, active]);
+  }, [inFront?.id, active, requestedTerminal]);
   const selectedKey = deviceSelected
     ? `dev:${deviceSelected.id}`
     : selected

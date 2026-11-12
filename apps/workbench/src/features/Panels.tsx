@@ -46,6 +46,7 @@ const DOCUMENT_AND_TREE = 620;
 export interface DrawerSelection {
   panel: PanelId;
   value: string;
+  sessionId?: string;
 }
 interface Props {
   fileView?: ReactNode;
@@ -286,6 +287,12 @@ function InspectorResources(
               ) : id === 'terminal' ? (
                 <TerminalMode
                   paused={props.resourcesPaused}
+                  requestedTerminal={
+                    props.selection.panel === 'terminal' &&
+                    props.selection.sessionId === props.sessionId
+                      ? props.selection.value
+                      : undefined
+                  }
                   commandTerminal={props.commandTerminal}
                   onExitCommandTerminal={props.onExitCommandTerminal}
                   sessionId={props.sessionId}
@@ -360,21 +367,25 @@ export function FilesPanel({
 }: { selection: string } & Pick<Props, 'onFile' | 'visible'>) {
   const { snapshot, runtime } = useRuntime();
   const session = currentSession(snapshot);
-  const listing = snapshot.fileListings?.[session.workspaceId];
+  const workspaceId = session.executionWorkspaceId ?? session.workspaceId;
+  const listing = snapshot.fileListings?.[workspaceId];
   const live = runtime.mode === 'live';
   // The names Git says differ from the last commit are coloured, with the letter that
   // says how. Where there is no repository, this conversation's own changes stand in.
   const git = useGitChanges({
     sessionId: session.id,
+    workspaceId,
     live,
     active: !!visible,
     busy: session.state !== 'idle',
     settled: endedToolCalls(session.messages),
   });
-  const workspacePath = snapshot.workspaces.find(
-    (workspace) => workspace.id === session.workspaceId,
-  )?.path;
-  const owner = JSON.stringify([session.workspaceId, session.id]);
+  const workspacePath =
+    session.executionPath ??
+    snapshot.workspaces.find(
+      (workspace) => workspace.id === session.workspaceId,
+    )?.path;
+  const owner = JSON.stringify([workspaceId, session.id]);
   const [query, setQuery] = useOwnerState(owner, '');
   const [open, setOpen] = useOwnerState<Set<string>>(owner, new Set());
   // Opening a source reveals its ancestors without replacing the retained editor.
@@ -389,9 +400,8 @@ export function FilesPanel({
     });
   }, [selection, owner]);
   const workspaceFiles = useMemo(
-    () =>
-      snapshot.files.filter((file) => file.workspaceId === session.workspaceId),
-    [snapshot.files, session.workspaceId],
+    () => snapshot.files.filter((file) => file.workspaceId === workspaceId),
+    [snapshot.files, workspaceId],
   );
   const changed = useMemo(() => {
     const own: ChangeRow[] = sessionChangeRows(session.changes, workspacePath);

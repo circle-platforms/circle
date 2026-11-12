@@ -86,9 +86,9 @@ import { channelOf } from './channel';
 import {
   Popouts,
   type PopoutHooks,
-  validPopoutAddress,
   validPopoutKind,
   validPopoutSession,
+  validPopoutTarget,
   validPopoutTitle,
 } from './popouts';
 import { validPopoutAttachment } from './popout-attachment';
@@ -183,8 +183,6 @@ let trayHintShown = false;
 let hiddenPopouts: BrowserWindow[] = [];
 // The browser and the terminal can leave the drawer for a window of their own.
 let popouts: Popouts<BrowserWindow> | null = null;
-// The address each browser window is to open next, until its page takes it.
-const popoutAddresses = new Map<BrowserWindow, string>();
 // What a window of its own put into a message box, waiting for the main window's answer
 const attachmentAnswers = new Map<
   string,
@@ -625,11 +623,9 @@ async function createPopoutWindow(
   // the application: pressing its mode again makes a new one.
   popout.on('close', () => {
     if (kind === 'browser') browsers?.moveToWindow(sessionId, null);
-    popoutAddresses.delete(popout);
     hooks.closing();
   });
   popout.once('closed', () => {
-    popoutAddresses.delete(popout);
     hooks.closed();
   });
   popout.once('ready-to-show', () => {
@@ -793,6 +789,10 @@ async function openWindow() {
   popouts = new Popouts<BrowserWindow>({
     create: createPopoutWindow,
     onChange: (event) => broadcast('circle:popout-event', event),
+    onTarget: (target, kind) =>
+      target.webContents.send(
+        kind === 'browser' ? 'circle:popout-address' : 'circle:popout-terminal',
+      ),
   });
   runtime?.onTerminalTabs((update) => {
     if (update === 'gone') terminals?.tabsGone();
@@ -1228,6 +1228,26 @@ app
       workspaceSelections.set(selected.id, selected.path);
       return selected;
     });
+    const activeExecutionDirectory = (
+      snapshot: ReturnType<RuntimeSupervisor['state']>['snapshot'],
+      workspaceId: string,
+    ) => {
+      const owner = snapshot.sessions.find(
+        (row) => row.id === snapshot.activeSessionId,
+      );
+      if (
+        !owner ||
+        (owner.executionWorkspaceId ?? owner.workspaceId) !== workspaceId
+      )
+        return undefined;
+      if (workspaceId !== owner.workspaceId)
+        return owner.executionWorkspaceTrusted
+          ? owner.executionPath
+          : undefined;
+      return snapshot.workspaces.find(
+        (row) => row.id === workspaceId && row.trusted,
+      )?.path;
+    };
     handle('circle:reveal-workspace', async (workspaceId, path) => {
       if (
         !runtime ||
@@ -1235,15 +1255,16 @@ app
         (path !== undefined && typeof path !== 'string')
       )
         throw Error('invalid workspace');
-      const workspace = runtime
-        .state()
-        .snapshot.workspaces.find((row) => row.id === workspaceId);
-      if (!workspace) throw Error('workspace not found');
+      const snapshot = runtime.state().snapshot;
+      const directory =
+        activeExecutionDirectory(snapshot, workspaceId) ??
+        snapshot.workspaces.find((row) => row.id === workspaceId)?.path;
+      if (!directory) throw Error('workspace not found');
       // A file of the workspace, named by its path there: shown only when it is still in it
       const shown =
         path === undefined
-          ? workspace.path
-          : await workspaceFileToReveal(workspace.path, path);
+          ? directory
+          : await workspaceFileToReveal(directory, path);
       if (!fixtureProfile) shell.showItemInFolder(shown);
     });
     // The files of the folder the runtime works in, when it is trusted: the app's own
@@ -1259,28 +1280,18 @@ app
         throw Error('invalid workspace listing');
       const snapshot = runtime.state().snapshot;
       const sessionId = snapshot.activeSessionId;
-      const workspace = snapshot.workspaces.find(
-        (row) => row.id === workspaceId,
-      );
+      const directory = activeExecutionDirectory(snapshot, workspaceId);
+      if (!directory) return null;
       const assertActive = () => {
         const current = runtime!.state().snapshot;
         if (
           !runtime!.connected ||
           from.isDestroyed() ||
           current.activeSessionId !== sessionId ||
-          current.sessions.find((row) => row.id === sessionId)?.workspaceId !==
-            workspaceId ||
-          !current.workspaces.find((row) => row.id === workspaceId)?.trusted
+          activeExecutionDirectory(current, workspaceId) !== directory
         )
           throw Error('file listing owner changed');
       };
-      if (
-        !workspace ||
-        !workspace.trusted ||
-        snapshot.sessions.find((row) => row.id === sessionId)?.workspaceId !==
-          workspaceId
-      )
-        return null;
       if (!listingWindows.has(from)) {
         listingWindows.add(from);
         from.once('closed', () => {
@@ -1291,7 +1302,7 @@ app
         from,
         sessionId,
         workspaceId,
-        workspace.path,
+        directory,
         cursor,
         assertActive,
       );
@@ -1403,17 +1414,28 @@ app
         (ownerSessionId !== undefined && typeof ownerSessionId !== 'string')
       )
         throw Error('invalid session');
-      // The page opens in this conversation's browser, from the workspace of the
-      // conversation that has the file: a task's own worktree for a task's file
+      // The conversation that owns the file may run in a linked checkout.
       const snapshot = runtime.state().snapshot;
-      const session = snapshot.sessions.find(
-        (row) => row.id === (ownerSessionId ?? sessionId),
-      );
-      const workspace = snapshot.workspaces.find(
-        (row) => row.id === session?.workspaceId,
-      );
-      if (!workspace) throw Error('workspace not found');
-      return browsers.localPage(sessionId, workspace.path, path);
+      const owner = ownerSessionId ?? sessionId;
+      if (
+        owner !== sessionId &&
+        !snapshot.agents.some(
+          (agent) =>
+            agent.sessionId === sessionId && agent.resourceSessionId === owner,
+        )
+      )
+        throw Error('workspace not found');
+      const session = snapshot.sessions.find((row) => row.id === owner);
+      if (!session) throw Error('workspace not found');
+      const workspaceId = session.executionWorkspaceId ?? session.workspaceId;
+      const directory =
+        workspaceId === session.workspaceId
+          ? snapshot.workspaces.find((row) => row.id === workspaceId)?.path
+          : session.executionWorkspaceTrusted
+            ? session.executionPath
+            : undefined;
+      if (!directory) throw Error('workspace not found');
+      return browsers.localPage(sessionId, directory, path);
     });
     // Only the window that has a conversation's pages places them: the drawer of the main
     // window keeps its hands off while the browser is in a window of its own.
@@ -1424,30 +1446,34 @@ app
     handleFrom('circle:browser-hide', (from, id) => {
       if (browsers && browsers.windowOf(id) === from) browsers.hide(id);
     });
-    // The main window's drawer opens the windows, and may give the browser's an address.
-    handleFrom('circle:popout-open', async (from, kind, id, title, address) => {
-      if (!popouts) throw Error('window not ready');
-      if (from !== window) throw Error('untrusted IPC sender');
-      const mode = validPopoutKind(kind);
-      const sessionId = validPopoutSession(id);
-      const name = validPopoutTitle(title);
-      if (address !== undefined && mode !== 'browser')
-        throw Error('invalid address');
-      const url =
-        address === undefined ? undefined : validPopoutAddress(address);
-      await popouts.open(mode, sessionId, name);
-      const opened = popouts.window(mode, sessionId);
-      if (!url || !opened || opened.isDestroyed()) return;
-      // Its page takes it when it starts, or now when it is up.
-      popoutAddresses.set(opened, url);
-      opened.webContents.send('circle:popout-address');
-    });
-    handleFrom('circle:popout-address', (from) => {
-      if (popouts?.owner(from)?.kind !== 'browser') return null;
-      const url = popoutAddresses.get(from) ?? null;
-      popoutAddresses.delete(from);
-      return url;
-    });
+    // Only the main window can give a popout a target.
+    handleFrom(
+      'circle:popout-open',
+      (from, kind, id, title, address, terminalId) => {
+        if (!popouts) throw Error('window not ready');
+        if (from !== window) throw Error('untrusted IPC sender');
+        const mode = validPopoutKind(kind);
+        const sessionId = validPopoutSession(id);
+        const name = validPopoutTitle(title);
+        const target = validPopoutTarget(mode, address, terminalId);
+        if (
+          target?.kind === 'terminal' &&
+          !terminals
+            ?.state(sessionId)
+            .local?.some((tab) => tab.terminal === target.value)
+        )
+          throw Error('terminal is not owned by this conversation');
+        return popouts.open(mode, sessionId, name, target);
+      },
+    );
+    handleFrom(
+      'circle:popout-address',
+      (from) => popouts?.takeTarget(from, 'browser') ?? null,
+    );
+    handleFrom(
+      'circle:popout-terminal',
+      (from) => popouts?.takeTarget(from, 'terminal') ?? null,
+    );
     handle('circle:popout-dock', (kind, id) => {
       popouts?.dock(validPopoutKind(kind), validPopoutSession(id));
     });

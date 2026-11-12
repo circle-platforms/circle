@@ -255,3 +255,89 @@ test('stop and restart cannot apply an old generation response or clear the new 
   assert.equal(store.cursor.seq, 1);
   connection.stop();
 });
+
+test('moving one session retires its previous journal authorization and ignores its stale reply', async () => {
+  const { WorkspaceStreamRegistry } =
+    await import('../src/model/workspace-stream-connection.ts');
+  let receive!: (row: WorkspaceStreamEvent) => void;
+  let rejectSource!: (error: Error) => void;
+  const calls: string[] = [];
+  const registry = new WorkspaceStreamRegistry({
+    listen: (listener) => {
+      receive = listener;
+      return () => {};
+    },
+    replay: async (workspace, session, after) => {
+      calls.push(`${workspace}:${session}`);
+      if (workspace === 'source' && session === 'moving')
+        return new Promise((_resolve, reject) => {
+          rejectSource = reject;
+        });
+      return { events: [], cursor: after, hasMore: false };
+    },
+  });
+
+  const old = registry.connect('source', 'moving');
+  await Promise.resolve();
+  await registry.connect('target', 'moving');
+  rejectSource(Error('session moved before source replay'));
+  await old;
+  receive({ ...event(1, 'other'), workspaceId: 'source' });
+  receive({ ...event(1, 'moving'), workspaceId: 'target' });
+  assert.equal(registry.store('source').cursor.seq, 0);
+  assert.equal(registry.store('target').cursor.seq, 1);
+
+  await registry.connect('source', 'other');
+  receive({ ...event(1, 'other'), workspaceId: 'source' });
+  assert.equal(registry.store('source').cursor.seq, 1);
+  assert.deepEqual(calls, ['source:moving', 'target:moving', 'source:other']);
+  registry.close();
+});
+
+test('a moved session leaves a previous source session authorized to replay background events', async () => {
+  const { WorkspaceStreamRegistry } =
+    await import('../src/model/workspace-stream-connection.ts');
+  let receive!: (row: WorkspaceStreamEvent) => void;
+  let finishMove!: (page: {
+    events: WorkspaceStreamEvent[];
+    cursor: WorkspaceStreamEvent['cursor'];
+    hasMore: boolean;
+  }) => void;
+  const source1 = { ...event(1, 'background'), workspaceId: 'source' };
+  const source2 = { ...event(2, 'background'), workspaceId: 'source' };
+  const target1 = { ...event(1, 'moving'), workspaceId: 'target' };
+  const calls: string[] = [];
+  const registry = new WorkspaceStreamRegistry({
+    listen: (listener) => {
+      receive = listener;
+      return () => {};
+    },
+    replay: async (workspace, session, after) => {
+      calls.push(`${workspace}:${session}`);
+      if (workspace === 'source' && session === 'moving')
+        return new Promise((resolve) => {
+          finishMove = resolve;
+        });
+      const available = workspace === 'source' ? [source1] : [target1];
+      const events = available.filter((row) => row.seq > after.seq);
+      return { events, cursor: events.at(-1)?.cursor ?? after, hasMore: false };
+    },
+  });
+
+  await registry.connect('source', 'background');
+  const old = registry.connect('source', 'moving');
+  await Promise.resolve();
+  await registry.connect('target', 'moving');
+  finishMove({ events: [target1], cursor: target1.cursor, hasMore: false });
+  await old;
+  receive(source2);
+  assert.equal(registry.store('source').cursor.seq, 2);
+  assert.equal(registry.store('target').cursor.seq, 1);
+  assert.deepEqual(calls, [
+    'source:background',
+    'source:moving',
+    'target:moving',
+    'source:background',
+  ]);
+  registry.close();
+});

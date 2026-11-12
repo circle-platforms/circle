@@ -190,7 +190,11 @@ export interface Session {
     disclosures?: Record<string, { open: boolean; defaultOpen: boolean }>;
   };
   title: string;
+  /** Project for conversation grouping. */
   workspaceId: string;
+  /** Execution checkout for workspace resources and events. */
+  executionWorkspaceId?: string;
+  executionWorkspaceTrusted?: boolean;
   executionPath?: string;
   executionBranch?: string;
   model: string;
@@ -606,6 +610,10 @@ export interface BeginConversation {
   /** A known project. Omit it, or pass null, to work without a project. */
   workspaceId?: string | null;
   checkoutId?: string;
+  /** The branch shown for the chosen existing worktree. */
+  expectedTargetBranch?: string;
+  /** Start the conversation in a new worktree based on this local branch. */
+  worktreeBase?: string;
   text: string;
   /** Choices from the home composer, applied to the session this message starts. */
   model?: string;

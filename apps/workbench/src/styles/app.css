@@ -963,51 +963,115 @@ pre {
   display: flex;
   flex-direction: column;
 }
-/* Where a conversation runs: a button and the list that opens under it. */
-.checkout-picker {
-  position: relative;
-  display: inline-flex;
-  min-width: 0;
-}
-.checkout-options {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 30;
-  width: min(420px, 85vw);
-  padding: 12px;
-  border: 1px solid var(--control-border);
-  border-radius: 8px;
-  background: var(--input);
-  color: var(--fg);
-}
-.checkout-options > button,
-.checkout-options label {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  text-align: start;
-  padding: 6px;
-  overflow-wrap: anywhere;
-}
-.checkout-options button[aria-pressed='true'] {
-  outline: 1px solid var(--focus-ring);
-}
-.checkout-options input {
-  width: 100%;
-}
-/* The top bar's chip sits at the left of its row: its list opens from its left edge. */
-.topbar .checkout-options {
-  right: auto;
-  left: 0;
-}
-button.project-chip {
-  cursor: pointer;
-}
 button.project-chip:hover,
 button.project-chip[aria-expanded='true'] {
   background: var(--active);
   color: var(--fg);
+}
+button.project-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+button.project-chip > span:first-of-type {
+  flex-shrink: 0;
+  max-width: 90px;
+}
+.checkout-menu [role='menuitem'],
+.checkout-choices button,
+.checkout-create {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.checkout-menu [data-disabled] {
+  color: var(--muted);
+  cursor: default;
+}
+.checkout-menu-reason {
+  max-width: 240px;
+  margin: 0;
+  padding: 0 10px 8px 32px;
+  color: var(--muted);
+  font-size: var(--ui-tiny);
+}
+.dialog-content.checkout-dialog {
+  width: min(460px, calc(100vw - 32px));
+}
+.checkout-choices {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  max-height: min(248px, 36dvh);
+  overflow: auto;
+}
+.checkout-choices button,
+.checkout-create {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  text-align: start;
+  border-radius: 4px;
+  font-size: var(--ui-small);
+  color: var(--secondary);
+}
+.checkout-choices button:not(:disabled):hover,
+.checkout-create:hover {
+  background: var(--active);
+  color: var(--fg);
+}
+.checkout-choices button[aria-current] {
+  opacity: 1;
+}
+.checkout-choices button > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.checkout-choices svg,
+.checkout-create svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.checkout-choices small,
+.checkout-locations small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.checkout-create {
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 4px 4px;
+}
+.checkout-locations {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px 16px;
+  margin: 0;
+  font-size: var(--ui-small);
+}
+.checkout-locations dt {
+  color: var(--muted);
+}
+.checkout-locations dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.checkout-locations small {
+  direction: rtl;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.checkout-move-note {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: var(--ui-small);
+  line-height: 1.5;
+}
+.checkout-move-note[role='alert'] {
+  color: var(--negative-text);
 }
 .composer {
   position: relative;

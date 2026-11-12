@@ -60,14 +60,18 @@ export function ChangesMode({
     (item) => item.id === session.workspaceId,
   );
   const live = runtime.mode === 'live';
+  const workspaceId = session.executionWorkspaceId ?? session.workspaceId;
+  const workspacePath = session.executionPath ?? workspace?.path;
+  const owner = JSON.stringify([session.id, workspaceId]);
   const [scope, setScope] = useOwnerState<Scope>(session.id, 'session');
-  const [chosen, setChosen] = useOwnerState(session.id, '');
+  const [chosen, setChosen] = useOwnerState(owner, '');
   const sessionRows = useMemo(
-    () => sessionChangeRows(session.changes, workspace?.path),
-    [session.changes, workspace?.path],
+    () => sessionChangeRows(session.changes, workspacePath),
+    [session.changes, workspacePath],
   );
   const git = useGitChanges({
     sessionId: session.id,
+    workspaceId,
     live,
     active: active && live,
     busy: session.state !== 'idle',
@@ -105,7 +109,7 @@ export function ChangesMode({
     setChosen(selection);
     if (!sessionRows.some((row) => row.path === selection)) setScope('all');
     else setScope('session');
-  }, [selection]);
+  }, [selection, owner]);
   const current = rows.find((row) => row.path === chosen) ?? rows[0];
 
   // A file's difference: the session's own, or the file against the last commit.
@@ -118,7 +122,7 @@ export function ChangesMode({
     scope === 'session' && current
       ? sessionRows.find((row) => row.path === current.path)?.diff
       : undefined;
-  const key = current ? `${session.id}\n${scope}\n${current.path}` : '';
+  const key = current ? `${owner}\n${scope}\n${current.path}` : '';
   useEffect(() => {
     if (!current || !live || sessionDiff) return;
     let stale = false;

@@ -161,6 +161,33 @@ try {
     await page.locator('#list').getAttribute('data-files'),
     /other\.md/,
   );
+  // A move keeps the same session but replaces its checkout and Git state.
+  await set({ active: false });
+  await settle();
+  await page.evaluate(() => window.holdNextGitRead());
+  await set({ active: true });
+  await settle();
+  assert.equal(await reads(), 11);
+  await page.evaluate(() =>
+    window.setGitFiles([{ path: 'target.md', status: 'M' }]),
+  );
+  await set({ workspaceId: 'target-checkout' });
+  await settle();
+  assert.equal(
+    await reads(),
+    12,
+    'a move immediately reads the target checkout',
+  );
+  await page.evaluate(() => window.releaseGitRead());
+  await settle();
+  assert.match(
+    await page.locator('#list').getAttribute('data-files'),
+    /target\.md/,
+  );
+  assert.doesNotMatch(
+    await page.locator('#list').getAttribute('data-files'),
+    /other\.md/,
+  );
   assert.deepEqual(errors, []);
   console.log('git changes refresh: ok');
 } finally {

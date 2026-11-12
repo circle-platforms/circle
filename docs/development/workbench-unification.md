@@ -17,7 +17,7 @@ The owner set these rules on 2026-11-05, after the graphite restyle of #405 was 
 
 - On macOS there is no empty strip above the content. The window's own buttons sit in the first row, which is also the top bar's row (52 pixels). Those rows move the window, and the controls inside them do not.
 - One 1px rule runs under the top bar, across the conversation and the right-hand side.
-- The project and branch chip in the top bar names where the conversation runs: its execution checkout's branch once it was moved to another worktree of the repository. For a trusted project under git the chip is also the button that lists the repository's checkouts and moves the conversation to one, or makes a new worktree. The conversation gets no row of its own for this, above or below the composer (owner's decision, 2026-11-11). On the home page the same list is the **checkout** button beside the project.
+- The top bar's project and branch chip shows the conversation's execution checkout. Its menu offers copying the branch name, opening a terminal there and **continue in worktree…**, which lets the person choose and confirm a destination. The conversation title menu offers the move on narrow windows. The composer of an existing conversation keeps its single row of controls. On the home page the project menu offers a searchable starting branch and existing worktree list, and the composer footer shows the worktree choice. (Owner's decisions, 2026-11-11 and 2026-11-12.)
 
 **Sidebar**
 
