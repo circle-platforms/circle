@@ -47,6 +47,7 @@ import {
 import { setTimeout as delay } from 'node:timers/promises';
 import { basename, join, relative, isAbsolute, sep } from 'node:path';
 import { AgentRuntime, type InteractionContext } from '../../../src/runtime.js';
+import { TOOLS_NOT_LISTED_AGAIN } from '../../../src/mcp_loader.js';
 import type { HookChange } from '../../../src/hooks.js';
 import { defaultRunOptions } from '../../../src/run_options.js';
 import type { Extension, ExtensionCommand } from '../../../src/extensions.js';
@@ -3593,7 +3594,8 @@ export class RuntimeController {
             : spec.enabled === false
               ? 'not connected'
               : status
-                ? status.error
+                ? // Tools that may be out of date are still the server's: the note says why, and it is connected
+                  status.error && status.error !== TOOLS_NOT_LISTED_AGAIN
                   ? 'error'
                   : 'connected'
                 : 'not connected',
