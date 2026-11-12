@@ -6,7 +6,7 @@ import { loadToolPrompt } from '../system_prompt.js';
 import { fitMedia } from '../media.js';
 import type { Effect, Message, Tool, ToolContext } from '../types.js';
 import type { AgentRuntime } from '../runtime.js';
-import { loadSecrets, onlyReferences } from '../secrets.js';
+import { onlyReferences } from '../secrets.js';
 import { VARIABLE_NAME } from '../settings.js';
 import { siteOf } from './hosts.js';
 import { destructive, snapshotElement, waitingDialog } from './format.js';
@@ -236,8 +236,8 @@ export function runtimeBrowserOptions(runtime: () => AgentRuntime): Required<
       runtime()
         .allTools.find((tool) => tool.name === 'write_file')
         ?.prepare?.({ file_path: path, content }, context),
-    variables: () => runtime().options.settings.variables ?? {},
-    secrets: () => loadSecrets(runtime().options.home),
+    variables: () => runtime().runVariables(),
+    secrets: () => runtime().runSecrets(),
   };
 }
 

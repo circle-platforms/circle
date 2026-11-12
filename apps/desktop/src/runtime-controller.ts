@@ -100,6 +100,7 @@ import {
   addHub,
   findHub,
   hubEndpoint,
+  keepHubPlaceholders,
   removeHub,
 } from '../../../src/hub_connection.js';
 import { revokeAuthorization } from '../../../src/mcp_auth.js';
@@ -641,6 +642,9 @@ export class RuntimeController {
       saveSettingsChange(this.home, (saved) => {
         Object.assign(saved, trustFolder(saved, workspace));
       });
+    // The Hub extension's entry names the placeholders a Hub's skills use; one connected before it did gets them
+    if (keepHubPlaceholders(settings))
+      saveSettingsChange(this.home, keepHubPlaceholders);
     try {
       this.active = this.runtime(workspace, saved?.sessionId);
     } catch (error) {
@@ -1420,11 +1424,17 @@ export class RuntimeController {
       throw Error("that is not one of the user's terminal tabs");
     const still = () =>
       this.pending.get(id) === pending && !pending.signal.aborted;
+    const owner = row.sessionId
+      ? (this.runtimes.get(row.sessionId) ??
+        [...this.taskRuntimes.values()].find(
+          (task) => task.session.id === row.sessionId,
+        ))
+      : undefined;
     const name = await this.terminalTabs.typeForPerson(
       row.sessionId,
       session,
-      // What execute would run: the card shows each secret by its name
-      expandVariables(shown, loadSecrets(this.home)),
+      // What execute would run: the card shows each secret by its name, an MCP entry's token among them
+      expandVariables(shown, owner?.runSecrets() ?? loadSecrets(this.home)),
       still,
     );
     if (!still()) return {};

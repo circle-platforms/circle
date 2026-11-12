@@ -113,6 +113,7 @@ try {
       url: peer.origin + '/mcp',
       transport: 'streamable_http',
       enabled: true,
+      placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
     },
   ]);
   // The Hub's page for the code opened beside the conversation
