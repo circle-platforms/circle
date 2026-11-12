@@ -28,6 +28,7 @@ import {
   unsignedUploadRefusal,
 } from '../../../tests/fixtures/knowledge-sync/authorized-server.ts';
 import { setViewport } from './helpers/viewport.mjs';
+import { SIDEBAR_WIDTH } from '../../workbench/src/app/workspace-layout.ts';
 import { waitAnimationFrames } from './helpers/frame-readiness.mjs';
 import { closeNativeSettings } from './helpers/native-settings.mjs';
 import { observePage } from './helpers/diagnostics.mjs';
@@ -404,7 +405,7 @@ async function shot(name) {
       );
       assert.equal(
         Math.round(layout.sidebar.width),
-        232,
+        SIDEBAR_WIDTH,
         name + ': navigation width',
       );
     }
@@ -1045,7 +1046,17 @@ try {
   await route('knowledge', '?q=does-not-exist');
   await page.getByText('没有符合条件的知识', { exact: true }).waitFor();
   await shot('zh-CN-light-1024-empty');
-  await setViewport(app, page, { width: 700, height: 900 }, { show: true });
+  // The narrowest the window goes, still below the width where details become returnable (#524)
+  const narrowest = await app.evaluate(
+    ({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getMinimumSize()[0],
+  );
+  assert.ok(narrowest < 1180, 'the narrowest window shows returnable details');
+  await setViewport(
+    app,
+    page,
+    { width: narrowest, height: 900 },
+    { show: true },
+  );
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await route('knowledge');
   await rows().first().focus();
@@ -1063,7 +1074,7 @@ try {
     .locator('.knowledge-inspector h2')
     .filter({ hasText: keyboardTitle })
     .waitFor();
-  await shot('zh-CN-light-700-keyboard-reduced-motion');
+  await shot(`zh-CN-light-${narrowest}-keyboard-reduced-motion`);
   await button('返回列表').click();
   await page.waitForFunction(
     () =>
@@ -1071,7 +1082,7 @@ try {
       document.activeElement.getAttribute('aria-selected') === 'true',
   );
   checks.push(
-    '1024 details return to the list; 700 navigation, keyboard selection and reduced motion remain usable',
+    `1024 details return to the list; ${narrowest} navigation, keyboard selection and reduced motion remain usable`,
   );
   let finalHead = head();
   await app.close();
