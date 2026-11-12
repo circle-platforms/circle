@@ -93,7 +93,9 @@ export function knowledgeStatusLines(
     '  ' + next,
     ...(status.detail ? ['  refused: ' + oneLine(status.detail)] : []),
     ...(status.discovery === 'fallback'
-      ? ['  the server publishes no discovery document · fixed v1 paths']
+      ? [
+          '  the server publishes no discovery document · fixed v1 paths · no team sharing or team memory',
+        ]
       : []),
   ];
 }

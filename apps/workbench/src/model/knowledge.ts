@@ -96,6 +96,15 @@ export function knowledgeError(error: unknown): string {
     );
   if (code.includes('knowledge-resolve-first'))
     return t('resolve the conflict before changing this item');
+  // What the sync server answered; its own words and any confirmation page are shown with the sync status
+  if (code.includes('knowledge-sync-confirm'))
+    return t('confirm on the sync server’s page to finish this change');
+  if (code.includes('knowledge-sync-login'))
+    return t('sign in to the sync server again');
+  if (code.includes('knowledge-sync-later'))
+    return t('the sync server is unavailable now; try again later');
+  if (code.includes('knowledge-sync-refused'))
+    return t('the sync server refused the request');
   return t('knowledge could not be opened; reload and try again');
 }
 

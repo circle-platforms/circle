@@ -95,7 +95,7 @@ test('status lines say where sync stands and the next step, as the design writes
       'knowledge · offline · team server · last synced 11-03 14:20',
       '  2 items · retrying · /knowledge sync to try now',
       '  refused: 合成的较新错误说明。',
-      '  the server publishes no discovery document · fixed v1 paths',
+      '  the server publishes no discovery document · fixed v1 paths · no team sharing or team memory',
     ],
   );
   assert.deepEqual(

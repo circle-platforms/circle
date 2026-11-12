@@ -77,15 +77,9 @@ export function fallbackDiscovery(
     syncBase: base + SYNC_V1_TEMPLATE_PREFIX,
     capabilities: Object.freeze([]),
     localToolsBase: base + '/local-tools',
-    mcp: Object.freeze({
-      'team-memory-read': {
-        tool: 'get_nodes',
-        argument: 'memory',
-        fixed: { scope: 'team' },
-      },
-      'entry-share': { tool: 'upload_file', argument: 'share_entry' },
-      'memory-share': { tool: 'upload_file', argument: 'memory_share' },
-    }),
+    // No document names the MCP tools that share or read team memory, and Circle names no server's tools itself
+    // (#502): without one, sharing and team memory are unavailable, and say so
+    mcp: Object.freeze({}),
   });
 }
 

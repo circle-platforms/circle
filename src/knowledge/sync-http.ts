@@ -121,14 +121,9 @@ export class SyncHttp implements SyncTransport {
       this.resolved = await this.resolving;
     } catch (error) {
       signal.throwIfAborted();
+      // Retried later, as the server being away is; `detail` is the server's own text, and there is none
       if (error instanceof DiscoveryError && error.retryable)
-        throw new SyncHttpError(
-          0,
-          'SOURCE_RETRYABLE',
-          undefined,
-          0,
-          error.message,
-        );
+        throw new SyncHttpError(0, 'SOURCE_RETRYABLE');
       throw new TypeError(
         error instanceof Error ? error.message : 'discovery document invalid',
       );

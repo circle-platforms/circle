@@ -57,6 +57,9 @@ export class FakeSyncServer {
     status: number;
     code: string;
     retry?: number;
+    /** The server's own explanation (capability error-detail) and a purge's confirmation page. */
+    detail?: string;
+    confirmation?: { url: string; expires_at: string };
   } | null = null;
   onRequest: ((route: string, body: any) => void | Promise<void>) | null = null;
   purging = false;
@@ -160,6 +163,8 @@ export class FakeSyncServer {
       this.send(res, error.status, {
         code: error.code,
         ...(error.retry ? { retry_after_seconds: error.retry } : {}),
+        ...(error.detail ? { detail: error.detail } : {}),
+        ...(error.confirmation ? { confirmation: error.confirmation } : {}),
       });
       return;
     }

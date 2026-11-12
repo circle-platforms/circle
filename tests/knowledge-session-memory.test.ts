@@ -52,6 +52,8 @@ async function world(
     selected?: boolean;
     localContext?: boolean;
     renamedTools?: boolean;
+    /** Team memory is read only through the tool a discovery document names (#502). */
+    discoveryDocument?: boolean;
   } = {},
 ) {
   const root = scratch(t, 'circle-memory-'),
@@ -61,6 +63,7 @@ async function world(
   for (const path of [home, workspace, userHome]) mkdirSync(path);
   const server = new AuthorizedServer(join(root, 'peer'));
   server.renamedTools = options.renamedTools ?? false;
+  server.discoveryDocument = options.discoveryDocument ?? true;
   await server.start();
   cleanup(t, () => server.close());
   const settings = defaultSettings();
@@ -407,6 +410,18 @@ test('team space metadata and bodies obey the 48000 byte reception limit before 
   );
   assert.equal(w.server.memoryQueries.filter((q) => q.document).length, 0);
   assert.ok(w.runtime.loadedSessionMemory!.warnings.length);
+});
+
+test('without a discovery document no tool is guessed: team memory is not read, and personal memory still loads', async (t) => {
+  const w = await world(t, { discoveryDocument: false });
+  w.server.documents = [document(1, 'TEAM_UNDECLARED')];
+  await w.runtime.harness.run('hello');
+  assert.doesNotMatch(w.model.requests[0]!.system, /TEAM_UNDECLARED/);
+  // Nothing was sent to a tool the server never named for team memory
+  assert.equal(w.server.toolNames.includes('get_nodes'), false);
+  assert.equal(w.server.memoryQueries.length, 0);
+  // A server without team memory is no failure to warn about
+  assert.deepEqual(w.runtime.loadedSessionMemory!.warnings, []);
 });
 
 test('team memory is read through the tool and fixed members the server declares', async (t) => {

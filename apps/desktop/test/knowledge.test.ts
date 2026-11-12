@@ -252,6 +252,63 @@ test('the real sync mode precheck is shown before any mode write and changed imp
   assert.equal(status.condition, 'local');
 });
 
+test("a mode change the server holds for confirmation says so, and the sync status carries the server's words and its page", async (t) => {
+  const w = await world(t, true);
+  await w.call({ op: 'sync' });
+  const prepared = await w.call({
+    op: 'prepare',
+    action: 'mode',
+    mode: 'local',
+  });
+  const detail =
+    '合成的说明：删除本人副本需要账户持有人确认。到确认页面确认后重试。';
+  const url = w.server!.origin + '/console/sync?confirm=purge';
+  w.server!.peer.errorNext = {
+    route: 'mode',
+    status: 403,
+    code: 'SYNC_PURGE_CONFIRMATION_REQUIRED',
+    detail,
+    confirmation: {
+      url,
+      expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+    },
+  };
+  // Not "knowledge could not be opened": what the server answered, by its kind
+  await assert.rejects(
+    w.call({ op: 'confirm', ticket: prepared.ticket, confirmed: true }),
+    (error: Error) => error.message === 'knowledge-sync-confirm',
+  );
+  const status = (await w.call({ op: 'settings' })).sync;
+  assert.equal(status.detail, detail);
+  assert.equal(status.confirmation?.url, url);
+  assert.equal(w.server!.peer.mode, 'hub');
+});
+test("a sync the server does not take says by kind why, and the status carries the server's own words", async (t) => {
+  const detail = '合成的说明：这个账户暂时不能同步。请联系管理员。';
+  for (const [answer, kind] of [
+    // Busy or away: try again later, as the status's retry does
+    [{ status: 503, code: 'SOURCE_RETRYABLE' }, 'knowledge-sync-later'],
+    // Refused, with its reason as it came
+    [
+      { status: 403, code: 'BOUNDARY_POLICY_DENIED', detail },
+      'knowledge-sync-refused',
+    ],
+    // The credential no longer works: sign in again
+    [{ status: 401, code: 'SOURCE_UNAVAILABLE' }, 'knowledge-sync-login'],
+  ] as const) {
+    const w = await world(t, true);
+    await w.call({ op: 'sync' });
+    w.server!.peer.errorNext = { route: 'state', ...answer };
+    await assert.rejects(
+      w.call({ op: 'sync' }),
+      (error: Error) => error.message === kind,
+    );
+    const status = (await w.call({ op: 'settings' })).sync;
+    assert.equal(status.detail, 'detail' in answer ? detail : null);
+    if (answer.status === 401) assert.equal(status.condition, 'login-required');
+  }
+});
+
 test('native file selection imports exact source bytes and never grants arbitrary renderer paths or private stores', async (t) => {
   const w = await world(t),
     file = join(w.workspace, 'original  source.txt'),

@@ -58,6 +58,11 @@ export class AuthorizedServer {
    * argument names, so a client that hard-codes the earlier names fails against it.
    */
   renamedTools = false;
+  /**
+   * Publish a discovery document that declares this server's own tool names, as a current server does. Sharing and team
+   * memory need one: without it Circle names no tool (#502). Off for a server that publishes none.
+   */
+  discoveryDocument = true;
   /** The tool name of every tools/call, as the client sent it. */
   readonly toolNames: string[] = [];
   /** Offer the device code (RFC 8628) and a revocation endpoint, as a Circle Hub does. */
@@ -289,7 +294,10 @@ export class AuthorizedServer {
       return;
     }
 
-    if (url.pathname === '/.well-known/knowledge-sync' && this.renamedTools)
+    if (
+      url.pathname === '/.well-known/knowledge-sync' &&
+      (this.renamedTools || this.discoveryDocument)
+    )
       return json(200, {
         schema: 'knowledge-sync-discovery@1',
         issuer: this.origin,
@@ -311,15 +319,28 @@ export class AuthorizedServer {
         local_tools: { base_url: this.origin + '/local-tools' },
         mcp: {
           endpoint: this.origin + '/mcp',
-          capabilities: {
-            'entry-share': { tool: 'team_share', argument: 'entry' },
-            'memory-share': { tool: 'team_share', argument: 'memory' },
-            'team-memory-read': {
-              tool: 'team_preferences',
-              argument: 'query',
-              fixed: { scope: 'team' },
-            },
-          },
+          capabilities: this.renamedTools
+            ? {
+                'entry-share': { tool: 'team_share', argument: 'entry' },
+                'memory-share': { tool: 'team_share', argument: 'memory' },
+                'team-memory-read': {
+                  tool: 'team_preferences',
+                  argument: 'query',
+                  fixed: { scope: 'team' },
+                },
+              }
+            : {
+                'entry-share': { tool: 'upload_file', argument: 'share_entry' },
+                'memory-share': {
+                  tool: 'upload_file',
+                  argument: 'memory_share',
+                },
+                'team-memory-read': {
+                  tool: 'get_nodes',
+                  argument: 'memory',
+                  fixed: { scope: 'team' },
+                },
+              },
         },
         synthetic_future_member: true,
       });
