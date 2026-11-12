@@ -332,6 +332,33 @@ test('the connect preview says when this account has never synced on this device
   await w.call({ op: 'cancel', ticket: again.ticket });
 });
 
+test('sync now after a failed sync asks the server at once, as the status says it can (#522)', async (t) => {
+  for (const answer of [
+    // The service is away: the client's own back-off
+    { status: 503, code: 'SOURCE_RETRYABLE', condition: 'offline' },
+    // An answer Circle could not use: paused until the person asks
+    { status: 422, code: 'SUBMISSION_SCHEMA_VIOLATION', condition: 'invalid' },
+  ]) {
+    const w = await world(t, true);
+    await w.call({ op: 'sync' });
+    const peer = w.server!.peer;
+    peer.errorNext = {
+      route: 'state',
+      status: answer.status,
+      code: answer.code,
+    };
+    await w.call({ op: 'sync' }).catch(() => {});
+    assert.equal(
+      (await w.call({ op: 'settings' })).sync.condition,
+      answer.condition,
+    );
+    const before = peer.calls.length;
+    await w.call({ op: 'sync' });
+    assert.ok(peer.calls.length > before, answer.condition);
+    assert.equal((await w.call({ op: 'settings' })).sync.condition, 'synced');
+  }
+});
+
 test('native file selection imports exact source bytes and never grants arbitrary renderer paths or private stores', async (t) => {
   const w = await world(t),
     file = join(w.workspace, 'original  source.txt'),

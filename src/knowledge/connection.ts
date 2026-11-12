@@ -278,8 +278,9 @@ export class KnowledgeConnection {
   }
   async synchronize(): Promise<void> {
     if (!this.client) throw Error('select an authorized MCP connection first');
-    if (this.client.status.condition === 'login-required')
-      await this.client.resumeAuthorization();
+    const condition = this.client.status.condition;
+    if (condition === 'login-required') await this.client.resumeAuthorization();
+    else if (condition === 'invalid') await this.client.retryInvalid();
     await this.client.runOnce(true);
   }
   async checkMode(

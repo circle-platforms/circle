@@ -54,6 +54,11 @@ interface Journal {
   condition: SyncCondition;
   failures: number;
   nextAt: number;
+  /**
+   * Until when the server asked not to be asked again (429, `retry_after_seconds`). A sync the person asks for waits
+   * for this; the rest of a back-off is the client's own, and an asked-for sync does not wait it out (#522).
+   */
+  notBefore?: number;
   /** The last refusal the server explained; cleared by the next success. */
   refusal?: { code: string; detail?: string };
   /** A purge waiting for the account holder's confirmation on the server. */
@@ -347,7 +352,11 @@ export class KnowledgeSync {
             j.condition === 'invalid')) ||
         (j.nextAt > this.now() &&
           !(
-            force && ['synced', 'pending', 'conflicted'].includes(j.condition)
+            force &&
+            ['synced', 'pending', 'conflicted', 'offline', 'capacity'].includes(
+              j.condition,
+            ) &&
+            !((j.notBefore ?? 0) > this.now())
           )))
     )
       return;
@@ -566,12 +575,16 @@ export class KnowledgeSync {
                 : 'offline';
       if (j.condition === 'login-required' || j.condition === 'invalid')
         j.paused = true;
+      const serverWait =
+        error instanceof SyncHttpError ? error.retryAfterSeconds * 1000 : 0;
       j.nextAt =
         this.now() +
         Math.max(
           Math.min(300000, 1000 * 2 ** Math.min(j.failures, 9)),
-          error instanceof SyncHttpError ? error.retryAfterSeconds * 1000 : 0,
+          serverWait,
         );
+      if (serverWait) j.notBefore = this.now() + serverWait;
+      else delete j.notBefore;
     }
     this.save(j);
   }
@@ -942,6 +955,21 @@ export class KnowledgeSync {
       }
     });
     return true;
+  }
+  /**
+   * A sync the person asks for after an answer Circle could not use: tried again, with the same pending operation and
+   * common base, instead of staying paused (#522).
+   */
+  async retryInvalid(): Promise<void> {
+    await this.exclusive(async () => {
+      const j = this.store.syncRead<Journal>('active');
+      if (!j || j.binding !== this.options.binding || j.condition !== 'invalid')
+        return;
+      j.paused = false;
+      j.condition = 'pending';
+      j.nextAt = 0;
+      this.save(j);
+    });
   }
   /** Host-confirmed retry after authorization; retain the exact pending operation and common base. */
   async resumeAuthorization(): Promise<void> {

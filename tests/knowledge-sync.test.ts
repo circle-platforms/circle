@@ -135,6 +135,67 @@ test('a device that synced before the record existed counts by its current journ
   assert.equal(syncedBefore(home, 'another-account'), false);
 });
 
+test('a sync the person asks for during the back-off after a failure is tried at once, unless the server set the wait (#522)', async (t) => {
+  const w = await world(t);
+  const client = w.clients[0]!;
+  w.memory(0, '退避');
+  await client.runOnce();
+  const asked = () => w.server.calls.filter((c) => c.route === 'state').length;
+  // The service is away: Circle backs off, and its own loop waits that out
+  w.server.errorNext = {
+    route: 'state',
+    status: 503,
+    code: 'SOURCE_RETRYABLE',
+  };
+  await assert.rejects(client.runOnce(true));
+  assert.equal(client.status.condition, 'offline');
+  const before = asked();
+  await client.runOnce();
+  assert.equal(asked(), before);
+  // Asked for: sent now (a sync asks for the state more than once)
+  await client.runOnce(true);
+  assert.ok(asked() > before);
+  assert.equal(client.status.condition, 'synced');
+  // The server asks for a minute: an asked-for sync waits too, and is sent once the minute is over
+  w.server.errorNext = {
+    route: 'state',
+    status: 429,
+    code: 'SYNC_RATE_LIMITED',
+    retry: 60,
+  };
+  await assert.rejects(client.runOnce(true));
+  const limited = asked();
+  await client.runOnce(true);
+  assert.equal(asked(), limited);
+  w.advance(61000);
+  await client.runOnce(true);
+  assert.ok(asked() > limited);
+  assert.equal(client.status.condition, 'synced');
+});
+
+test('a sync the person asks for after an answer Circle could not use tries again (#522)', async (t) => {
+  const w = await world(t);
+  const client = w.clients[0]!;
+  w.memory(0, '无效');
+  await client.runOnce();
+  const asked = () => w.server.calls.filter((c) => c.route === 'state').length;
+  w.server.errorNext = {
+    route: 'state',
+    status: 422,
+    code: 'SUBMISSION_SCHEMA_VIOLATION',
+  };
+  await assert.rejects(client.runOnce(true));
+  assert.equal(client.status.condition, 'invalid');
+  // Paused: neither its own loop nor a plain retry sends anything
+  const before = asked();
+  await client.runOnce(true);
+  assert.equal(asked(), before);
+  await client.retryInvalid();
+  await client.runOnce(true);
+  assert.ok(asked() > before);
+  assert.equal(client.status.condition, 'synced');
+});
+
 test('different stable identities merge as a union and repeated idle polls reuse the snapshot', async (t) => {
   const w = await world(t);
   w.memory(0, '基础');
