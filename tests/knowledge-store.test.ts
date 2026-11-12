@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import {
   KnowledgeStore,
   KnowledgeVersionConflict,
@@ -593,6 +594,18 @@ test('newer and unrelated databases are rejected without downgrading or changing
   );
   foreign.close();
   assert.throws(() => new KnowledgeStore(other), /not a Circle/);
+});
+
+test("a sync batch keeps its object limit; a local change's objects are not counted against it (#525)", (t) => {
+  const w = world(t),
+    over = Array.from({ length: 65 }, (_, n) =>
+      entry('合成批量 ' + n, [], randomUUID()),
+    );
+  assert.throws(() => w.store.putBatch(over), /knowledge batch object limit/);
+  assert.equal(w.store.has(computeObjectDigest(over[0])), false);
+  const ids = w.store.putChange(over);
+  assert.deepEqual(ids, over.map(computeObjectDigest));
+  for (const id of ids) assert.equal(w.store.has(id), true);
 });
 
 test('invalid or corrupt objects cannot become readable registered data', (t) => {
