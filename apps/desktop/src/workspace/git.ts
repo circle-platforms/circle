@@ -101,6 +101,51 @@ function changedFiles(raw: string, stats?: string): GitCommitDiff['entries'] {
       });
   return entries;
 }
+/** The rows of `git status --porcelain=v1 -z`: each path with its index and working-tree columns. */
+function statusEntries(raw: string): GitSnapshot['entries'] {
+  const fields = raw.split('\0');
+  const entries: GitSnapshot['entries'] = [];
+  for (let i = 0; i < fields.length; i++) {
+    const row = fields[i];
+    if (!row) continue;
+    const entry = {
+      index: row[0]!,
+      working: row[1]!,
+      path: row.slice(3),
+      originalPath: undefined as string | undefined,
+    };
+    if (/[RC]/.test(row.slice(0, 2))) entry.originalPath = fields[++i];
+    entries.push(entry);
+  }
+  return entries;
+}
+/**
+ * A diff against the working tree without the files only Git's cached file times call changed. This service never
+ * writes the index, so its `git diff` runs without the index's auto-refresh, and a file whose modification time changed
+ * while its content and mode stayed those it is compared with (an edit undone and saved, a file a tool rewrote as it was)
+ * is listed as modified, with no lines counted, until something else refreshes the index. `git status` compares such a
+ * file's content in memory and leaves it out. A row goes only when the status does not list its path for that
+ * comparison and no lines are counted for it, so a change made after the status was read still shows.
+ */
+function withoutTimeOnly(
+  entries: GitCommitDiff['entries'],
+  status: GitSnapshot['entries'],
+  against: 'head' | 'index',
+): GitCommitDiff['entries'] {
+  const changed = (column: string) => !' ?!'.includes(column);
+  const listed = new Set<string>();
+  for (const entry of status)
+    if (
+      changed(entry.working) ||
+      (against === 'head' && changed(entry.index))
+    ) {
+      listed.add(entry.path);
+      if (entry.originalPath) listed.add(entry.originalPath);
+    }
+  return entries.filter(
+    (entry) => listed.has(entry.path) || typeof entry.added === 'number',
+  );
+}
 export interface GitInvocation {
   pushAuthentication?: GitPushAuthentication;
   signal?: AbortSignal;
@@ -373,20 +418,7 @@ export class GitWorkspaceService {
     const root = rootValue.trim(),
       branch = branchValue.trim(),
       indexPath = indexValue.trim();
-    const fields = raw.split('\0');
-    const entries: GitSnapshot['entries'] = [];
-    for (let i = 0; i < fields.length; i++) {
-      const row = fields[i];
-      if (!row) continue;
-      const entry = {
-        index: row[0],
-        working: row[1],
-        path: row.slice(3),
-        originalPath: undefined as string | undefined,
-      };
-      if (/[RC]/.test(row.slice(0, 2))) entry.originalPath = fields[++i];
-      entries.push(entry);
-    }
+    const entries = statusEntries(raw);
     const hash = createHash('sha256')
       .update(JSON.stringify({ head, branch, originPushUrls, merging }))
       .update(raw);
@@ -728,9 +760,13 @@ export class GitWorkspaceService {
       '--no-renames',
     ];
     const files: GitCommitDiff['entries'] = head
-      ? changedFiles(
-          await this.git([...options, '--name-status', '-z', 'HEAD', '--']),
-          await this.git([...options, '--numstat', '-z', 'HEAD', '--']),
+      ? withoutTimeOnly(
+          changedFiles(
+            await this.git([...options, '--name-status', '-z', 'HEAD', '--']),
+            await this.git([...options, '--numstat', '-z', 'HEAD', '--']),
+          ),
+          state.entries,
+          'head',
         )
       : [];
     const root = await realpath(this.root);
@@ -1035,13 +1071,29 @@ export class GitWorkspaceService {
       }
       args.push('--');
       if (params.paths) args.push(...this.paths(params.paths));
-      let text = await this.git(args);
       const options = args.slice(0, args.indexOf('--')),
         paths = args.slice(args.indexOf('--'));
-      const entries = changedFiles(
+      // Against the working tree, what Git's status says changed (withoutTimeOnly)
+      const status =
+        scope === 'working' || scope === 'head'
+          ? statusEntries(
+              await this.git([
+                'status',
+                '--porcelain=v1',
+                '-z',
+                '--untracked-files=no',
+                ...paths,
+              ]),
+            )
+          : undefined;
+      let text = await this.git(args);
+      const listed = changedFiles(
         await this.git([...options, '--name-status', '-z', ...paths]),
         await this.git([...options, '--numstat', '-z', ...paths]),
       );
+      const entries = status
+        ? withoutTimeOnly(listed, status, scope === 'head' ? 'head' : 'index')
+        : listed;
       const previews = [];
       if ((scope === 'working' || scope === 'head') && params.paths) {
         const explicit = this.paths(params.paths);

@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -150,5 +159,75 @@ test('the head scope shows one file against the last commit, whether the edit is
   await assert.rejects(
     service.call('diff', { scope: 'elsewhere' }),
     /invalid diff scope/,
+  );
+});
+
+test("a file whose content is the last commit's is no change when only its time changed, text or binary, and reading writes no index", async (t) => {
+  const { root, git, service } = await repository(t);
+  await writeFile(join(root, 'image.bin'), Buffer.from([0, 1, 2, 0]));
+  await git('add', 'image.bin');
+  await git('commit', '-m', 'Binary');
+  // An edit undone and saved: the same content, another modification time
+  const before = new Date('2020-01-01T00:00:00Z');
+  await writeFile(join(root, 'a.txt'), 'one\ntwo\nthree\n');
+  await writeFile(join(root, 'image.bin'), Buffer.from([0, 1, 2, 0]));
+  await utimes(join(root, 'a.txt'), before, before);
+  await utimes(join(root, 'image.bin'), before, before);
+  // Real changes beside them: an edit, and on a system with file modes a mode
+  await writeFile(join(root, 'b.txt'), 'keep\nmore\n');
+  const modes = process.platform !== 'win32';
+  if (modes) await chmod(join(root, 'gone.txt'), 0o755);
+  const index = await readFile(join(root, '.git', 'index'));
+  // Git read as this service reads it, without refreshing the index, calls the untouched files modified
+  const unrefreshed = (
+    await exec(
+      'git',
+      [
+        '-C',
+        root,
+        '-c',
+        'diff.autoRefreshIndex=false',
+        'diff',
+        '--name-status',
+        '-z',
+        'HEAD',
+        '--',
+      ],
+      { encoding: 'utf8', env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } },
+    )
+  ).stdout.split('\0');
+  assert.ok(
+    unrefreshed.includes('a.txt') && unrefreshed.includes('image.bin'),
+    "the fixture changed only those files' times",
+  );
+
+  const result = (await service.call('changes')) as {
+    files: { path: string; status: string }[];
+  };
+  assert.deepEqual(letters(result.files), {
+    'b.txt': 'M',
+    ...(modes ? { 'gone.txt': 'M' } : {}),
+  });
+  for (const scope of ['head', 'working'])
+    for (const path of ['a.txt', 'image.bin']) {
+      const diff = (await service.call('diff', { scope, paths: [path] })) as {
+        text: string;
+        entries: unknown[];
+      };
+      assert.deepEqual(diff.entries, [], `${scope}: ${path}`);
+      assert.equal(diff.text, '', `${scope}: ${path}`);
+    }
+  const edited = (await service.call('diff', {
+    scope: 'working',
+    paths: ['b.txt'],
+  })) as { entries: { path: string }[] };
+  assert.deepEqual(
+    edited.entries.map((entry) => entry.path),
+    ['b.txt'],
+  );
+  assert.deepEqual(
+    await readFile(join(root, '.git', 'index')),
+    index,
+    'the index is not written',
   );
 });
