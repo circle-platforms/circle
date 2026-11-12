@@ -3463,6 +3463,8 @@ test('the Hub extension connects a Hub by its typed address with a device code, 
       url: peer.origin + '/mcp',
       transport: 'streamable_http',
       enabled: true,
+      // The placeholders a Hub's skills write for its address and token
+      placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
     },
   ]);
   assert.equal(saved.extensions.hub?.enabled, true);

@@ -9,6 +9,7 @@ import {
   findHub,
   hubCandidates,
   hubEndpoint,
+  keepHubPlaceholders,
   removeHub,
 } from '../src/hub_connection.js';
 import { keptFor, revokeAuthorization } from '../src/mcp_auth.js';
@@ -113,6 +114,8 @@ test('the Hub entry is added with the extension on, keeps its id when replaced, 
       url: 'https://hub.example.test/mcp',
       transport: 'streamable_http',
       enabled: true,
+      // The names a Hub's skills write for the Hub's endpoint and token
+      placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
     },
   ]);
   assert.equal(settings.extensions.hub?.enabled, true);
@@ -175,4 +178,33 @@ test('signing out revokes the tokens at the revocation endpoint and forgets them
     false,
   );
   assert.deepEqual(keptFor(home, server), {}, 'forgotten all the same');
+});
+
+test('a Hub entry from before the entry named its placeholders gets them while the extension is on, and one that names its own keeps them', () => {
+  const settings = defaultSettings();
+  const legacy = {
+    name: HUB_SERVER,
+    url: 'http://192.0.2.10:7420/mcp',
+    transport: 'streamable_http',
+  };
+  settings.mcp_servers = [
+    { name: 'other', url: 'http://192.0.2.20/mcp' },
+    { ...legacy },
+  ];
+  // The extension off: the entry is not the extension's to change
+  assert.equal(keepHubPlaceholders(settings), false);
+  assert.deepEqual(settings.mcp_servers.slice()[1], legacy);
+  settings.extensions = { ...settings.extensions, hub: { enabled: true } };
+  assert.equal(keepHubPlaceholders(settings), true);
+  assert.deepEqual(settings.mcp_servers.slice(), [
+    { name: 'other', url: 'http://192.0.2.20/mcp' },
+    { ...legacy, placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' } },
+  ]);
+  // Done once: nothing more to change
+  assert.equal(keepHubPlaceholders(settings), false);
+  settings.mcp_servers[1] = { ...legacy, placeholders: { url: 'MY_HUB' } };
+  assert.equal(keepHubPlaceholders(settings), false);
+  assert.deepEqual(settings.mcp_servers.slice()[1]?.placeholders, {
+    url: 'MY_HUB',
+  });
 });

@@ -19,7 +19,7 @@ import {
   serverBaseUrl,
   verifyInstalled,
 } from '../src/local_skills.js';
-import type { CircleSettings } from '../src/settings.js';
+import { writePrivateJson, type CircleSettings } from '../src/settings.js';
 
 const TOKEN = 'synthetic-token-value';
 const sha = (bytes: Uint8Array | string): string =>
@@ -138,33 +138,97 @@ async function tempRoot(): Promise<string> {
   return await mkdtemp(join(tmpdir(), 'circle-local-skills-'));
 }
 
-test('resolveServer reads the named MCP server entry, its saved secret or a literal bearer', () => {
-  const settings = settingsWith({
-    name: 'example',
-    url: 'http://127.0.0.1:9000/mcp',
-    headers: { Authorization: 'Bearer ${secret:EXAMPLE_TOKEN}' },
-  });
-  assert.deepEqual(
-    resolveServer(settings, { EXAMPLE_TOKEN: 'saved' }, 'example'),
-    { url: 'http://127.0.0.1:9000/mcp', token: 'saved' },
-  );
-  const literal = settingsWith({
-    name: 'example',
-    url: 'http://127.0.0.1:9001/mcp',
-    headers: { authorization: 'Bearer literal-token' },
-  });
-  assert.deepEqual(resolveServer(literal, {}, 'example'), {
-    url: 'http://127.0.0.1:9001/mcp',
-    token: 'literal-token',
-  });
-  const unknown = resolveServer(settings, { EXAMPLE_TOKEN: 'saved' }, 'other');
-  assert.ok('problem' in unknown && unknown.problem.includes('other'));
-  const missing = resolveServer(
-    settingsWith({ name: 'example', url: 'http://127.0.0.1:9000/mcp' }),
-    {},
-    'example',
-  );
-  assert.ok('problem' in missing && missing.problem.includes('令牌'));
+test("resolveServer takes the entry's Authorization header, else the token its sign-in keeps, and says what is missing", async () => {
+  const home = await tempRoot();
+  try {
+    const settings = settingsWith({
+      name: 'example',
+      url: 'http://127.0.0.1:9000/mcp',
+      headers: { Authorization: 'Bearer ${secret:EXAMPLE_TOKEN}' },
+    });
+    assert.deepEqual(
+      await resolveServer(settings, { EXAMPLE_TOKEN: 'saved' }, 'example', {
+        home,
+      }),
+      { url: 'http://127.0.0.1:9000/mcp', token: 'saved' },
+    );
+    const literal = settingsWith({
+      name: 'example',
+      url: 'http://127.0.0.1:9001/mcp',
+      headers: { authorization: 'Bearer literal-token' },
+    });
+    assert.deepEqual(await resolveServer(literal, {}, 'example', { home }), {
+      url: 'http://127.0.0.1:9001/mcp',
+      token: 'literal-token',
+    });
+    // The Hub extension's entry has no header: the token its sign-in keeps is used
+    const hub = settingsWith({
+      name: 'Hub',
+      url: 'http://127.0.0.1:9002/mcp',
+      transport: 'streamable_http',
+      enabled: true,
+    });
+    const missing = await resolveServer(hub, {}, 'Hub', { home });
+    assert.ok('problem' in missing);
+    assert.match(missing.problem, /还没有登录/);
+    assert.match(missing.fix, /设置 → 扩展/);
+    assert.match(missing.fix, /\/mcp/);
+    writePrivateJson(join(home, 'mcp-auth.json'), {
+      servers: {
+        'http://127.0.0.1:9002/mcp': {
+          tokens: { access_token: 'signed-in-token', token_type: 'Bearer' },
+        },
+      },
+    });
+    assert.deepEqual(await resolveServer(hub, {}, 'Hub', { home }), {
+      url: 'http://127.0.0.1:9002/mcp',
+      token: 'signed-in-token',
+    });
+    // An unknown name lists the entries there are
+    const unknown = await resolveServer(
+      settings,
+      { EXAMPLE_TOKEN: 'saved' },
+      'other',
+      { home },
+    );
+    assert.ok('problem' in unknown);
+    assert.match(unknown.problem, /other/);
+    assert.match(unknown.problem, /已有：example/);
+    // A header naming a secret that is not saved says which
+    const unsaved = await resolveServer(settings, {}, 'example', { home });
+    assert.ok(
+      'problem' in unsaved && unsaved.problem.includes('EXAMPLE_TOKEN'),
+    );
+    // A disabled entry is not used, signed in or not
+    const disabled = await resolveServer(
+      settingsWith({
+        name: 'Hub',
+        url: 'http://127.0.0.1:9002/mcp',
+        transport: 'streamable_http',
+        enabled: false,
+      }),
+      {},
+      'Hub',
+      { home },
+    );
+    assert.ok('problem' in disabled && disabled.problem.includes('已停用'));
+    // An entry not started for another reason says that reason
+    const broken = await resolveServer(
+      settingsWith({
+        name: 'Hub',
+        url: 'http://127.0.0.1:9002/mcp',
+        transport: 'streamable_http',
+        max_file_bytes: 0,
+      }),
+      {},
+      'Hub',
+      { home },
+    );
+    assert.ok('problem' in broken);
+    assert.match(broken.problem, /没有启动：max_file_bytes/);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });
 
 test('serverBaseUrl and parsePackRef keep the shared contract', () => {

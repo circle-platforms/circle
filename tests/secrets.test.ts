@@ -28,6 +28,7 @@ import {
   loadSettings,
   loadSettingsFromDict,
   trustFolder,
+  writePrivateJson,
 } from '../src/settings.js';
 import { buildSystemPrompt } from '../src/system_prompt.js';
 import type { Tool, ToolContext } from '../src/types.js';
@@ -522,6 +523,98 @@ test('a secret question that is not answered asks again rather than pointing to 
   assert.match(result, /Ask again with the question tool/);
   assert.doesNotMatch(result, /target file/);
   assert.deepEqual(loadSecrets(root), {});
+});
+
+test("an MCP entry's endpoint and sign-in token are the placeholders it names: a tool gets the values, the model reads the token's name, and a saved value stays", async (t) => {
+  const root = scratch(t);
+  const hub = 'http://127.0.0.1:9/mcp';
+  writePrivateJson(join(root, 'mcp-auth.json'), {
+    servers: {
+      [hub]: {
+        tokens: { access_token: 'hub-sign-in-token', token_type: 'Bearer' },
+        grant_id: 'grant-1',
+      },
+    },
+  });
+  const seen: Record<string, unknown>[] = [];
+  // A Hub skill's fetch: the address in its arguments, the token on standard input
+  const fetchRun: Tool = {
+    name: 'fetch_run',
+    description: 'fetches a run from the Hub',
+    effect: 'read',
+    parameters: {
+      type: 'object',
+      properties: { hub: { type: 'string' }, stdin: { type: 'string' } },
+      required: ['hub', 'stdin'],
+    },
+    run: async (args) => {
+      seen.push(structuredClone(args));
+      return `sent ${String(args.stdin)} to ${String(args.hub)}`;
+    },
+  };
+  const model = new ScriptedModel([
+    {
+      message: {
+        id: 'calls',
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'fetch',
+            name: 'fetch_run',
+            args: { hub: '%HUB_URL%', stdin: '%HUB_TOKEN%' },
+          },
+        ],
+      },
+    },
+    { message: { id: 'done', role: 'assistant', content: 'done' } },
+  ]);
+  const settings = trustFolder(defaultSettings(), root);
+  // The entry the Hub extension keeps: no header, its sign-in is in mcp-auth.json, and it names the placeholders a
+  // Hub's skills write
+  settings.mcp_servers = [
+    {
+      name: 'Hub',
+      url: hub,
+      transport: 'streamable_http',
+      enabled: true,
+      placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
+    },
+  ];
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings,
+    model,
+    extraTools: [fetchRun],
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('fetch the run');
+  assert.deepEqual(seen, [{ hub, stdin: 'hub-sign-in-token' }]);
+  const result = model.requests[1]!.messages.find(
+    (message) => message.role === 'tool' && message.tool_call_id === 'fetch',
+  )!.content;
+  assert.equal(result, `sent %HUB_TOKEN% to ${hub}`);
+  assert.equal(
+    JSON.stringify(model.requests).includes('hub-sign-in-token'),
+    false,
+  );
+  assert.ok(model.requests[0]!.system.includes(`- HUB_URL = ${hub}`));
+  assert.match(
+    model.requests[0]!.system,
+    /which you know only by name: HUB_TOKEN/,
+  );
+  // Signed out: no token; a value the person saves under the name is theirs
+  writePrivateJson(join(root, 'mcp-auth.json'), { servers: {} });
+  assert.equal(runtime.runSecrets().HUB_TOKEN, undefined);
+  assert.equal(runtime.runVariables().HUB_URL, hub);
+  saveSecret(root, 'HUB_TOKEN', 'kept-by-the-person');
+  assert.equal(runtime.runSecrets().HUB_TOKEN, 'kept-by-the-person');
+  // An entry that names no placeholders gives neither
+  runtime.options.settings.mcp_servers = [
+    { name: 'Hub', url: hub, transport: 'streamable_http', enabled: true },
+  ];
+  assert.equal(runtime.runVariables().HUB_URL, undefined);
 });
 
 test('the model is told the variables with their values and the secrets by name only', () => {

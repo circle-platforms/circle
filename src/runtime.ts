@@ -34,6 +34,7 @@ import { Sandbox } from './sandbox.js';
 import { EditorBridge } from './editor_bridge.js';
 import { buildTools, type Todo } from './tools.js';
 import { browserToolsWanted } from './browser/tools.js';
+import { mcpPlaceholders } from './mcp_placeholders.js';
 import {
   loadSecrets,
   MAX_SECRET,
@@ -639,8 +640,8 @@ export class AgentRuntime {
     // A background command can print a secret: its notice reaches the model and history.
     // Calls and notices share what values each secret had.
     this.redact = secretRedactor(
-      () => loadSecrets(this.options.home),
-      () => this.options.settings.variables ?? {},
+      () => this.runSecrets(),
+      () => this.runVariables(),
     );
     this.jobs.redact = (text, sessionId) =>
       this.redact(text, {}, () => written(this.store.messages(sessionId)));
@@ -866,9 +867,10 @@ export class AgentRuntime {
           written(this.store.messages(context.sessionId)),
         ),
       localSkills: {
-        settings: this.options.settings,
-        secrets: () => loadSecrets(this.options.home),
-        variables: () => this.options.settings.variables ?? {},
+        home: this.options.home,
+        settings: () => this.options.settings,
+        secrets: () => this.runSecrets(),
+        variables: () => this.runVariables(),
       },
       screenshot:
         this.options.screenshot === false
@@ -1120,8 +1122,8 @@ export class AgentRuntime {
             forCall: (sessionId, callId) =>
               this.jobs.executionFor(sessionId, callId),
           },
-          variables: () => this.options.settings.variables,
-          secrets: () => loadSecrets(this.options.home),
+          variables: () => this.runVariables(),
+          secrets: () => this.runSecrets(),
           redact: this.redact,
           model: childModel,
           tools: ownedChildTools,
@@ -1280,8 +1282,8 @@ export class AgentRuntime {
         forCall: (sessionId, callId) =>
           this.jobs.executionFor(sessionId, callId),
       },
-      variables: () => this.options.settings.variables,
-      secrets: () => loadSecrets(this.options.home),
+      variables: () => this.runVariables(),
+      secrets: () => this.runSecrets(),
       redact: this.redact,
       model: this.modelWithSearch(model),
       holdTitle: this.options.holdTitle,
@@ -1582,8 +1584,8 @@ export class AgentRuntime {
           extensionTools: this.extensions.tools(),
           userHome: this.options.userHome,
           localContext: this.options.localContext,
-          variables: this.options.settings.variables,
-          secrets: secretNames(this.options.home),
+          variables: this.runVariables(),
+          secrets: Object.keys(this.runSecrets()).sort(),
           attribution: this.options.settings.attribution,
           headless: this.options.headless,
           mcpInstructions: this.mcp.instructions(),
@@ -1620,6 +1622,31 @@ export class AgentRuntime {
     return preferences ? build(preferences) : base;
   }
 
+  /**
+   * The secrets a call may name as `%NAME%`: those saved, and the tokens of the MCP server entries that name a
+   * placeholder for theirs (mcp_placeholders.ts), unless the person keeps a value under that name.
+   */
+  runSecrets(): Record<string, string> {
+    const secrets = loadSecrets(this.options.home);
+    return {
+      ...mcpPlaceholders(this.options.home, this.options.settings, {
+        variables: this.options.settings.variables ?? {},
+        secrets,
+      }).secrets,
+      ...secrets,
+    };
+  }
+  /** The plain variables a call may name: the person's, and the endpoints of the MCP entries that name a placeholder for theirs. */
+  runVariables(): Record<string, string> {
+    const variables = this.options.settings.variables ?? {};
+    return {
+      ...mcpPlaceholders(this.options.home, this.options.settings, {
+        variables,
+        secrets: loadSecrets(this.options.home),
+      }).variables,
+      ...variables,
+    };
+  }
   /** The variables or the secrets changed: the next request tells the model. */
   refreshPrompt(): void {
     this.refreshSystemPrompt();

@@ -116,6 +116,12 @@ export function hubEndpoint(settings: CircleSettings): string | undefined {
 }
 
 /**
+ * The placeholders the Hub entry names (mcp_placeholders.ts): a Hub's own skills write the Hub's endpoint and token as
+ * `%HUB_URL%` and `%HUB_TOKEN%`, so a program they run reaches the Hub with the person's own sign-in.
+ */
+export const HUB_PLACEHOLDERS = { url: 'HUB_URL', token: 'HUB_TOKEN' } as const;
+
+/**
  * Puts the Hub entry for `endpoint` into `settings` (as saveSettingsChange changes them), keeping that entry's id when
  * there was one, and keeps the extension on.
  */
@@ -129,6 +135,7 @@ export function addHub(settings: CircleSettings, endpoint: string): void {
       url: endpoint,
       transport: 'streamable_http',
       enabled: true,
+      placeholders: { ...HUB_PLACEHOLDERS },
     },
   ];
   settings.extensions = {
@@ -142,4 +149,20 @@ export function removeHub(settings: CircleSettings): void {
   settings.mcp_servers = settings.mcp_servers.filter(
     (row) => row.name !== HUB_SERVER,
   );
+}
+
+/**
+ * Gives a Hub entry written before the entry named its placeholders (by hand, or by Circle 1.16) the placeholders
+ * addHub writes, while the Hub extension is on; a Hub entry that names its own is left as it is. True when it changed
+ * `settings`.
+ */
+export function keepHubPlaceholders(settings: CircleSettings): boolean {
+  if (settings.extensions.hub?.enabled !== true) return false;
+  let changed = false;
+  settings.mcp_servers = settings.mcp_servers.map((row) => {
+    if (row.name !== HUB_SERVER || row.placeholders !== undefined) return row;
+    changed = true;
+    return { ...row, placeholders: { ...HUB_PLACEHOLDERS } };
+  });
+  return changed;
 }

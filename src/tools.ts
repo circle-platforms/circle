@@ -78,11 +78,17 @@ export interface ToolHooks {
     reference?: string,
   ) => Promise<string>;
   compact?: (hint: string, context: ToolContext) => Promise<string>;
-  /** The installer/runner of the local tools an MCP server publishes: settings and the saved secrets it may use. */
+  /**
+   * The installer/runner of the local tools an MCP server publishes: the settings as they are now (the Hub can be
+   * connected after the tools were made), the secrets and variables it may put in, and the home whose MCP sign-ins it
+   * may use. `root` is the skills root; tests give their own.
+   */
   localSkills?: {
-    settings: CircleSettings;
+    home: string;
+    settings: () => CircleSettings;
     secrets: () => Record<string, string>;
     variables: () => Record<string, string>;
+    root?: string;
   };
   /** Offer `screenshot`; tests give it their own runner. */
   screenshot?: Omit<ScreenshotOptions, 'app' | 'target'>;
@@ -500,11 +506,16 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
   );
   if (hooks.localSkills) {
     const localSkills = hooks.localSkills;
-    const server = (name: string): { url: string; token: string } => {
-      const resolved = resolveServer(
-        localSkills.settings,
+    const root = localSkills.root ?? SKILLS_ROOT;
+    const server = async (
+      name: string,
+      signal?: AbortSignal,
+    ): Promise<{ url: string; token: string }> => {
+      const resolved = await resolveServer(
+        localSkills.settings(),
         localSkills.secrets(),
         name,
+        { home: localSkills.home, ...(signal ? { signal } : {}) },
       );
       if ('problem' in resolved)
         throw new Error(`${resolved.problem}；${resolved.fix}`);
@@ -521,7 +532,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       schema(
         {
           server: text(
-            'Name of the MCP server entry that publishes the pack; its url and Authorization header are used',
+            'Name of the MCP server entry that publishes the pack; its url and the token its connection sends (its Authorization header, or its sign-in) are used',
           ),
           pack: text(
             'Pack reference id@version, copied from the answer of that server',
@@ -538,7 +549,10 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         ['server', 'pack'],
       ),
       async (args, context) => {
-        const { url, token } = server(string(args, 'server'));
+        const { url, token } = await server(
+          string(args, 'server'),
+          context.signal,
+        );
         try {
           // The base the server declares in its discovery document; beside the MCP entry
           // only when it has none. The entry's own scheme is kept, as before discovery.
@@ -552,6 +566,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
               token,
               toolsBase,
               ref: string(args, 'pack'),
+              root,
               ...(typeof args.digest === 'string' && args.digest.length > 0
                 ? { digest: args.digest }
                 : {}),
@@ -564,7 +579,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       },
     );
     add('skill_list', 'read', schema({}), async () =>
-      JSON.stringify({ skills: await listInstalled(SKILLS_ROOT) }),
+      JSON.stringify({ skills: await listInstalled(root) }),
     );
     add(
       'skill_run',
@@ -590,6 +605,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         try {
           return JSON.stringify(
             await runTool({
+              root,
               pack: string(args, 'pack'),
               script: string(args, 'script'),
               ...(Array.isArray(args.args)
