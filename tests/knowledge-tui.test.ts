@@ -374,6 +374,24 @@ test('sync connection, mode and login cards are their own actions, not knowledge
     '12 local items will sync with this account',
     'local files stay',
   ]);
+  // The first time this account syncs on this device, the card says how to keep content here instead (#502)
+  const first = card(t, 'knowledge_connect', {
+    change: {
+      action: 'select sync connection',
+      server: '团队服务器',
+      origin: 'https://192.0.2.10',
+      retained_local_items: 12,
+      first_sync: true,
+    },
+  });
+  assert.deepEqual(content(first).slice(0, 6), [
+    '● connect sync server',
+    '团队服务器 · https://192.0.2.10',
+    '12 local items will sync with this account',
+    'first sync on this device',
+    'local only any time: /knowledge mode local',
+    'local files stay',
+  ]);
   const mode = card(t, 'knowledge_mode', {
     change: {
       mode: 'local',

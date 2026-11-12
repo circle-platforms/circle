@@ -309,6 +309,29 @@ test("a sync the server does not take says by kind why, and the status carries t
   }
 });
 
+test('the connect preview says when this account has never synced on this device, and stops once it has', async (t) => {
+  const w = await world(t, true);
+  const calls = w.server!.peer.calls.length;
+  const first = await w.call({
+    op: 'prepare',
+    action: 'connect',
+    server: 'selected',
+  });
+  assert.equal(first.firstSync, true);
+  // From local records: the preview sent nothing to the server
+  assert.equal(w.server!.peer.calls.length, calls);
+  await w.call({ op: 'cancel', ticket: first.ticket });
+  await w.call({ op: 'sync' });
+  assert.ok((await w.call({ op: 'settings' })).sync.lastSyncedAt);
+  const again = await w.call({
+    op: 'prepare',
+    action: 'connect',
+    server: 'selected',
+  });
+  assert.equal(again.firstSync, undefined);
+  await w.call({ op: 'cancel', ticket: again.ticket });
+});
+
 test('native file selection imports exact source bytes and never grants arbitrary renderer paths or private stores', async (t) => {
   const w = await world(t),
     file = join(w.workspace, 'original  source.txt'),

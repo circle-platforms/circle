@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { decodeSyncObject } from '../src/knowledge/canonical.js';
 import { KnowledgeStore } from '../src/knowledge/store.js';
 import { KnowledgeService } from '../src/knowledge/service.js';
-import { KnowledgeSync } from '../src/knowledge/sync.js';
+import { KnowledgeSync, syncedBefore } from '../src/knowledge/sync.js';
 import { SyncHttp } from '../src/knowledge/sync-http.js';
 import { mergeSnapshots } from '../src/knowledge/merge.js';
 import { FakeSyncServer } from './fixtures/knowledge-sync/fake-server.js';
@@ -96,6 +96,43 @@ test('two HTTP clients exchange exact objects, offline changes, conflicts and ex
     ),
   );
   assert.ok(w.server.calls.every((c) => !c.headers.cookie));
+});
+
+test('an account has synced on this device once a sync of it finished, whatever account is selected later', async (t) => {
+  const w = await world(t);
+  const home = w.homes[0]!;
+  assert.equal(syncedBefore(home, 'synthetic-account'), false);
+  w.memory(0, '首次同步');
+  assert.equal(syncedBefore(home, 'synthetic-account'), false);
+  await w.clients[0]!.runOnce();
+  assert.ok(w.clients[0]!.status.lastSyncedAt);
+  // Another account takes over the journal; this one's record stays
+  const store = new KnowledgeStore(home);
+  try {
+    store.syncWrite('active', { binding: 'other-account', base: null });
+  } finally {
+    store.close();
+  }
+  assert.equal(syncedBefore(home, 'synthetic-account'), true);
+  assert.equal(syncedBefore(home, 'other-account'), false);
+});
+
+test('a device that synced before the record existed counts by its current journal', (t) => {
+  const home = scratch(t, 'circle-sync-before-');
+  // A device without a knowledge store has synced nothing, and nothing is created to answer
+  assert.equal(syncedBefore(home, 'earlier-account'), false);
+  assert.equal(existsSync(join(home, 'knowledge')), false);
+  const store = new KnowledgeStore(home);
+  try {
+    store.syncWrite('active', {
+      binding: 'earlier-account',
+      lastSyncedAt: '2026-11-01T00:00:00.000Z',
+    });
+  } finally {
+    store.close();
+  }
+  assert.equal(syncedBefore(home, 'earlier-account'), true);
+  assert.equal(syncedBefore(home, 'another-account'), false);
 });
 
 test('different stable identities merge as a union and repeated idle polls reuse the snapshot', async (t) => {

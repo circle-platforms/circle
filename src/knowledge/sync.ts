@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { KnowledgeStore, KnowledgeVersionConflict } from './store.js';
 import { mergeSnapshots } from './merge.js';
 import { decodeSyncObject, formatJcs } from './canonical.js';
@@ -57,6 +59,24 @@ interface Journal {
   /** A purge waiting for the account holder's confirmation on the server. */
   confirmation?: PurgeConfirmation;
 }
+/**
+ * Whether this account has finished a sync on this device, from local records only: the record its first finished
+ * sync leaves, or the current journal, which is all a device kept before that record existed. Read before a
+ * connection is selected, so it sends nothing.
+ */
+export function syncedBefore(home: string, binding: string): boolean {
+  if (!binding || !existsSync(join(home, 'knowledge', 'knowledge.sqlite')))
+    return false;
+  const store = new KnowledgeStore(home);
+  try {
+    if (store.syncRead(`synced:${binding}`)) return true;
+    const j = store.syncRead<Journal>('active');
+    return j?.binding === binding && !!j.lastSyncedAt;
+  } finally {
+    store.close();
+  }
+}
+
 export interface SyncStatus {
   condition: SyncCondition;
   lastSyncedAt: string | null;
@@ -828,6 +848,8 @@ export class KnowledgeSync {
         j.base = result.state.snapshot;
         j.state = result.state.state_version;
         j.lastSyncedAt = receipt.at;
+        // Kept whatever account is selected later: this one has synced on this device
+        this.store.syncWrite(`synced:${j.binding}`, { at: receipt.at });
         j.failures = 0;
         delete j.refusal;
         j.condition =

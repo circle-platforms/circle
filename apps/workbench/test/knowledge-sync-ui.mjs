@@ -1,7 +1,8 @@
 // Settings → sync says what the sync server answered, in its own words: a refusal as "the server refused: …", a purge
 // it holds for the account holder with the page to confirm on and its deadline, and a server without a discovery
-// document as syncing on the fixed paths with no team sharing. A refused "sync now" is said by its kind. English and
-// Chinese, light and dark, narrow and wide; a synthetic runtime, no network.
+// document as syncing on the fixed paths with no team sharing. A refused "sync now" is said by its kind, and connecting
+// an account that never synced on this device says so. English and Chinese, light and dark, narrow and wide; a synthetic
+// runtime, no network.
 import { chromium } from 'playwright';
 import { createServer } from 'vite';
 import { fileURLToPath } from 'node:url';
@@ -106,6 +107,31 @@ try {
             { exact: true },
           )
           .waitFor();
+        // Connecting an account that never synced on this device says where its content goes and how to keep it here
+        await settings
+          .getByRole('button', {
+            name: label('use this connection…', '使用此连接…'),
+            exact: true,
+          })
+          .click();
+        const dialog = page.getByRole('dialog', {
+          name: label('use this connection', '使用此连接'),
+          exact: true,
+        });
+        await dialog
+          .getByText(
+            label(
+              'personal content will sync to this server; you can switch to only on this device at any time',
+              '本人空间的内容会同步到这台服务器，随时可以改成“仅保存在本机”',
+            ),
+            { exact: true },
+          )
+          .waitFor();
+        await page.screenshot({ path: join(output, `${name}-first-sync.png`) });
+        await dialog
+          .getByRole('button', { name: label('cancel', '取消'), exact: true })
+          .click();
+        await dialog.waitFor({ state: 'detached' });
         assert.deepEqual(errors, []);
         receipts.push(name);
         await page.close();

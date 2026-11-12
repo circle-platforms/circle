@@ -371,6 +371,39 @@ test('a direct Bearer connection offers credential replacement rather than claim
   );
 });
 
+test('connecting an account that never synced on this device says so, from local records, and stops saying it once it has', async (t) => {
+  const w = await session(t),
+    server = new AuthorizedServer(scratch(t, 'circle-terminal-peer-'));
+  await server.start();
+  cleanup(t, () => server.close());
+  await server.seed(w.home);
+  const config = {
+    name: '团队服务器',
+    transport: 'streamable_http',
+    url: server.origin + '/mcp',
+  };
+  w.runtime.options.settings.mcp_servers = [config];
+  w.settings.mcp_servers = [config];
+  saveSettings(w.settings, w.home);
+  const first = /first sync on this device/;
+  const before = server.peer.calls.length;
+  const selecting = w.app.submit('/knowledge connect 团队服务器');
+  await until(() => !!w.ui.state.dialog);
+  assert.match(JSON.stringify(w.ui.state.dialog.lines), first);
+  // Decided from local records: nothing was asked of the server before the person chose
+  assert.equal(server.peer.calls.length, before);
+  w.key('y');
+  await selecting;
+  await w.app.submit('/knowledge sync');
+  assert.ok(w.runtime.knowledge.status().lastSyncedAt);
+  await w.app.submit('/knowledge disconnect');
+  const again = w.app.submit('/knowledge connect 团队服务器');
+  await until(() => !!w.ui.state.dialog);
+  assert.doesNotMatch(JSON.stringify(w.ui.state.dialog.lines), first);
+  w.key('n');
+  await again;
+});
+
 test('the terminal says synced and local, asks with named cards and leaves a notice per sync change', async (t) => {
   const w = await session(t),
     server = new AuthorizedServer(scratch(t, 'circle-terminal-peer-'));
