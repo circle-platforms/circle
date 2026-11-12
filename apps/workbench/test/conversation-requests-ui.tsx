@@ -44,6 +44,7 @@ const item: Interaction =
             name: 'lint',
             event: 'after_tool',
             command: 'npm run lint',
+            screenshot: true,
             mark: 'changed',
           },
           {

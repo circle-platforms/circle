@@ -204,6 +204,14 @@ export interface HarnessOptions {
    * them. Subagents share the runner but do not start or stop the session.
    */
   hooks?: HookRunner;
+  /**
+   * A PNG of the page this session's browser shows, for an after_tool hook that asks for one; undefined when there is
+   * no page. It must not start a browser.
+   */
+  hookScreenshot?: (
+    sessionId: string,
+    signal: AbortSignal,
+  ) => Promise<Buffer | undefined>;
   /** False for a subagent: tool hooks still run, session start and stop do not. */
   sessionHooks?: boolean;
   /**
@@ -1820,6 +1828,12 @@ export class Harness {
             toolOutput: content,
             toolStatus: 'success',
             secrets: this.hookSecrets(),
+            ...(this.options.hookScreenshot
+              ? {
+                  screenshot: (capture: AbortSignal) =>
+                    this.options.hookScreenshot!(this.sessionId, capture),
+                }
+              : {}),
             signal,
           })
         : undefined;

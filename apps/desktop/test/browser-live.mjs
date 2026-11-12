@@ -473,6 +473,34 @@ await script([
   },
   answer('ring-held', 'the ring stayed on'),
 ]);
+// An after_tool hook that asks for a screenshot (#502): it keeps what it got, and a copy of the page's PNG
+const hookSeen = join(temp, 'hook-screenshot.json');
+// The desktop's runtime keeps its data, and so its own hooks file, in runtime-home under the application's data folder
+await mkdir(join(dataPath, 'runtime-home'), { recursive: true });
+await writeFile(
+  join(temp, 'hook-screenshot.mjs'),
+  `import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+const file = input.files?.[0];
+if (file && existsSync(file.path)) copyFileSync(file.path, ${JSON.stringify(join(temp, 'hook-screenshot.png'))});
+writeFileSync(${JSON.stringify(hookSeen)}, JSON.stringify({ tool: input.tool_name, files: input.files }));
+`,
+);
+await writeFile(
+  join(dataPath, 'runtime-home', 'hooks.json'),
+  JSON.stringify({
+    hooks: {
+      after_tool: [
+        {
+          name: 'keep the page',
+          command: `${JSON.stringify(process.execPath)} ${JSON.stringify(join(temp, 'hook-screenshot.mjs'))}`,
+          tools: 'browser_screenshot',
+          screenshot: true,
+        },
+      ],
+    },
+  }),
+);
 const env = {
   ...process.env,
   CIRCLE_HOME: join(temp, 'circle-home'),
@@ -1045,6 +1073,18 @@ try {
     assert.match(await textOf('snapshot'), /fixture-answer/);
     checks.push(
       'snapshot and screenshot run without another approval, and the browser PNG reaches the next model request',
+    );
+    // The hook that asked got the page as a PNG of its own, removed once it had finished
+    const hooked = JSON.parse(await readFile(hookSeen, 'utf8'));
+    assert.equal(hooked.tool, 'browser_screenshot');
+    assert.equal(hooked.files?.[0]?.kind, 'screenshot');
+    assert.equal(hooked.files[0].mime_type, 'image/png');
+    const hookPng = await readFile(join(temp, 'hook-screenshot.png'));
+    assert.equal(hookPng.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+    assert.equal(hookPng.length, hooked.files[0].size);
+    assert.equal(existsSync(hooked.files[0].path), false);
+    checks.push(
+      'an after_tool hook that asks for a screenshot gets the page as a PNG file, removed when it has finished',
     );
     // The panel seen whole: the page is a native view, not DOM, so it has to follow the
     // panel across the workspace and back, sitting on the box the person sees.

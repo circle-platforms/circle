@@ -103,10 +103,20 @@ export function HookChanges({
             <span>
               <strong>{HOOK_MARKS[hook.mark]?.() ?? hook.mark}</strong> ·{' '}
               {hook.name} · {hook.event}
+              {hook.screenshot ? ' · ' + t('with screenshot') : ''}
             </span>
             <pre className="approval-command">{hook.command}</pre>
           </li>
         ))}
+      {hooks.some((hook) => hook.screenshot && hook.mark !== 'removed') && (
+        <li data-mark="screenshot">
+          <span>
+            {t(
+              'with screenshot: the hook also gets a picture of the page the browser shows, as a file the model never sees',
+            )}
+          </span>
+        </li>
+      )}
       {same.length > 0 && (
         <li data-mark="unchanged">
           <span>

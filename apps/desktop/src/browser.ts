@@ -3315,6 +3315,48 @@ export class BrowserSessions {
     );
     return sections.join('\n');
   }
+  /**
+   * The page the conversation shows, for an after_tool hook that asked for it (#502). It is not kept as the screenshot
+   * coordinate clicks go by, and nothing is captured while the person has the browser, the page waits on a dialog or
+   * failed to load, or no page is open: no image then.
+   */
+  private async capturePage(
+    conversation: Conversation,
+    signal: AbortSignal,
+  ): Promise<BrowserResult> {
+    signal.throwIfAborted();
+    const tab = conversation.active
+      ? conversation.tabs.get(conversation.active)
+      : undefined;
+    if (
+      !tab ||
+      tab.contents.isDestroyed() ||
+      tab.failure ||
+      tab.dialogs.length ||
+      conversation.control === 'user' ||
+      conversation.control === 'user_pending'
+    )
+      return { text: 'no page to capture' };
+    // The page as shown, without Circle's own marks on it
+    await this.js(tab, 'overlay-hidden', { hidden: true }, signal).catch(
+      () => {},
+    );
+    try {
+      const { image } = await this.limit(
+        captureFrame(async () =>
+          tab.contents.capturePage(undefined, {
+            stayAwake: true,
+            stayHidden: !tab.view.getVisible(),
+          }),
+        ),
+        signal,
+        10000,
+      );
+      return { text: 'captured', image: image.toPNG().toString('base64') };
+    } finally {
+      await this.js(tab, 'overlay-hidden', { hidden: false }).catch(() => {});
+    }
+  }
   // ---- the model's actions
   async agent(
     value: BrowserRequest,
@@ -3322,6 +3364,13 @@ export class BrowserSessions {
   ): Promise<BrowserResult> {
     const request = validateBrowserRequest(value);
     const conversation = this.conversation(this.validId(request.sessionId));
+    if (request.action === 'capture') {
+      // After the conversation's own actions, and without being one: nothing waiting on the person changes
+      const capture = () => this.capturePage(conversation, signal);
+      const captured = conversation.queue.then(capture, capture);
+      conversation.queue = captured.catch(() => {});
+      return captured;
+    }
     const run = async (): Promise<BrowserResult> => {
       signal.throwIfAborted();
       const approval = request.args.approval as

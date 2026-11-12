@@ -5,7 +5,16 @@
 // still refuses a credential file when it runs, after the hooks.
 import { spawn, execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import {
   basename,
   dirname,
@@ -68,6 +77,11 @@ export interface HookDefinition {
   file: string;
   /** Set when the hook ships with a skill. It runs only after that skill is loaded. */
   skill?: string;
+  /**
+   * after_tool only: the hook also gets a PNG of the page the conversation's browser shows, as a file, which never
+   * reaches the model (#502). Off unless the hooks file says `"screenshot": true`.
+   */
+  screenshot?: boolean;
 }
 
 export interface HookLoadError {
@@ -92,6 +106,8 @@ export interface HookPreview {
   name: string;
   event: HookEvent;
   command: string;
+  /** The hook also gets a screenshot of the browser's page. */
+  screenshot?: boolean;
   mark: 'new' | 'changed' | 'unchanged' | 'removed';
 }
 
@@ -146,7 +162,20 @@ export interface HookRunRequest {
   secrets?: Record<string, string>;
   /** Run only these hook ids. Used when a skill is loaded after the session started. */
   onlyIds?: string[];
+  /**
+   * A PNG of the page the conversation's browser shows, taken when a hook that runs asks for one (`screenshot`), at
+   * most once per event; undefined when no page is open. It must not start a browser.
+   */
+  screenshot?: (signal: AbortSignal) => Promise<Buffer | undefined>;
   signal?: AbortSignal;
+}
+/** A file a hook gets beside its JSON, named in the JSON's `files`. */
+export interface HookFile {
+  kind: 'screenshot';
+  path: string;
+  mime_type: 'image/png';
+  sha256: string;
+  size: number;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -507,6 +536,16 @@ function readHookFile(
         problems.push(`${event}[${index}] ${badField} is not usable`);
         return;
       }
+      if (
+        entry.screenshot !== undefined &&
+        (typeof entry.screenshot !== 'boolean' ||
+          (entry.screenshot && event !== 'after_tool'))
+      ) {
+        problems.push(
+          `${event}[${index}] screenshot must be true or false, and only after_tool takes it`,
+        );
+        return;
+      }
       const command = resolveHookCommand(
         {
           command: entry.command,
@@ -529,6 +568,7 @@ function readHookFile(
         sourceLabel,
         file,
         ...(skill ? { skill } : {}),
+        ...(entry.screenshot === true ? { screenshot: true } : {}),
       });
     });
   }
@@ -560,6 +600,7 @@ interface ApprovedHook {
   name: string;
   event: string;
   command: string;
+  screenshot?: boolean;
 }
 
 /** One approved version of a project hooks file: its digest and the hooks it held. */
@@ -579,7 +620,12 @@ function approvedHooks(value: unknown): ApprovedHook[] | undefined {
       typeof item.command !== 'string'
     )
       return undefined;
-    hooks.push({ name: item.name, event: item.event, command: item.command });
+    hooks.push({
+      name: item.name,
+      event: item.event,
+      command: item.command,
+      ...(item.screenshot === true ? { screenshot: true } : {}),
+    });
   }
   return hooks;
 }
@@ -620,6 +666,7 @@ function previewHooks(
     name: hook.name,
     event: hook.event,
     command: hook.command,
+    ...(hook.screenshot ? { screenshot: true } : {}),
   }));
   if (!previous) return rows.map((hook) => ({ ...hook, mark: 'new' as const }));
   const used = new Set<number>();
@@ -629,7 +676,8 @@ function previewHooks(
         !used.has(index) &&
         item.event === hook.event &&
         item.name === hook.name &&
-        item.command === hook.command,
+        item.command === hook.command &&
+        !!item.screenshot === !!hook.screenshot,
     );
     if (exact >= 0) {
       used.add(exact);
@@ -650,6 +698,7 @@ function previewHooks(
       name: hook.name,
       event: hook.event as HookEvent,
       command: hook.command,
+      ...(hook.screenshot ? { screenshot: true } : {}),
       mark: 'removed',
     }));
   return [...marked, ...removed];
@@ -669,6 +718,7 @@ export function approveHookFile(home: string, change: HookChange): void {
         name: hook.name,
         event: hook.event,
         command: hook.command,
+        ...(hook.screenshot ? { screenshot: true } : {}),
       })),
     };
     writePrivateJson(path, { version: 1, files });
@@ -1144,6 +1194,43 @@ export class HookRunner {
   }
 
   async run(request: HookRunRequest): Promise<HookBatch> {
+    // The page's picture, for the hooks that ask for it: taken once, in a folder of its own, removed when the event's
+    // hooks have all finished
+    let folder: string | undefined;
+    let taken: Promise<HookFile | undefined> | undefined;
+    const screenshot = () =>
+      (taken ??= (async (): Promise<HookFile | undefined> => {
+        let bytes: Buffer | undefined;
+        try {
+          bytes = await request.screenshot?.(
+            request.signal ?? new AbortController().signal,
+          );
+        } catch {
+          return undefined;
+        }
+        if (!bytes?.length) return undefined;
+        folder = mkdtempSync(join(tmpdir(), 'circle-hook-'));
+        const path = join(folder, 'screenshot.png');
+        writeFileSync(path, bytes, { mode: 0o600 });
+        return {
+          kind: 'screenshot',
+          path,
+          mime_type: 'image/png',
+          sha256: createHash('sha256').update(bytes).digest('hex'),
+          size: bytes.length,
+        };
+      })());
+    try {
+      return await this.runHooks(request, screenshot);
+    } finally {
+      if (folder) rmSync(folder, { recursive: true, force: true });
+    }
+  }
+
+  private async runHooks(
+    request: HookRunRequest,
+    screenshot: () => Promise<HookFile | undefined>,
+  ): Promise<HookBatch> {
     const pathOptions: HookPathOptions = {
       workspace: this.options.workspace,
       platform: this.options.platform,
@@ -1185,6 +1272,10 @@ export class HookRunner {
           return file;
         }
       });
+      const file =
+        hook.screenshot && request.event === 'after_tool'
+          ? await screenshot()
+          : undefined;
       const stdin = JSON.stringify({
         event: request.event,
         session_id: request.sessionId,
@@ -1198,6 +1289,7 @@ export class HookRunner {
         tool_output: redactHookValue(request.toolOutput, secrets),
         tool_status: request.toolStatus,
         permission_reason: redactHookValue(request.permissionReason, secrets),
+        ...(file ? { files: [file] } : {}),
         ...(request.event === 'before_stop'
           ? { stop_attempt: (this.blocks.get(hook.id) ?? 0) + 1 }
           : {}),

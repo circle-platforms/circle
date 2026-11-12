@@ -2135,6 +2135,13 @@ export class ChromeBrowser implements BrowserPort {
   ): Promise<BrowserResult> {
     if (this.closed) return Promise.reject(Error('the browser is closed'));
     const conversation = this.conversation(sessionId);
+    if (action === 'capture') {
+      // After the conversation's own actions, and without being one: what waits on the person stays as it was
+      const capture = () => this.capturePage(conversation, signal);
+      const captured = conversation.queue.then(capture, capture);
+      conversation.queue = captured.catch(() => {});
+      return captured;
+    }
     const run = async () => {
       signal.throwIfAborted();
       this.current = conversation;
@@ -2180,6 +2187,39 @@ export class ChromeBrowser implements BrowserPort {
     const result = conversation.queue.then(run, run);
     conversation.queue = result.catch(() => {});
     return result;
+  }
+  /**
+   * The page the conversation shows, for a hook that asked for it. It is not kept as the screenshot coordinate clicks
+   * go by, no browser is started for it, and a page waiting on a dialog is not captured: no image then.
+   */
+  private async capturePage(
+    conversation: Conversation,
+    signal: AbortSignal,
+  ): Promise<BrowserResult> {
+    signal.throwIfAborted();
+    const tab = conversation.active
+      ? conversation.tabs.get(conversation.active)
+      : undefined;
+    if (!this.cdp || this.cdp.closed || !tab || tab.dialogs.length)
+      return { text: 'no page to capture' };
+    await this.js(tab, 'overlay-hidden', { hidden: true }, signal).catch(
+      () => {},
+    );
+    try {
+      const { data } = await this.limit(
+        this.send<{ data: string }>(
+          'Page.captureScreenshot',
+          { format: 'png' },
+          tab.session,
+        ),
+        signal,
+        10000,
+        'Page.captureScreenshot',
+      );
+      return { text: 'captured', image: data };
+    } finally {
+      await this.js(tab, 'overlay-hidden', { hidden: false }).catch(() => {});
+    }
   }
   private async action(
     conversation: Conversation,
