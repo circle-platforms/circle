@@ -24,6 +24,8 @@ async function world(
   t: Parameters<typeof scratch>[0],
   decision: 'approve' | 'reject' | 'always' = 'approve',
   renamedTools = false,
+  // Sharing needs the server to name its share tools in a discovery document (#502)
+  discoveryDocument = true,
 ) {
   const root = scratch(t, 'circle-share-'),
     home = join(root, 'home'),
@@ -32,6 +34,7 @@ async function world(
   for (const path of [home, workspace, userHome]) mkdirSync(path);
   const server = new AuthorizedServer(join(root, 'peer'));
   server.renamedTools = renamedTools;
+  server.discoveryDocument = discoveryDocument;
   await server.start();
   cleanup(t, () => server.close());
   const connection = {
@@ -332,10 +335,11 @@ test('a server that declares its share tools in a discovery document is used as 
   assert.equal(w.server.shareCalls.length, 1);
   assert.ok(w.server.shareCalls[0].share_entry.entry);
 });
-test('without a discovery document the fixed shapes are used and status says so', async (t) => {
-  const w = await world(t);
+test('without a discovery document no tool is guessed: sharing says it is unavailable, and status says why', async (t) => {
+  const w = await world(t, 'approve', false, false);
   assert.equal(w.runtime.knowledge.status().discovery, 'fallback');
-  await (await w.prepare()).run();
-  assert.ok(w.server.toolNames.includes('get_nodes'));
-  assert.ok(w.server.toolNames.includes('upload_file'));
+  await assert.rejects(w.prepare(), /knowledge-share-unavailable/);
+  // Nothing was sent to the tools another server happens to have
+  assert.equal(w.server.toolNames.includes('upload_file'), false);
+  assert.equal(w.server.toolNames.includes('get_nodes'), false);
 });

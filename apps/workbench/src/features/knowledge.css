@@ -534,6 +534,20 @@
 .knowledge-sync-settings .knowledge-actions {
   margin: 14px 0;
 }
+/* What the sync server last said: its words as they came, and a page to confirm on */
+.knowledge-server-answer {
+  margin: 0 0 16px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.knowledge-server-answer p {
+  margin: 0 0 8px;
+}
+.knowledge-note {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--muted);
+}
 .knowledge-sync-facts {
   margin: 24px 0;
   display: flex;

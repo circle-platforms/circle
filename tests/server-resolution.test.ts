@@ -108,6 +108,8 @@ test('without a document, local tools and sync share one base: the entry without
     assert.equal(found.syncBase, base + '/api/sync/v1');
     assert.equal(found.localToolsBase, base + '/local-tools');
     assert.deepEqual(found.capabilities, []);
+    // No server's tool names are guessed
+    assert.deepEqual(found.mcp, {});
   }
   assert.throws(() => fallbackDiscovery('http://192.0.2.10/mcp'));
   assert.equal(
@@ -225,4 +227,25 @@ test('error answers keep detail, the purge confirmation and unknown codes as a g
   assert.equal(newer.code, 'SYNC_SOMETHING_NEWER');
   assert.equal(newer.unknownCode, true);
   assert.equal(newer.detail, '合成的较新错误说明。');
+});
+
+test("a discovery document that cannot be read now is retried as an absent server, with no detail: that is the server's own text", async () => {
+  const http = new SyncHttp(
+    'https://192.0.2.10/mcp',
+    async () => 'synthetic-token',
+    (async () => {
+      throw Error('no request is sent without a discovery');
+    }) as typeof fetch,
+    async () => {
+      throw new DiscoveryError('discovery document unavailable', true);
+    },
+  );
+  await assert.rejects(
+    http.request('state', { signal: AbortSignal.timeout(5000) }),
+    (error: unknown) =>
+      error instanceof SyncHttpError &&
+      error.status === 0 &&
+      error.code === 'SOURCE_RETRYABLE' &&
+      error.detail === undefined,
+  );
 });

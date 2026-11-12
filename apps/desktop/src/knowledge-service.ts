@@ -15,6 +15,7 @@ import { basename, extname, join } from 'node:path';
 import type { AgentRuntime } from '../../../src/runtime.js';
 import { KnowledgeService } from '../../../src/knowledge/service.js';
 import { KnowledgeVersionConflict } from '../../../src/knowledge/store.js';
+import { SyncHttpError } from '../../../src/knowledge/sync-http.js';
 import { decodeBase64, isObjectId } from '../../../src/knowledge/protocol.js';
 import {
   computeObjectDigest,
@@ -1525,6 +1526,20 @@ export class DesktopKnowledge {
         return { shareRefusal: error.refusal };
       if (error instanceof KnowledgeVersionConflict)
         throw Error('knowledge-changed');
+      // What the sync server answered, by its kind, as the sync status sorts it; its own words and any purge
+      // confirmation are in the status, which the window reads again
+      if (error instanceof SyncHttpError)
+        throw Error(
+          error.code === 'SYNC_PURGE_CONFIRMATION_REQUIRED'
+            ? 'knowledge-sync-confirm'
+            : error.status === 401
+              ? 'knowledge-sync-login'
+              : error.status === 0 ||
+                  error.status === 429 ||
+                  error.status >= 500
+                ? 'knowledge-sync-later'
+                : 'knowledge-sync-refused',
+        );
       const message = error instanceof Error ? error.message : '';
       if (message.startsWith('knowledge-')) throw error;
       if (/credential|scan incomplete/.test(message))

@@ -124,6 +124,23 @@ test('boundary errors are localized without echoing raw host errors or paths', (
   );
   assert.equal(message, '无法打开内容，请刷新后重试');
   assert.doesNotMatch(message, /private|token/);
+  // What the sync server answered is said by its kind; its own words are shown with the status
+  assert.equal(
+    knowledgeError(Error('knowledge-sync-confirm')),
+    '在同步服务器的页面上确认后，才能完成这次更改',
+  );
+  assert.equal(
+    knowledgeError(Error('knowledge-sync-login')),
+    '请重新登录同步服务器',
+  );
+  assert.equal(
+    knowledgeError(Error('knowledge-sync-later')),
+    '同步服务器暂时不可用，请稍后再试',
+  );
+  assert.equal(
+    knowledgeError(Error('knowledge-sync-refused')),
+    '同步服务器拒绝了这次请求',
+  );
   setLanguage('en', storage);
 });
 
