@@ -12,6 +12,7 @@ export interface StubTool {
   name: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
   annotations?: Record<string, unknown>;
 }
 export interface StubResult {
@@ -35,6 +36,8 @@ export interface StubRequest {
 export interface StubOptions {
   name?: string;
   tools?: StubTool[];
+  /** The tools listed a page at a time instead of `tools`, the next page's index as each page's cursor. */
+  pages?: StubTool[][];
   /** The initialize result's `instructions`, read at each initialize. */
   instructions?: () => string | undefined;
   /** Answers tools/call; by default the text names the tool. */
@@ -71,7 +74,16 @@ export async function mcpStub(
         ...(instructions === undefined ? {} : { instructions }),
       };
     }
-    if (message.method === 'tools/list') return { tools: options.tools ?? [] };
+    if (message.method === 'tools/list') {
+      if (!options.pages) return { tools: options.tools ?? [] };
+      const page = Number(message.params?.cursor ?? 0);
+      return {
+        tools: options.pages[page] ?? [],
+        ...(page + 1 < options.pages.length
+          ? { nextCursor: String(page + 1) }
+          : {}),
+      };
+    }
     if (message.method === 'tools/call')
       return options.call
         ? options.call(request)

@@ -6,7 +6,15 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
-import type { Implementation } from '@modelcontextprotocol/sdk/types.js';
+import {
+  CallToolResultSchema,
+  ListToolsResultSchema,
+  type CallToolResult,
+  type Implementation,
+} from '@modelcontextprotocol/sdk/types.js';
+import type { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
+import type { JsonSchemaType } from '@modelcontextprotocol/sdk/validation/types.js';
 import type {
   FetchLike,
   Transport,
@@ -481,7 +489,7 @@ function transportFor(
 }
 /** A tool result as the model reads it: its text, and the pictures and PDFs it carries. */
 function resultText(
-  result: Awaited<ReturnType<Client['callTool']>>,
+  result: ToolResult,
   tool: string,
   context: ToolContext,
 ): { text: string; attachments: MediaAttachment[] } {
@@ -491,7 +499,7 @@ function resultText(
     .map((block) => {
       if (!isRecord(block)) return JSON.stringify(block);
       if (block.type === 'text') return String(block.text || '');
-      const resource =
+      const resource: Record<string, unknown> | undefined =
         block.type === 'resource' && isRecord(block.resource)
           ? block.resource
           : undefined;
@@ -545,7 +553,45 @@ function toolHints(
     idempotent: hints.idempotentHint === true,
   };
 }
-type ToolResult = Awaited<ReturnType<Client['callTool']>>;
+type ToolResult = CallToolResult;
+/**
+ * Calls a server's tool and gives its result as the server sent it. The SDK's `callTool` checks a result against the
+ * output schema it kept from the last listing of the tools and throws the result away when it does not match, as when
+ * the server added a field after Circle connected (#513); this sends `tools/call` itself. The server still checks the
+ * request, and whether a result matches its schema is for the caller to say.
+ */
+function callServerTool(
+  client: Client,
+  params: { name: string; arguments: Record<string, unknown> },
+  options: RequestOptions,
+): Promise<ToolResult> {
+  return client.request(
+    { method: 'tools/call', params },
+    CallToolResultSchema,
+    options,
+  );
+}
+/**
+ * Whether a structured result matches the output schema a tool was listed with, compiled when first needed: undefined
+ * when the tool has no output schema or it cannot be compiled, since then nothing can be said either way.
+ */
+function structureCheck(
+  schema: unknown,
+  validator: AjvJsonSchemaValidator,
+): (value: unknown) => boolean | undefined {
+  let check: ((value: unknown) => boolean) | null | undefined;
+  return (value) => {
+    if (!isRecord(schema)) return undefined;
+    if (check === undefined)
+      try {
+        const validate = validator.getValidator(schema as JsonSchemaType);
+        check = (input) => validate(input).valid;
+      } catch {
+        check = null;
+      }
+    return check ? check(value) : undefined;
+  };
+}
 /** At most this many results of calls that sent files are kept, and this much of them. */
 export const MAX_CACHED_RESULTS = 64;
 export const MAX_CACHED_BYTES = 16 * 1024 * 1024;
@@ -608,6 +654,12 @@ class SentResults {
 /** What a result taken from the cache says before the files it was for. */
 export const CACHED_RESULT =
   'cached (same content): an earlier call in this session sent the same files and arguments, so the server was not called again and this is its result';
+/**
+ * What the model reads before a structured result that does not match the output schema the server listed for the tool
+ * when Circle connected. Circle can say that much for certain; whether the result is right is not for it to judge.
+ */
+export const UNDECLARED_STRUCTURE =
+  'structured result, as the server sent it: it does not match the output schema the server listed for this tool when Circle connected';
 /** What the card adds to a file the call will not send, since it gets its earlier result. */
 export const NOT_SENT =
   'not sent: the same call earlier in this session got its result, which is given again';
@@ -662,8 +714,10 @@ export class McpManager {
     name: string,
     hints: { readOnly: boolean; idempotent: boolean },
     filled: Map<string, string>,
+    validator: AjvJsonSchemaValidator,
   ): Tool {
     const hide = hideFilled(filled);
+    const matches = structureCheck(spec.outputSchema, validator);
     const files = fileParameters(spec.inputSchema);
     const limit = connection.maxFileBytes ?? MAX_FILE_BYTES;
     // What a call sent: the session, the server's tool, each file's sha256 and the other
@@ -738,9 +792,9 @@ export class McpManager {
               context.signal.addEventListener('abort', forward, { once: true });
               if (context.signal.aborted) forward();
               try {
-                return await client.callTool(
+                return await callServerTool(
+                  client,
                   { name: spec.name, arguments: sending },
-                  undefined,
                   {
                     signal: own.signal,
                     timeout: this.callTimeout ?? NO_LIMIT,
@@ -766,13 +820,32 @@ export class McpManager {
         ),
       ].join('\n');
       const framed = (body: string) => (header ? `${header}\n\n${body}` : body);
+      const structured = result.structuredContent;
+      // An error is the tool's own word, given as it is: its structure is not checked
       if (result.isError)
-        throw new Error(framed(shown(text || 'MCP tool failed')));
+        throw new Error(
+          framed(
+            shown(
+              text ||
+                (structured === undefined
+                  ? 'MCP tool failed'
+                  : JSON.stringify(structured)),
+            ),
+          ),
+        );
       context.signal.throwIfAborted();
       if (attachments.length) context.emitAttachments!(attachments);
-      return framed(
-        shown(text || JSON.stringify(result.structuredContent ?? {})),
-      );
+      // A result unlike the schema the tool was listed with still arrives whole: its text, then its structure with
+      // what Circle can say of it. One that matches reads as it always did.
+      if (structured !== undefined && matches(structured) === false)
+        return framed(
+          shown(
+            [text, `${UNDECLARED_STRUCTURE}\n${JSON.stringify(structured)}`]
+              .filter(Boolean)
+              .join('\n\n'),
+          ),
+        );
+      return framed(shown(text || JSON.stringify(structured ?? {})));
     };
     // Before the approval: each named file is read under read_file's rules, so the card shows
     // what will be sent, and the call sends those bytes
@@ -956,13 +1029,18 @@ export class McpManager {
       );
       const registered: Tool[] = [];
       const said = new Map<string, ToolHint>();
+      // One per connection: a schema with an $id is kept by it, and a server that changed has new schemas
+      const validator = new AjvJsonSchemaValidator();
       let cursor: string | undefined;
       const cursors = new Set<string>();
       do {
-        const listed = await client.listTools(cursor ? { cursor } : undefined, {
-          signal: combined,
-          timeout: this.timeout,
-        });
+        // Listed by Circle itself: the SDK's listTools would also compile every output schema for its own checks of
+        // results, and fail the whole server on one it cannot compile
+        const listed = await client.request(
+          { method: 'tools/list', params: cursor ? { cursor } : undefined },
+          ListToolsResultSchema,
+          { signal: combined, timeout: this.timeout },
+        );
         for (const spec of listed.tools) {
           const name = mcpToolName(connection.name, spec.name);
           if (
@@ -985,6 +1063,7 @@ export class McpManager {
               name,
               hints,
               filled.filled,
+              validator,
             ),
           );
         }
@@ -1215,9 +1294,9 @@ export class McpManager {
     const server = this.servers.find((s) => s.name === serverName && s.open);
     if (!server || this.hint(mcpToolName(serverName, toolName)) !== 'read-only')
       throw new Error('read-only MCP tool unavailable');
-    const response = await server.client.callTool(
+    const response = await callServerTool(
+      server.client,
       { name: toolName, arguments: args },
-      undefined,
       { signal, timeout: this.timeout },
     );
     const text = JSON.stringify(response);
@@ -1239,9 +1318,9 @@ export class McpManager {
       !this.tools.some((t) => t.name === mcpToolName(serverName, toolName))
     )
       throw Error('MCP tool unavailable');
-    const result = await server.client.callTool(
+    const result = await callServerTool(
+      server.client,
       { name: toolName, arguments: args },
-      undefined,
       { signal, timeout: this.timeout },
     );
     const text = JSON.stringify(result);
