@@ -99,6 +99,7 @@ import {
 import {
   addHub,
   findHub,
+  HUB_SERVER,
   hubEndpoint,
   keepHubPlaceholders,
   removeHub,
@@ -5853,6 +5854,7 @@ export class RuntimeController {
       }
       case 'save-settings': {
         const data = p.settings as Record<string, unknown>;
+        let hubSwitched = false;
         const settings = saveSettingsChange(this.home, (settings) => {
           if (!data || typeof data !== 'object' || Array.isArray(data))
             throw Error('invalid settings');
@@ -5968,6 +5970,7 @@ export class RuntimeController {
           }
           if (p.extensions !== undefined) {
             if (!Array.isArray(p.extensions)) throw Error('invalid extensions');
+            const hubBefore = settings.extensions.hub?.enabled === true;
             for (const row of p.extensions as {
               name: string;
               enabled: boolean;
@@ -5976,9 +5979,27 @@ export class RuntimeController {
                 ...settings.extensions[row.name],
                 enabled: flag(row.enabled),
               };
+            // The Hub extension's switch is its connection's: the MCP entry it keeps goes off and on with it, so a
+            // Hub that is off is not connected anywhere (the MCP servers page does not list that entry)
+            const hub = settings.extensions.hub?.enabled === true;
+            if (hub !== hubBefore) {
+              settings.mcp_servers = settings.mcp_servers.map((row) => {
+                if (row.name !== HUB_SERVER || (row.enabled !== false) === hub)
+                  return row;
+                hubSwitched = true;
+                return { ...row, enabled: hub };
+              });
+              // Switched on, an entry connected with an earlier version gets the placeholders a Hub's skills use
+              if (keepHubPlaceholders(settings)) hubSwitched = true;
+            }
           }
         });
         this.synchronizeSharedSettings(settings);
+        // As connecting from the Hub's page does: the runtime reads its settings again and connects or drops the
+        // entry. An untrusted workspace loads nothing, and during a turn the reload is refused; until one runs, the
+        // Hub's card says a reload is required.
+        if (hubSwitched && isFolderTrusted(settings, runtime.options.workspace))
+          await runtime.reloadIntegrations().catch(() => {});
         if (data.defaultEffort !== undefined)
           this.applySharedEffort(settings.default_thinking);
         if (data.variables !== undefined)

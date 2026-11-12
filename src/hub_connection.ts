@@ -6,6 +6,8 @@ import type { CircleSettings } from './settings.js';
 
 /** The name of the MCP server entry the Hub extension keeps. */
 export const HUB_SERVER = 'Hub';
+/** The port a Circle Hub listens on unless it is told another (circle-hub's DEFAULT_PORT). */
+export const HUB_PORT = 7420;
 /** How long finding a Hub at an address may take. */
 const FIND_TIMEOUT_MS = 10_000;
 
@@ -13,7 +15,9 @@ export class HubAddressError extends Error {}
 
 /**
  * The addresses to try for what a person typed: as typed when it names http or https, otherwise https first and then
- * http, since a Hub on an internal address often serves plain HTTP. A path of `/` or `/mcp` is the Hub itself.
+ * http, since a Hub on an internal address often serves plain HTTP. A path of `/` or `/mcp` is the Hub itself. An
+ * address without a port is tried at its scheme's own port and then at the Hub's, HUB_PORT, so the Hub's IP address
+ * alone finds it.
  */
 export function hubCandidates(typed: string): URL[] {
   const value = typed.trim();
@@ -21,7 +25,7 @@ export function hubCandidates(typed: string): URL[] {
     throw new HubAddressError('type the address of a Circle Hub');
   const schemed = /^[a-z][a-z0-9+.-]*:\/\//i.test(value);
   const raw = schemed ? [value] : [`https://${value}`, `http://${value}`];
-  return raw.map((candidate) => {
+  const origins = raw.map((candidate) => {
     let url: URL;
     try {
       url = new URL(candidate);
@@ -42,6 +46,16 @@ export function hubCandidates(typed: string): URL[] {
       throw new HubAddressError('type the Hub address without a path');
     return new URL(url.origin);
   });
+  // A port typed, or a scheme's own that is the Hub's, leaves nothing more to try
+  if (origins.some((url) => url.port !== '')) return origins;
+  return [
+    ...origins,
+    ...origins.map((url) => {
+      const withPort = new URL(url.href);
+      withPort.port = String(HUB_PORT);
+      return withPort;
+    }),
+  ];
 }
 
 /** The MCP endpoint a Hub's discovery names, when it is on the Hub's own origin. */
@@ -72,10 +86,37 @@ async function json(
     : undefined;
 }
 
+/** The MCP endpoint of the Hub at `origin`, as findHub says, or undefined when no Hub answers there. */
+async function hubAt(
+  origin: URL,
+  fetcher: typeof fetch,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  const discovery = await json(
+    new URL('/.well-known/knowledge-sync', origin).href,
+    fetcher,
+    signal,
+  );
+  const mcp = discovery?.mcp as Record<string, unknown> | undefined;
+  const endpoint =
+    discovery?.schema === 'knowledge-sync-discovery@1'
+      ? sameOrigin(mcp?.endpoint, origin)
+      : undefined;
+  if (endpoint) return endpoint;
+  const resource = await json(
+    new URL('/.well-known/oauth-protected-resource/mcp', origin).href,
+    fetcher,
+    signal,
+  );
+  return sameOrigin(resource?.resource, origin);
+}
+
 /**
  * The MCP endpoint of the Hub at `typed`. A Hub publishes it in its knowledge-sync discovery
  * (`/.well-known/knowledge-sync`, `mcp.endpoint`); a server that answers only the protected-resource metadata of its
- * `/mcp` (RFC 9728) is taken by that. Anything else is not a Hub.
+ * `/mcp` (RFC 9728) is taken by that. Anything else is not a Hub. Every candidate address is asked at once, so one that
+ * never answers costs no more than the wait for the others; the first of them in hubCandidates' order that is a Hub
+ * is the one taken.
  */
 export async function findHub(
   typed: string,
@@ -83,29 +124,15 @@ export async function findHub(
   signal: AbortSignal = AbortSignal.timeout(FIND_TIMEOUT_MS),
 ): Promise<string> {
   const candidates = hubCandidates(typed);
-  for (const origin of candidates) {
-    const discovery = await json(
-      new URL('/.well-known/knowledge-sync', origin).href,
-      fetcher,
-      signal,
-    );
-    const mcp = discovery?.mcp as Record<string, unknown> | undefined;
-    const endpoint =
-      discovery?.schema === 'knowledge-sync-discovery@1'
-        ? sameOrigin(mcp?.endpoint, origin)
-        : undefined;
+  const answers = candidates.map((origin) => hubAt(origin, fetcher, signal));
+  for (const answer of answers) {
+    const endpoint = await answer;
     if (endpoint) return endpoint;
-    const resource = await json(
-      new URL('/.well-known/oauth-protected-resource/mcp', origin).href,
-      fetcher,
-      signal,
-    );
-    const protectedMcp = sameOrigin(resource?.resource, origin);
-    if (protectedMcp) return protectedMcp;
-    signal.throwIfAborted();
   }
+  signal.throwIfAborted();
+  const origins = candidates.map((url) => url.origin);
   throw new HubAddressError(
-    `no Circle Hub answers at ${candidates.map((url) => url.origin).join(' or ')}`,
+    `no Circle Hub answers at ${origins.length > 1 ? origins.slice(0, -1).join(', ') + ' or ' + origins.at(-1) : origins[0]}`,
   );
 }
 

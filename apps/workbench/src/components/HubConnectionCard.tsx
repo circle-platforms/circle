@@ -1,12 +1,76 @@
 import './HubConnectionCard.css';
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { useRuntime } from '../app/context';
 import { desktopHost } from '../host';
-import { t, tn } from '../i18n';
+import { locale, t, tn } from '../i18n';
+import type { McpServer } from '../model/types';
 import { Badge, Button, CopyButton, DeviceCode, Switch } from './common';
 
 /** The MCP entry the Hub extension keeps (src/hub_connection.ts). */
 export const HUB_SERVER = 'Hub';
+
+/**
+ * The state of a connection an extension keeps as an MCP server entry, as its card shows it: connected, waiting for its
+ * sign-in, needing a reload to take a change, or not connected (also when there is no entry yet).
+ */
+export function connectionChip(row: McpServer | undefined): {
+  tone: 'neutral' | 'green' | 'amber' | 'blue';
+  text: string;
+} {
+  return !row
+    ? { tone: 'neutral', text: t('not connected') }
+    : row.status === 'connected'
+      ? { tone: 'green', text: t('connected') }
+      : row.signIn
+        ? { tone: 'blue', text: t('waiting for sign-in') }
+        : row.status === 'reload required'
+          ? { tone: 'amber', text: t('reload required') }
+          : row.status === 'error'
+            ? { tone: 'amber', text: t('not connected') }
+            : { tone: 'neutral', text: t('not connected') };
+}
+
+/** What finding a Hub at a typed address says (src/hub_connection.ts), in the window's language; anything else as it is. */
+export function hubErrorText(message: string): string {
+  const nowhere = /no Circle Hub answers at (.+)$/.exec(message);
+  if (nowhere)
+    return t('no Circle Hub answers at {addresses}', {
+      // The addresses tried, as a list in the window's language
+      addresses: new Intl.ListFormat(locale(), { type: 'disjunction' }).format(
+        (nowhere[1] ?? '').split(/, | or /),
+      ),
+    });
+  const known: [string, () => string][] = [
+    [
+      'type the address of a Circle Hub',
+      () => t('type the IP address of your Hub'),
+    ],
+    [
+      'that is not a web address',
+      () => t('that is not an IP address or a web address'),
+    ],
+    [
+      'a Hub address starts with https:// or http://',
+      () => t('a Hub address starts with https:// or http://'),
+    ],
+    [
+      'a Hub address carries no user name or password',
+      () =>
+        t(
+          'type your user name and password on the Hub’s page, not in its address',
+        ),
+    ],
+    [
+      'a Hub address has no query or fragment',
+      () => t('a Hub address has no query or fragment'),
+    ],
+    [
+      'type the Hub address without a path',
+      () => t('type the Hub address without a path'),
+    ],
+  ];
+  return known.find(([english]) => message.includes(english))?.[1]() ?? message;
+}
 
 /** The Hub's address as a person reads it: the origin of its MCP endpoint. */
 function hubAddress(url: string): string {
@@ -44,18 +108,12 @@ export function HubConnectionCard({
     !extension.error;
   const row = snapshot.mcp.find((item) => item.name === HUB_SERVER);
   const signIn = row?.signIn;
-  const chip: { tone: 'neutral' | 'green' | 'amber' | 'blue'; text: string } =
-    !row
-      ? { tone: 'neutral', text: t('not connected') }
-      : row.status === 'connected'
-        ? { tone: 'green', text: t('connected') }
-        : signIn
-          ? { tone: 'blue', text: t('waiting for sign-in') }
-          : row.status === 'reload required'
-            ? { tone: 'amber', text: t('reload required') }
-            : row.status === 'error'
-              ? { tone: 'amber', text: t('not connected') }
-              : { tone: 'neutral', text: t('not connected') };
+  // What finding a Hub said belongs to the address form: once there is a Hub, it is past
+  const present = !!row;
+  useEffect(() => {
+    if (present) setError('');
+  }, [present]);
+  const chip = connectionChip(row);
   async function run(kind: string, payload: Record<string, unknown> = {}) {
     setBusy(true);
     setError('');
@@ -63,7 +121,9 @@ export function HubConnectionCard({
       await runtime.request(kind, payload);
       return true;
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(
+        hubErrorText(reason instanceof Error ? reason.message : String(reason)),
+      );
       return false;
     } finally {
       setBusy(false);
@@ -98,19 +158,19 @@ export function HubConnectionCard({
         {!row && (
           <p className="hub-status">
             {t(
-              'Type the address of your Circle Hub. Circle then shows a code to enter on the Hub’s page; no address is built in.',
+              'Type your Hub’s IP address. Circle then opens the Hub’s page, where you sign in with your Hub user name and password.',
             )}
           </p>
         )}
         {available && !row && (
           <form className="hub-address" onSubmit={connect}>
-            <label htmlFor="hub-address">{t('hub address')}</label>
+            <label htmlFor="hub-address">{t('hub IP address')}</label>
             <div className="hub-address-row">
               <input
                 id="hub-address"
                 value={address}
                 onChange={(event) => setAddress(event.target.value)}
-                placeholder="https://hub.example.com"
+                placeholder="192.0.2.10"
                 autoComplete="off"
                 spellCheck={false}
                 maxLength={2048}
@@ -138,16 +198,18 @@ export function HubConnectionCard({
                 )}
           </p>
         )}
+        {available && signIn && (
+          <p className="hub-status">
+            {t(
+              'sign in on the Hub’s page with your Hub user name and password',
+            )}
+          </p>
+        )}
         {available && signIn?.code && (
           <DeviceCode
-            prompt={t('enter this code on the Hub’s page')}
+            prompt={t('then enter this code there')}
             code={signIn.code}
           />
-        )}
-        {available && signIn && !signIn.code && (
-          <p className="hub-status">
-            {t('finish the sign-in on the Hub’s page')}
-          </p>
         )}
         {available && row?.status === 'error' && !signIn && row.error && (
           <div className="hub-alert" role="alert">

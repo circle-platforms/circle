@@ -52,6 +52,7 @@ export const COMPONENT_SUITES = Object.freeze([
   'extension-feedback-ui.mjs',
   'conversation-reading-anchor-ui.mjs',
   'github-plugin-ui.mjs',
+  'hub-extension-ui.mjs',
   'command-terminal-handoff-ui.mjs',
   'github-permissions-ui.mjs',
   'github-feedback-ui.mjs',
