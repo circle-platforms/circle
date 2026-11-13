@@ -917,6 +917,23 @@ export class RuntimeController {
     await Promise.all(reloads);
   }
   /** The saved thinking depth, on every open runtime except one that was just set. */
+  /**
+   * A Hub connected, disconnected or switched applies to every open conversation, not only the one asking: each other
+   * idle conversation in a trusted folder reads its settings again. One in a turn refuses, and its MCP page says a
+   * reload is required, as for any settings change it has not taken yet.
+   */
+  private async reloadOtherRuntimes(active: AgentRuntime): Promise<void> {
+    const settings = loadSettings(this.home);
+    await Promise.all(
+      [...new Set(this.runtimes.values())]
+        .filter(
+          (owner) =>
+            owner !== active &&
+            isFolderTrusted(settings, owner.options.workspace),
+        )
+        .map((owner) => owner.reloadIntegrations().catch(() => {})),
+    );
+  }
   private applySharedEffort(saved: string, skip?: AgentRuntime): void {
     const level = saved || 'default';
     for (const owner of this.runtimes.values()) {
@@ -6006,8 +6023,11 @@ export class RuntimeController {
         // As connecting from the Hub's page does: the runtime reads its settings again and connects or drops the
         // entry. An untrusted workspace loads nothing, and during a turn the reload is refused; until one runs, the
         // Hub's card says a reload is required.
-        if (hubSwitched && isFolderTrusted(settings, runtime.options.workspace))
-          await runtime.reloadIntegrations().catch(() => {});
+        if (hubSwitched) {
+          if (isFolderTrusted(settings, runtime.options.workspace))
+            await runtime.reloadIntegrations().catch(() => {});
+          await this.reloadOtherRuntimes(runtime);
+        }
         if (data.defaultEffort !== undefined)
           this.applySharedEffort(settings.default_thinking);
         if (data.variables !== undefined)
@@ -6600,6 +6620,7 @@ export class RuntimeController {
         saveSettingsChange(this.home, (settings) => addHub(settings, endpoint));
         // The runtime reads its settings again and connects the entry
         await runtime.reloadIntegrations();
+        await this.reloadOtherRuntimes(runtime);
         return { endpoint };
       }
       case 'hub-disconnect': {
@@ -6609,6 +6630,7 @@ export class RuntimeController {
           : false;
         saveSettingsChange(this.home, removeHub);
         await runtime.reloadIntegrations();
+        await this.reloadOtherRuntimes(runtime);
         return { revoked };
       }
       case 'launch-options':

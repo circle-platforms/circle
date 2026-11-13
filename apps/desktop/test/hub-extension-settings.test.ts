@@ -67,7 +67,7 @@ async function start(t: TestContext, hubOn: boolean, entry = legacy) {
   };
   const hub = () =>
     loadSettings(home).mcp_servers.find((row) => row.name === 'Hub');
-  return { call, hub };
+  return { call, hub, controller };
 }
 
 test('a Hub entry connected with an earlier version gets the placeholders when the desktop starts, while its extension is on', async (t) => {
@@ -103,4 +103,62 @@ test("the Hub extension's switch turns its entry off and on, and switching anoth
   assert.equal(hub()?.enabled, false);
   await save('github', false);
   assert.equal(hub()?.enabled, false);
+});
+
+test('switching the Hub applies to every open conversation, not only the one asking', async (t) => {
+  const { call, controller } = await start(t, true);
+  const first = controller.snapshot().activeSessionId;
+  // A conversation in use: a new one is another runtime, not this one reused
+  await call('prompt', { text: 'hello' });
+  for (
+    let tries = 0;
+    tries < 200 &&
+    controller.snapshot().sessions.find((s) => s.id === first)?.state !==
+      'idle';
+    tries++
+  )
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  await call('new-session', {});
+  assert.notEqual(controller.snapshot().activeSessionId, first);
+  const runtimes = () => [
+    ...new Set(
+      (
+        controller as unknown as {
+          runtimes: {
+            values(): Iterable<{
+              options: {
+                settings: {
+                  mcp_servers: { name?: unknown; enabled?: unknown }[];
+                };
+              };
+            }>;
+          };
+        }
+      ).runtimes.values(),
+    ),
+  ];
+  assert.ok(runtimes().length >= 2);
+  // What each open conversation runs with: the Hub entry its runtime took
+  const applied = () =>
+    runtimes().map(
+      (runtime) =>
+        runtime.options.settings.mcp_servers.find((row) => row.name === 'Hub')
+          ?.enabled,
+    );
+  await call('save-settings', {
+    settings: {},
+    extensions: [{ name: 'hub', enabled: false }],
+  });
+  assert.ok(
+    applied().every((enabled) => enabled === false),
+    String(applied()),
+  );
+  await call('save-settings', {
+    settings: {},
+    extensions: [{ name: 'hub', enabled: true }],
+  });
+  assert.ok(
+    applied().every((enabled) => enabled !== false),
+    String(applied()),
+  );
 });
