@@ -3,12 +3,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { join } from 'node:path';
+import { mkdirSync } from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
 import { mcpPlaceholders } from '../src/mcp_placeholders.js';
+import { AgentRuntime } from '../src/runtime.js';
+import { saveSecret } from '../src/secrets.js';
 import { defaultSettings, writePrivateJson } from '../src/settings.js';
-import { scratch } from './helpers.js';
+import { ScriptedModel } from '../src/testing.js';
+import { cleanup, scratch } from './helpers.js';
 
 const endpoint = 'http://192.0.2.10:7420/mcp';
-const none = { variables: {}, secrets: {} };
+const none = { variables: {}, secrets: {}, until: Infinity };
 const nothingSaved = { variables: {}, secrets: {} };
 
 function signIn(
@@ -43,6 +48,19 @@ test('an entry gives its endpoint and the token of its sign-in under the names i
   assert.deepEqual(mcpPlaceholders(home, settings, nothingSaved), {
     variables: { DOCS_URL: endpoint },
     secrets: { DOCS_TOKEN: 'signed-in-token' },
+    until: Infinity,
+  });
+  // A token with an expiry is given until then, and says when
+  const expires = Date.now() + 60_000;
+  signIn(
+    home,
+    { access_token: 'signed-in-token', token_type: 'Bearer' },
+    expires,
+  );
+  assert.deepEqual(mcpPlaceholders(home, settings, nothingSaved), {
+    variables: { DOCS_URL: endpoint },
+    secrets: { DOCS_TOKEN: 'signed-in-token' },
+    until: expires,
   });
   // A token past its expiry, or none kept, is not given; the endpoint still is
   signIn(
@@ -53,6 +71,7 @@ test('an entry gives its endpoint and the token of its sign-in under the names i
   assert.deepEqual(mcpPlaceholders(home, settings, nothingSaved), {
     variables: { DOCS_URL: endpoint },
     secrets: {},
+    until: Infinity,
   });
   writePrivateJson(join(home, 'mcp-auth.json'), { servers: {} });
   assert.deepEqual(mcpPlaceholders(home, settings, nothingSaved).secrets, {});
@@ -128,5 +147,45 @@ test('an entry that is off, not reached over HTTP, or the second to claim a name
   assert.deepEqual(mcpPlaceholders(home, settings, nothingSaved), {
     variables: { DOCS_URL: endpoint },
     secrets: { DOCS_TOKEN: 'signed-in-token' },
+    until: Infinity,
   });
+});
+
+test('a run keeps what it read only while nothing it came from changed: a secret saved, or a token expired, is seen at once', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  mkdirSync(home);
+  mkdirSync(workspace);
+  const settings = defaultSettings();
+  settings.mcp_servers = [
+    {
+      name: 'docs',
+      url: endpoint,
+      transport: 'streamable_http',
+      placeholders: { url: 'DOCS_URL', token: 'DOCS_TOKEN' },
+    },
+  ];
+  signIn(
+    home,
+    { access_token: 'short-lived', token_type: 'Bearer' },
+    Date.now() + 400,
+  );
+  const runtime = new AgentRuntime({
+    home,
+    workspace,
+    userHome: join(root, 'user'),
+    settings,
+    model: new ScriptedModel([]),
+  });
+  cleanup(t, () => runtime.close());
+  assert.equal(runtime.runSecrets().DOCS_TOKEN, 'short-lived');
+  assert.equal(runtime.runVariables().DOCS_URL, endpoint);
+  // Read again: the same values, from what was kept
+  assert.equal(runtime.runSecrets().DOCS_TOKEN, 'short-lived');
+  saveSecret(home, 'MINE', 'synthetic-secret');
+  assert.equal(runtime.runSecrets().MINE, 'synthetic-secret');
+  await delay(450);
+  assert.equal(runtime.runSecrets().DOCS_TOKEN, undefined);
+  assert.equal(runtime.runSecrets().MINE, 'synthetic-secret');
 });

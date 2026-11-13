@@ -40,9 +40,11 @@ import {
   MAX_SECRET,
   secretNames,
   secretRedactor,
+  secretsPath,
   written,
   type Redactor,
 } from './secrets.js';
+import { mcpAuthPath } from './mcp_auth.js';
 import {
   buildSystemPrompt,
   planModePrompt,
@@ -1637,25 +1639,57 @@ export class AgentRuntime {
    * placeholder for theirs (mcp_placeholders.ts), unless the person keeps a value under that name.
    */
   runSecrets(): Record<string, string> {
-    const secrets = loadSecrets(this.options.home);
-    return {
-      ...mcpPlaceholders(this.options.home, this.options.settings, {
-        variables: this.options.settings.variables ?? {},
-        secrets,
-      }).secrets,
-      ...secrets,
-    };
+    return { ...this.runValues().secrets };
   }
   /** The plain variables a call may name: the person's, and the endpoints of the MCP entries that name a placeholder for theirs. */
   runVariables(): Record<string, string> {
-    const variables = this.options.settings.variables ?? {};
-    return {
-      ...mcpPlaceholders(this.options.home, this.options.settings, {
-        variables,
-        secrets: loadSecrets(this.options.home),
-      }).variables,
-      ...variables,
+    return { ...this.runValues().variables };
+  }
+  private values?: {
+    key: string;
+    until: number;
+    secrets: Record<string, string>;
+    variables: Record<string, string>;
+  };
+  /**
+   * Both, read once and kept while nothing they come from has changed: the saved secrets, the kept sign-ins, the MCP
+   * entries and the variables, and until the first token given expires. A redaction runs for every tool result and
+   * every chunk of a command's output; reading the files each time would read them several times a chunk.
+   */
+  private runValues(): {
+    secrets: Record<string, string>;
+    variables: Record<string, string>;
+  } {
+    const home = this.options.home;
+    const stamp = (path: string) => {
+      try {
+        const file = statSync(path);
+        return `${file.mtimeMs}:${file.size}`;
+      } catch {
+        return '-';
+      }
     };
+    const variables = this.options.settings.variables ?? {};
+    const key = [
+      stamp(secretsPath(home)),
+      stamp(mcpAuthPath(home)),
+      JSON.stringify(this.options.settings.mcp_servers),
+      JSON.stringify(variables),
+    ].join('\n');
+    if (this.values?.key === key && Date.now() < this.values.until)
+      return this.values;
+    const secrets = loadSecrets(home);
+    const given = mcpPlaceholders(home, this.options.settings, {
+      variables,
+      secrets,
+    });
+    this.values = {
+      key,
+      until: given.until,
+      secrets: { ...given.secrets, ...secrets },
+      variables: { ...given.variables, ...variables },
+    };
+    return this.values;
   }
   /** The variables or the secrets changed: the next request tells the model. */
   refreshPrompt(): void {

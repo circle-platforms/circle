@@ -16,9 +16,15 @@ export function mcpPlaceholders(
   home: string,
   settings: CircleSettings,
   saved: { variables: Record<string, string>; secrets: Record<string, string> },
-): { variables: Record<string, string>; secrets: Record<string, string> } {
+): {
+  variables: Record<string, string>;
+  secrets: Record<string, string>;
+  /** When the first kept token given expires, after which it is no longer given; Infinity when none expires. */
+  until: number;
+} {
   const variables: Record<string, string> = {};
   const secrets: Record<string, string> = {};
+  let until = Infinity;
   const free = (name: unknown): name is string =>
     typeof name === 'string' &&
     VARIABLE_NAME.test(name) &&
@@ -53,19 +59,22 @@ export function mcpPlaceholders(
         server.href,
         saved.secrets,
       );
-      if (token) secrets[named.token] = token;
+      if (token) {
+        secrets[named.token] = token.value;
+        until = Math.min(until, token.until);
+      }
     }
   }
-  return { variables, secrets };
+  return { variables, secrets, until };
 }
 
-/** The Bearer token a connection sends: its Authorization header's, or else the one its sign-in keeps. */
+/** The Bearer token a connection sends: its Authorization header's, or else the one its sign-in keeps, and its expiry. */
 function bearer(
   home: string,
   headers: Record<string, string> | undefined,
   server: string,
   secrets: Record<string, string>,
-): string | undefined {
+): { value: string; until: number } | undefined {
   let header: string | undefined;
   try {
     header = Object.entries(resolveHeaders(headers, process.env, secrets)).find(
@@ -75,11 +84,14 @@ function bearer(
     // A header that names a secret or variable not set: the connection sends nothing
     return undefined;
   }
-  if (header !== undefined) return /^Bearer (\S+)$/i.exec(header)?.[1];
+  if (header !== undefined) {
+    const value = /^Bearer (\S+)$/i.exec(header)?.[1];
+    return value ? { value, until: Infinity } : undefined;
+  }
   const kept = keptFor(home, server);
   return kept.tokens?.access_token &&
     kept.tokens.token_type?.toLowerCase() === 'bearer' &&
     (kept.expires_at === undefined || kept.expires_at > Date.now())
-    ? kept.tokens.access_token
+    ? { value: kept.tokens.access_token, until: kept.expires_at ?? Infinity }
     : undefined;
 }
