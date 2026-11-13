@@ -47,7 +47,10 @@ import {
   isReady,
   withConnectionLock,
 } from '../settings.js';
-import { resolveEndpoint } from '../probe.js';
+import {
+  availableModels,
+  type ConnectionModels,
+} from '../connection_models.js';
 import { PROVIDER_PRESETS } from '../providers.js';
 import { SetupCard, SetupFlow } from './setup_flow.js';
 import { InputParser, type InputEvent } from '../ink/parse_keypress.js';
@@ -210,6 +213,8 @@ export class SessionApp {
   }
   private knownModels?: string[];
   private knownModelsEndpoint = '';
+  private knownModelsStatus?: ConnectionModels['status'];
+  private knownModelsDetail = '';
   private runScopeOnly?: boolean;
   get runtime(): AgentRuntime | undefined {
     return this.view.runtime;
@@ -3624,18 +3629,27 @@ export class SessionApp {
       runtime.harness.model.model,
     );
   }
-  private async loadModels(runtime = this.runtime!): Promise<string[]> {
+  private modelsEndpoint(runtime: AgentRuntime): string {
+    const auth = runtime.options.settings.auth;
+    return [auth.provider ?? '', auth.protocol, auth.base_url].join(':');
+  }
+  private async loadModels(runtime = this.runtime!): Promise<ConnectionModels> {
     const settings = runtime.options.settings;
-    const result = await resolveEndpoint(
-      settings.auth.base_url,
+    const result = await availableModels(
+      settings.auth,
       await connectionKey(settings, this.home),
-      { protocol: settings.auth.protocol },
     );
-    if (result.status === 'failed') throw new Error(result.detail);
     this.knownModels = result.models;
-    this.knownModelsEndpoint =
-      settings.auth.protocol + ':' + settings.auth.base_url;
-    return modelScope(result.models, [], runtime.harness.model.model);
+    this.knownModelsStatus = result.status;
+    this.knownModelsDetail = result.detail;
+    this.knownModelsEndpoint = this.modelsEndpoint(runtime);
+    return {
+      ...result,
+      models:
+        result.status === 'failed'
+          ? modelScope(this.scopedModels(), [], runtime.harness.model.model)
+          : modelScope(result.models, [], runtime.harness.model.model),
+    };
   }
   private async cycleModel(): Promise<void> {
     const runtime = this.runtime;
@@ -3647,8 +3661,7 @@ export class SessionApp {
     }
     if (
       !this.knownModels ||
-      this.knownModelsEndpoint !==
-        this.settings.auth.protocol + ':' + this.settings.auth.base_url
+      this.knownModelsEndpoint !== this.modelsEndpoint(runtime)
     )
       await this.loadModels(runtime);
     if (runtime.isClosing) return;
@@ -3702,6 +3715,8 @@ export class SessionApp {
         modelOverride: undefined,
       };
     this.knownModels = undefined;
+    this.knownModelsStatus = undefined;
+    this.knownModelsDetail = '';
     this.commandList = undefined;
   }
   async command(name: string, args: string): Promise<void> {
@@ -3743,7 +3758,7 @@ export class SessionApp {
         if (runtime.harness.busy) throw new Error('a turn is running');
         runtime.setModel(model);
         // One space around each separator. The footer flash goes away; the
-        // transcript line stays, including `not listed by this endpoint`.
+        // transcript line stays, including when the available list omitted the id.
         const line = `model set to ${model}${extra} · this session`.replace(
           / {2,}/g,
           ' ',
@@ -3755,23 +3770,27 @@ export class SessionApp {
         const model = args.trim();
         let extra = '';
         try {
-          const endpoint =
-            runtime.options.settings.auth.protocol +
-            ':' +
-            runtime.options.settings.auth.base_url;
+          const endpoint = this.modelsEndpoint(runtime);
           // alt+m calls this with an id from the list just loaded. Ask the
           // endpoint again only when that list is missing.
           if (!this.knownModels || this.knownModelsEndpoint !== endpoint)
             await this.loadModels(runtime);
           if (runtime.isClosing) return;
-          if (!(this.knownModels ?? []).some((item) => sameModel(item, model)))
-            extra = ' · not listed by this endpoint';
+          if (
+            !(this.knownModels ?? []).some((item) => sameModel(item, model))
+          ) {
+            if (this.knownModelsStatus === 'preset')
+              extra = ' · not in provider presets';
+            else if (this.knownModelsStatus !== 'failed')
+              extra = ' · not listed by this endpoint';
+          }
         } catch {
           extra = '';
         }
         choose(model, extra);
       } else {
-        const models = await this.loadModels(runtime);
+        const found = await this.loadModels(runtime);
+        const models = found.models;
         if (runtime.isClosing) return;
         this.inView(view, () => {
           this.scopedModels();
@@ -3792,10 +3811,21 @@ export class SessionApp {
                 .filter(Boolean)
                 .join(' · '),
             }));
+          const source =
+            found.status === 'preset'
+              ? 'provider presets · '
+              : found.status === 'failed'
+                ? `endpoint did not list models${this.knownModelsDetail ? ` (${this.knownModelsDetail})` : ''} · `
+                : '';
           this.picker('Model', rows(), (item) => choose(item.key), {
-            hint: 'enter uses it in this session · alt+d also makes it the default · tab adds it to alt+m or takes it out',
-            empty:
-              'No model matches · /models <id> uses an id the endpoint does not list',
+            hint:
+              source +
+              'enter uses it in this session · alt+d also makes it the default · tab adds it to alt+m or takes it out',
+            empty: (query) =>
+              query.trim()
+                ? `use "${query.trim()}"`
+                : 'No model matches · /models <id> uses an id the endpoint does not list',
+            freeText: (text) => choose(text),
             focusKey:
               models.find((model) =>
                 sameModel(model, runtime.harness.model.model),

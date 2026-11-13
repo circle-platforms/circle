@@ -46,7 +46,7 @@ circle -p "review this" @src/app.ts "now list the risks"
 | `--thinking LEVEL` | The thinking depth for this run: `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. It is not saved. See [Models](models.md#thinking-depth). |
 | `--models PATTERNS` | The models `ctrl+p` switches between in this run, comma-separated, such as `step-3.7-flash,step-5-*`. In place of `enabled_models` in [settings](settings.md). |
 | `--export ID [FILE]` | Write a saved conversation as HTML, or as a JSONL bundle when `FILE` ends in `.jsonl`, and exit. `FILE` defaults to `<id>.html` in the current folder. See [Sessions](sessions.md#export-and-import). |
-| `--list-models [SEARCH]` | Print the models the endpoint offers and exit. With words, only the models that contain all of them. The current model is marked `(current)`. |
+| `--list-models [SEARCH]` | Print available models and exit. Preset providers print Circle's released ids without contacting the endpoint; online and custom connections use endpoint discovery. With words, only models that contain all of them are printed. The current model is marked `(current)`. |
 | `--system-prompt TEXT\|FILE` | Replace Circle's own instructions with this text, or with the file's text when it names a file. The instruction files, the environment and anything appended still follow. See [Configuration](configuration.md#system-prompt). |
 | `--append-system-prompt TEXT\|FILE` | Add this text, or the file's text, to the end of the system prompt. Can be given more than once. Replaces `APPEND_SYSTEM.md` for this run. |
 | `-nc`, `--no-context-files` | Do not read `AGENTS.md` or `CLAUDE.md`, in the project or elsewhere. |

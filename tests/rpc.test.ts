@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { PassThrough } from 'node:stream';
+import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { mkdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -381,4 +382,83 @@ test('closing RPC input waits for a model job and delivers its actual result in 
     false,
   );
   assert.deepEqual(output.at(-1), { type: 'jobs_stopped', count: 0 });
+});
+
+async function requestModels(
+  runtime: AgentRuntime,
+): Promise<Record<string, unknown>> {
+  const input = new PassThrough();
+  const output: Record<string, unknown>[] = [];
+  const runner = runRpc(runtime, {
+    input,
+    write: (text) => output.push(JSON.parse(text)),
+  });
+  input.end(
+    JSON.stringify({ id: 'models', type: 'get_available_models' }) + '\n',
+  );
+  assert.equal(await runner, 0);
+  const reply = output.find((record) => record.id === 'models');
+  assert.ok(reply);
+  return reply;
+}
+
+test('RPC returns provider presets without contacting the endpoint', async (t) => {
+  const root = scratch(t);
+  const settings = defaultSettings();
+  settings.auth = {
+    ...settings.auth,
+    provider: 'bailian',
+    base_url: 'http://127.0.0.1:1/compatible-mode/v1',
+    model: 'qwen3.8-flash',
+  };
+  saveCredentials({ api_key: 'fake' }, root);
+  const runtime = new AgentRuntime({
+    home: root,
+    workspace: root,
+    settings,
+    model: new ScriptedModel(),
+    headless: true,
+  });
+  cleanup(t, () => runtime.close());
+  const reply = await requestModels(runtime);
+  assert.equal(reply.success, true);
+  assert.deepEqual((reply.data as { models: string[] }).models, [
+    'qwen3.8-max',
+    'qwen3.8-flash',
+    'qwen3.7-plus',
+    'qwen3-coder-flash',
+  ]);
+});
+
+test('RPC keeps custom model discovery failures explicit', async (t) => {
+  const root = scratch(t);
+  const server = createServer((request, response) => {
+    response.writeHead(404).end();
+  });
+  await new Promise<void>((ready) => server.listen(0, '127.0.0.1', ready));
+  cleanup(t, async () => {
+    server.closeAllConnections();
+    await new Promise<void>((done) => server.close(() => done()));
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const settings = defaultSettings();
+  settings.auth = {
+    ...settings.auth,
+    provider: 'custom',
+    base_url: `http://127.0.0.1:${address.port}/v1`,
+    model: 'manual',
+  };
+  saveCredentials({ api_key: 'fake' }, root);
+  const runtime = new AgentRuntime({
+    home: root,
+    workspace: root,
+    settings,
+    model: new ScriptedModel(),
+    headless: true,
+  });
+  cleanup(t, () => runtime.close());
+  const reply = await requestModels(runtime);
+  assert.equal(reply.success, false);
+  assert.equal(reply.error, 'http 404');
 });

@@ -171,11 +171,13 @@ function setUp(
   base: string,
   trusted: string[],
   model = 'gateway',
+  provider?: string,
 ): void {
   let settings = defaultSettings();
   settings.initialized = true;
   settings.auth.base_url = base + '/v1';
   settings.auth.model = model;
+  settings.auth.provider = provider;
   for (const folder of trusted) settings = trustFolder(settings, folder);
   saveSettings(settings, home);
   saveCredentials({ api_key: 'test-key' }, home);
@@ -595,6 +597,47 @@ test('--list-models keeps the models that contain every word and marks the curre
   const unset = await circle(fresh, ['--list-models']);
   assert.equal(unset.code, 2);
   assert.match(unset.stderr, /not set up yet/);
+});
+
+test('--list-models prints provider presets without asking the endpoint', async (t) => {
+  const home = scratch(t);
+  const endpoint = await gateway(t, [{ content: 'unused' }]);
+  setUp(home, endpoint.base, [], 'qwen3.8-flash', 'bailian');
+  const all = await circle(home, ['--list-models']);
+  assert.equal(all.code, 0, all.stderr);
+  assert.equal(
+    all.stdout,
+    'qwen3.8-max\nqwen3.8-flash  (current)\nqwen3.7-plus\nqwen3-coder-flash\n',
+  );
+  const coder = await circle(home, ['--list-models', 'coder']);
+  assert.equal(coder.code, 0, coder.stderr);
+  assert.equal(coder.stdout, 'qwen3-coder-flash\n');
+  assert.equal(
+    endpoint.trace.filter((event) => event.phase === 'request').length,
+    0,
+  );
+});
+
+test('--list-models keeps custom discovery failures explicit', async (t) => {
+  const home = scratch(t);
+  const requests: string[] = [];
+  const server = createServer((request, response) => {
+    requests.push(request.url ?? '');
+    response.writeHead(404).end();
+  });
+  await new Promise<void>((ready) => server.listen(0, '127.0.0.1', ready));
+  cleanup(t, async () => {
+    server.closeAllConnections();
+    await new Promise<void>((done) => server.close(() => done()));
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  setUp(home, `http://127.0.0.1:${address.port}`, [], 'manual', 'custom');
+  const result = await circle(home, ['--list-models']);
+  assert.equal(result.code, 1);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /did not list its models \(http 404\)/);
+  assert.deepEqual(requests, ['/v1/models']);
 });
 
 test('options that cannot go together stop with exit code 2 before any request', async (t) => {

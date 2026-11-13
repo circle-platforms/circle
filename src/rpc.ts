@@ -2,7 +2,7 @@ import { connectionKey } from './chatgpt_plan.js';
 import { createInterface } from 'node:readline';
 import type { AgentRuntime } from './runtime.js';
 import { jsonEvent } from './headless.js';
-import { resolveEndpoint } from './probe.js';
+import { availableModels } from './connection_models.js';
 import { toHtml } from './session_export.js';
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -192,10 +192,9 @@ export async function runRpc(
           });
         } else if (type === 'get_available_models') {
           const settings = runtime.options.settings;
-          const discovered = await resolveEndpoint(
-            settings.auth.base_url,
+          const discovered = await availableModels(
+            settings.auth,
             await connectionKey(settings, runtime.options.home),
-            { protocol: settings.auth.protocol },
           );
           if (discovered.status === 'failed')
             throw new Error(discovered.detail);

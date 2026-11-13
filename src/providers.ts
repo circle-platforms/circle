@@ -305,3 +305,15 @@ export function searchProvider(
   }
   return { id: match.id, adapter };
 }
+
+/** Legacy connections did not save their provider; only a known preset route is inferred. */
+export function inferredPresetProvider(
+  baseUrl: string,
+  protocol: string,
+): ProviderPreset | undefined {
+  if (protocol !== 'openai' && protocol !== 'anthropic') return undefined;
+  const found = PROVIDER_PRESETS.find(
+    (item) => item.id === searchProvider(baseUrl, protocol, '').id,
+  );
+  return found?.source === 'preset' ? found : undefined;
+}

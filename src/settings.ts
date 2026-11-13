@@ -27,6 +27,7 @@ export interface ModelAuth {
   base_url: string;
   model: string;
   api_key_ref: string;
+  provider?: string;
 }
 export interface CircleSettings {
   version: number;
@@ -151,6 +152,8 @@ export function loadSettingsFromDict(
       String(auth[key] || fallback),
     ]),
   ) as unknown as ModelAuth;
+  if (typeof auth.provider === 'string' && auth.provider.trim())
+    settings.auth.provider = auth.provider.trim().slice(0, 100);
   settings.version = Number(raw.version || 1);
   settings.initialized = Boolean(raw.initialized);
   settings.trusted_folders = strings(raw.trusted_folders);
