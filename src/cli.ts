@@ -561,7 +561,9 @@ export function reportProjectHooks(
       write(`circle: approved the hooks in ${change.file}\n`);
       for (const hook of change.hooks)
         if (hook.mark !== 'removed')
-          write(`  ${hook.name} · ${hook.event} · ${hook.command}\n`);
+          write(
+            `  ${hook.name} · ${hook.event}${hook.screenshot ? ' · with screenshot' : ''} · ${hook.command}\n`,
+          );
     }
   for (const change of runtime.pendingHooks())
     write(

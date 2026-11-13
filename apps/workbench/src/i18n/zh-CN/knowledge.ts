@@ -225,4 +225,18 @@ export const knowledge = {
   'captured from command': '采集自命令运行',
   'promote to structured memory…': '晋升为结构化记忆…',
   'confirm source upload in console': '在控制台确认上传来源',
+  'confirm on the sync server’s page to finish this change':
+    '在同步服务器的页面上确认后，才能完成这次更改',
+  'sign in to the sync server again': '请重新登录同步服务器',
+  'the sync server is unavailable now; try again later':
+    '同步服务器暂时不可用，请稍后再试',
+  'the sync server refused the request': '同步服务器拒绝了这次请求',
+  'the server refused: {detail}': '服务器拒绝了：{detail}',
+  'confirm removing the personal copies on the server’s page by {time}; Circle finishes the change then':
+    '请在 {time} 前到服务器的页面上确认删除本人副本，确认后 Circle 会完成这次更改',
+  'open the page': '打开页面',
+  'personal content will sync to this server; you can switch to only on this device at any time':
+    '本人空间的内容会同步到这台服务器，随时可以改成“仅保存在本机”',
+  'this server publishes no discovery document: it syncs on the fixed v1 paths; team sharing and team memory are not available':
+    '这台服务器没有发布发现文档：按固定的 v1 路径同步，不能分享到团队，也不读取团队记忆',
 };

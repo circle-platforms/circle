@@ -272,7 +272,7 @@ export class KnowledgeService {
           return this.withStore((current) =>
             current.apply(expectedHead, () => {
               signal.throwIfAborted();
-              current.putBatch(
+              current.putChange(
                 (JSON.parse(frozen) as typeof proposed).map((p) => p.object),
               );
               return snapshot;

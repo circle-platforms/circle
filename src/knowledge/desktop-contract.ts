@@ -99,6 +99,8 @@ export interface KnowledgePreview {
     teamCopies: number;
   };
   files?: { name: string; bytes: number }[];
+  /** Connecting: this account has never finished a sync on this device. */
+  firstSync?: boolean;
 }
 export const KNOWLEDGE_OPERATIONS = [
   'list',

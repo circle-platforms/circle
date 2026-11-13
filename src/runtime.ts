@@ -34,14 +34,17 @@ import { Sandbox } from './sandbox.js';
 import { EditorBridge } from './editor_bridge.js';
 import { buildTools, type Todo } from './tools.js';
 import { browserToolsWanted } from './browser/tools.js';
+import { mcpPlaceholders } from './mcp_placeholders.js';
 import {
   loadSecrets,
   MAX_SECRET,
   secretNames,
   secretRedactor,
+  secretsPath,
   written,
   type Redactor,
 } from './secrets.js';
+import { mcpAuthPath } from './mcp_auth.js';
 import {
   buildSystemPrompt,
   planModePrompt,
@@ -221,6 +224,14 @@ export interface RuntimeOptions {
    * The terminal keeps browser tool schemas here until a page is requested.
    */
   deferredTools?: Tool[];
+  /**
+   * A PNG of the page a session's browser shows, for an after_tool hook that asks for one (`screenshot`); the front
+   * end that owns the browser gives it. Never starts a browser.
+   */
+  hookScreenshot?: (
+    sessionId: string,
+    signal: AbortSignal,
+  ) => Promise<Buffer | undefined>;
   /** Where the extensions that ship with Circle are; false for none (tests). */
   bundledExtensions?: string | false;
   /** An extension's status line changed. */
@@ -639,8 +650,8 @@ export class AgentRuntime {
     // A background command can print a secret: its notice reaches the model and history.
     // Calls and notices share what values each secret had.
     this.redact = secretRedactor(
-      () => loadSecrets(this.options.home),
-      () => this.options.settings.variables ?? {},
+      () => this.runSecrets(),
+      () => this.runVariables(),
     );
     this.jobs.redact = (text, sessionId) =>
       this.redact(text, {}, () => written(this.store.messages(sessionId)));
@@ -866,9 +877,10 @@ export class AgentRuntime {
           written(this.store.messages(context.sessionId)),
         ),
       localSkills: {
-        settings: this.options.settings,
-        secrets: () => loadSecrets(this.options.home),
-        variables: () => this.options.settings.variables ?? {},
+        home: this.options.home,
+        settings: () => this.options.settings,
+        secrets: () => this.runSecrets(),
+        variables: () => this.runVariables(),
       },
       screenshot:
         this.options.screenshot === false
@@ -1120,8 +1132,8 @@ export class AgentRuntime {
             forCall: (sessionId, callId) =>
               this.jobs.executionFor(sessionId, callId),
           },
-          variables: () => this.options.settings.variables,
-          secrets: () => loadSecrets(this.options.home),
+          variables: () => this.runVariables(),
+          secrets: () => this.runSecrets(),
           redact: this.redact,
           model: childModel,
           tools: ownedChildTools,
@@ -1148,6 +1160,7 @@ export class AgentRuntime {
                 )
             : undefined,
           hooks: this.ensureHooks(),
+          hookScreenshot: this.options.hookScreenshot,
           sessionHooks: false,
           headless: this.options.headless,
           approvalSessionId: parentSessionId,
@@ -1280,8 +1293,8 @@ export class AgentRuntime {
         forCall: (sessionId, callId) =>
           this.jobs.executionFor(sessionId, callId),
       },
-      variables: () => this.options.settings.variables,
-      secrets: () => loadSecrets(this.options.home),
+      variables: () => this.runVariables(),
+      secrets: () => this.runSecrets(),
       redact: this.redact,
       model: this.modelWithSearch(model),
       holdTitle: this.options.holdTitle,
@@ -1295,6 +1308,7 @@ export class AgentRuntime {
       headless: this.options.headless,
       approve: this.options.approve,
       hooks: this.ensureHooks(),
+      hookScreenshot: this.options.hookScreenshot,
       reviewHooks: (signal) => this.reviewHooks(signal),
       priceUsage: (model, usage) =>
         priceCall(this.catalog.facts(model, this.options.settings), usage),
@@ -1582,8 +1596,8 @@ export class AgentRuntime {
           extensionTools: this.extensions.tools(),
           userHome: this.options.userHome,
           localContext: this.options.localContext,
-          variables: this.options.settings.variables,
-          secrets: secretNames(this.options.home),
+          variables: this.runVariables(),
+          secrets: Object.keys(this.runSecrets()).sort(),
           attribution: this.options.settings.attribution,
           headless: this.options.headless,
           mcpInstructions: this.mcp.instructions(),
@@ -1620,6 +1634,63 @@ export class AgentRuntime {
     return preferences ? build(preferences) : base;
   }
 
+  /**
+   * The secrets a call may name as `%NAME%`: those saved, and the tokens of the MCP server entries that name a
+   * placeholder for theirs (mcp_placeholders.ts), unless the person keeps a value under that name.
+   */
+  runSecrets(): Record<string, string> {
+    return { ...this.runValues().secrets };
+  }
+  /** The plain variables a call may name: the person's, and the endpoints of the MCP entries that name a placeholder for theirs. */
+  runVariables(): Record<string, string> {
+    return { ...this.runValues().variables };
+  }
+  private values?: {
+    key: string;
+    until: number;
+    secrets: Record<string, string>;
+    variables: Record<string, string>;
+  };
+  /**
+   * Both, read once and kept while nothing they come from has changed: the saved secrets, the kept sign-ins, the MCP
+   * entries and the variables, and until the first token given expires. A redaction runs for every tool result and
+   * every chunk of a command's output; reading the files each time would read them several times a chunk.
+   */
+  private runValues(): {
+    secrets: Record<string, string>;
+    variables: Record<string, string>;
+  } {
+    const home = this.options.home;
+    const stamp = (path: string) => {
+      try {
+        const file = statSync(path);
+        return `${file.mtimeMs}:${file.size}`;
+      } catch {
+        return '-';
+      }
+    };
+    const variables = this.options.settings.variables ?? {};
+    const key = [
+      stamp(secretsPath(home)),
+      stamp(mcpAuthPath(home)),
+      JSON.stringify(this.options.settings.mcp_servers),
+      JSON.stringify(variables),
+    ].join('\n');
+    if (this.values?.key === key && Date.now() < this.values.until)
+      return this.values;
+    const secrets = loadSecrets(home);
+    const given = mcpPlaceholders(home, this.options.settings, {
+      variables,
+      secrets,
+    });
+    this.values = {
+      key,
+      until: given.until,
+      secrets: { ...given.secrets, ...secrets },
+      variables: { ...given.variables, ...variables },
+    };
+    return this.values;
+  }
   /** The variables or the secrets changed: the next request tells the model. */
   refreshPrompt(): void {
     this.refreshSystemPrompt();

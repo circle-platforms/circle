@@ -74,6 +74,7 @@ import {
   EmptyState,
   usePressAction,
 } from '../components/common';
+import { connectionChip } from '../components/HubConnectionCard';
 import { Markdown } from '../components/Markdown';
 import { SessionMenu } from '../components/SessionMenus';
 import {
@@ -774,9 +775,18 @@ export function CommandsPage() {
 }
 export function McpPage() {
   const { snapshot, runtime, perform, notify } = useRuntime();
+  const { registry } = usePlugins();
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<McpServer | null>(null);
   const server = snapshot.mcp.find((item) => item.id === selected);
+  // An entry a shipped extension keeps is that extension's connection: it is shown, switched and signed in to on the
+  // extension's card (extensions → Hub), not here
+  const kept = new Set(
+    registry.plugins.flatMap((plugin) =>
+      plugin.mcpServer ? [plugin.mcpServer] : [],
+    ),
+  );
+  const servers = snapshot.mcp.filter((item) => !kept.has(item.name));
   return (
     <Page
       title={t('mcp servers')}
@@ -819,14 +829,14 @@ export function McpPage() {
         </div>
       }
     >
-      {!snapshot.mcp.length && (
+      {!servers.length && (
         <EmptyState title={t('no MCP servers yet')} icon={<Plug size={25} />}>
           {t('Add a server to give Circle tools from another program.')}
         </EmptyState>
       )}
-      {snapshot.mcp.length > 0 && (
+      {servers.length > 0 && (
         <div className="records">
-          {snapshot.mcp.map((item) => (
+          {servers.map((item) => (
             <div key={item.id} className="record-row">
               <button
                 className="record-main"
@@ -1263,147 +1273,181 @@ export function ExtensionsPage() {
               )}
             </EmptyState>
           )}
-          {snapshot.extensions.map((extension) => (
-            <article className="extension-card" key={extension.id}>
-              <div className="detail-title">
-                <span className="extension-icon">
-                  <Blocks size={21} />
-                </span>
-                <div>
-                  <h2>{extension.name}</h2>
-                  <p>
-                    {scopeLabel(extension.scope)} · {extension.version}
-                  </p>
-                </div>
-                <Switch
-                  label={t('enable {name}', {
-                    name: extension.name,
-                  })}
-                  checked={checkedExtension(extension.name, extension.enabled)}
-                  onChange={(value) => void setExtension(extension.name, value)}
-                />
-              </div>
-              {registry.plugins.find(
-                (plugin) =>
-                  plugin.runtimeExtension === extension.name && plugin.detail,
-              ) && (
-                <NavLink
-                  to={
-                    '/page/extensions?plugin=' +
-                    registry.plugins.find(
-                      (plugin) =>
-                        plugin.runtimeExtension === extension.name &&
-                        plugin.detail,
-                    )!.id
-                  }
-                >
-                  {t('plugin details')}
-                </NavLink>
-              )}
-              {feedback(extension.name)}
-              {extension.error && !actions[extension.name] && (
-                <div role="alert">
-                  <p>{extensionErrorText(extension.error)}</p>
-                  <details className="context-source">
-                    <summary>{t('technical details')}</summary>
-                    <pre>{extension.error}</pre>
-                  </details>
-                </div>
-              )}
-              <div className="extension-contributions">
-                <span>
-                  {tn(extension.tools.length, '{n} tool', '{n} tools')}
-                </span>
-                <span>
-                  {tn(extension.commands.length, '{n} command', '{n} commands')}
-                </span>
-                <span>
-                  {tn(
-                    extension.events.length,
-                    '{n} event handler',
-                    '{n} event handlers',
+          {snapshot.extensions.map((extension) => {
+            // A shipped extension's interface half gives its card the mark of what it connects, and an extension that
+            // keeps an MCP server entry shows that connection: its state, and its tools among the extension's own
+            const paired =
+              extension.scope === 'bundled'
+                ? registry.plugins.find(
+                    (plugin) => plugin.runtimeExtension === extension.name,
+                  )
+                : undefined;
+            const Icon = paired?.mark ?? paired?.icon ?? Blocks;
+            const server = paired?.mcpServer
+              ? snapshot.mcp.find((row) => row.name === paired.mcpServer)
+              : undefined;
+            const chip = paired?.mcpServer ? connectionChip(server) : undefined;
+            const tools = [
+              ...extension.tools,
+              ...(server?.tools.map((tool) => tool.name) ?? []),
+            ];
+            return (
+              <article className="extension-card" key={extension.id}>
+                <div className="detail-title">
+                  <span className="extension-icon">
+                    <Icon size={21} />
+                  </span>
+                  <div>
+                    <h2>{extension.name}</h2>
+                    <p>
+                      {scopeLabel(extension.scope)} · {extension.version}
+                    </p>
+                  </div>
+                  {chip && (
+                    <span role="status">
+                      <Badge tone={chip.tone}>{chip.text}</Badge>
+                    </span>
                   )}
-                </span>
-              </div>
-              <details>
-                <summary>{t('contributions')}</summary>
-                <DataBlock
-                  title={t('registered items')}
-                  value={{
-                    tools: extension.tools,
-                    commands: extension.commands,
-                    events: extension.events,
-                  }}
-                />
-              </details>
-            </article>
-          ))}
+                  <Switch
+                    label={t('enable {name}', {
+                      name: extension.name,
+                    })}
+                    checked={checkedExtension(
+                      extension.name,
+                      extension.enabled,
+                    )}
+                    onChange={(value) =>
+                      void setExtension(extension.name, value)
+                    }
+                  />
+                </div>
+                {registry.plugins.find(
+                  (plugin) =>
+                    plugin.runtimeExtension === extension.name && plugin.detail,
+                ) && (
+                  <NavLink
+                    to={
+                      '/page/extensions?plugin=' +
+                      registry.plugins.find(
+                        (plugin) =>
+                          plugin.runtimeExtension === extension.name &&
+                          plugin.detail,
+                      )!.id
+                    }
+                  >
+                    {t('plugin details')}
+                  </NavLink>
+                )}
+                {feedback(extension.name)}
+                {extension.error && !actions[extension.name] && (
+                  <div role="alert">
+                    <p>{extensionErrorText(extension.error)}</p>
+                    <details className="context-source">
+                      <summary>{t('technical details')}</summary>
+                      <pre>{extension.error}</pre>
+                    </details>
+                  </div>
+                )}
+                <div className="extension-contributions">
+                  <span>{tn(tools.length, '{n} tool', '{n} tools')}</span>
+                  <span>
+                    {tn(
+                      extension.commands.length,
+                      '{n} command',
+                      '{n} commands',
+                    )}
+                  </span>
+                  <span>
+                    {tn(
+                      extension.events.length,
+                      '{n} event handler',
+                      '{n} event handlers',
+                    )}
+                  </span>
+                </div>
+                <details>
+                  <summary>{t('contributions')}</summary>
+                  <DataBlock
+                    title={t('registered items')}
+                    value={{
+                      tools,
+                      commands: extension.commands,
+                      events: extension.events,
+                    }}
+                  />
+                </details>
+              </article>
+            );
+          })}
         </div>
       ) : (
         <div className="extension-list">
-          {registry.plugins.map((plugin) => (
-            <article className="extension-card" key={plugin.id}>
-              <div className="detail-title">
-                <Blocks size={20} />
-                <div>
-                  <h2>{plugin.title}</h2>
-                  <p>{plugin.description}</p>
-                </div>
-                <Switch
-                  label={t('enable {name} interface', {
-                    name: plugin.title,
-                  })}
-                  checked={
-                    plugin.runtimeExtension
-                      ? checkedExtension(
-                          plugin.runtimeExtension,
-                          enabled.includes(plugin.id),
-                        )
-                      : enabled.includes(plugin.id)
-                  }
-                  onChange={(value) => {
-                    if (!plugin.runtimeExtension)
-                      return toggle(plugin.id, value);
-                    // The interface's own page comes and goes with this switch; the
-                    // runtime extension follows through its usual save and reload, and
-                    // stays on while another of its pages is still on.
-                    let extension = value;
-                    runtime.change((state) => {
-                      const after = pairedSwitch(
-                        registry,
-                        state.uiPlugins,
-                        plugin.id,
-                        value,
-                      );
-                      state.uiPlugins = after.chosen;
-                      extension = after.extension;
-                    });
-                    if (value || !extension)
-                      void setExtension(plugin.runtimeExtension, value);
-                  }}
-                />
-              </div>
-              {plugin.detail && (
-                <NavLink to={'/page/extensions?plugin=' + plugin.id}>
-                  {t('plugin details')}
-                </NavLink>
-              )}
-              {plugin.runtimeExtension && feedback(plugin.runtimeExtension)}
-              <p className="panel-note">
-                {plugin.runtimeExtension
-                  ? t('paired with runtime extension {name} · {version}', {
-                      name: plugin.runtimeExtension,
-                      version: plugin.version,
-                    }) +
-                    (pairing(plugin, snapshot.extensions).reason
-                      ? ' · ' + pairing(plugin, snapshot.extensions).reason
-                      : '')
-                  : t('bundled first-party component · {version}', {
-                      version: plugin.version,
+          {registry.plugins.map((plugin) => {
+            const Icon = plugin.mark ?? plugin.icon;
+            return (
+              <article className="extension-card" key={plugin.id}>
+                <div className="detail-title">
+                  <Icon size={20} />
+                  <div>
+                    <h2>{plugin.title}</h2>
+                    <p>{plugin.description}</p>
+                  </div>
+                  <Switch
+                    label={t('enable {name} interface', {
+                      name: plugin.title,
                     })}
-              </p>
-            </article>
-          ))}
+                    checked={
+                      plugin.runtimeExtension
+                        ? checkedExtension(
+                            plugin.runtimeExtension,
+                            enabled.includes(plugin.id),
+                          )
+                        : enabled.includes(plugin.id)
+                    }
+                    onChange={(value) => {
+                      if (!plugin.runtimeExtension)
+                        return toggle(plugin.id, value);
+                      // The interface's own page comes and goes with this switch; the
+                      // runtime extension follows through its usual save and reload, and
+                      // stays on while another of its pages is still on.
+                      let extension = value;
+                      runtime.change((state) => {
+                        const after = pairedSwitch(
+                          registry,
+                          state.uiPlugins,
+                          plugin.id,
+                          value,
+                        );
+                        state.uiPlugins = after.chosen;
+                        extension = after.extension;
+                      });
+                      if (value || !extension)
+                        void setExtension(plugin.runtimeExtension, value);
+                    }}
+                  />
+                </div>
+                {plugin.detail && (
+                  <NavLink to={'/page/extensions?plugin=' + plugin.id}>
+                    {t('plugin details')}
+                  </NavLink>
+                )}
+                {plugin.runtimeExtension && feedback(plugin.runtimeExtension)}
+                <p className="panel-note">
+                  {plugin.runtimeExtension
+                    ? t('paired with runtime extension {name} · {version}', {
+                        name: plugin.runtimeExtension,
+                        version: plugin.version,
+                      }) +
+                      (pairing(plugin, snapshot.extensions).reason
+                        ? ' · ' + pairing(plugin, snapshot.extensions).reason
+                        : '')
+                    : t('bundled first-party component · {version}', {
+                        version: plugin.version,
+                      })}
+                </p>
+              </article>
+            );
+          })}
         </div>
       )}
     </Page>

@@ -2462,7 +2462,7 @@ function hooks(host: CommandHost): void {
       ? `waiting for /skill ${hook.skill ?? hook.name}`
       : 'trusted';
     return wrapHang(
-      `  ${hook.name} · ${hook.sourceLabel} · ${hook.event} · ${hook.command} · ${state}`,
+      `  ${hook.name} · ${hook.sourceLabel} · ${hook.event}${hook.screenshot ? ' · with screenshot' : ''} · ${hook.command} · ${state}`,
       width,
       2,
     ).join('\n');

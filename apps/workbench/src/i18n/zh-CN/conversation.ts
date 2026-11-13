@@ -28,6 +28,9 @@ export const conversation: Record<string, string> = {
   'changed hook': '已更改',
   'removed hook': '已删除',
   'unchanged hook': '未变',
+  'with screenshot': '附带截图',
+  'with screenshot: the hook also gets a picture of the page the browser shows, as a file the model never sees':
+    '附带截图：钩子还会收到浏览器当前页面的截图文件，模型看不到它',
   'These hooks run shell commands. They stay off until you approve this version of the file.':
     '这些钩子会执行 shell 命令。批准这个版本的文件之前，它们不会运行。',
   'Hook denied this call:': '钩子拒绝了此次调用：',

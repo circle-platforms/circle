@@ -69,6 +69,7 @@ Releases up to 1.9.1 ran a trusted folder's hooks without this approval and kept
 | `timeout_ms` | Optional. Default 30 seconds. Clamped between 100 milliseconds and 10 minutes. On timeout the process group is stopped (on Windows, `taskkill /T /F`, the same stop Circle uses for other commands).                                                                                                                                                                      |
 | `loop_limit` | Optional, only for `before_stop`. Default 5, clamped from 1 to 20. After this many blocks the hook is not run again for that session, until `/reload` or a new session.                                                                                                                                                                                                   |
 | `tools`      | Optional. A tool name, a list, or several names separated by `\|` or a comma. `*` or omitting it matches every tool. `matcher` is the same field. There is no regular expression. `session_start` and `before_stop` ignore it, so a copied matcher does not disable them.                                                                                                 |
+| `screenshot` | Optional, only for `after_tool`. `true` gives the hook a PNG of the page the conversation's browser shows, as a file: see [A screenshot for the hook](#a-screenshot-for-the-hook). Off by default; any other event, or a value that is not `true` or `false`, is an error in the file. |
 | `paths`      | Optional globs. Empty matches every call. A call that names no path does not match a hook that has globs. A call names the paths in its `file_path`, `path`, `file` and `paths` arguments, the files of a patch, and those an MCP tool's [file parameters](mcp.md#files-a-tool-takes) take. See [Path globs](#path-globs). Ignored for `session_start` and `before_stop`. |
 
 ## Per-platform commands
@@ -145,7 +146,19 @@ Circle writes one JSON object to standard input:
 }
 ```
 
+A hook with `"screenshot": true` also gets `"files": [{ "kind": "screenshot", "path": "…", "mime_type": "image/png", "sha256": "…", "size": 12345 }]`, when there is a page to capture (see below).
+
 `tool_input` is the arguments after variables are filled in, with one exception: a saved secret's value is written back as `%NAME%` everywhere it appears in the arguments, the paths, the tool output, and the hook's environment. The hook runs as you, but it does not receive the secret. `paths` are canonical (symlinks resolved through `canonicalPath`). `tool_output` and `tool_status` are set for `after_tool`. `permission_reason` is set for `permission_request`. `stop_attempt` is set for `before_stop` and starts at 1.
+
+### A screenshot for the hook
+
+A hook can keep evidence of a page without the model ever seeing a picture of it, for example to upload it, even when the model does not read images. With `"screenshot": true` on an `after_tool` hook, Circle captures the page the conversation's browser shows once the tool has returned, before the hook runs, and names the PNG in the hook's `files`:
+
+- The capture is the page as shown, without Circle's own marks on it. It is not a `browser_screenshot`: the model gets nothing from it, and `browser_click_at` keeps going by the screenshot the model took last.
+- It is taken once per tool call, however many hooks ask for it, and only when a hook that asks matches the call.
+- No browser is started for it. With no page open, a page waiting on a dialog, a page that failed to load, (in the terminal) a page another conversation's tab hides, or (in the desktop application) the browser in your hands, there is no file and no `files`. A picture that cannot be written to the temporary folder is no file either; the hooks still run.
+- The file is in a folder of its own under the system's temporary folder, readable only by you, and Circle removes it once the call's hooks have finished. A hook that hands the file to something that keeps running copies it first.
+- The approval card of a project hooks file, `/hooks` and the desktop settings show `with screenshot` on such a hook. Turning it on in a project's file changes the file, so the file waits for approval again.
 
 The command's standard output and standard error are kept up to 100,000 characters. A command that exits before it reads the input is still judged by its exit code. Closing the pipe does not stop Circle.
 

@@ -1,7 +1,9 @@
 // Native check of the Hub extension: it ships off and with no address; switched on, its page takes a Hub's address,
 // the Hub's sign-in page opens with the code, the card shows the code, and once a person approves on the Hub the card
-// says connected; disconnecting revokes the sign-in and removes the entry. Isolated data folder, scripted model and a
-// loopback authorization server that offers the device code; no real data, model or network.
+// says connected. The extensions list then shows the Hub's mark, state and tools on the hub extension's card, the MCP
+// servers page leaves the Hub out, and the extension's switch drops and restores the Hub's connection; disconnecting
+// revokes the sign-in and removes the entry. Isolated data folder, scripted model and a loopback authorization server
+// that offers the device code; no real data, model or network.
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
@@ -92,7 +94,7 @@ try {
   assert.equal((await saved()).mcp_servers.length, 0, 'no address is built in');
   await toggle.check();
   const address = card.getByRole('textbox', {
-    name: 'hub address',
+    name: 'hub IP address',
     exact: true,
   });
   await address.waitFor();
@@ -113,6 +115,7 @@ try {
       url: peer.origin + '/mcp',
       transport: 'streamable_http',
       enabled: true,
+      placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
     },
   ]);
   // The Hub's page for the code opened beside the conversation
@@ -140,6 +143,81 @@ try {
   assert.equal(await card.getByText('BCDF-GHJK', { exact: true }).count(), 0);
   checks.push('once approved on the Hub the card says connected');
 
+  // The extensions list: the hub extension's card carries the Hub's mark and its connection, state and tools
+  await route('/page/extensions');
+  const listed = page.locator('.extension-card').filter({
+    has: page.getByRole('heading', { name: 'hub', exact: true }),
+  });
+  await listed.locator('.extension-icon svg.hub-mark').waitFor();
+  await listed
+    .getByRole('status')
+    .getByText('connected', { exact: true })
+    .waitFor();
+  const tools = (await hub()).tools.length;
+  assert.equal(tools, 2, 'the synthetic Hub offers two tools');
+  await listed.getByText('2 tools', { exact: true }).waitFor();
+  // The MCP servers page leaves the Hub to its extension
+  await route('/page/mcp');
+  await page
+    .getByRole('heading', { name: 'mcp servers', exact: true })
+    .waitFor();
+  // With no other server, the page is empty
+  await page
+    .getByRole('heading', { name: 'no MCP servers yet', exact: true })
+    .waitFor();
+  assert.equal(
+    await page
+      .getByRole('checkbox', { name: 'enable Hub', exact: true })
+      .count(),
+    0,
+  );
+  checks.push(
+    'the extensions list shows the Hub connected with its tools, and the MCP servers page leaves it out',
+  );
+
+  // The extension's switch is the Hub's connection's: off drops it, on brings it back on the same sign-in
+  await route('/page/extensions');
+  const listedSwitch = listed.getByRole('checkbox', {
+    name: 'enable hub',
+    exact: true,
+  });
+  await listedSwitch.uncheck();
+  await waitFor(async () => {
+    const row = await hub();
+    return (
+      (await saved()).mcp_servers[0]?.enabled === false &&
+      row?.status === 'not connected' &&
+      row.tools.length === 0
+    );
+  }, 'the Hub dropped with its extension');
+  await listed
+    .getByRole('status')
+    .getByText('not connected', { exact: true })
+    .waitFor();
+  const before = peer.requests.length;
+  await listedSwitch.check();
+  await waitFor(async () => {
+    const row = await hub();
+    return (
+      (await saved()).mcp_servers[0]?.enabled === true &&
+      row?.status === 'connected' &&
+      row.tools.length === 2
+    );
+  }, 'the Hub back with its extension');
+  assert.equal(
+    peer.requests
+      .slice(before)
+      .some((request) =>
+        ['/device_authorization', '/token'].includes(request.path),
+      ),
+    false,
+    'no new sign-in',
+  );
+  checks.push(
+    "turning the Hub extension off drops the Hub's connection, and on restores it without signing in again",
+  );
+
+  await route('/page/extensions?plugin=hub');
   await card.getByRole('button', { name: 'disconnect', exact: true }).click();
   await waitFor(async () => !(await hub()), 'the Hub entry removed');
   assert.equal((await saved()).mcp_servers.length, 0);

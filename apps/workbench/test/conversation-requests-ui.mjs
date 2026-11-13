@@ -150,6 +150,17 @@ try {
     await card.locator('.hook-changes li[data-mark="changed"] pre').innerText(),
     'npm run lint',
   );
+  // A hook that asks for a screenshot says so, and the card says what it gets (#502)
+  assert.match(
+    await card
+      .locator('.hook-changes li[data-mark="changed"] span')
+      .innerText(),
+    /lint · after_tool · with screenshot$/,
+  );
+  assert.equal(
+    await card.locator('.hook-changes li[data-mark="screenshot"]').innerText(),
+    'with screenshot: the hook also gets a picture of the page the browser shows, as a file the model never sees',
+  );
   assert.equal(
     await card.locator('.hook-changes li[data-mark="new"] pre').innerText(),
     'node .circle/guard.mjs',

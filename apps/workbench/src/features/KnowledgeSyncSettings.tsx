@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useRuntime } from '../app/context';
-import { Button, Modal } from '../components/common';
+import { Button, CopyButton, Modal } from '../components/common';
+import { desktopHost } from '../host';
 import { t } from '../i18n';
 import { shownTime } from '../model/time';
 import {
@@ -16,6 +17,52 @@ import './knowledge.css';
 interface Settings {
   sync: KnowledgeSyncView;
   connections: { name: string }[];
+}
+/**
+ * What the sync server last said, as it said it: its refusal, and the page where the account holder confirms a removal
+ * it asked to have confirmed, until that expires.
+ */
+function ServerAnswer({
+  sync,
+  live = true,
+}: {
+  sync?: KnowledgeSyncView;
+  /** Announced as it changes; not where the alert beside it already is. */
+  live?: boolean;
+}) {
+  const confirmation = sync?.confirmation;
+  if (!sync?.detail && !confirmation) return null;
+  return (
+    <div className="knowledge-server-answer" role={live ? 'status' : undefined}>
+      {sync?.detail && (
+        <p>{t('the server refused: {detail}', { detail: sync.detail })}</p>
+      )}
+      {confirmation && (
+        <>
+          <p>
+            {t(
+              'confirm removing the personal copies on the server’s page by {time}; Circle finishes the change then',
+              { time: shownTime(confirmation.expiresAt) },
+            )}
+          </p>
+          <div className="knowledge-actions">
+            <Button
+              disabled={
+                !confirmation.url.startsWith('https://') ||
+                !desktopHost()?.openExternal
+              }
+              onClick={() =>
+                void desktopHost()?.openExternal?.(confirmation.url)
+              }
+            >
+              {t('open the page')}
+            </Button>
+            <CopyButton text={confirmation.url} label={t('copy link')} />
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 export function KnowledgeSyncSettings() {
   const { runtime, snapshot, notify } = useRuntime();
@@ -158,6 +205,14 @@ export function KnowledgeSyncSettings() {
           )}
         </p>
       )}
+      <ServerAnswer sync={sync} />
+      {sync?.server && sync.discovery === 'fallback' && (
+        <p className="knowledge-note">
+          {t(
+            'this server publishes no discovery document: it syncs on the fixed v1 paths; team sharing and team memory are not available',
+          )}
+        </p>
+      )}
       <div className="knowledge-sync-modes">
         <Button
           disabled={
@@ -266,9 +321,18 @@ export function KnowledgeSyncSettings() {
                       'retained local content is used for this account’s personal sync',
                     )}
                   </p>
+                  {/* The first time this account syncs on this device (#502) */}
+                  {preview.firstSync && (
+                    <p className="knowledge-first-sync">
+                      {t(
+                        'personal content will sync to this server; you can switch to only on this device at any time',
+                      )}
+                    </p>
+                  )}
                 </>
               )}
               {error && <p role="alert">{error}</p>}
+              {error && <ServerAnswer sync={sync} live={false} />}
             </div>
             <footer className="knowledge-dialog-actions">
               <Button onClick={cancel}>{t('cancel')}</Button>
@@ -287,17 +351,17 @@ export function KnowledgeSyncSettings() {
                       confirmed: true,
                     }),
                   ).then((result) => {
-                    if (result) {
-                      setPreview(undefined);
-                      void load();
-                      notify(
-                        preview.action !== 'mode'
-                          ? t('connected · {name}', { name: server })
-                          : preview.title === 'local'
-                            ? t('kept only on this device')
-                            : t('syncing to server'),
-                      );
-                    }
+                    // Read either way: a refusal or a confirmation the server asked for is in the status
+                    void load();
+                    if (!result) return;
+                    setPreview(undefined);
+                    notify(
+                      preview.action !== 'mode'
+                        ? t('connected · {name}', { name: server })
+                        : preview.title === 'local'
+                          ? t('kept only on this device')
+                          : t('syncing to server'),
+                    );
                   })
                 }
               >

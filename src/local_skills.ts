@@ -11,6 +11,8 @@ import {
 import { homedir } from 'node:os';
 import { dirname, join, relative, sep } from 'node:path';
 import { isRecord, type CircleSettings } from './settings.js';
+import { McpLoginRequired } from './mcp_auth.js';
+import { backgroundMcpConnection, buildMcpConnections } from './mcp_loader.js';
 import { serverBaseUrl } from './server_resolution.js';
 import { expandVariables, redactSecrets } from './secrets.js';
 import { assertNoCaseCollisions, isSafePackPath } from './pack_files.js';
@@ -64,44 +66,82 @@ export function parsePackRef(
   return { id, version };
 }
 
-export function resolveServer(
+/** Where a person signs in to a server, for the fixes below. */
+const SIGN_IN =
+  '桌面版在这个服务器所在的 设置 → 扩展 或 设置 → MCP 服务器 页面登录，终端里用 /mcp';
+
+/**
+ * The url of the MCP server entry `name`, and the Bearer token its connection sends: the entry's own Authorization
+ * header (`Bearer <token>` or `Bearer ${secret:NAME}`), or else the token its sign-in keeps, taken as knowledge sync
+ * takes it (`backgroundMcpConnection`). An entry signed in by the MCP authorization has no header: its sign-in is its token.
+ */
+export async function resolveServer(
   settings: CircleSettings,
   secrets: Record<string, string>,
   name: string,
-): { url: string; token: string } | { problem: string; fix: string } {
-  const entry = settings.mcp_servers
-    .filter(isRecord)
-    .find((server) => server.name === name);
+  options: { home: string; signal?: AbortSignal },
+): Promise<{ url: string; token: string } | { problem: string; fix: string }> {
+  const shown = name.slice(0, 64);
+  const entries = settings.mcp_servers.filter(isRecord);
+  const entry = entries.find((server) => server.name === name);
   if (entry === undefined) {
+    const named = entries
+      .map((server) => server.name)
+      .filter((value): value is string => typeof value === 'string')
+      .map((value) => value.slice(0, 64));
     return {
-      problem: `没有名为 ${name.slice(0, 64)} 的 MCP 服务器条目`,
-      fix: '在 mcp_servers 里按这个名字配置它（url 与 Authorization 头）',
+      problem:
+        `没有名为 ${shown} 的 MCP 服务器条目` +
+        (named.length ? `（已有：${named.join('、')}）` : ''),
+      fix: '用已有的条目名；没有的服务器先连接它：桌面版在 设置 → 扩展 或 设置 → MCP 服务器，终端里在 mcp_servers 里配置',
     };
   }
-  const url = typeof entry.url === 'string' ? entry.url : '';
-  let token = '';
-  const headers = isRecord(entry.headers) ? entry.headers : {};
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() !== 'authorization' || typeof value !== 'string')
-      continue;
-    const named = /\$\{secret:([A-Za-z_][A-Za-z0-9_]*)\}/.exec(value);
-    if (named !== null && secrets[named[1]!] !== undefined)
-      token = secrets[named[1]!]!;
-    else if (/^Bearer\s+[^$]/.test(value.trim()))
-      token = value.trim().slice('Bearer '.length);
+  // As the MCP connections are made: a disabled entry, or an earlier one of the same name, is not used
+  const { connections, skipped } = buildMcpConnections(settings.mcp_servers);
+  const connection = connections.find((candidate) => candidate.name === name);
+  if (connection === undefined) {
+    const why = skipped.find((row) => row.name === name)?.error;
+    return why === undefined || why === 'disabled'
+      ? { problem: `MCP 服务器条目 ${shown} 已停用`, fix: '启用它后再试' }
+      : {
+          problem: `MCP 服务器条目 ${shown} 没有启动：${why}`,
+          fix: '照上面说的改好这个条目后再试',
+        };
   }
+  if (!['streamable_http', 'sse'].includes(connection.transport))
+    return {
+      problem: `MCP 服务器条目 ${shown} 不是经 HTTP 连接的服务器`,
+      fix: '本地工具只从 HTTP 的 MCP 服务器安装',
+    };
+  // The address of the entry whose token is sent: with two entries of one name, the one connected
+  const url = connection.url ?? '';
   if (url.length === 0)
     return {
-      problem: `MCP 服务器条目 ${name.slice(0, 64)} 没有 url`,
+      problem: `MCP 服务器条目 ${shown} 没有 url`,
       fix: '在这个条目里写 url',
     };
-  if (token.length === 0) {
+  try {
+    const port = backgroundMcpConnection(
+      options.home,
+      connection,
+      () => secrets,
+    );
+    const token = await port.token(
+      options.signal ?? AbortSignal.timeout(30_000),
+    );
+    return { url, token };
+  } catch (error) {
+    options.signal?.throwIfAborted();
+    if (error instanceof McpLoginRequired)
+      return {
+        problem: `MCP 服务器条目 ${shown} 还没有登录，也没有 Bearer 令牌`,
+        fix: `先登录这个服务器：${SIGN_IN}；用令牌连接的服务器在它的 Authorization 头里写 Bearer \${secret:<名字>}，并用 /secrets <名字> 保存令牌`,
+      };
     return {
-      problem: `MCP 服务器条目 ${name.slice(0, 64)} 没有可用的 Bearer 令牌`,
-      fix: '在它的 Authorization 头里写 Bearer ${secret:<名字>}，并用 /secrets <名字> 保存令牌',
+      problem: `MCP 服务器条目 ${shown} 的令牌用不了：${error instanceof Error ? error.message : String(error)}`,
+      fix: '照上面说的改好后再试',
     };
   }
-  return { url, token };
 }
 
 /** Fetch with the bearer token, no redirects, and a bounded timeout. */
@@ -120,7 +160,10 @@ async function fetchBytes(
       signal: controller.signal,
     });
     if (response.status === 401)
-      throw new LocalSkillsError('令牌无效或已撤销', '重新领取令牌后再试');
+      throw new LocalSkillsError(
+        '令牌无效或已撤销',
+        `重新登录这个服务器（${SIGN_IN}），或换上新的令牌后再试`,
+      );
     if (response.status === 404)
       throw new LocalSkillsError(
         '这个版本没有分给你、已下架或不存在',

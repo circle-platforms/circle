@@ -127,7 +127,11 @@ import { hookFileShown, type HookChange } from '../hooks.js';
 import { HookApprovalCard } from '../ink/components/hook_card.js';
 import { resumeHint, runningJobs, stoppedJobsLine } from './exit_lines.js';
 import { ChromeBrowser, findBrowser } from '../browser/chrome.js';
-import { browserTools, runtimeBrowserOptions } from '../browser/tools.js';
+import {
+  browserTools,
+  hookScreenshot,
+  runtimeBrowserOptions,
+} from '../browser/tools.js';
 import type {
   BrowserApproval,
   CertificateApproval,
@@ -1322,6 +1326,8 @@ export class SessionApp {
     runtime = new AgentRuntime({
       ...options,
       deferSession: true,
+      // An after_tool hook that asks for a screenshot gets the page the terminal's browser shows
+      ...(browser ? { hookScreenshot: hookScreenshot(browser) } : {}),
       extraTools: [
         ...(options.extraTools ?? []),
         ...terminalTools(terminals, {

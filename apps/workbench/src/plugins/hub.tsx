@@ -1,5 +1,6 @@
 import { Network } from 'lucide-react';
-import { HubConnectionCard } from '../components/HubConnectionCard';
+import { HUB_SERVER, HubConnectionCard } from '../components/HubConnectionCard';
+import { HubMark } from '../components/marks';
 import { t } from '../i18n';
 import type { PluginDetailProps, WorkbenchPlugin } from './types';
 
@@ -24,9 +25,11 @@ export const hubPlugin: WorkbenchPlugin = {
   },
   get description() {
     return t(
-      'Connect a Circle Hub by its address and sign in with a one-time code.',
+      'Connect a Circle Hub by its IP address and sign in with your Hub account.',
     );
   },
   icon: Network,
+  mark: HubMark,
+  mcpServer: HUB_SERVER,
   detail: HubPluginDetails,
 };

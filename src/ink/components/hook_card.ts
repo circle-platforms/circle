@@ -43,13 +43,22 @@ export class HookApprovalCard implements Card<HookAnswer> {
       }
       const [word, tone] = MARKS[hook.mark];
       lines.push({
-        text: `${word} · ${hook.name} · ${hook.event} · ${hook.command}`,
+        text: `${word} · ${hook.name} · ${hook.event}${hook.screenshot ? ' · with screenshot' : ''} · ${hook.command}`,
         tone,
       });
     }
     if (same.length)
       lines.push({
         text: `${MARKS.unchanged[0]} · ${same.join(', ')}`,
+        tone: 'dim',
+      });
+    if (
+      this.change.hooks.some(
+        (hook) => hook.screenshot && hook.mark !== 'removed',
+      )
+    )
+      lines.push({
+        text: 'with screenshot: the hook also gets a picture of the page the browser shows, as a file the model never sees',
         tone: 'dim',
       });
     const anchor = lines.length;

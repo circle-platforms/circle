@@ -2656,23 +2656,23 @@ test('saved API configuration, model selection and effort produce actual local g
     (await call('prompt', { text: 'use the selected model' })).ok,
     true,
   );
+  // The conversation's own request, told from an auxiliary title request the way the title checks do: a title
+  // request carries max_tokens TITLE_MAX_TOKENS on the wire. A title request may arrive at any moment after the
+  // answer, so the count that waits and the checks that follow are of the conversation's requests only (#506)
+  const isTitle = (request: (typeof requests)[number]) =>
+    request.max_tokens === TITLE_MAX_TOKENS;
+  const conversation = () => requests.filter((request) => !isTitle(request));
   try {
     await wait(
       () =>
-        requests.length === 1 &&
+        conversation().length === 1 &&
         controller.snapshot().sessions[0]!.state === 'idle',
       'gateway answer',
     );
   } catch (error) {
-    // The predicate combines the request count with the session state but
-    // kept neither on failure, so a timeout said nothing about which half
-    // missed. Record both, and tell a foreground request from an auxiliary
-    // title request the way the title checks do: a title request carries
-    // max_tokens TITLE_MAX_TOKENS on the wire (#506).
+    // Which half of the wait missed, with what reached the gateway
     const session = controller.snapshot().sessions[0]!;
-    const isTitle = (request: (typeof requests)[number]) =>
-      request.max_tokens === TITLE_MAX_TOKENS;
-    const foreground = requests.filter((request) => !isTitle(request));
+    const foreground = conversation();
     const titles = requests.filter(isTitle);
     const describe = (request: (typeof requests)[number]) =>
       `model=${request.model} effort=${request.reasoning_effort ?? 'unset'} max_tokens=${request.max_tokens ?? 'unset'} auth=${request.auth ? 'present' : 'absent'}`;
@@ -2681,9 +2681,10 @@ test('saved API configuration, model selection and effort produce actual local g
       { cause: error },
     );
   }
-  assert.equal(requests[0]!.auth, 'Bearer local-fixture-secret');
-  assert.equal(requests[0]!.model, 'fixture-two');
-  assert.equal(requests[0]!.reasoning_effort, 'high');
+  const answered = conversation()[0]!;
+  assert.equal(answered.auth, 'Bearer local-fixture-secret');
+  assert.equal(answered.model, 'fixture-two');
+  assert.equal(answered.reasoning_effort, 'high');
   assert(
     controller
       .snapshot()
@@ -2692,7 +2693,8 @@ test('saved API configuration, model selection and effort produce actual local g
   await call('logout');
   assert.equal((await call('prompt', { text: 'after logout' })).ok, false);
   assert.equal((await call('compact')).ok, false);
-  assert.equal(requests.length, 1);
+  // Neither reached the gateway
+  assert.equal(conversation().length, 1);
 });
 
 test('the connection form probes endpoints as setup does, lists only the saved endpoint models and never sends a key to another host', async (t) => {
@@ -3195,6 +3197,113 @@ test('MCP configuration saves preserve private fields and show pending reload ho
   assert.equal(f.controller.snapshot().mcp[0]!.status, 'reload required');
 });
 
+test('a server whose tools could not be listed again shows as connected, with the note, not as an error', async (t) => {
+  const { TOOLS_NOT_LISTED_AGAIN } = await import('../../../src/mcp_loader.js');
+  const f = await setup(t, []);
+  const spec = {
+    name: 'fixture',
+    transport: 'stdio',
+    command: 'unused-fixture',
+  };
+  const settings = loadSettings(f.home);
+  settings.mcp_servers = [spec];
+  saveSettings(settings, f.home);
+  // The runtime's own state, as a server connected with these settings and then failed to list its tools again
+  const runtime = (
+    f.controller as unknown as {
+      runtime(workspace: string): {
+        options: { settings: { mcp_servers: unknown[] } };
+        mcp: { status: import('../../../src/mcp_loader.js').McpStatus[] };
+      };
+    }
+  ).runtime(f.workspace);
+  runtime.options.settings.mcp_servers = [{ ...spec }];
+  runtime.mcp.status.splice(0, runtime.mcp.status.length, {
+    name: 'fixture',
+    connection: 'unused-fixture',
+    tools: ['fixture_kept'],
+    error: TOOLS_NOT_LISTED_AGAIN,
+  });
+  const row = () =>
+    f.controller.snapshot().mcp.find((item) => item.name === 'fixture')!;
+  assert.equal(row().status, 'connected');
+  assert.equal(row().error, TOOLS_NOT_LISTED_AGAIN);
+  // Any other note is still an error
+  runtime.mcp.status[0]!.error = 'synthetic failure';
+  assert.equal(row().status, 'error');
+});
+
+test("an after_tool hook that asks for a screenshot gets the conversation browser's page, and the model does not (#502)", async (t) => {
+  const { PNG } = await import('pngjs');
+  const { createHash } = await import('node:crypto');
+  const page = PNG.sync.write(new PNG({ width: 4, height: 3 }));
+  const asked: string[] = [];
+  const port: BrowserPort = {
+    async request(_sessionId, action) {
+      asked.push(action);
+      return action === 'capture'
+        ? { text: 'captured', image: page.toString('base64') }
+        : { text: 'url: https://example.test/\n[e1] button sign in' };
+    },
+  };
+  const f = await setup(
+    t,
+    [
+      {
+        message: assistant('', [
+          { id: 'look', name: 'browser_snapshot', args: {} },
+        ]),
+      },
+      { message: assistant('page read') },
+    ],
+    true,
+    port,
+  );
+  const script = join(f.root, 'keep.mjs');
+  await writeFile(
+    script,
+    `import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+const file = input.files?.[0];
+writeFileSync(${JSON.stringify(join(f.root, 'keep.json'))}, JSON.stringify({
+  files: input.files,
+  read: file && existsSync(file.path) ? createHash('sha256').update(readFileSync(file.path)).digest('hex') : null,
+}));
+`,
+  );
+  await writeFile(
+    join(f.home, 'hooks.json'),
+    JSON.stringify({
+      hooks: {
+        after_tool: [
+          {
+            name: 'keep the page',
+            command: `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`,
+            tools: 'browser_snapshot',
+            screenshot: true,
+          },
+        ],
+      },
+    }),
+  );
+  // Hooks are read when the runtime starts; this one was written after
+  assert.equal((await f.call('reload')).ok, true);
+  await f.call('prompt', { text: 'look at the page' });
+  await wait(
+    () => f.model.requests.length === 2 && activeSession(f).state === 'idle',
+    'the turn after the hook',
+  );
+  const kept = JSON.parse(await readFile(join(f.root, 'keep.json'), 'utf8'));
+  assert.equal(kept.files?.[0]?.kind, 'screenshot');
+  assert.equal(kept.read, createHash('sha256').update(page).digest('hex'));
+  assert.deepEqual(asked, ['snapshot', 'capture']);
+  // The model's next request has the page's text, and nothing of the picture
+  const next = JSON.stringify(f.model.requests[1]!.messages);
+  assert.match(next, /\[e1\] button sign in/);
+  assert.doesNotMatch(next, /image\/png|iVBORw0KGgo/);
+});
+
 test('attached pictures go as mentioned ones do: a large PNG is scaled down and both sizes named, and a text-only model gets where the picture was saved', async (t) => {
   const { PNG } = await import('pngjs');
   const picture = (width: number, height: number) => {
@@ -3463,6 +3572,8 @@ test('the Hub extension connects a Hub by its typed address with a device code, 
       url: peer.origin + '/mcp',
       transport: 'streamable_http',
       enabled: true,
+      // The placeholders a Hub's skills write for its address and token
+      placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
     },
   ]);
   assert.equal(saved.extensions.hub?.enabled, true);

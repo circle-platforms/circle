@@ -9,6 +9,7 @@ import {
   findHub,
   hubCandidates,
   hubEndpoint,
+  keepHubPlaceholders,
   removeHub,
 } from '../src/hub_connection.js';
 import { keptFor, revokeAuthorization } from '../src/mcp_auth.js';
@@ -25,6 +26,25 @@ test('an address is taken with or without its scheme, as the Hub itself, and not
   assert.deepEqual(
     hubCandidates('http://192.0.2.10:7420/mcp').map((url) => url.href),
     ['http://192.0.2.10:7420/'],
+  );
+  // The Hub's IP address alone: its scheme's own port, then the Hub's
+  assert.deepEqual(
+    hubCandidates('192.0.2.10').map((url) => url.href),
+    [
+      'https://192.0.2.10/',
+      'http://192.0.2.10/',
+      'https://192.0.2.10:7420/',
+      'http://192.0.2.10:7420/',
+    ],
+  );
+  assert.deepEqual(
+    hubCandidates('http://192.0.2.10').map((url) => url.href),
+    ['http://192.0.2.10/', 'http://192.0.2.10:7420/'],
+  );
+  // A port typed is the one tried, also a scheme's own
+  assert.deepEqual(
+    hubCandidates('192.0.2.10:80').map((url) => url.href),
+    ['https://192.0.2.10:80/', 'http://192.0.2.10/'],
   );
   for (const typed of [
     '',
@@ -94,8 +114,68 @@ test('the Hub is found by its knowledge-sync discovery, else by its protected-re
     (error) =>
       error instanceof HubAddressError &&
       error.message ===
-        'no Circle Hub answers at https://hub.example.test or http://hub.example.test',
+        'no Circle Hub answers at https://hub.example.test, http://hub.example.test, https://hub.example.test:7420 or http://hub.example.test:7420',
   );
+  await assert.rejects(
+    findHub('http://hub.example.test:8000', hub({}).fetcher),
+    (error) =>
+      error instanceof HubAddressError &&
+      error.message === 'no Circle Hub answers at http://hub.example.test:8000',
+  );
+});
+
+test("the Hub's IP address alone finds it at the Hub's port, the first address in order wins, and one that never answers hides none", async () => {
+  const discovery = (origin: string) => ({
+    schema: 'knowledge-sync-discovery@1',
+    mcp: { endpoint: origin + '/mcp' },
+  });
+  // Nothing on the usual ports (a web server's 404 on port 80): the Hub's own port
+  const ip = hub({
+    'http://192.0.2.10:7420/.well-known/knowledge-sync': discovery(
+      'http://192.0.2.10:7420',
+    ),
+  });
+  assert.equal(
+    await findHub('192.0.2.10', ip.fetcher),
+    'http://192.0.2.10:7420/mcp',
+  );
+  // Every address is asked at once
+  assert.deepEqual(ip.asked.slice(0, 4), [
+    'https://192.0.2.10/.well-known/knowledge-sync',
+    'http://192.0.2.10/.well-known/knowledge-sync',
+    'https://192.0.2.10:7420/.well-known/knowledge-sync',
+    'http://192.0.2.10:7420/.well-known/knowledge-sync',
+  ]);
+  // Two Hubs answer: the first in order is taken
+  const both = hub({
+    'http://192.0.2.10/.well-known/knowledge-sync':
+      discovery('http://192.0.2.10'),
+    'http://192.0.2.10:7420/.well-known/knowledge-sync': discovery(
+      'http://192.0.2.10:7420',
+    ),
+  });
+  assert.equal(
+    await findHub('192.0.2.10', both.fetcher),
+    'http://192.0.2.10/mcp',
+  );
+  // An address that never answers holds its place until the wait ends; the Hub's port that answered is then taken
+  const silent = (async (url: string | URL, init?: RequestInit) => {
+    // As fetch does: a request on a wait that has ended fails at once, and one under way fails when it ends
+    init?.signal?.throwIfAborted();
+    if (String(url).startsWith('https://192.0.2.10/'))
+      return await new Promise<Response>((_resolve, reject) =>
+        init?.signal?.addEventListener('abort', () =>
+          reject(init.signal!.reason),
+        ),
+      );
+    return String(url) === 'http://192.0.2.10:7420/.well-known/knowledge-sync'
+      ? new Response(JSON.stringify(discovery('http://192.0.2.10:7420')))
+      : new Response('', { status: 404 });
+  }) as typeof fetch;
+  const wait = new AbortController();
+  const found = findHub('192.0.2.10', silent, wait.signal);
+  wait.abort();
+  assert.equal(await found, 'http://192.0.2.10:7420/mcp');
 });
 
 test('the Hub entry is added with the extension on, keeps its id when replaced, and is removed alone', () => {
@@ -113,6 +193,8 @@ test('the Hub entry is added with the extension on, keeps its id when replaced, 
       url: 'https://hub.example.test/mcp',
       transport: 'streamable_http',
       enabled: true,
+      // The names a Hub's skills write for the Hub's endpoint and token
+      placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
     },
   ]);
   assert.equal(settings.extensions.hub?.enabled, true);
@@ -175,4 +257,33 @@ test('signing out revokes the tokens at the revocation endpoint and forgets them
     false,
   );
   assert.deepEqual(keptFor(home, server), {}, 'forgotten all the same');
+});
+
+test('a Hub entry from before the entry named its placeholders gets them while the extension is on, and one that names its own keeps them', () => {
+  const settings = defaultSettings();
+  const legacy = {
+    name: HUB_SERVER,
+    url: 'http://192.0.2.10:7420/mcp',
+    transport: 'streamable_http',
+  };
+  settings.mcp_servers = [
+    { name: 'other', url: 'http://192.0.2.20/mcp' },
+    { ...legacy },
+  ];
+  // The extension off: the entry is not the extension's to change
+  assert.equal(keepHubPlaceholders(settings), false);
+  assert.deepEqual(settings.mcp_servers.slice()[1], legacy);
+  settings.extensions = { ...settings.extensions, hub: { enabled: true } };
+  assert.equal(keepHubPlaceholders(settings), true);
+  assert.deepEqual(settings.mcp_servers.slice(), [
+    { name: 'other', url: 'http://192.0.2.20/mcp' },
+    { ...legacy, placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' } },
+  ]);
+  // Done once: nothing more to change
+  assert.equal(keepHubPlaceholders(settings), false);
+  settings.mcp_servers[1] = { ...legacy, placeholders: { url: 'MY_HUB' } };
+  assert.equal(keepHubPlaceholders(settings), false);
+  assert.deepEqual(settings.mcp_servers.slice()[1]?.placeholders, {
+    url: 'MY_HUB',
+  });
 });

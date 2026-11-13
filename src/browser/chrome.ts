@@ -2134,6 +2134,16 @@ export class ChromeBrowser implements BrowserPort {
     signal: AbortSignal,
   ): Promise<BrowserResult> {
     if (this.closed) return Promise.reject(Error('the browser is closed'));
+    if (action === 'capture') {
+      // A session that never used the browser has no page, and gets no record for asking
+      const known = this.conversations.get(sessionId);
+      if (!known) return Promise.resolve({ text: 'no page to capture' });
+      // After the conversation's own actions, and without being one: what waits on the person stays as it was
+      const capture = () => this.capturePage(known, signal);
+      const captured = known.queue.then(capture, capture);
+      known.queue = captured.catch(() => {});
+      return captured;
+    }
     const conversation = this.conversation(sessionId);
     const run = async () => {
       signal.throwIfAborted();
@@ -2180,6 +2190,48 @@ export class ChromeBrowser implements BrowserPort {
     const result = conversation.queue.then(run, run);
     conversation.queue = result.catch(() => {});
     return result;
+  }
+  /**
+   * The page the conversation shows, for a hook that asked for it. It is not kept as the screenshot coordinate clicks
+   * go by, no browser is started for it, and a page waiting on a dialog is not captured: no image then.
+   */
+  private async capturePage(
+    conversation: Conversation,
+    signal: AbortSignal,
+  ): Promise<BrowserResult> {
+    signal.throwIfAborted();
+    const tab = conversation.active
+      ? conversation.tabs.get(conversation.active)
+      : undefined;
+    if (!this.cdp || this.cdp.closed || !tab || tab.dialogs.length)
+      return { text: 'no page to capture' };
+    // A page behind another tab gives no picture, and a hook does not bring it to the front: the action that just ran
+    // did, so a page still behind is another conversation's turn
+    const shown = await this.evaluate<string>(
+      tab,
+      'document.visibilityState',
+      signal,
+    ).catch(() => 'hidden');
+    if (shown === 'hidden') return { text: 'no page to capture' };
+    await this.js(tab, 'overlay-hidden', { hidden: true }, signal).catch(
+      () => {},
+    );
+    try {
+      const { data } = await this.limit(
+        this.send<{ data: string }>(
+          'Page.captureScreenshot',
+          { format: 'png' },
+          tab.session,
+          { signal },
+        ),
+        signal,
+        10000,
+        'Page.captureScreenshot',
+      );
+      return { text: 'captured', image: data };
+    } finally {
+      await this.js(tab, 'overlay-hidden', { hidden: false }).catch(() => {});
+    }
   }
   private async action(
     conversation: Conversation,

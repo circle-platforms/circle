@@ -6,7 +6,16 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
-import type { Implementation } from '@modelcontextprotocol/sdk/types.js';
+import {
+  CallToolResultSchema,
+  ListToolsResultSchema,
+  ToolListChangedNotificationSchema,
+  type CallToolResult,
+  type Implementation,
+} from '@modelcontextprotocol/sdk/types.js';
+import type { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
+import type { JsonSchemaType } from '@modelcontextprotocol/sdk/validation/types.js';
 import type {
   FetchLike,
   Transport,
@@ -481,7 +490,7 @@ function transportFor(
 }
 /** A tool result as the model reads it: its text, and the pictures and PDFs it carries. */
 function resultText(
-  result: Awaited<ReturnType<Client['callTool']>>,
+  result: ToolResult,
   tool: string,
   context: ToolContext,
 ): { text: string; attachments: MediaAttachment[] } {
@@ -491,7 +500,7 @@ function resultText(
     .map((block) => {
       if (!isRecord(block)) return JSON.stringify(block);
       if (block.type === 'text') return String(block.text || '');
-      const resource =
+      const resource: Record<string, unknown> | undefined =
         block.type === 'resource' && isRecord(block.resource)
           ? block.resource
           : undefined;
@@ -545,7 +554,45 @@ function toolHints(
     idempotent: hints.idempotentHint === true,
   };
 }
-type ToolResult = Awaited<ReturnType<Client['callTool']>>;
+type ToolResult = CallToolResult;
+/**
+ * Calls a server's tool and gives its result as the server sent it. The SDK's `callTool` checks a result against the
+ * output schema it kept from the last listing of the tools and throws the result away when it does not match, as when
+ * the server added a field after Circle connected (#513); this sends `tools/call` itself. The server still checks the
+ * request, and whether a result matches its schema is for the caller to say.
+ */
+function callServerTool(
+  client: Client,
+  params: { name: string; arguments: Record<string, unknown> },
+  options: RequestOptions,
+): Promise<ToolResult> {
+  return client.request(
+    { method: 'tools/call', params },
+    CallToolResultSchema,
+    options,
+  );
+}
+/**
+ * Whether a structured result matches the output schema a tool was listed with, compiled when first needed: undefined
+ * when the tool has no output schema or it cannot be compiled, since then nothing can be said either way.
+ */
+function structureCheck(
+  schema: unknown,
+  validator: AjvJsonSchemaValidator,
+): (value: unknown) => boolean | undefined {
+  let check: ((value: unknown) => boolean) | null | undefined;
+  return (value) => {
+    if (!isRecord(schema)) return undefined;
+    if (check === undefined)
+      try {
+        const validate = validator.getValidator(schema as JsonSchemaType);
+        check = (input) => validate(input).valid;
+      } catch {
+        check = null;
+      }
+    return check ? check(value) : undefined;
+  };
+}
 /** At most this many results of calls that sent files are kept, and this much of them. */
 export const MAX_CACHED_RESULTS = 64;
 export const MAX_CACHED_BYTES = 16 * 1024 * 1024;
@@ -608,6 +655,12 @@ class SentResults {
 /** What a result taken from the cache says before the files it was for. */
 export const CACHED_RESULT =
   'cached (same content): an earlier call in this session sent the same files and arguments, so the server was not called again and this is its result';
+/**
+ * What the model reads before a structured result that does not match the output schema the server listed for the tool
+ * when Circle connected. Circle can say that much for certain; whether the result is right is not for it to judge.
+ */
+export const UNDECLARED_STRUCTURE =
+  'structured result, as the server sent it: it does not match the output schema the server listed for this tool when Circle connected';
 /** What the card adds to a file the call will not send, since it gets its earlier result. */
 export const NOT_SENT =
   'not sent: the same call earlier in this session got its result, which is given again';
@@ -621,6 +674,11 @@ interface Connected {
   open: boolean;
 }
 type ServerTool = Awaited<ReturnType<Client['listTools']>>['tools'][number];
+/** How long after a server says its tools changed Circle lists them, so several notices in a row list them once. */
+export const TOOLS_CHANGED_WAIT_MS = 300;
+/** What a server whose tools changed shows while Circle keeps its earlier tools. */
+export const TOOLS_NOT_LISTED_AGAIN =
+  'the server changed its tools and listing them again failed; the earlier tools stay until a reload';
 export class McpManager {
   tools: Tool[] = [];
   status: McpStatus[] = [];
@@ -636,6 +694,11 @@ export class McpManager {
   private lifetime = new AbortController();
   // A sign-in under way, by server address: its page
   private signingIn = new Map<string, SignInShown>();
+  // A server's tools to list again after it said they changed: the wait, the listing under way, and another notice
+  private relisting = new Map<
+    Connected,
+    { wait?: NodeJS.Timeout; running?: Promise<void>; again?: boolean }
+  >();
   // `timeout` bounds connecting and listing tools. A tool call has no limit unless `callTimeout`
   // is given: a tool may wait minutes (a login), and an interrupt cancels it.
   constructor(
@@ -662,8 +725,10 @@ export class McpManager {
     name: string,
     hints: { readOnly: boolean; idempotent: boolean },
     filled: Map<string, string>,
+    validator: AjvJsonSchemaValidator,
   ): Tool {
     const hide = hideFilled(filled);
+    const matches = structureCheck(spec.outputSchema, validator);
     const files = fileParameters(spec.inputSchema);
     const limit = connection.maxFileBytes ?? MAX_FILE_BYTES;
     // What a call sent: the session, the server's tool, each file's sha256 and the other
@@ -738,9 +803,9 @@ export class McpManager {
               context.signal.addEventListener('abort', forward, { once: true });
               if (context.signal.aborted) forward();
               try {
-                return await client.callTool(
+                return await callServerTool(
+                  client,
                   { name: spec.name, arguments: sending },
-                  undefined,
                   {
                     signal: own.signal,
                     timeout: this.callTimeout ?? NO_LIMIT,
@@ -766,13 +831,32 @@ export class McpManager {
         ),
       ].join('\n');
       const framed = (body: string) => (header ? `${header}\n\n${body}` : body);
+      const structured = result.structuredContent;
+      // An error is the tool's own word, given as it is: its structure is not checked
       if (result.isError)
-        throw new Error(framed(shown(text || 'MCP tool failed')));
+        throw new Error(
+          framed(
+            shown(
+              text ||
+                (structured === undefined
+                  ? 'MCP tool failed'
+                  : JSON.stringify(structured)),
+            ),
+          ),
+        );
       context.signal.throwIfAborted();
       if (attachments.length) context.emitAttachments!(attachments);
-      return framed(
-        shown(text || JSON.stringify(result.structuredContent ?? {})),
-      );
+      // A result unlike the schema the tool was listed with still arrives whole: its text, then its structure with
+      // what Circle can say of it. One that matches reads as it always did.
+      if (structured !== undefined && matches(structured) === false)
+        return framed(
+          shown(
+            [text, `${UNDECLARED_STRUCTURE}\n${JSON.stringify(structured)}`]
+              .filter(Boolean)
+              .join('\n\n'),
+          ),
+        );
+      return framed(shown(text || JSON.stringify(structured ?? {})));
     };
     // Before the approval: each named file is read under read_file's rules, so the card shows
     // what will be sent, and the call sends those bytes
@@ -954,47 +1038,13 @@ export class McpManager {
         }),
         combined,
       );
-      const registered: Tool[] = [];
-      const said = new Map<string, ToolHint>();
-      let cursor: string | undefined;
-      const cursors = new Set<string>();
-      do {
-        const listed = await client.listTools(cursor ? { cursor } : undefined, {
-          signal: combined,
-          timeout: this.timeout,
-        });
-        for (const spec of listed.tools) {
-          const name = mcpToolName(connection.name, spec.name);
-          if (
-            reserved.has(name) ||
-            taken(name) ||
-            registered.some((tool) => tool.name === name)
-          )
-            throw new Error(`tool '${name}' already exists`);
-          const hints = toolHints(
-            spec.annotations,
-            connection.trustAnnotations !== false,
-          );
-          if (hints.destructive) said.set(name, 'destructive');
-          else if (hints.readOnly) said.set(name, 'read-only');
-          registered.push(
-            this.serverTool(
-              connection,
-              client,
-              spec,
-              name,
-              hints,
-              filled.filled,
-            ),
-          );
-        }
-        cursor = listed.nextCursor;
-        if (cursor) {
-          if (cursors.has(cursor))
-            throw new Error('MCP tools pagination repeated a cursor');
-          cursors.add(cursor);
-        }
-      } while (cursor);
+      const { registered, said } = await this.listServerTools(
+        connection,
+        client,
+        filled.filled,
+        (name) => reserved.has(name) || taken(name),
+        combined,
+      );
       combined.throwIfAborted();
       const server: Connected = {
         name: connection.name,
@@ -1012,6 +1062,12 @@ export class McpManager {
         this.results.forget(connection.name);
         this.services.onChange?.();
       };
+      // A server that says its tools can change is listed again when it says they did: the next turn has the new
+      // tools, and the turn under way keeps the ones it started with
+      if (client.getServerCapabilities()?.tools?.listChanged)
+        client.setNotificationHandler(ToolListChangedNotificationSchema, () =>
+          this.toolsChanged(server, filled.filled),
+        );
       state.tools = registered.map((tool) => tool.name);
       return { state, server, tools: registered, said };
     } catch (error) {
@@ -1160,6 +1216,128 @@ export class McpManager {
       })
       .finally(() => this.signingIn.delete(provider.server));
   }
+  /**
+   * A server's tools as it lists them now, page by page. Listed by Circle itself: the SDK's listTools would also compile
+   * every output schema for its own checks of results, and fail the whole server on one it cannot compile. One
+   * validator per listing: a schema with an $id is kept by it, and a server that changed has new schemas.
+   */
+  private async listServerTools(
+    connection: McpConnection,
+    client: Client,
+    filled: Map<string, string>,
+    taken: (name: string) => boolean,
+    signal: AbortSignal,
+  ): Promise<{ registered: Tool[]; said: Map<string, ToolHint> }> {
+    const registered: Tool[] = [];
+    const said = new Map<string, ToolHint>();
+    const validator = new AjvJsonSchemaValidator();
+    let cursor: string | undefined;
+    const cursors = new Set<string>();
+    do {
+      const listed = await client.request(
+        { method: 'tools/list', params: cursor ? { cursor } : undefined },
+        ListToolsResultSchema,
+        { signal, timeout: this.timeout },
+      );
+      for (const spec of listed.tools) {
+        const name = mcpToolName(connection.name, spec.name);
+        if (taken(name) || registered.some((tool) => tool.name === name))
+          throw new Error(`tool '${name}' already exists`);
+        const hints = toolHints(
+          spec.annotations,
+          connection.trustAnnotations !== false,
+        );
+        if (hints.destructive) said.set(name, 'destructive');
+        else if (hints.readOnly) said.set(name, 'read-only');
+        registered.push(
+          this.serverTool(
+            connection,
+            client,
+            spec,
+            name,
+            hints,
+            filled,
+            validator,
+          ),
+        );
+      }
+      cursor = listed.nextCursor;
+      if (cursor) {
+        if (cursors.has(cursor))
+          throw new Error('MCP tools pagination repeated a cursor');
+        cursors.add(cursor);
+      }
+    } while (cursor);
+    return { registered, said };
+  }
+  /** A server said its tools changed: they are listed again a moment later, once for several notices in a row. */
+  private toolsChanged(server: Connected, filled: Map<string, string>): void {
+    if (!server.open) return;
+    let pending = this.relisting.get(server);
+    if (!pending) this.relisting.set(server, (pending = {}));
+    if (pending.running) {
+      pending.again = true;
+      return;
+    }
+    clearTimeout(pending.wait);
+    const own = pending;
+    own.wait = setTimeout(() => {
+      own.wait = undefined;
+      own.running = this.listAgain(server, filled).finally(() => {
+        own.running = undefined;
+        if (own.again) {
+          own.again = false;
+          this.toolsChanged(server, filled);
+        } else if (this.relisting.get(server) === own)
+          this.relisting.delete(server);
+      });
+    }, TOOLS_CHANGED_WAIT_MS);
+    own.wait.unref?.();
+  }
+  /**
+   * The server's tools, status and kept results replaced by what it lists now, all at once. When the listing fails, its
+   * earlier tools stay and its status says so.
+   */
+  private async listAgain(
+    server: Connected,
+    filled: Map<string, string>,
+  ): Promise<void> {
+    const current = () => server.open && this.servers.includes(server);
+    if (!current()) return;
+    const state = this.status.find((item) => item.name === server.name);
+    const own = new Set(state?.tools ?? []);
+    try {
+      const { registered, said } = await this.listServerTools(
+        server.connection,
+        server.client,
+        filled,
+        (name) =>
+          this.reserved.has(name) ||
+          this.tools.some((tool) => tool.name === name && !own.has(name)),
+        AbortSignal.any([
+          AbortSignal.timeout(this.timeout),
+          this.lifetime.signal,
+        ]),
+      );
+      if (!current()) return;
+      this.tools = [
+        ...this.tools.filter((tool) => !own.has(tool.name)),
+        ...registered,
+      ];
+      for (const name of own) this.hinted.delete(name);
+      for (const [name, hint] of said) this.hinted.set(name, hint);
+      if (state) {
+        state.tools = registered.map((tool) => tool.name);
+        if (state.error === TOOLS_NOT_LISTED_AGAIN) state.error = '';
+      }
+    } catch {
+      if (!current()) return;
+      if (state) state.error = TOOLS_NOT_LISTED_AGAIN;
+    }
+    // What a tool of the server returned before may not hold for the tools it has now
+    this.results.forget(server.name);
+    this.services.onChange?.();
+  }
   /** After a sign-in: the server connected again with its tokens; its status, connection and tools replace the old. */
   private async connectAgain(
     connection: McpConnection,
@@ -1200,6 +1378,7 @@ export class McpManager {
     this.services.onChange?.();
   }
   private static async disconnect(servers: Connected[]): Promise<void> {
+    // A server closed by Circle is not listed again: listAgain sees it is no longer open
     for (const server of servers) server.open = false;
     await Promise.all(
       servers.map((server) => server.client.close().catch(() => {})),
@@ -1215,9 +1394,9 @@ export class McpManager {
     const server = this.servers.find((s) => s.name === serverName && s.open);
     if (!server || this.hint(mcpToolName(serverName, toolName)) !== 'read-only')
       throw new Error('read-only MCP tool unavailable');
-    const response = await server.client.callTool(
+    const response = await callServerTool(
+      server.client,
       { name: toolName, arguments: args },
-      undefined,
       { signal, timeout: this.timeout },
     );
     const text = JSON.stringify(response);
@@ -1239,9 +1418,9 @@ export class McpManager {
       !this.tools.some((t) => t.name === mcpToolName(serverName, toolName))
     )
       throw Error('MCP tool unavailable');
-    const result = await server.client.callTool(
+    const result = await callServerTool(
+      server.client,
       { name: toolName, arguments: args },
-      undefined,
       { signal, timeout: this.timeout },
     );
     const text = JSON.stringify(result);
@@ -1296,7 +1475,7 @@ export class McpManager {
       this.status
         .map(
           (server) =>
-            `  · ${server.name}  ${server.connection}${server.headers?.length ? '\n    headers: ' + server.headers.join(', ') : ''}${server.notSent?.length ? '\n    not sent, Circle sets them: ' + server.notSent.join(', ') : ''}${server.authorize ? '\n    ' + server.error + ': ' + server.authorize : server.error === 'disabled' ? '\n    disabled' : server.error ? '\n    failed: ' + server.error : '\n    ' + server.tools.join(', ')}`,
+            `  · ${server.name}  ${server.connection}${server.headers?.length ? '\n    headers: ' + server.headers.join(', ') : ''}${server.notSent?.length ? '\n    not sent, Circle sets them: ' + server.notSent.join(', ') : ''}${server.authorize ? '\n    ' + server.error + ': ' + server.authorize : server.error === 'disabled' ? '\n    disabled' : server.error === TOOLS_NOT_LISTED_AGAIN ? '\n    ' + server.tools.join(', ') + '\n    ' + server.error : server.error ? '\n    failed: ' + server.error : '\n    ' + server.tools.join(', ')}`,
         )
         .join('\n')
     );

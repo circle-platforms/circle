@@ -294,6 +294,8 @@ export async function knowledgeCommand(
             retained_local_items: count,
             consequence:
               'use this account for retained personal knowledge; local files remain',
+            // The first time this account syncs on this device (#502)
+            ...(selected.firstSync ? { first_sync: true } : {}),
           },
           'knowledge_connect',
         ))

@@ -47,6 +47,7 @@ import {
 import { setTimeout as delay } from 'node:timers/promises';
 import { basename, join, relative, isAbsolute, sep } from 'node:path';
 import { AgentRuntime, type InteractionContext } from '../../../src/runtime.js';
+import { TOOLS_NOT_LISTED_AGAIN } from '../../../src/mcp_loader.js';
 import type { HookChange } from '../../../src/hooks.js';
 import { defaultRunOptions } from '../../../src/run_options.js';
 import type { Extension, ExtensionCommand } from '../../../src/extensions.js';
@@ -99,7 +100,9 @@ import {
 import {
   addHub,
   findHub,
+  HUB_SERVER,
   hubEndpoint,
+  keepHubPlaceholders,
   removeHub,
 } from '../../../src/hub_connection.js';
 import { revokeAuthorization } from '../../../src/mcp_auth.js';
@@ -117,6 +120,7 @@ import {
 } from '../../../src/session_export.js';
 import {
   browserTools,
+  hookScreenshot,
   runtimeBrowserOptions,
   type BrowserPort,
 } from '../../../src/browser/tools.js';
@@ -641,6 +645,9 @@ export class RuntimeController {
       saveSettingsChange(this.home, (saved) => {
         Object.assign(saved, trustFolder(saved, workspace));
       });
+    // The Hub extension's entry names the placeholders a Hub's skills use; one connected before it did gets them
+    if (keepHubPlaceholders(settings))
+      saveSettingsChange(this.home, keepHubPlaceholders);
     try {
       this.active = this.runtime(workspace, saved?.sessionId);
     } catch (error) {
@@ -910,6 +917,23 @@ export class RuntimeController {
     await Promise.all(reloads);
   }
   /** The saved thinking depth, on every open runtime except one that was just set. */
+  /**
+   * A Hub connected, disconnected or switched applies to every open conversation, not only the one asking: each other
+   * idle conversation in a trusted folder reads its settings again. One in a turn refuses, and its MCP page says a
+   * reload is required, as for any settings change it has not taken yet.
+   */
+  private async reloadOtherRuntimes(active: AgentRuntime): Promise<void> {
+    const settings = loadSettings(this.home);
+    await Promise.all(
+      [...new Set(this.runtimes.values())]
+        .filter(
+          (owner) =>
+            owner !== active &&
+            isFolderTrusted(settings, owner.options.workspace),
+        )
+        .map((owner) => owner.reloadIntegrations().catch(() => {})),
+    );
+  }
   private applySharedEffort(saved: string, skip?: AgentRuntime): void {
     const level = saved || 'default';
     for (const owner of this.runtimes.values()) {
@@ -1420,11 +1444,17 @@ export class RuntimeController {
       throw Error("that is not one of the user's terminal tabs");
     const still = () =>
       this.pending.get(id) === pending && !pending.signal.aborted;
+    const owner = row.sessionId
+      ? (this.runtimes.get(row.sessionId) ??
+        [...this.taskRuntimes.values()].find(
+          (task) => task.session.id === row.sessionId,
+        ))
+      : undefined;
     const name = await this.terminalTabs.typeForPerson(
       row.sessionId,
       session,
-      // What execute would run: the card shows each secret by its name
-      expandVariables(shown, loadSecrets(this.home)),
+      // What execute would run: the card shows each secret by its name, an MCP entry's token among them
+      expandVariables(shown, owner?.runSecrets() ?? loadSecrets(this.home)),
       still,
     );
     if (!still()) return {};
@@ -2387,6 +2417,10 @@ export class RuntimeController {
     const create = (session?: string) =>
       new AgentRuntime({
         workspace,
+        // An after_tool hook that asks for a screenshot gets the page this conversation's browser shows
+        ...(this.options.browser
+          ? { hookScreenshot: hookScreenshot(this.options.browser) }
+          : {}),
         // The recovered-input panel offers a closed runtime's queue back.
         preserveQueuedInputs: true,
         fileMutations: fileRewind.files,
@@ -3582,7 +3616,8 @@ export class RuntimeController {
             : spec.enabled === false
               ? 'not connected'
               : status
-                ? status.error
+                ? // Tools that may be out of date are still the server's: the note says why, and it is connected
+                  status.error && status.error !== TOOLS_NOT_LISTED_AGAIN
                   ? 'error'
                   : 'connected'
                 : 'not connected',
@@ -3677,6 +3712,7 @@ export class RuntimeController {
           tools: hook.tools === '*' ? '*' : hook.tools.join(', '),
           paths: hook.paths.join(', '),
           ...(hook.skill ? { skill: hook.skill } : {}),
+          ...(hook.screenshot ? { screenshot: true } : {}),
           active,
         })),
         projectHooksIgnored: runtime.hookCatalog.projectIgnored,
@@ -5843,6 +5879,7 @@ export class RuntimeController {
       }
       case 'save-settings': {
         const data = p.settings as Record<string, unknown>;
+        let hubSwitched = false;
         const settings = saveSettingsChange(this.home, (settings) => {
           if (!data || typeof data !== 'object' || Array.isArray(data))
             throw Error('invalid settings');
@@ -5958,6 +5995,7 @@ export class RuntimeController {
           }
           if (p.extensions !== undefined) {
             if (!Array.isArray(p.extensions)) throw Error('invalid extensions');
+            const hubBefore = settings.extensions.hub?.enabled === true;
             for (const row of p.extensions as {
               name: string;
               enabled: boolean;
@@ -5966,9 +6004,30 @@ export class RuntimeController {
                 ...settings.extensions[row.name],
                 enabled: flag(row.enabled),
               };
+            // The Hub extension's switch is its connection's: the MCP entry it keeps goes off and on with it, so a
+            // Hub that is off is not connected anywhere (the MCP servers page does not list that entry)
+            const hub = settings.extensions.hub?.enabled === true;
+            if (hub !== hubBefore) {
+              settings.mcp_servers = settings.mcp_servers.map((row) => {
+                if (row.name !== HUB_SERVER || (row.enabled !== false) === hub)
+                  return row;
+                hubSwitched = true;
+                return { ...row, enabled: hub };
+              });
+              // Switched on, an entry connected with an earlier version gets the placeholders a Hub's skills use
+              if (keepHubPlaceholders(settings)) hubSwitched = true;
+            }
           }
         });
         this.synchronizeSharedSettings(settings);
+        // As connecting from the Hub's page does: the runtime reads its settings again and connects or drops the
+        // entry. An untrusted workspace loads nothing, and during a turn the reload is refused; until one runs, the
+        // Hub's card says a reload is required.
+        if (hubSwitched) {
+          if (isFolderTrusted(settings, runtime.options.workspace))
+            await runtime.reloadIntegrations().catch(() => {});
+          await this.reloadOtherRuntimes(runtime);
+        }
         if (data.defaultEffort !== undefined)
           this.applySharedEffort(settings.default_thinking);
         if (data.variables !== undefined)
@@ -6561,6 +6620,7 @@ export class RuntimeController {
         saveSettingsChange(this.home, (settings) => addHub(settings, endpoint));
         // The runtime reads its settings again and connects the entry
         await runtime.reloadIntegrations();
+        await this.reloadOtherRuntimes(runtime);
         return { endpoint };
       }
       case 'hub-disconnect': {
@@ -6570,6 +6630,7 @@ export class RuntimeController {
           : false;
         saveSettingsChange(this.home, removeHub);
         await runtime.reloadIntegrations();
+        await this.reloadOtherRuntimes(runtime);
         return { revoked };
       }
       case 'launch-options':

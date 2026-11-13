@@ -95,7 +95,7 @@ test('status lines say where sync stands and the next step, as the design writes
       'knowledge · offline · team server · last synced 11-03 14:20',
       '  2 items · retrying · /knowledge sync to try now',
       '  refused: 合成的较新错误说明。',
-      '  the server publishes no discovery document · fixed v1 paths',
+      '  the server publishes no discovery document · fixed v1 paths · no team sharing or team memory',
     ],
   );
   assert.deepEqual(
@@ -372,6 +372,24 @@ test('sync connection, mode and login cards are their own actions, not knowledge
     '● connect sync server',
     '团队服务器 · https://192.0.2.10',
     '12 local items will sync with this account',
+    'local files stay',
+  ]);
+  // The first time this account syncs on this device, the card says how to keep content here instead (#502)
+  const first = card(t, 'knowledge_connect', {
+    change: {
+      action: 'select sync connection',
+      server: '团队服务器',
+      origin: 'https://192.0.2.10',
+      retained_local_items: 12,
+      first_sync: true,
+    },
+  });
+  assert.deepEqual(content(first).slice(0, 6), [
+    '● connect sync server',
+    '团队服务器 · https://192.0.2.10',
+    '12 local items will sync with this account',
+    'first sync on this device',
+    'local only any time: /knowledge mode local',
     'local files stay',
   ]);
   const mode = card(t, 'knowledge_mode', {

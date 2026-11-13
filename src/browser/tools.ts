@@ -6,7 +6,7 @@ import { loadToolPrompt } from '../system_prompt.js';
 import { fitMedia } from '../media.js';
 import type { Effect, Message, Tool, ToolContext } from '../types.js';
 import type { AgentRuntime } from '../runtime.js';
-import { loadSecrets, onlyReferences } from '../secrets.js';
+import { onlyReferences } from '../secrets.js';
 import { VARIABLE_NAME } from '../settings.js';
 import { siteOf } from './hosts.js';
 import { destructive, snapshotElement, waitingDialog } from './format.js';
@@ -188,6 +188,19 @@ export interface BrowserToolOptions {
   secrets?: () => Record<string, string>;
 }
 /**
+ * The page a session's browser shows, as PNG bytes, for an after_tool hook that asked for a screenshot (#502): the
+ * browser's own `capture`, which no model tool sends. Undefined when the browser shows no page.
+ */
+export function hookScreenshot(
+  browser: BrowserPort,
+): (sessionId: string, signal: AbortSignal) => Promise<Buffer | undefined> {
+  return async (sessionId, signal) => {
+    const result = await browser.request(sessionId, 'capture', {}, signal);
+    return result.image ? Buffer.from(result.image, 'base64') : undefined;
+  };
+}
+
+/**
  * Browser tool schemas are large. Send them once this session has used the browser,
  * or the new message asks for one (a URL, or the word browser). A plain greeting does not.
  */
@@ -236,8 +249,8 @@ export function runtimeBrowserOptions(runtime: () => AgentRuntime): Required<
       runtime()
         .allTools.find((tool) => tool.name === 'write_file')
         ?.prepare?.({ file_path: path, content }, context),
-    variables: () => runtime().options.settings.variables ?? {},
-    secrets: () => loadSecrets(runtime().options.home),
+    variables: () => runtime().runVariables(),
+    secrets: () => runtime().runSecrets(),
   };
 }
 

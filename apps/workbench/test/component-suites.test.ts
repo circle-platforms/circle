@@ -99,6 +99,8 @@ test('the component gate preserves prior journeys and includes each native regre
           'extension-feedback-ui.mjs',
           'conversation-reading-anchor-ui.mjs',
           'github-plugin-ui.mjs',
+          'hub-extension-ui.mjs',
+          'knowledge-sync-ui.mjs',
           'command-terminal-handoff-ui.mjs',
           'github-permissions-ui.mjs',
           'github-feedback-ui.mjs',
@@ -171,6 +173,8 @@ test('the component gate preserves prior journeys and includes each native regre
     'extension-feedback-ui.mjs',
     'conversation-reading-anchor-ui.mjs',
     'github-plugin-ui.mjs',
+    'hub-extension-ui.mjs',
+    'knowledge-sync-ui.mjs',
     'command-terminal-handoff-ui.mjs',
     'github-permissions-ui.mjs',
     'github-feedback-ui.mjs',
@@ -202,7 +206,7 @@ test('the component gate preserves prior journeys and includes each native regre
     'terminal-tab-menu-ui.mjs',
   ])
     assert.equal(COMPONENT_SUITES.filter((item) => item === name).length, 1);
-  assert.equal(new Set(COMPONENT_SUITES).size, 74);
+  assert.equal(new Set(COMPONENT_SUITES).size, 76);
 });
 
 test('safe file undo remains a required component journey', () => {

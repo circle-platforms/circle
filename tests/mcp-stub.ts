@@ -12,6 +12,7 @@ export interface StubTool {
   name: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
   annotations?: Record<string, unknown>;
 }
 export interface StubResult {
@@ -35,10 +36,17 @@ export interface StubRequest {
 export interface StubOptions {
   name?: string;
   tools?: StubTool[];
+  /** The tools listed a page at a time instead of `tools`, the next page's index as each page's cursor. */
+  pages?: StubTool[][];
   /** The initialize result's `instructions`, read at each initialize. */
   instructions?: () => string | undefined;
   /** Answers tools/call; by default the text names the tool. */
   call?: (request: StubRequest) => StubResult | Promise<StubResult>;
+  /**
+   * Declares that its tools can change (`tools.listChanged`) and keeps the stream a streamable HTTP client opens with
+   * GET, so `notify` reaches it. `tools` is read again at each tools/list: change it, then notify.
+   */
+  listChanged?: boolean;
   /** An HTTP status to refuse a request with, such as 401, with this body. */
   refuse?: (
     request: StubRequest,
@@ -53,6 +61,8 @@ export interface McpStub {
   requests: StubRequest[];
   /** The tools/call requests, in order. */
   calls(): StubRequest[];
+  /** Sends a notification on every stream a client holds open. */
+  notify(method: string): void;
 }
 export async function mcpStub(
   t: TestContext,
@@ -60,18 +70,30 @@ export async function mcpStub(
 ): Promise<McpStub> {
   const requests: StubRequest[] = [];
   let stream: ServerResponse | undefined;
+  const pushed: ServerResponse[] = [];
   const answer = async (request: StubRequest): Promise<unknown> => {
     const message = request.message!;
     if (message.method === 'initialize') {
       const instructions = options.instructions?.();
       return {
         protocolVersion: message.params?.protocolVersion,
-        capabilities: { tools: {} },
+        capabilities: {
+          tools: options.listChanged ? { listChanged: true } : {},
+        },
         serverInfo: { name: options.name ?? 'files-server', version: '1' },
         ...(instructions === undefined ? {} : { instructions }),
       };
     }
-    if (message.method === 'tools/list') return { tools: options.tools ?? [] };
+    if (message.method === 'tools/list') {
+      if (!options.pages) return { tools: options.tools ?? [] };
+      const page = Number(message.params?.cursor ?? 0);
+      return {
+        tools: options.pages[page] ?? [],
+        ...(page + 1 < options.pages.length
+          ? { nextCursor: String(page + 1) }
+          : {}),
+      };
+    }
     if (message.method === 'tools/call')
       return options.call
         ? options.call(request)
@@ -109,6 +131,16 @@ export async function mcpStub(
       response.write('event: endpoint\ndata: /messages\n\n');
       return;
     }
+    if (
+      options.listChanged &&
+      request.method === 'GET' &&
+      request.path === '/mcp'
+    ) {
+      pushed.push(response);
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.flushHeaders();
+      return;
+    }
     if (request.method !== 'POST' || !request.message) {
       response.writeHead(405).end();
       return;
@@ -141,5 +173,10 @@ export async function mcpStub(
     requests,
     calls: () =>
       requests.filter((request) => request.message?.method === 'tools/call'),
+    notify: (method) => {
+      const event = `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', method })}\n\n`;
+      for (const open of [...pushed, ...(stream ? [stream] : [])])
+        open.write(event);
+    },
   };
 }

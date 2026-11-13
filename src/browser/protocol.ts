@@ -16,6 +16,8 @@ export const browserActions = [
   'tabs',
   'upload',
   'handoff',
+  // Not a model's tool: the page as shown, for an after_tool hook that asks for a screenshot (#502)
+  'capture',
 ] as const;
 export type BrowserAction = (typeof browserActions)[number];
 export interface BrowserRequest {
@@ -31,7 +33,7 @@ export interface BrowserResult {
    * action's approval goes by it, and the browser checks it before acting.
    */
   origin?: string;
-  /** A PNG, base64, for `screenshot`. */
+  /** A PNG, base64, for `screenshot` and `capture`. */
   image?: string;
   /** The latest screenshot's CSS viewport, for coordinate input. */
   screenshot?: { id: string; width: number; height: number };

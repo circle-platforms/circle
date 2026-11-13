@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { KnowledgeStore, KnowledgeVersionConflict } from './store.js';
 import { mergeSnapshots } from './merge.js';
 import { decodeSyncObject, formatJcs } from './canonical.js';
@@ -52,11 +55,45 @@ interface Journal {
   condition: SyncCondition;
   failures: number;
   nextAt: number;
+  /**
+   * Until when the server asked not to be asked again (429, `retry_after_seconds`). A sync the person asks for waits
+   * for this; the rest of a back-off is the client's own, and an asked-for sync does not wait it out (#522).
+   */
+  notBefore?: number;
   /** The last refusal the server explained; cleared by the next success. */
   refusal?: { code: string; detail?: string };
   /** A purge waiting for the account holder's confirmation on the server. */
   confirmation?: PurgeConfirmation;
 }
+/**
+ * Whether this account has finished a sync on this device, from local records only: the record its first finished
+ * sync leaves, or the current journal, which is all a device kept before that record existed. Read before a
+ * connection is selected, so it sends nothing.
+ */
+export function syncedBefore(home: string, binding: string): boolean {
+  const path = join(home, 'knowledge', 'knowledge.sqlite');
+  if (!binding || !existsSync(path)) return false;
+  // Two rows read, nothing else: opening the store would take its write lock and check its files, for one line
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(path, { readOnly: true });
+    const read = (key: string): unknown => {
+      const row = db!
+        .prepare('SELECT value FROM sync_journal WHERE key=?')
+        .get(key) as { value?: unknown } | undefined;
+      return typeof row?.value === 'string' ? JSON.parse(row.value) : null;
+    };
+    if (read(`synced:${binding}`)) return true;
+    const j = read('active') as Partial<Journal> | null;
+    return j?.binding === binding && !!j.lastSyncedAt;
+  } catch {
+    // A store that cannot be read counts as never synced here: the notice is shown
+    return false;
+  } finally {
+    db?.close();
+  }
+}
+
 export interface SyncStatus {
   condition: SyncCondition;
   lastSyncedAt: string | null;
@@ -327,7 +364,11 @@ export class KnowledgeSync {
             j.condition === 'invalid')) ||
         (j.nextAt > this.now() &&
           !(
-            force && ['synced', 'pending', 'conflicted'].includes(j.condition)
+            force &&
+            ['synced', 'pending', 'conflicted', 'offline', 'capacity'].includes(
+              j.condition,
+            ) &&
+            !((j.notBefore ?? 0) > this.now())
           )))
     )
       return;
@@ -546,12 +587,16 @@ export class KnowledgeSync {
                 : 'offline';
       if (j.condition === 'login-required' || j.condition === 'invalid')
         j.paused = true;
+      const serverWait =
+        error instanceof SyncHttpError ? error.retryAfterSeconds * 1000 : 0;
       j.nextAt =
         this.now() +
         Math.max(
           Math.min(300000, 1000 * 2 ** Math.min(j.failures, 9)),
-          error instanceof SyncHttpError ? error.retryAfterSeconds * 1000 : 0,
+          serverWait,
         );
+      if (serverWait) j.notBefore = this.now() + serverWait;
+      else delete j.notBefore;
     }
     this.save(j);
   }
@@ -828,6 +873,8 @@ export class KnowledgeSync {
         j.base = result.state.snapshot;
         j.state = result.state.state_version;
         j.lastSyncedAt = receipt.at;
+        // Kept whatever account is selected later: this one has synced on this device
+        this.store.syncWrite(`synced:${j.binding}`, { at: receipt.at });
         j.failures = 0;
         delete j.refusal;
         j.condition =
@@ -920,6 +967,21 @@ export class KnowledgeSync {
       }
     });
     return true;
+  }
+  /**
+   * A sync the person asks for after an answer Circle could not use: tried again, with the same pending operation and
+   * common base, instead of staying paused (#522).
+   */
+  async retryInvalid(): Promise<void> {
+    await this.exclusive(async () => {
+      const j = this.store.syncRead<Journal>('active');
+      if (!j || j.binding !== this.options.binding || j.condition !== 'invalid')
+        return;
+      j.paused = false;
+      j.condition = 'pending';
+      j.nextAt = 0;
+      this.save(j);
+    });
   }
   /** Host-confirmed retry after authorization; retain the exact pending operation and common base. */
   async resumeAuthorization(): Promise<void> {
