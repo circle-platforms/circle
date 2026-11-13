@@ -2656,23 +2656,23 @@ test('saved API configuration, model selection and effort produce actual local g
     (await call('prompt', { text: 'use the selected model' })).ok,
     true,
   );
+  // The conversation's own request, told from an auxiliary title request the way the title checks do: a title
+  // request carries max_tokens TITLE_MAX_TOKENS on the wire. A title request may arrive at any moment after the
+  // answer, so the count that waits and the checks that follow are of the conversation's requests only (#506)
+  const isTitle = (request: (typeof requests)[number]) =>
+    request.max_tokens === TITLE_MAX_TOKENS;
+  const conversation = () => requests.filter((request) => !isTitle(request));
   try {
     await wait(
       () =>
-        requests.length === 1 &&
+        conversation().length === 1 &&
         controller.snapshot().sessions[0]!.state === 'idle',
       'gateway answer',
     );
   } catch (error) {
-    // The predicate combines the request count with the session state but
-    // kept neither on failure, so a timeout said nothing about which half
-    // missed. Record both, and tell a foreground request from an auxiliary
-    // title request the way the title checks do: a title request carries
-    // max_tokens TITLE_MAX_TOKENS on the wire (#506).
+    // Which half of the wait missed, with what reached the gateway
     const session = controller.snapshot().sessions[0]!;
-    const isTitle = (request: (typeof requests)[number]) =>
-      request.max_tokens === TITLE_MAX_TOKENS;
-    const foreground = requests.filter((request) => !isTitle(request));
+    const foreground = conversation();
     const titles = requests.filter(isTitle);
     const describe = (request: (typeof requests)[number]) =>
       `model=${request.model} effort=${request.reasoning_effort ?? 'unset'} max_tokens=${request.max_tokens ?? 'unset'} auth=${request.auth ? 'present' : 'absent'}`;
@@ -2681,9 +2681,10 @@ test('saved API configuration, model selection and effort produce actual local g
       { cause: error },
     );
   }
-  assert.equal(requests[0]!.auth, 'Bearer local-fixture-secret');
-  assert.equal(requests[0]!.model, 'fixture-two');
-  assert.equal(requests[0]!.reasoning_effort, 'high');
+  const answered = conversation()[0]!;
+  assert.equal(answered.auth, 'Bearer local-fixture-secret');
+  assert.equal(answered.model, 'fixture-two');
+  assert.equal(answered.reasoning_effort, 'high');
   assert(
     controller
       .snapshot()
@@ -2692,7 +2693,8 @@ test('saved API configuration, model selection and effort produce actual local g
   await call('logout');
   assert.equal((await call('prompt', { text: 'after logout' })).ok, false);
   assert.equal((await call('compact')).ok, false);
-  assert.equal(requests.length, 1);
+  // Neither reached the gateway
+  assert.equal(conversation().length, 1);
 });
 
 test('the connection form probes endpoints as setup does, lists only the saved endpoint models and never sends a key to another host', async (t) => {
