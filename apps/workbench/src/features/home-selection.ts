@@ -6,6 +6,7 @@ import type {
   Workspace,
 } from '../model/types';
 import { sessionHasContent } from '../model/session-management.ts';
+import type { Checkout } from '../../../desktop/src/checkouts';
 
 /**
  * Projects the home menu can choose. The default circle workspace is one of
@@ -70,6 +71,8 @@ export function startPath(
     : homePath();
 }
 
+export type HomeWorktree = { base: string } | { checkout: Checkout };
+
 /** What the home composer was holding when the person left it. */
 export type HomeComposerMemory = {
   text: string;
@@ -79,6 +82,7 @@ export type HomeComposerMemory = {
   mode: SessionMode;
   /** `null` is working without a project. */
   projectId: string | null;
+  worktree?: HomeWorktree;
 };
 
 let composerMemory: HomeComposerMemory | null = null;

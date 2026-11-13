@@ -52,7 +52,15 @@ import type { HookChange } from '../../../src/hooks.js';
 import { defaultRunOptions } from '../../../src/run_options.js';
 import type { Extension, ExtensionCommand } from '../../../src/extensions.js';
 import { SessionRuntimeManager } from '../../../src/session_manager.js';
-import { listCheckouts, checkoutTarget, createCheckout } from './checkouts';
+import {
+  checkoutTarget,
+  createCheckout,
+  createGeneratedCheckout,
+  listCheckoutBranches,
+  listCheckouts,
+  removeGeneratedCheckout,
+  type GeneratedCheckout,
+} from './checkouts';
 import {
   sessionOccupied,
   SessionOccupiedError,
@@ -459,6 +467,8 @@ export class RuntimeController {
   /** Conversations whose give-back turn should clear the resumed terminal state. */
   private handbackSessions = new Set<string>();
   private workspaceSessions = new Map<string, string>();
+  private movingCheckouts = new Set<string>();
+  private activeWorkspaceMutations = new Map<string, number>();
   private readonly store: CheckpointStore;
   // The last link an extension asked to open; the window opens each id once.
   private openRequest?: { id: string; url: string; sessionId: string };
@@ -2065,16 +2075,32 @@ export class RuntimeController {
         }),
       )
       .digest('hex');
-    return (await this.ledger()).run(
-      {
-        id: command.id,
-        sessionId: command.sessionId!,
-        service: request.service,
-        method: request.method,
-        paramsHash,
-      },
-      action,
-    );
+    const sessionId = command.sessionId!;
+    if (
+      this.movingCheckouts.has(sessionId) ||
+      this.store.get(sessionId)?.workspace !== workspace
+    )
+      throw Error('wait for the worktree switch to finish');
+    const active = this.activeWorkspaceMutations;
+    active.set(sessionId, (active.get(sessionId) ?? 0) + 1);
+    try {
+      return await (
+        await this.ledger()
+      ).run(
+        {
+          id: command.id,
+          sessionId,
+          service: request.service,
+          method: request.method,
+          paramsHash,
+        },
+        action,
+      );
+    } finally {
+      const remaining = active.get(sessionId)! - 1;
+      if (remaining) active.set(sessionId, remaining);
+      else active.delete(sessionId);
+    }
   }
   /** Existing runtimes only: resolving a card must never open a runtime or spawn. */
   private commandTerminalSource(
@@ -2198,6 +2224,11 @@ export class RuntimeController {
     if (this.runtimes.lifecycle(id) !== 'open')
       throw Error('session is deleting or deleted');
     const request = validateWorkspaceRequest(command.payload);
+    if (
+      this.movingCheckouts.has(id) &&
+      ['terminal', 'tasks', 'inputs'].includes(request.service)
+    )
+      throw Error('wait for the worktree switch to finish');
     if (
       request.service === 'documents' &&
       this.sourceTask(id)?.spec.access === 'readonly'
@@ -3351,6 +3382,7 @@ export class RuntimeController {
         ? owner.harness.queuedMessages
         : { steering: [], followUp: [] };
       const history = this.sessionHistory(row.id, row.head, historyInputs);
+      const executionRootValid = this.validWorkspaceRoot(row.workspace);
       return {
         id: row.id,
         archivedAt: this.metadata.archivedAt(row.id),
@@ -3367,9 +3399,10 @@ export class RuntimeController {
         title: row.title || 'new session',
         workspaceId: identity(row.origin_workspace ?? row.workspace),
         executionPath: row.workspace,
-        executionBranch: this.validWorkspaceRoot(row.workspace)
-          ? this.branch(row.workspace)
-          : '',
+        executionWorkspaceId: identity(row.workspace),
+        executionWorkspaceTrusted:
+          executionRootValid && isFolderTrusted(savedSettings, row.workspace),
+        executionBranch: executionRootValid ? this.branch(row.workspace) : '',
         model: selected ? owner.harness.model.model : row.model,
         effort: ((selected
           ? owner.options.settings.default_thinking
@@ -4691,6 +4724,85 @@ export class RuntimeController {
     )
       throw Error(`stop this session before ${action} it`);
   }
+  private checkoutDirectory(origin: string): string {
+    return join(
+      this.tasksRootFor(loadSettings(this.home)),
+      'worktrees',
+      identity(origin),
+    );
+  }
+  private managedTaskCheckout(path: string): boolean {
+    if (this.taskWorkspaces.has(path)) return true;
+    const directory = canonicalPath(
+      join(this.options.dataFolder ?? this.home, 'collaboration'),
+    );
+    if (!folderContains(directory, path)) return false;
+    const [project, kind, checkout] = relative(directory, path).split(sep);
+    return (
+      /^[0-9a-f]{24}$/.test(project ?? '') && kind === 'worktrees' && !!checkout
+    );
+  }
+  private conversationCheckoutTarget(
+    root: string,
+    id: string,
+    expectedBranch?: string,
+  ) {
+    const target = checkoutTarget(root, id, expectedBranch);
+    if (this.managedTaskCheckout(target.path))
+      throw Error('task conversations use their own worktree');
+    return target;
+  }
+  private async assertCheckoutMove(id: string) {
+    const row = this.store.get(id);
+    if (!row || row.parent_id) throw Error('session not found');
+    if (this.managedTaskCheckout(row.workspace) || this.sourceTask(id))
+      throw Error('task conversations use their own worktree');
+    const origin = row.origin_workspace ?? row.workspace;
+    this.trustedWorkspace(origin);
+    this.trustedWorkspace(row.workspace);
+    if (this.metadata.archivedAt(id))
+      throw Error('restore this session before continuing');
+    if (this.activeWorkspaceMutations.has(id))
+      throw Error(
+        'wait for workspace actions to finish before moving this session',
+      );
+    await this.assertArchivable(id, row.workspace, 'moving');
+    const runtime = this.runtimes.get(id);
+    if (!runtime || runtime.isClosing || runtime.viewOnly)
+      throw Error('stop this session before moving it');
+    if (
+      runtime.harness.queuedMessages.steering.length ||
+      runtime.harness.queuedMessages.followUp.length ||
+      runtime.harness.recoverableInputs.items.length
+    )
+      throw Error(
+        'finish or remove queued messages before switching checkouts',
+      );
+    return { row, origin };
+  }
+  private async discardCheckout(
+    origin: string,
+    generated: GeneratedCheckout,
+    failure: unknown,
+  ): Promise<never> {
+    const path = generated.checkout.path;
+    const removed =
+      this.store.list(path, true, true).length === 0 &&
+      (await removeGeneratedCheckout(origin, generated).catch(() => false));
+    if (!removed) {
+      const reason =
+        failure instanceof Error ? failure.message : String(failure);
+      throw Error(`${reason}. new worktree kept at ${path}`);
+    }
+    const services = this.workspaceServices.get(path);
+    this.workspaceServices.delete(path);
+    await services?.dispose().catch(() => {});
+    this.workspaceRoots.delete(path);
+    saveSettingsChange(this.home, (settings) =>
+      Object.assign(settings, untrustFolder(settings, path)),
+    );
+    throw failure;
+  }
   // Archiving stops nothing unasked. Once the person confirmed it, the sessions'
   // terminal tabs and tasks stop first, as for a deletion (#201), and only when
   // nothing else keeps any of the sessions from being archived.
@@ -4728,7 +4840,14 @@ export class RuntimeController {
   /** An empty untitled session. It is not kept once the user leaves it. */
   private async unusedSession(id: string): Promise<boolean> {
     const row = this.store.get(id);
-    if (!row || row.parent_id || row.head || row.title) return false;
+    if (
+      !row ||
+      row.parent_id ||
+      row.head ||
+      row.title ||
+      this.movingCheckouts.has(id)
+    )
+      return false;
     const owner = this.runtimes.get(id);
     if (!owner || owner.busy) return false;
     // An agent-only parent and recoverable drafts are real work even without a
@@ -4779,7 +4898,12 @@ export class RuntimeController {
     return this.runtimes.lifecycle(id) === 'open';
   }
   private async dropUnused(id: string): Promise<void> {
-    if (!id || id === this.selectedSessionId || !(await this.unusedSession(id)))
+    if (
+      !id ||
+      id === this.selectedSessionId ||
+      !(await this.unusedSession(id)) ||
+      this.movingCheckouts.has(id)
+    )
       return;
     await this.runtimes.delete(id, { confirmed: true });
     this.publish();
@@ -4824,7 +4948,10 @@ export class RuntimeController {
   private workspaceRows(workspaceId: string) {
     return this.store
       .list(undefined, false, true)
-      .filter((row) => identity(row.workspace) === workspaceId);
+      .filter(
+        (row) =>
+          identity(row.origin_workspace ?? row.workspace) === workspaceId,
+      );
   }
   // The folders the workspace list shows: every folder a stored session names,
   // archived ones included, the open conversation's, and those opened on home.
@@ -5019,6 +5146,35 @@ export class RuntimeController {
     this.metadata.refresh();
     this.synchronizeSharedSettings(loadSettings(this.home));
     const p = command.payload;
+    if (command.name === 'checkout-branches' || command.name === 'checkouts') {
+      const root = this.trustedWorkspace(
+        this.workspaceById(text(p.workspaceId, 'workspace', 200)),
+      );
+      if (command.name === 'checkout-branches')
+        return listCheckoutBranches(root);
+      const selected = command.sessionId
+        ? this.store.get(command.sessionId)
+        : undefined;
+      const current =
+        selected && (selected.origin_workspace ?? selected.workspace) === root
+          ? selected.workspace
+          : root;
+      return listCheckouts(root, current).filter(
+        (row) => !this.managedTaskCheckout(row.path),
+      );
+    }
+    if (command.name === 'checkout-move-status') {
+      try {
+        await this.assertCheckoutMove(
+          command.sessionId ?? this.selectedSessionId,
+        );
+        return {};
+      } catch (error) {
+        return {
+          reason: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }
     // An answer to a card: it addresses the card's own conversation
     if (command.name === 'terminal-tab-run')
       return this.runInTerminalTab(command.sessionId, p);
@@ -5091,6 +5247,11 @@ export class RuntimeController {
     ) {
       const row = this.store.get(this.viewedSessionId);
       if (!row) throw Error('session not found');
+      if (
+        command.name === 'switch-checkout' &&
+        (this.managedTaskCheckout(row.workspace) || this.sourceTask(row.id))
+      )
+        throw Error('task conversations use their own worktree');
       // This acquires a lease only after the previous writer released it. A live
       // foreign writer rejects the action without touching the selected history.
       this.workspaceRoot(row.workspace);
@@ -5138,66 +5299,93 @@ export class RuntimeController {
       case 'prompt':
         await this.submitPrompt(runtime, p, false, command.id);
         return {};
-      case 'checkouts': {
-        const root = this.workspaceById(text(p.workspaceId, 'workspace', 200));
-        this.trustedWorkspace(root);
-        return listCheckouts(root, runtime.options.workspace);
-      }
       case 'create-checkout': {
-        const root = this.workspaceById(text(p.workspaceId, 'workspace', 200));
-        this.trustedWorkspace(root);
+        const root = this.trustedWorkspace(
+          this.workspaceById(text(p.workspaceId, 'workspace', 200)),
+        );
         return createCheckout(
           root,
-          join(
-            this.tasksRootFor(loadSettings(this.home)),
-            'worktrees',
-            identity(root),
-          ),
+          this.checkoutDirectory(root),
           text(p.branch, 'branch', 200),
           text(p.start, 'starting revision', 200),
         );
       }
       case 'switch-checkout': {
         const id = runtime.session.id;
-        const row = this.store.get(id)!;
-        const origin = row.origin_workspace ?? row.workspace;
-        this.trustedWorkspace(origin);
-        if (this.metadata.archivedAt(id))
-          throw Error('restore this session before continuing');
-        await this.assertArchivable(id, row.workspace, 'moving');
+        const create = p.createWorktree === true;
         if (
-          runtime.harness.queuedMessages.steering.length ||
-          runtime.harness.queuedMessages.followUp.length ||
-          runtime.harness.recoverableInputs.items.length
+          (p.createWorktree !== undefined && !create) ||
+          create === (p.checkoutId !== undefined)
         )
-          throw Error(
-            'finish or remove queued messages before switching checkouts',
-          );
-        const target = checkoutTarget(
-          origin,
-          text(p.checkoutId, 'checkout', 200),
-        );
-        if (target.path === row.workspace)
-          return { ...target, switched: false };
-        this.bindWorkspace(target.path);
-        saveSettingsChange(this.home, (settings) =>
-          Object.assign(settings, trustFolder(settings, target.path)),
-        );
-        this.services(target.path);
-        const mode = runtime.mode;
-        const model = runtime.harness.model.model;
-        const effort = runtime.options.settings.default_thinking;
-        const plan = runtime.plan();
-        this.jobWakes.get(runtime)?.snooze();
-        this.externalBlocked.add(id);
-        await this.externalFiles?.revokeSession(id);
-        this.externalGrantOwners.delete(id);
+          throw Error('choose an existing checkout or a new worktree');
+        this.movingCheckouts.add(id);
+        let generated: GeneratedCheckout | undefined;
+        let origin: string | undefined;
+        let blockedExternal = false;
         try {
+          const eligibility = await this.assertCheckoutMove(id);
+          const { row } = eligibility;
+          origin = eligibility.origin;
+          if (
+            p.expectedPath !== undefined &&
+            text(p.expectedPath, 'execution path', 4096) !== row.workspace
+          )
+            throw Error('execution location changed; reopen the worktree menu');
+          if (create)
+            generated = await createGeneratedCheckout(
+              row.workspace,
+              this.checkoutDirectory(origin),
+              {
+                expectedBranch:
+                  p.expectedBranch === undefined
+                    ? undefined
+                    : text(p.expectedBranch, 'execution branch', 1024),
+              },
+            );
+          const expectedTargetBranch =
+            create || p.expectedTargetBranch === undefined
+              ? undefined
+              : text(p.expectedTargetBranch, 'destination branch', 1024);
+          const target =
+            generated?.checkout ??
+            this.conversationCheckoutTarget(
+              origin,
+              text(p.checkoutId, 'checkout', 200),
+              expectedTargetBranch,
+            );
+          if (target.path === row.workspace)
+            return { ...target, switched: false };
+          this.bindWorkspace(target.path);
+          saveSettingsChange(this.home, (settings) =>
+            Object.assign(settings, trustFolder(settings, target.path)),
+          );
+          this.services(target.path);
+          const mode = runtime.mode;
+          const model = runtime.harness.model.model;
+          const effort = runtime.options.settings.default_thinking;
+          const plan = runtime.plan();
+          this.jobWakes.get(runtime)?.snooze();
+          this.externalBlocked.add(id);
+          blockedExternal = true;
+          await this.externalFiles?.revokeSession(id);
+          this.externalGrantOwners.delete(id);
           const owner = await this.runtimes.replace(
             id,
             target.path,
-            () =>
-              this.store.bindExecution(id, row.workspace, target.path, origin),
+            () => {
+              if (expectedTargetBranch !== undefined)
+                this.conversationCheckoutTarget(
+                  eligibility.origin,
+                  target.id,
+                  expectedTargetBranch,
+                );
+              this.store.bindExecution(
+                id,
+                row.workspace,
+                target.path,
+                eligibility.origin,
+              );
+            },
             () => {
               const current = this.store.get(id)!;
               if (current.workspace !== row.workspace)
@@ -5209,20 +5397,32 @@ export class RuntimeController {
                 );
             },
           );
+          this.workspaceSessions.delete(row.workspace);
+          this.workspaceSessions.set(target.path, id);
+          if (this.selectedSessionId === id) this.selectRuntime(owner);
           if (owner.harness.model.model !== model) owner.setModel(model);
           if (effort) owner.setThinkingLevel(effort);
           owner.setMode(mode);
           if (plan?.text) writeFileSync(owner.planFile.path, plan.text);
-          this.workspaceSessions.delete(row.workspace);
-          this.selectRuntime(owner);
+          if (this.selectedSessionId !== id) owner.yieldLease();
           this.persistLocation();
           return { ...target, switched: true, changesMoved: false };
         } catch (error) {
           const restored = this.runtimes.get(id);
-          if (restored && !restored.isClosing) this.selectRuntime(restored);
+          if (restored && !restored.isClosing) {
+            if (this.selectedSessionId === id) this.selectRuntime(restored);
+            else restored.yieldLease();
+          }
+          if (
+            generated &&
+            origin &&
+            this.store.get(id)?.workspace !== generated.checkout.path
+          )
+            return await this.discardCheckout(origin, generated, error);
           throw error;
         } finally {
-          this.externalBlocked.delete(id);
+          if (blockedExternal) this.externalBlocked.delete(id);
+          this.movingCheckouts.delete(id);
         }
       }
       case 'begin-session': {
@@ -5230,6 +5430,11 @@ export class RuntimeController {
         if (!promptText.trim()) throw Error('prompt is empty');
         if (p.prepareOnly !== undefined && typeof p.prepareOnly !== 'boolean')
           throw Error('invalid command preparation');
+        if (
+          p.worktreeBase !== undefined &&
+          (p.workspaceId === undefined || p.checkoutId !== undefined)
+        )
+          throw Error('choose a project and one checkout or worktree branch');
         const workspace =
           p.workspaceId === undefined
             ? // Work with no project: the first message opens in a task folder of its own.
@@ -5239,32 +5444,70 @@ export class RuntimeController {
           throw Error('trust the workspace before running Circle');
         // A root replaced since it was opened is refused, as for every session.
         this.bindWorkspace(workspace);
+        const generated =
+          p.worktreeBase === undefined
+            ? undefined
+            : await createGeneratedCheckout(
+                workspace,
+                this.checkoutDirectory(workspace),
+                { base: text(p.worktreeBase, 'worktree branch', 1024) },
+              );
         const target =
-          p.checkoutId === undefined
+          generated?.checkout.path ??
+          (p.checkoutId === undefined
             ? workspace
-            : checkoutTarget(workspace, text(p.checkoutId, 'checkout', 200))
-                .path;
-        this.bindWorkspace(target);
-        if (target !== workspace)
-          saveSettingsChange(this.home, (settings) =>
-            Object.assign(settings, trustFolder(settings, target)),
-          );
-        const owner = this.conversationRuntime(target);
-        if (target !== workspace)
-          this.store.bindExecution(owner.session.id, target, target, workspace);
-        this.selectRuntime(owner);
-        this.applyHomeChoices(owner, p);
-        const started =
-          p.prepareOnly === true
-            ? { sessionId: owner.session.id }
-            : await this.submitPrompt(owner, p, true);
-        // Home shows the notice. Starting the session from there marks it
-        // seen, the same as dismissing it.
-        if (this.whatsNew) {
-          dismissWhatsNew(this.home);
-          this.whatsNew = undefined;
+            : this.conversationCheckoutTarget(
+                workspace,
+                text(p.checkoutId, 'checkout', 200),
+                p.expectedTargetBranch === undefined
+                  ? undefined
+                  : text(p.expectedTargetBranch, 'destination branch', 1024),
+              ).path);
+        const previous = this.active;
+        let owner: AgentRuntime | undefined;
+        try {
+          this.bindWorkspace(target);
+          if (target !== workspace)
+            saveSettingsChange(this.home, (settings) =>
+              Object.assign(settings, trustFolder(settings, target)),
+            );
+          owner = this.conversationRuntime(target);
+          if (target !== workspace)
+            owner.store.bindExecution(
+              owner.session.id,
+              target,
+              target,
+              workspace,
+            );
+          this.selectRuntime(owner);
+          this.applyHomeChoices(owner, p);
+          const started =
+            p.prepareOnly === true
+              ? { sessionId: owner.session.id }
+              : await this.submitPrompt(owner, p, true);
+          // Home shows the notice. Starting the session from there marks it
+          // seen, the same as dismissing it.
+          if (this.whatsNew) {
+            dismissWhatsNew(this.home);
+            this.whatsNew = undefined;
+          }
+          return { sessionId: started.sessionId ?? owner.session.id };
+        } catch (error) {
+          if (!generated) throw error;
+          if (
+            owner &&
+            !owner.busy &&
+            !this.store.messages(owner.session.id).length
+          ) {
+            const id = owner.session.id;
+            await this.runtimes.delete(id, { confirmed: true }).catch(() => {});
+            if (this.runtimes.lifecycle(id) === 'deleted') {
+              this.workspaceSessions.delete(target);
+              if (this.selectedSessionId === id) this.selectRuntime(previous);
+            }
+          }
+          return this.discardCheckout(workspace, generated, error);
         }
-        return { sessionId: started.sessionId ?? owner.session.id };
       }
       case 'abort': {
         const operationId =
@@ -5368,6 +5611,8 @@ export class RuntimeController {
       }
       case 'delete-session': {
         const id = text(p.id, 'session', 200);
+        if (this.movingCheckouts.has(id))
+          throw Error('wait for the worktree switch to finish');
         const row = this.store.get(id);
         if (!row || row.parent_id) throw Error('session not found');
         const taskRuntime = [...this.taskRuntimes.values()].find(

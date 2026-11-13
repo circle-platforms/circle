@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { PopoutEvent } from '../src/contracts.ts';
+import type { PopoutEvent, PopoutKind } from '../src/contracts.ts';
 import {
   MAX_POPOUT_TITLE,
   Popouts,
   validPopoutAddress,
   validPopoutKind,
   validPopoutSession,
+  validPopoutTarget,
   validPopoutTitle,
   type PopoutHooks,
   type PopoutWindow,
@@ -59,6 +60,7 @@ const settle = () => new Promise<void>((done) => setImmediate(done));
 
 function fixture(delay = false) {
   const events: PopoutEvent[] = [];
+  const targets: Array<{ window: FakeWindow; kind: PopoutKind }> = [];
   const made: FakeWindow[] = [];
   const release: Array<() => void> = [];
   const popouts = new Popouts<FakeWindow>({
@@ -71,8 +73,9 @@ function fixture(delay = false) {
       return window;
     },
     onChange: (event) => events.push(event),
+    onTarget: (window, kind) => targets.push({ window, kind }),
   });
-  return { popouts, events, made, release };
+  return { popouts, events, made, release, targets };
 }
 
 test('a mode opens in one window, and opening it again brings that window forward', async () => {
@@ -281,4 +284,99 @@ test('an address for the browser window is a web address, as an extension may op
     null,
   ])
     assert.throws(() => validPopoutAddress(value), /invalid address/);
+});
+
+const shellA = '19d567fe-c7c3-4aa9-85ef-a12206f337a9';
+const shellB = '2295b0ef-9988-4e5d-b96b-44bb4b98eb55';
+
+test('popout targets accept addresses only for browsers and UUID shells only for terminals', () => {
+  assert.deepEqual(
+    validPopoutTarget('browser', 'https://example.test', undefined),
+    {
+      kind: 'browser',
+      value: 'https://example.test/',
+    },
+  );
+  assert.deepEqual(validPopoutTarget('terminal', undefined, shellA), {
+    kind: 'terminal',
+    value: shellA,
+  });
+  assert.equal(validPopoutTarget('browser', undefined, undefined), undefined);
+  assert.equal(validPopoutTarget('terminal', undefined, undefined), undefined);
+  assert.throws(
+    () => validPopoutTarget('terminal', 'https://example.test', undefined),
+    /invalid address/,
+  );
+  assert.throws(
+    () => validPopoutTarget('browser', 'https://example.test', shellA),
+    /invalid terminal selection/,
+  );
+  for (const invalid of [null, 5, '', 'local:' + shellA, '../' + shellA])
+    assert.throws(
+      () => validPopoutTarget('terminal', undefined, invalid),
+      /invalid terminal selection/,
+    );
+});
+
+test('a target is delivered once to its own mode and conversation only', async () => {
+  const { popouts, made, targets } = fixture();
+  await popouts.open('terminal', 'first', 'terminal');
+  await popouts.open('terminal', 'second', 'terminal');
+  await popouts.open(
+    'browser',
+    'first',
+    'browser',
+    validPopoutTarget('browser', 'https://example.test', undefined),
+  );
+  await popouts.open(
+    'terminal',
+    'first',
+    'terminal',
+    validPopoutTarget('terminal', undefined, shellA),
+  );
+  const [first, second, browser] = made;
+  assert.deepEqual(targets, [
+    { window: browser, kind: 'browser' },
+    { window: first, kind: 'terminal' },
+  ]);
+  assert.equal(popouts.takeTarget(second!, 'terminal'), null);
+  assert.equal(popouts.takeTarget(browser!, 'terminal'), null);
+  assert.equal(popouts.takeTarget(first!, 'browser'), null);
+  assert.equal(
+    popouts.takeTarget(browser!, 'browser'),
+    'https://example.test/',
+  );
+  assert.equal(popouts.takeTarget(browser!, 'browser'), null);
+  assert.equal(popouts.takeTarget(first!, 'terminal'), shellA);
+  assert.equal(popouts.takeTarget(first!, 'terminal'), null);
+
+  await popouts.open('terminal', 'first', 'terminal', {
+    kind: 'terminal',
+    value: shellB,
+  });
+  first!.hold = true;
+  first!.close();
+  assert.equal(popouts.takeTarget(first!, 'terminal'), null);
+  first!.finish();
+  await popouts.open('terminal', 'first', 'terminal');
+  assert.equal(popouts.takeTarget(made[3]!, 'terminal'), null);
+});
+
+test('only the latest selection is delivered if two opens share a loading window', async () => {
+  const { popouts, made, release, targets } = fixture(true);
+  const first = popouts.open('terminal', 'session', 'terminal', {
+    kind: 'terminal',
+    value: shellA,
+  });
+  const second = popouts.open('terminal', 'session', 'terminal', {
+    kind: 'terminal',
+    value: shellB,
+  });
+  assert.equal(popouts.takeTarget(made[0]!, 'terminal'), null);
+  release.splice(0).forEach((go) => go());
+  await Promise.all([first, second]);
+  assert.equal(made.length, 1);
+  assert.deepEqual(targets, [{ window: made[0], kind: 'terminal' }]);
+  assert.equal(popouts.takeTarget(made[0]!, 'terminal'), shellB);
+  assert.equal(popouts.takeTarget(made[0]!, 'terminal'), null);
 });

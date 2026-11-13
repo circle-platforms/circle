@@ -1,13 +1,35 @@
 // Simplified Chinese for words shared across the window. English is the key.
 export const common: Record<string, string> = {
   'continue in worktree…': '在工作树中继续…',
-  checkout: '执行位置',
-  'only future execution moves; uncommitted changes stay in their checkout':
-    '仅切换后续执行位置；未提交修改保留在原工作树',
-  'this project is not a Git repository': '此项目不是 Git 仓库',
-  'new branch': '新分支',
-  'starting branch or commit': '起始分支或提交',
+  worktree: '工作树',
+  'branch {branch}': '分支 {branch}',
+  'copy branch name': '复制分支名称',
+  'use existing worktree': '使用已有工作树',
   'create worktree': '新建工作树',
+  'search worktrees': '搜索工作树',
+  'no matching worktrees': '没有匹配的工作树',
+  'current location': '当前位置',
+  'new worktree from {branch}': '从 {branch} 新建工作树',
+  'moving conversation…': '正在切换执行位置…',
+  'only future execution moves; uncommitted changes stay in their checkout':
+    '后续操作将在目标文件夹执行，未提交的改动留在原处。',
+  'restore this session before continuing': '请先恢复此会话',
+  'task conversations use their own worktree': '任务会话在专用工作树中运行',
+  "stop this session's native resources and tasks before moving it":
+    '请先关闭此会话的终端并结束正在运行的任务',
+  "stop this session's tasks before moving it": '请先结束此会话的任务',
+  'stop this session before moving it': '请等待此会话空闲后再切换',
+  'finish or remove queued messages before switching checkouts':
+    '请等待或移除排队的消息后再切换',
+  'execution location changed; reopen the worktree menu':
+    '执行位置已变化，请重新打开工作树菜单',
+  'execution branch changed; reopen the worktree menu':
+    '当前分支已变化，请重新打开工作树菜单',
+  'destination branch changed; reopen the worktree menu':
+    '目标分支已变化，请重新打开工作树菜单',
+  'wait for the worktree switch to finish': '请等待工作树切换完成',
+  'wait for workspace actions to finish before moving this session':
+    '请等待工作区操作完成后再切换',
   'changes personal knowledge or memory and always needs your confirmation':
     '变更个人知识或记忆，每次均须本人确认',
   'restarting…': '等待重启中…',

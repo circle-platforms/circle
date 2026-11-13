@@ -1,0 +1,64 @@
+.home-composer .composer-footbar:has(.home-worktree) {
+  flex-wrap: wrap;
+}
+.home-composer .composer-footbar > div:first-child:has(.home-worktree) {
+  flex-wrap: wrap;
+}
+.home-worktree {
+  cursor: pointer;
+}
+.home-worktree:has(:disabled) {
+  cursor: default;
+  color: var(--muted);
+}
+.home-worktree input {
+  accent-color: var(--accent);
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  cursor: inherit;
+}
+.home-worktree small,
+.project-location-trigger small {
+  min-width: 0;
+  max-width: 110px;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.home-worktree small {
+  max-width: clamp(90px, 15vw, 164px);
+}
+.dropdown.home-menu.home-git-project-menu {
+  display: flex;
+  flex-direction: column;
+}
+.home-git-project-menu > :not(.project-picker-projects) {
+  flex-shrink: 0;
+}
+.home-git-project-menu .project-picker-projects {
+  min-height: 28px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.dropdown.home-menu.project-menu .project-location-trigger > span {
+  white-space: nowrap;
+}
+.dropdown.home-menu.project-menu.project-location-menu {
+  display: flex;
+  flex-direction: column;
+  width: min(320px, var(--home-menu-width));
+  max-height: min(360px, var(--home-menu-height));
+  overflow: hidden;
+}
+.project-location-menu .project-picker-search {
+  flex: none;
+}
+.project-location-list {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.project-location-list [role='menuitem'] > span {
+  white-space: nowrap;
+}

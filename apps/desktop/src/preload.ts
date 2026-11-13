@@ -164,10 +164,18 @@ const bridge: DesktopBridge = {
     ipcRenderer.invoke('circle:terminal-input', id, session, text),
   terminalResize: (id, session, cols, rows) =>
     ipcRenderer.invoke('circle:terminal-resize', id, session, cols, rows),
-  popoutOpen: (kind, id, title, address) =>
-    address === undefined
-      ? ipcRenderer.invoke('circle:popout-open', kind, id, title)
-      : ipcRenderer.invoke('circle:popout-open', kind, id, title, address),
+  popoutOpen: (kind, id, title, address, terminalId) =>
+    ipcRenderer.invoke(
+      'circle:popout-open',
+      kind,
+      id,
+      title,
+      ...(terminalId !== undefined
+        ? [address, terminalId]
+        : address !== undefined
+          ? [address]
+          : []),
+    ),
   popoutDock: (kind, id) => ipcRenderer.invoke('circle:popout-dock', kind, id),
   popoutDockAll: () => ipcRenderer.invoke('circle:popout-dock-all'),
   popouts: () => ipcRenderer.invoke('circle:popouts'),
@@ -182,6 +190,12 @@ const bridge: DesktopBridge = {
     const handler = () => listener();
     ipcRenderer.on('circle:popout-address', handler);
     return () => ipcRenderer.removeListener('circle:popout-address', handler);
+  },
+  popoutTerminal: () => ipcRenderer.invoke('circle:popout-terminal'),
+  onPopoutTerminal: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on('circle:popout-terminal', handler);
+    return () => ipcRenderer.removeListener('circle:popout-terminal', handler);
   },
   popoutAttach: (id, attachment) =>
     ipcRenderer

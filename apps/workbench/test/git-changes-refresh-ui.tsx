@@ -31,20 +31,21 @@ window.circleDesktop = {
   },
   onWorkspaceEvent: () => () => {},
 } as unknown as DesktopBridge;
-let set: (
-  next: Partial<{
-    busy: boolean;
-    settled: number;
-    active: boolean;
-    sessionId: string;
-  }>,
-) => void = () => {};
+type ListState = {
+  busy: boolean;
+  settled: number;
+  active: boolean;
+  sessionId: string;
+  workspaceId: string;
+};
+let set: (next: Partial<ListState>) => void = () => {};
 function List() {
   const [state, setState] = useState({
     busy: false,
     settled: 0,
     active: true,
     sessionId: 'refresh',
+    workspaceId: 'git-changes-workspace',
   });
   set = (next) => setState((previous) => ({ ...previous, ...next }));
   const { error, files: shown } = useGitChanges({
@@ -59,14 +60,7 @@ function List() {
 }
 Object.assign(window, {
   reads: () => asked.filter((call) => call === 'git.changes').length,
-  setList: (
-    next: Partial<{
-      busy: boolean;
-      settled: number;
-      active: boolean;
-      sessionId: string;
-    }>,
-  ) => set(next),
+  setList: (next: Partial<ListState>) => set(next),
   setGitFiles: (next: typeof files) => {
     files = next;
   },

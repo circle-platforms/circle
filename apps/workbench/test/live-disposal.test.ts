@@ -96,3 +96,70 @@ test('a pending file listing after disposal cannot replace the new view or notif
   assert.equal(runtime.getSnapshot(), before);
   assert.equal(notifications, 0);
 });
+
+test('same-session worktree moves refresh the file list and ignore a late source listing', async (t) => {
+  const snapshot = createFixtures();
+  snapshot.runtime = { connected: true, configured: true };
+  const session = snapshot.sessions.find(
+    (item) => item.id === snapshot.activeSessionId,
+  )!;
+  const source = session.workspaceId;
+  let receive!: (update: RuntimeUpdate) => void;
+  let finishSource!: (value: unknown) => void;
+  const sourceListing = new Promise((resolve) => {
+    finishSource = resolve;
+  });
+  const asked: string[] = [];
+  const host = {
+    onRuntime: (callback: (update: RuntimeUpdate) => void) => {
+      receive = callback;
+      return () => {};
+    },
+    listWorkspace: async (workspaceId: string) => {
+      asked.push(workspaceId);
+      if (workspaceId === source) return sourceListing;
+      return {
+        id: 'target-grant',
+        files: [
+          { id: 'target-file', path: 'target-only.ts', language: 'typescript' },
+        ],
+      };
+    },
+  } as unknown as DesktopBridge;
+  const runtime = new LiveRuntime(host, { seq: 1, connected: true, snapshot });
+  t.after(() => runtime.dispose());
+
+  const moved = structuredClone(snapshot);
+  moved.sessions.find((item) => item.id === session.id)!.executionWorkspaceId =
+    'target';
+  receive({ seq: 2, connected: true, snapshot: moved });
+  finishSource({
+    id: 'source-grant',
+    files: [
+      { id: 'source-file', path: 'source-only.ts', language: 'typescript' },
+    ],
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(asked, [source, 'target']);
+  const result = runtime.getSnapshot();
+  assert.equal(result.activeSessionId, session.id);
+  assert.equal(
+    result.sessions.find((item) => item.id === session.id)?.workspaceId,
+    source,
+  );
+  assert.deepEqual(
+    result.files.map(({ path, workspaceId, nativeGrant }) => ({
+      path,
+      workspaceId,
+      nativeGrant,
+    })),
+    [
+      {
+        path: 'target-only.ts',
+        workspaceId: 'target',
+        nativeGrant: { workspaceId: 'target-grant', fileId: 'target-file' },
+      },
+    ],
+  );
+});

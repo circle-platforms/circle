@@ -68,7 +68,10 @@ export function FileViewer({
         readOnly: resourceOwner.readOnly,
       }
     : parentSession;
-  const workspaceId = session.workspaceId;
+  const workspaceId =
+    resourceOwner?.workspaceId ??
+    parentSession.executionWorkspaceId ??
+    parentSession.workspaceId;
   const [path, setPath] = useState(
     requestedPath.replace(/#L\d+(?:C\d+)?$/, ''),
   );
@@ -128,7 +131,8 @@ export function FileViewer({
     ? resourceOwner.readOnly
     : readOnlyTask || session.readOnly;
   const sourceWorkspace = snapshot.workspaces.find(
-    (item) => item.id === workspaceId,
+    (item) =>
+      item.id === (resourceOwner?.workspaceId ?? parentSession.workspaceId),
   );
   const sourceAgent =
     resourceOwner &&
@@ -149,7 +153,9 @@ export function FileViewer({
   const shownSource = resourceOwner
     ? sourceLabel
     : (sourceWorkspace?.name ?? t('workspace'));
-  const sourceDirectory = sourceWorkspace?.path;
+  const sourceDirectory = resourceOwner
+    ? sourceWorkspace?.path
+    : (parentSession.executionPath ?? sourceWorkspace?.path);
   const fileName = path.split('/').at(-1) || path;
   // A PDF that opened here can still be read as a page, in the browser
   const sources = useSources();

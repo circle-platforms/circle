@@ -132,3 +132,30 @@ test('the browser window takes an address on start and when told there is one', 
     ['circle:popout-open', 'browser', 's1', 'browser · one', 'https://a.test/'],
   ]);
 });
+
+test('terminal popouts take selections from their own fixed channel without a renderer-supplied owner', async () => {
+  const shell = '19d567fe-c7c3-4aa9-85ef-a12206f337a9';
+  const { bridge, invoked, deliver } = await preload(async (channel) =>
+    channel === 'circle:popout-terminal' ? shell : null,
+  );
+  assert.equal(await bridge.popoutTerminal!(), shell);
+  let told = 0;
+  const stop = bridge.onPopoutTerminal!(() => told++);
+  deliver('circle:popout-address');
+  deliver('circle:popout-terminal', 'unused');
+  stop();
+  deliver('circle:popout-terminal');
+  assert.equal(told, 1);
+  await bridge.popoutOpen('terminal', 's1', 'terminal · one', undefined, shell);
+  assert.deepEqual(invoked, [
+    ['circle:popout-terminal'],
+    [
+      'circle:popout-open',
+      'terminal',
+      's1',
+      'terminal · one',
+      undefined,
+      shell,
+    ],
+  ]);
+});

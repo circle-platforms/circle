@@ -40,12 +40,14 @@ interface GitChanges {
  */
 export function useGitChanges({
   sessionId,
+  workspaceId,
   live,
   active,
   busy,
   settled = 0,
 }: {
   sessionId: string;
+  workspaceId: string;
   live: boolean;
   /** The list is on screen. */
   active: boolean;
@@ -54,26 +56,25 @@ export function useGitChanges({
   /** Grows as the conversation's tool calls end: endedToolCalls. */
   settled?: number;
 }) {
-  const [bySession, setBySession] = useState(
+  const owner = JSON.stringify([sessionId, workspaceId]);
+  const [byCheckout, setByCheckout] = useState(
     () => new Map<string, ChangeRow[]>(),
   );
-  const [error, setError] = useState('');
-  const inFlight = useRef<string | null>(null);
+  const [error, setError] = useState<{ owner: string; message: string }>();
+  const inFlight = useRef(new Set<string>());
   const pending = useRef(new Set<string>());
-  const session = useRef(sessionId);
-  session.current = sessionId;
-  const current = useRef({ sessionId, live, active });
-  current.current = { sessionId, live, active };
+  const current = useRef({ owner, live, active });
+  current.current = { owner, live, active };
 
   const refresh = useCallback(async () => {
     if (!live || !active) return;
-    if (inFlight.current === sessionId) {
+    if (inFlight.current.has(owner)) {
       // A save, focus or reopen during this read may have changed Git after
       // its snapshot. Follow it with one fresh read instead of dropping it.
-      pending.current.add(sessionId);
+      pending.current.add(owner);
       return;
     }
-    inFlight.current = sessionId;
+    inFlight.current.add(owner);
     try {
       const result = await workspaceCall<GitChanges | undefined>(
         sessionId,
@@ -84,23 +85,26 @@ export function useGitChanges({
       if (!Array.isArray(result?.files))
         throw Error('git changes answered without a list of files');
       const rows = gitChangeRows(result.files);
-      setBySession((known) => new Map(known).set(sessionId, rows));
-      if (session.current === sessionId) setError('');
+      setByCheckout((known) => new Map(known).set(owner, rows));
+      if (current.current.owner === owner) setError(undefined);
     } catch (reason) {
       // Not a repository, or Git is missing: the list says so; what it showed stays.
-      if (session.current === sessionId)
-        setError(reason instanceof Error ? reason.message : String(reason));
+      if (current.current.owner === owner)
+        setError({
+          owner,
+          message: reason instanceof Error ? reason.message : String(reason),
+        });
     } finally {
-      if (inFlight.current === sessionId) inFlight.current = null;
+      inFlight.current.delete(owner);
       if (
-        pending.current.delete(sessionId) &&
-        current.current.sessionId === sessionId &&
+        pending.current.delete(owner) &&
+        current.current.owner === owner &&
         current.current.live &&
         current.current.active
       )
         void refresh();
     }
-  }, [live, active, sessionId]);
+  }, [live, active, sessionId, owner]);
 
   useEffect(() => {
     void refresh();
@@ -111,7 +115,8 @@ export function useGitChanges({
     if (!live || !active) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const stop = subscribeWorkspace((event) => {
-      if (event.sessionId !== sessionId) return;
+      if (event.sessionId !== sessionId || event.workspaceId !== workspaceId)
+        return;
       if (event.service !== 'documents' && event.service !== 'git') return;
       clearTimeout(timer);
       timer = setTimeout(() => void refresh(), 400);
@@ -120,7 +125,7 @@ export function useGitChanges({
       clearTimeout(timer);
       stop();
     };
-  }, [live, active, sessionId, refresh]);
+  }, [live, active, sessionId, workspaceId, refresh]);
   useEffect(() => {
     if (!active) return;
     const onFocus = () => void refresh();
@@ -152,7 +157,11 @@ export function useGitChanges({
     return () => clearTimeout(timer);
   }, [settled, live, active, refresh]);
 
-  return { files: bySession.get(sessionId), error, refresh };
+  return {
+    files: byCheckout.get(owner),
+    error: error?.owner === owner ? error.message : '',
+    refresh,
+  };
 }
 
 /** One file's patch against the last commit; a new file is shown as it would be added. */

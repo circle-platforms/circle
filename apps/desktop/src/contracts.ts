@@ -298,14 +298,15 @@ export interface DesktopBridge {
   onTerminalEvent: (listener: (event: TerminalEvent) => void) => () => void;
   /**
    * Take a mode of the drawer out into a window of its own, or bring that window to the
-   * front when it is already open. The title is the window's. An `address` for the
-   * browser opens there, as it would in the drawer. Only the main window asks.
+   * front when it is already open. An `address` opens in the browser. A `terminalId`
+   * selects a shell in the terminal's own conversation. Only the main window asks.
    */
   popoutOpen: (
     kind: PopoutKind,
     sessionId: string,
     title: string,
     address?: string,
+    terminalId?: string,
   ) => Promise<void>;
   /** Close a mode's window: the mode is in the drawer again. */
   popoutDock: (kind: PopoutKind, sessionId: string) => Promise<void>;
@@ -320,6 +321,9 @@ export interface DesktopBridge {
    */
   popoutAddress?: () => Promise<string | null>;
   onPopoutAddress?: (listener: () => void) => () => void;
+  /** In a terminal window, take the last requested shell once. */
+  popoutTerminal?: () => Promise<string | null>;
+  onPopoutTerminal?: (listener: () => void) => () => void;
   /**
    * In a window of its own: an attachment for its conversation's message box, which is in
    * the main window. Resolves once the main window has it, with whether it could also be

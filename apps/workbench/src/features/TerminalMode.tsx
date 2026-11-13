@@ -40,12 +40,14 @@ if (typeof window !== 'undefined') {
 /** The terminal mode: this conversation's terminals, as tabs, in the drawer. */
 export function TerminalMode({
   commandTerminal,
+  requestedTerminal,
   onExitCommandTerminal,
   sessionId,
   visible,
   paused = false,
 }: {
   commandTerminal?: CommandTerminalView;
+  requestedTerminal?: string;
   onExitCommandTerminal?: () => void;
   sessionId: string;
   visible: boolean;
@@ -77,6 +79,7 @@ export function TerminalMode({
             embedded
             sessionId={sessionId}
             commandTerminal={commandTerminal}
+            requestedTerminal={requestedTerminal}
             onExitCommandTerminal={onExitCommandTerminal}
             active={visible}
             onAddToDraft={(capture) =>

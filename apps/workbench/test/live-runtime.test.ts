@@ -4,6 +4,7 @@ import { LiveRuntime } from '../src/model/live.ts';
 import { PreviewRuntime, STORAGE_KEY } from '../src/model/state.ts';
 import { saveSessionScroll } from '../src/model/presentation.ts';
 import { createFixtures } from '../src/preview/fixtures.ts';
+import { languageChoice, setLanguage } from '../src/i18n/index.ts';
 import type { DesktopBridge } from '../../desktop/src/contracts.ts';
 import type {
   RuntimeCommand,
@@ -513,6 +514,40 @@ test('a home message sends the chosen model, effort and mode', async () => {
   assert.equal(host.commands[0]!.payload.modelId, 'sample-fast-model');
   assert.equal(host.commands[0]!.payload.effort, 'xhigh');
   assert.equal(host.commands[0]!.payload.mode, 'plan');
+});
+
+test('a home message keeps the selected worktree branch with its checkout and localizes a stale selection', async (t) => {
+  const { runtime, host } = live();
+  const previousLanguage = languageChoice();
+  t.after(() => {
+    runtime.dispose();
+    setLanguage(previousLanguage);
+  });
+  setLanguage('zh-CN');
+  host.runtimeCommand = async (command) => {
+    host.commands.push(command);
+    return {
+      id: command.id,
+      ok: false,
+      error: 'destination branch changed; reopen the worktree menu',
+    };
+  };
+  await assert.rejects(
+    runtime.beginConversation({
+      workspaceId: 'workspace1',
+      checkoutId: 'selected-checkout',
+      expectedTargetBranch: 'feature/selected',
+      text: 'work in the selected branch',
+    }),
+    { message: '目标分支已变化，请重新打开工作树菜单' },
+  );
+  assert.equal(host.commands.length, 1);
+  assert.equal(host.commands[0]!.name, 'begin-session');
+  assert.equal(host.commands[0]!.payload.checkoutId, 'selected-checkout');
+  assert.equal(
+    host.commands[0]!.payload.expectedTargetBranch,
+    'feature/selected',
+  );
 });
 
 test('a home message inlines text files and sends pictures as attachments', async () => {

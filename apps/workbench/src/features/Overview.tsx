@@ -335,9 +335,14 @@ export function Overview({
     ...runningJobs,
     ...(moreJobs ? endedJobs : endedJobs.slice(0, ENDED_JOBS_SHOWN)),
   ];
-  const outputs = outputRows(session.changes, workspace?.path);
+  const workspaceId = session.executionWorkspaceId ?? session.workspaceId;
+  const outputs = outputRows(
+    session.changes,
+    session.executionPath ?? workspace?.path,
+  );
   const { overview } = usePullRequests({
     sessionId: session.id,
+    workspaceId,
     live: runtime.mode === 'live',
     busy: session.state !== 'idle',
     sample: runtime.mode === 'live' ? undefined : SAMPLE_PULL_REQUESTS,
@@ -348,6 +353,7 @@ export function Overview({
   // summary is only the project total, and it waits much longer.
   const tree = useGitChanges({
     sessionId: session.id,
+    workspaceId,
     live: runtime.mode === 'live',
     active: true,
     busy: session.state !== 'idle',

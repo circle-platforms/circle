@@ -614,6 +614,65 @@ test('task bridge runs isolated writers and read-only reviewer while task approv
     );
   await assert.rejects(readFile(join(f.workspace, 'same.txt')));
   assert.ok(f.events.some((event) => event.service === 'tasks'));
+
+  const workspaceId = f.controller
+    .snapshot()
+    .sessions.find((row) => row.id === parent)!.workspaceId;
+  const listed = await f.call('checkouts', { workspaceId }, parent);
+  assert.equal(listed.ok, true, listed.error);
+  assert.deepEqual(
+    (listed.data as { path: string }[]).map((row) => row.path),
+    [realpathSync.native(f.workspace)],
+  );
+  const worker = tasks.find((task) => task.spec.id === 'left');
+  const worktree = realpathSync.native(worker.worktree);
+  const checkoutId = createHash('sha256')
+    .update(worktree)
+    .digest('hex')
+    .slice(0, 24);
+  const reason = 'task conversations use their own worktree';
+  const deniedTarget = await f.call('switch-checkout', { checkoutId }, parent);
+  assert.equal(deniedTarget.ok, false);
+  assert.equal(deniedTarget.error, reason);
+
+  const child = worker.runtimeSessionId as string;
+  assert.equal((await f.call('select-session', { id: child })).ok, true);
+  assert.deepEqual((await f.call('checkout-move-status', {}, child)).data, {
+    reason,
+  });
+  const trees = execFileSync(
+    'git',
+    ['-C', f.workspace, 'worktree', 'list', '--porcelain'],
+    {
+      encoding: 'utf8',
+    },
+  );
+  const deniedMove = await f.call(
+    'switch-checkout',
+    { createWorktree: true },
+    child,
+  );
+  assert.equal(deniedMove.ok, false);
+  assert.equal(deniedMove.error, reason);
+  assert.equal(
+    f.controller.snapshot().sessions.find((row) => row.id === child)
+      ?.executionPath,
+    worktree,
+  );
+  assert.equal(
+    f.controller.snapshot().agents.find((row) => row.id === child)?.task?.id,
+    'left',
+  );
+  assert.equal(
+    execFileSync(
+      'git',
+      ['-C', f.workspace, 'worktree', 'list', '--porcelain'],
+      {
+        encoding: 'utf8',
+      },
+    ),
+    trees,
+  );
 });
 
 test('a replaced trusted root cannot redirect an existing session into another trusted repository', async (t) => {

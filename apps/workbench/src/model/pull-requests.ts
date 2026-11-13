@@ -40,27 +40,30 @@ export function keepLastPullRequests(
  */
 export function usePullRequests({
   sessionId,
+  workspaceId,
   live,
   busy,
   sample,
 }: {
   sessionId: string;
+  workspaceId: string;
   live: boolean;
   /** A turn is running in this conversation. */
   busy: boolean;
   sample?: PullRequestOverview;
 }) {
-  const [bySession, setBySession] = useState(
+  const owner = JSON.stringify([sessionId, workspaceId]);
+  const [byCheckout, setByCheckout] = useState(
     () => new Map<string, PullRequestOverview>(),
   );
-  const [failed, setFailed] = useState(false);
-  const inFlight = useRef<string | null>(null);
-  const session = useRef(sessionId);
-  session.current = sessionId;
+  const [failedOwner, setFailedOwner] = useState<string>();
+  const inFlight = useRef(new Set<string>());
+  const current = useRef(owner);
+  current.current = owner;
 
   const refresh = useCallback(async () => {
-    if (!live || inFlight.current === sessionId) return;
-    inFlight.current = sessionId;
+    if (!live || inFlight.current.has(owner)) return;
+    inFlight.current.add(owner);
     try {
       const overview = await workspaceCall<PullRequestOverview>(
         sessionId,
@@ -68,20 +71,20 @@ export function usePullRequests({
         'overview',
       );
       // The person may have moved to another conversation while this read ran.
-      setBySession((known) =>
+      setByCheckout((known) =>
         new Map(known).set(
-          sessionId,
-          keepLastPullRequests(known.get(sessionId), overview),
+          owner,
+          keepLastPullRequests(known.get(owner), overview),
         ),
       );
-      if (session.current === sessionId) setFailed(false);
+      if (current.current === owner) setFailedOwner(undefined);
     } catch {
       // Keep what was shown; it is stale, not wrong.
-      if (session.current === sessionId) setFailed(true);
+      if (current.current === owner) setFailedOwner(owner);
     } finally {
-      if (inFlight.current === sessionId) inFlight.current = null;
+      inFlight.current.delete(owner);
     }
-  }, [live, sessionId]);
+  }, [live, sessionId, owner]);
 
   useEffect(() => {
     void refresh();
@@ -100,7 +103,7 @@ export function usePullRequests({
     const timer = setTimeout(() => void refresh(), AFTER_TURN_MS);
     return () => clearTimeout(timer);
   }, [busy, refresh]);
-  const overview = live ? bySession.get(sessionId) : sample;
+  const overview = live ? byCheckout.get(owner) : sample;
   const running = overview?.current?.checks === 'running';
   useEffect(() => {
     if (!live) return;
@@ -113,7 +116,7 @@ export function usePullRequests({
     return () => clearInterval(timer);
   }, [live, refresh, running]);
 
-  return { overview, failed, refresh };
+  return { overview, failed: failedOwner === owner, refresh };
 }
 
 /** The tail of what failed in one GitHub Actions run, for the clipboard. */

@@ -136,7 +136,10 @@ import { DialogHost, InteractionDialog } from '../features/Dialogs';
 import { PlanView } from '../features/PlanView';
 import { PictureView, pictureFile } from '../features/PictureView';
 import { applyTheme } from '../theme';
-import { CheckoutPicker } from '../features/CheckoutPicker';
+import {
+  MoveCheckoutDialog,
+  SessionCheckoutMenu,
+} from '../features/CheckoutPicker';
 import { t } from '../i18n';
 import { shellPageTitle } from '../plugins/labels';
 import {
@@ -146,6 +149,7 @@ import {
 } from '../model/settings-sections';
 import { isSessionBrowser } from '../model/browser';
 import type { TerminalEvent } from '../../../desktop/src/contracts';
+import type { TerminalSnapshot } from '../../../desktop/src/workspace/terminal';
 import { isSessionTerminal } from '../features/useTerminalState';
 import { armComposerFocus, sealComposerFocus } from '../model/composer-focus';
 import {
@@ -173,14 +177,15 @@ function writeStored(key: string, value: string) {
     // The choice only lasts for this window then.
   }
 }
-function useNarrow() {
+function useNarrow(width = 1050) {
+  const query = `(max-width: ${width}px)`;
   return useSyncExternalStore(
     (listener) => {
-      const media = matchMedia('(max-width: 1050px)');
+      const media = matchMedia(query);
       media.addEventListener('change', listener);
       return () => media.removeEventListener('change', listener);
     },
-    () => matchMedia('(max-width: 1050px)').matches,
+    () => matchMedia(query).matches,
   );
 }
 /**
@@ -260,19 +265,33 @@ export function App() {
     navigate(`${location.pathname}${location.search}`, { replace: true });
   const openSettingsSection = (id: SettingsSectionId) =>
     navigate(settingsHref(id), { replace: true });
+  const executionWorkspaceId =
+    session.executionWorkspaceId ?? session.workspaceId;
   useEffect(
     () =>
       runtime.mode === 'live' && snapshot.runtime?.connected
-        ? connectWorkspaceStreams(session.workspaceId, session.id, (error) =>
+        ? connectWorkspaceStreams(executionWorkspaceId, session.id, (error) =>
             notify(String(error)),
           )
         : undefined,
-    [runtime, session.id, session.workspaceId, snapshot.runtime?.connected],
+    [runtime, session.id, executionWorkspaceId, snapshot.runtime?.connected],
   );
   const workspace = snapshot.workspaces.find(
     (item) => item.id === session.workspaceId,
   )!;
+  const [movingSession, setMovingSession] = useState<string>();
+  useEffect(() => setMovingSession(undefined), [location.pathname]);
+  const executionBranch = session.executionBranch || workspace.branch;
+  const executionPath = session.executionPath ?? workspace.path;
+  const checkoutMenuAvailable =
+    runtime.mode === 'live' &&
+    workspace.trusted &&
+    !!executionBranch &&
+    !snapshot.agents.some(
+      (agent) => agent.task && agent.resourceSessionId === session.id,
+    );
   const narrow = useNarrow();
+  const checkoutInSessionMenu = useNarrow(1100);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // The sidebar folded by itself to give a document drawer its room, to unfold with it.
@@ -308,8 +327,7 @@ export function App() {
     () => new Set(poppedKey.split(' ').filter(Boolean)),
     [poppedKey],
   );
-  // `address`: a page for the browser's window to open, as the drawer's would.
-  const popOut = (kind: 'browser' | 'terminal', address?: string) => {
+  const popOut = (kind: 'browser' | 'terminal', target?: string) => {
     const host = desktopHost();
     if (!host?.popoutOpen) return;
     const name = kind === 'browser' ? t('browser') : t('terminal');
@@ -317,11 +335,14 @@ export function App() {
     // The drawer lets go as the window opens, so the top-bar button is not the open drawer.
     const wasOpen = panel === kind;
     if (wasOpen) setInspectorOpen(false);
-    void (
-      address
-        ? host.popoutOpen(kind, session.id, title, address)
-        : host.popoutOpen(kind, session.id, title)
-    )
+    void host
+      .popoutOpen(
+        kind,
+        session.id,
+        title,
+        kind === 'browser' ? target : undefined,
+        kind === 'terminal' ? target : undefined,
+      )
       .then(() => {
         if (wasOpen) setInspectorOpen(false);
       })
@@ -831,20 +852,35 @@ export function App() {
       if (!overviewShown) toggleOverview();
       return;
     }
-    if ((kind === 'browser' || kind === 'terminal') && poppedModes.has(kind)) {
-      // An address for the browser opens in its window, as it would in the drawer.
-      popOut(
-        kind,
-        kind === 'browser' && /^https?:\/\//i.test(choice) ? choice : undefined,
-      );
+    if (
+      (kind === 'browser' || kind === 'terminal') &&
+      autoOpen.current.poppedModes.has(kind)
+    ) {
+      const target =
+        choice && (kind === 'terminal' || /^https?:\/\//i.test(choice))
+          ? choice
+          : undefined;
+      popOut(kind, target);
       return;
     }
     setPanel(kind);
-    setSelection({ panel: kind, value: choice });
+    setSelection({ panel: kind, value: choice, sessionId: session.id });
     // The button alone keeps the subagent that is open, as the files button keeps its file.
     if (kind === 'agents' && choice) setAgent(choice);
     showDrawer();
   };
+  const openCheckoutTerminal = () =>
+    perform(async () => {
+      const shell = await workspaceCall<TerminalSnapshot>(
+        session.id,
+        'terminal',
+        'create',
+      );
+      if (runtime.getSnapshot().activeSessionId !== session.id) return;
+      commandRequest.current++;
+      setCommandTerminal(undefined);
+      onPanel('terminal', shell.id);
+    });
   // When Circle starts using this conversation's browser, its panel opens so the person
   // sees it work: once per start, and never by taking the person away from another page.
   // A narrow window lays the panel over the conversation, where Circle's cards and the
@@ -1114,7 +1150,7 @@ export function App() {
       : undefined;
     if (id && !snapshot.sessions.some((item) => item.id === id))
       navigate(`/session/${session.id}`, { replace: true });
-  }, [session.id]);
+  }, [session.id, executionWorkspaceId]);
   useEffect(() => {
     const apply = () => {
       applyTheme(snapshot.settings.theme, snapshot.settings.textSize);
@@ -1648,7 +1684,7 @@ export function App() {
           })),
         ),
         ...snapshot.files
-          .filter((item) => item.workspaceId === session.workspaceId)
+          .filter((item) => item.workspaceId === executionWorkspaceId)
           .map((item) => ({
             id: `file:${item.id}`,
             label: item.path,
@@ -1736,6 +1772,14 @@ export function App() {
                         align="start"
                         sideOffset={6}
                       >
+                        {checkoutMenuAvailable && checkoutInSessionMenu && (
+                          <DropdownMenu.Item
+                            className="session-checkout-fallback"
+                            onSelect={() => setMovingSession(session.id)}
+                          >
+                            {t('continue in worktree…')}
+                          </DropdownMenu.Item>
+                        )}
                         {SESSION_ACTIONS.map(([label, run]) => (
                           <DropdownMenu.Item key={label()} onSelect={run}>
                             {label()}
@@ -1745,24 +1789,17 @@ export function App() {
                     </DropdownMenu.Portal>
                   </DropdownMenu.Root>
                 )}
-                {/* The project and the branch the conversation runs on. For a project
-                  under git they are also where it is moved to another checkout of the
-                  repository: the top bar keeps its one row. */}
                 {!home &&
-                  (!page &&
-                  workspace.trusted &&
-                  (session.executionBranch || workspace.branch) ? (
-                    <CheckoutPicker
-                      workspaceId={workspace.id}
+                  (!page && checkoutMenuAvailable ? (
+                    <SessionCheckoutMenu
+                      key={session.id}
                       sessionId={session.id}
-                      className="project-chip"
-                      title={session.executionPath ?? workspace.path}
-                    >
-                      <Folder size={12} />
-                      {workspaceLabel(workspace, snapshot.agents)}
-                      <GitBranch size={11} />
-                      {session.executionBranch || workspace.branch}
-                    </CheckoutPicker>
+                      project={workspaceLabel(workspace, snapshot.agents)}
+                      branch={executionBranch}
+                      path={executionPath}
+                      onMove={() => setMovingSession(session.id)}
+                      onTerminal={openCheckoutTerminal}
+                    />
                   ) : (
                     <span
                       className="project-chip"
@@ -1800,6 +1837,16 @@ export function App() {
                 )}
               </div>
             </header>
+            {!home && !page && movingSession === session.id && (
+              <MoveCheckoutDialog
+                key={session.id}
+                sessionId={session.id}
+                workspaceId={workspace.id}
+                path={executionPath}
+                branch={executionBranch}
+                onClose={() => setMovingSession(undefined)}
+              />
+            )}
             <div
               className={
                 whole ? 'workspace-content whole' : 'workspace-content'
