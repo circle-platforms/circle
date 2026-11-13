@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { KnowledgeStore, KnowledgeVersionConflict } from './store.js';
 import { mergeSnapshots } from './merge.js';
 import { decodeSyncObject, formatJcs } from './canonical.js';
@@ -70,15 +71,26 @@ interface Journal {
  * connection is selected, so it sends nothing.
  */
 export function syncedBefore(home: string, binding: string): boolean {
-  if (!binding || !existsSync(join(home, 'knowledge', 'knowledge.sqlite')))
-    return false;
-  const store = new KnowledgeStore(home);
+  const path = join(home, 'knowledge', 'knowledge.sqlite');
+  if (!binding || !existsSync(path)) return false;
+  // Two rows read, nothing else: opening the store would take its write lock and check its files, for one line
+  let db: DatabaseSync | undefined;
   try {
-    if (store.syncRead(`synced:${binding}`)) return true;
-    const j = store.syncRead<Journal>('active');
+    db = new DatabaseSync(path, { readOnly: true });
+    const read = (key: string): unknown => {
+      const row = db!
+        .prepare('SELECT value FROM sync_journal WHERE key=?')
+        .get(key) as { value?: unknown } | undefined;
+      return typeof row?.value === 'string' ? JSON.parse(row.value) : null;
+    };
+    if (read(`synced:${binding}`)) return true;
+    const j = read('active') as Partial<Journal> | null;
     return j?.binding === binding && !!j.lastSyncedAt;
+  } catch {
+    // A store that cannot be read counts as never synced here: the notice is shown
+    return false;
   } finally {
-    store.close();
+    db?.close();
   }
 }
 

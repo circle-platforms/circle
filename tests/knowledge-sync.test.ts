@@ -135,6 +135,23 @@ test('a device that synced before the record existed counts by its current journ
   assert.equal(syncedBefore(home, 'another-account'), false);
 });
 
+test('the check reads two rows while the store is busy, without its write lock', (t) => {
+  const home = scratch(t, 'circle-sync-busy-');
+  const store = new KnowledgeStore(home);
+  try {
+    store.syncWrite('synced:busy-account', { at: '2026-11-01T00:00:00.000Z' });
+    // Sync holds the store's write lock: a connect preview still answers at once
+    (store as any).transaction(() => {
+      const started = Date.now();
+      assert.equal(syncedBefore(home, 'busy-account'), true);
+      assert.equal(syncedBefore(home, 'other-account'), false);
+      assert.ok(Date.now() - started < 1000);
+    });
+  } finally {
+    store.close();
+  }
+});
+
 test('a sync the person asks for during the back-off after a failure is tried at once, unless the server set the wait (#522)', async (t) => {
   const w = await world(t);
   const client = w.clients[0]!;
