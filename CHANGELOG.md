@@ -4,6 +4,32 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+## 1.17.0 - 2026-11-13
+
+### Added
+- **An `after_tool` hook can ask for a screenshot of the browser's page.** The hook gets a PNG of the page the conversation's browser shows, as a file named in its JSON's `files`; the model never sees it. (#536, #502 item 4)
+- **The home project menu lets people search local starting branches or reuse an existing worktree, and a new worktree is created on the first send.** (#512)
+- **Existing conversations show the source and destination before moving**, keep their transcript, and leave uncommitted changes in the source checkout. (#512)
+- **The connect confirmation says personal content will sync to this server**, only when the account has never finished a sync on this device. (#536, #502 item 2)
+
+### Changed
+- **A tool result is no longer thrown away because its structure does not match the output schema cached when Circle connected.** The result arrives whole, with a fixed note when it does not match. (#536, fixes #513)
+- **When a server that declares `tools.listChanged` sends `notifications/tools/list_changed`, its tools are listed again for the next turn.** The turn under way keeps its tools, and when that listing fails the earlier tools stay. (#536)
+- **The Hub shows on its extension card, with its status and tool count, and no longer on the MCP servers page.** Local tools install with the sign-in the Hub's MCP entry already has, and typing only the Hub's IP address finds it on the default port. (#536, fixes #514)
+- **"Sync now" asks the server at once during a back-off after a failed sync**, unless the server set the wait. (#536, fixes #522)
+- **The desktop shows the sync server's own refusal as it came**, and a purge it holds for confirmation, with the page and the deadline. (#536, #502 item 3)
+- **The branch menu opens a terminal in the actual checkout** and selects the new tab. (#512)
+
+### Fixed
+- **A knowledge change of 63 or 64 objects no longer fails at commit after approval.** (#536, fixes #525)
+- **A file whose content is the last commit's again is no longer listed in changes mode just because Git's index has not been refreshed.** (#536, fixes #515)
+- **The native journey no longer reads the browser address before its navigation lands.** (#536, fixes #518)
+- **The browser-slot limit holds: every real browser launch takes a slot**, so the full suite no longer starts more real browsers than it allows. (#536, fixes #503)
+- **The saved-gateway test counts only the conversation's own requests**, so an auxiliary title request can no longer keep its wait from converging. (#536, fixes #506)
+- **The native knowledge acceptance follows the current layout again.** (#536, fixes #524)
+- **The unwritable-log command test no longer races the job output monitor.** (#536, fixes #532)
+- **@hono/node-server 2.1.4 → 2.1.8**, including security fixes for path and WebSocket handling. (#535)
+
 ## 1.16.0 - 2026-11-11
 
 ### Added
