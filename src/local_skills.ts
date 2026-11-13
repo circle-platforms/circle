@@ -96,12 +96,6 @@ export async function resolveServer(
       fix: '用已有的条目名；没有的服务器先连接它：桌面版在 设置 → 扩展 或 设置 → MCP 服务器，终端里在 mcp_servers 里配置',
     };
   }
-  const url = typeof entry.url === 'string' ? entry.url : '';
-  if (url.length === 0)
-    return {
-      problem: `MCP 服务器条目 ${shown} 没有 url`,
-      fix: '在这个条目里写 url',
-    };
   // As the MCP connections are made: a disabled entry, or an earlier one of the same name, is not used
   const { connections, skipped } = buildMcpConnections(settings.mcp_servers);
   const connection = connections.find((candidate) => candidate.name === name);
@@ -118,6 +112,13 @@ export async function resolveServer(
     return {
       problem: `MCP 服务器条目 ${shown} 不是经 HTTP 连接的服务器`,
       fix: '本地工具只从 HTTP 的 MCP 服务器安装',
+    };
+  // The address of the entry whose token is sent: with two entries of one name, the one connected
+  const url = connection.url ?? '';
+  if (url.length === 0)
+    return {
+      problem: `MCP 服务器条目 ${shown} 没有 url`,
+      fix: '在这个条目里写 url',
     };
   try {
     const port = backgroundMcpConnection(

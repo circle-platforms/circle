@@ -184,6 +184,21 @@ test("resolveServer takes the entry's Authorization header, else the token its s
       url: 'http://127.0.0.1:9002/mcp',
       token: 'signed-in-token',
     });
+    // Two entries of one name: the address and the token are both the one connected, the later
+    const twice = settingsWith({
+      name: 'twice',
+      url: 'http://127.0.0.1:9003/mcp',
+      headers: { authorization: 'Bearer first-token' },
+    });
+    twice.mcp_servers.push({
+      name: 'twice',
+      url: 'http://127.0.0.1:9004/mcp',
+      headers: { authorization: 'Bearer second-token' },
+    });
+    assert.deepEqual(await resolveServer(twice, {}, 'twice', { home }), {
+      url: 'http://127.0.0.1:9004/mcp',
+      token: 'second-token',
+    });
     // An unknown name lists the entries there are
     const unknown = await resolveServer(
       settings,
