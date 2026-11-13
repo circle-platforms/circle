@@ -115,6 +115,11 @@ const gateway = createServer(async (req, res) => {
     res.end(stream(body.model, text));
     return;
   }
+  if (req.method === 'POST' && url.pathname === '/qwen/anthropic/v1/messages') {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.end(stream(body.model, 'native preset switched'));
+    return;
+  }
   res.writeHead(404);
   res.end();
 });
@@ -350,6 +355,68 @@ try {
         request.headers['x-api-key'] === 'native-saved-key' &&
         request.body.model === selected,
     ),
+  );
+  await until(async () => {
+    const snapshot = await state();
+    return !snapshot.sessions.find(
+      (session) => session.id === snapshot.activeSessionId,
+    )?.turn;
+  }, 'the old connection turn completed');
+  const beforePreset = requests.length;
+  await send('/login');
+  await page
+    .getByRole('combobox', { name: 'provider', exact: true })
+    .selectOption('bailian-anthropic');
+  await page
+    .getByRole('textbox', { name: 'base url', exact: true })
+    .fill(base + '/qwen/anthropic');
+  await page
+    .getByRole('textbox', { name: 'api key', exact: true })
+    .fill('qwen-local-key');
+  await page.getByRole('button', { name: 'next', exact: true }).click();
+  await page
+    .getByText('provider presets (2026-10-14); unverified', { exact: true })
+    .waitFor();
+  await page
+    .getByRole('option', { name: 'qwen3.8-flash preset', exact: true })
+    .click();
+  await page.getByRole('button', { name: 'connect', exact: true }).click();
+  await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
+  const presetSettings = JSON.parse(
+    await readFile(join(home, 'settings.json'), 'utf8'),
+  );
+  assert.equal(presetSettings.auth.provider, 'bailian-anthropic');
+  assert.equal(presetSettings.auth.model, 'qwen3.8-flash');
+  await send('/models');
+  await page
+    .getByRole('button', { name: 'refresh models', exact: true })
+    .click();
+  await page.getByText('models refreshed', { exact: true }).waitFor();
+  const presetRow = page
+    .locator('.model-row')
+    .filter({ hasText: 'qwen3.7-plus' });
+  await presetRow
+    .getByRole('button', { name: 'use model', exact: true })
+    .click();
+  await page.getByText('model selected', { exact: true }).waitFor();
+  await page.evaluate(
+    (id) => {
+      location.hash = '/session/' + id;
+    },
+    (await state()).activeSessionId,
+  );
+  await page.getByRole('textbox', { name: 'message', exact: true }).waitFor();
+  await send('use the switched Qwen preset');
+  await page.getByText('native preset switched', { exact: true }).waitFor();
+  assert.deepEqual(
+    requests.slice(beforePreset).map((request) => request.url),
+    ['/qwen/anthropic/v1/messages'],
+    'preset setup, refresh and switching never request a model list',
+  );
+  assert.equal(requests.at(-1).body.model, 'qwen3.7-plus');
+  assert.equal(requests.at(-1).headers['x-api-key'], 'qwen-local-key');
+  checks.push(
+    'Qwen presets persist their provider, refresh without discovery and switch the next actual SDK request',
   );
   assert.deepEqual(errors, []);
   checks.push(

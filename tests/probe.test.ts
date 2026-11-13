@@ -2,11 +2,16 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer, type IncomingMessage } from 'node:http';
 import { resolveEndpoint } from '../src/probe.js';
-import { connectionModels } from '../src/connection_models.js';
+import { availableModels, connectionModels } from '../src/connection_models.js';
 import { PROVIDER_PRESETS } from '../src/providers.js';
 import { SetupFlow } from '../src/tui/setup_flow.js';
 import { runLineInit, type LinePrompter } from '../src/line_setup.js';
-import { loadSettings, loadCredentials } from '../src/settings.js';
+import {
+  loadSettings,
+  loadCredentials,
+  loadSettingsFromDict,
+  type ModelAuth,
+} from '../src/settings.js';
 import { scratch } from './helpers.js';
 
 async function gateway(
@@ -141,6 +146,7 @@ test('provider presets are explicit, skip discovery and remain editable without 
   assert.equal(flow.auth().model, 'my-own-id');
   assert.equal(flow.auth().base_url, 'http://127.0.0.1:12345/custom/anthropic');
   assert.equal(flow.auth().protocol, 'anthropic');
+  assert.equal(flow.auth().provider, 'bailian-anthropic');
   assert.equal(loadSettings(home).initialized, false);
   const providerIndex =
     PROVIDER_PRESETS.findIndex((p) => p.id === 'bailian-anthropic') + 1;
@@ -159,12 +165,122 @@ test('provider presets are explicit, skip discovery and remain editable without 
   await runLineInit(home, io);
   assert.equal(loadSettings(home).auth.model, 'my-own-id');
   assert.equal(loadSettings(home).auth.protocol, 'anthropic');
+  assert.equal(loadSettings(home).auth.provider, 'bailian-anthropic');
   assert.equal(loadCredentials(home).api_key, 'synthetic');
   assert.match(
     said.join('\n'),
     /provider presets; model and key are unverified/,
   );
 });
+
+test('runtime model lists preserve the selected source for every provider', async () => {
+  for (const provider of PROVIDER_PRESETS) {
+    const protocol = provider.protocol ?? 'openai';
+    const auth: ModelAuth = {
+      provider: provider.id,
+      protocol,
+      base_url:
+        provider.baseUrl ||
+        (provider.id === 'azure'
+          ? 'https://account.example/openai/v1'
+          : provider.id === 'foundry-anthropic'
+            ? 'https://account.example/anthropic'
+            : 'http://127.0.0.1:18999/custom'),
+      model: 'current',
+      api_key_ref: 'api_key',
+    };
+    const calls: { url: string; protocol?: string }[] = [];
+    const found = await availableModels(
+      auth,
+      'key',
+      async (url, key, options) => {
+        calls.push({ url, protocol: options?.protocol });
+        return {
+          protocol: options?.protocol ?? 'openai',
+          models: ['online-model'],
+          inferred: false,
+          base_url: url,
+          status: 'discovered',
+          detail: '',
+        };
+      },
+    );
+    if (provider.source === 'preset') {
+      assert.equal(calls.length, 0, provider.id);
+      assert.equal(found.status, 'preset', provider.id);
+      assert.deepEqual(found.models, [...provider.models], provider.id);
+    } else {
+      assert.equal(calls.length, 1, provider.id);
+      assert.equal(calls[0]!.protocol, protocol, provider.id);
+      assert.equal(found.status, 'discovered', provider.id);
+      assert.deepEqual(found.models, ['online-model'], provider.id);
+    }
+  }
+});
+
+test('legacy preset routes are inferred without overriding explicit custom or unknown providers', async () => {
+  const online = async (url: string) => ({
+    protocol: 'openai',
+    models: ['online-model'],
+    inferred: false,
+    base_url: url,
+    status: 'discovered' as const,
+    detail: '',
+  });
+  for (const [baseUrl, protocol, expected] of [
+    ['https://dashscope.aliyuncs.com/compatible-mode/v1', 'openai', 'bailian'],
+    [
+      'https://dashscope.aliyuncs.com/apps/anthropic',
+      'anthropic',
+      'bailian-anthropic',
+    ],
+    [
+      'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+      'openai',
+      'bailian',
+    ],
+    [
+      'https://workspace.cn-beijing.maas.aliyuncs.com/apps/anthropic',
+      'anthropic',
+      'bailian-anthropic',
+    ],
+  ] as const) {
+    const found = await availableModels(
+      { protocol, base_url: baseUrl, model: 'current', api_key_ref: 'api_key' },
+      'key',
+      async () => {
+        throw Error('legacy preset must not discover');
+      },
+    );
+    assert.equal(found.status, 'preset');
+    assert.equal(found.protocol, protocol);
+    assert.ok(found.models.includes('qwen3.8-max'), expected);
+  }
+  for (const provider of ['custom', 'future-provider']) {
+    let calls = 0;
+    const found = await availableModels(
+      {
+        provider,
+        protocol: 'openai',
+        base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        model: 'current',
+        api_key_ref: 'api_key',
+      },
+      'key',
+      async (url) => {
+        calls++;
+        return online(url);
+      },
+    );
+    assert.equal(calls, 1, provider);
+    assert.equal(found.status, 'discovered', provider);
+  }
+  const settings = loadSettingsFromDict({
+    auth: { provider: ' future-provider ', protocol: 'openai' },
+  });
+  assert.equal(settings.auth.provider, 'future-provider');
+});
+
 test('an online provider failure remains a failure and never falls back to presets or another protocol', async (t) => {
   const { base, seen } = await gateway(t, () => undefined);
   const found = await connectionModels(base + '/v2', 'key', 'qianfan');

@@ -230,6 +230,7 @@ export async function runLineInit(
     const connection = withConnection(
       {
         ...defaultAuth(),
+        provider: provider.id,
         protocol,
         base_url: normalizeBaseUrl(found.base_url || base, protocol),
         model,
@@ -302,6 +303,7 @@ async function lineSignIn(
         saved.enabled_models = [];
       saved.auth = {
         ...defaultAuth(),
+        provider: 'chatgpt',
         protocol: 'chatgpt',
         base_url: base,
         model,

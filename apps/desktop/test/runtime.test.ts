@@ -4009,6 +4009,7 @@ test('an explicit provider preset bypasses discovery, saves editable fields and 
         await s.call('configure', {
           endpoint,
           protocol,
+          provider,
           apiKey: 'local-key',
           model: 'my-edited-id',
         })
@@ -4017,9 +4018,22 @@ test('an explicit provider preset bypasses discovery, saves editable fields and 
     );
     assert.equal(loadSettings(s.home).auth.model, 'my-edited-id');
     assert.equal(loadSettings(s.home).auth.base_url, endpoint);
+    assert.equal(loadSettings(s.home).auth.provider, provider);
     assert.ok(
-      !s.controller.snapshot().models.some((model) => model.id === presetId),
+      s.controller.snapshot().models.some((model) => model.id === presetId),
     );
+    assert.ok(
+      s.controller
+        .snapshot()
+        .models.some((model) => model.id === 'my-edited-id'),
+    );
+    const refreshed = await s.call('discover-models');
+    assert.equal(refreshed.ok, true, refreshed.error);
+    assert.equal((refreshed.data as { status: string }).status, 'preset');
+    assert.ok(
+      (refreshed.data as { models: string[] }).models.includes(presetId),
+    );
+    assert.equal(seen.length, 0);
     await s.call('prompt', { text: 'use my selected model' });
     await wait(
       () =>
@@ -7532,6 +7546,7 @@ test('the desktop signs in with ChatGPT, saves no key, runs a turn on the plan a
   assert.equal(connected.ok, true, connected.error);
   assert.deepEqual(connected.data, {});
   assert.deepEqual(loadSettings(home).auth, {
+    provider: 'chatgpt',
     protocol: 'chatgpt',
     base_url: gateway.base + '/v1',
     model: 'gpt-6.1-sol',

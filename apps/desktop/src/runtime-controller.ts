@@ -30,9 +30,11 @@ import { NativeGitHubConnection } from './workspace/github-connection.js';
 import { githubWorkspaceBackend } from './workspace/github-backend.js';
 import type { GitHubConnectionBackend } from '../../../src/github_connection.js';
 import {
+  availableModels,
   connectionModels,
   connectionSummary,
 } from '../../../src/connection_models.js';
+import { providerPreset } from '../../../src/providers.js';
 import { randomUUID, createHash } from 'node:crypto';
 import {
   mkdirSync,
@@ -157,7 +159,7 @@ import {
   saveSecret,
   secretNames,
 } from '../../../src/secrets.js';
-import { normalizeBaseUrl, resolveEndpoint } from '../../../src/probe.js';
+import { normalizeBaseUrl } from '../../../src/probe.js';
 import { isProtocol } from '../../../src/protocols.js';
 import { availableUpdate } from '../../../src/update.js';
 import { BUILTIN_SLASH } from '../../../src/tui/slash_commands.js';
@@ -5878,6 +5880,16 @@ export class RuntimeController {
         // A ChatGPT plan signs in; it is never configured with a key here.
         if (!isProtocol(protocol) || protocol === 'chatgpt')
           throw Error('invalid protocol');
+        const provider =
+          p.provider === undefined
+            ? undefined
+            : text(p.provider, 'provider', 100);
+        if (provider) {
+          const selected = providerPreset(provider);
+          if (selected.source === 'signin') throw Error('invalid provider');
+          if (selected.protocol && selected.protocol !== protocol)
+            throw Error('provider protocol mismatch');
+        }
         const baseUrl = normalizeBaseUrl(endpoint, protocol);
         const model = text(p.model, 'model', 500);
         if (!model.trim()) throw Error('model required');
@@ -5891,15 +5903,20 @@ export class RuntimeController {
             Object.assign(
               saved,
               withConnection(
-                { protocol, base_url: baseUrl, model, api_key_ref: 'api_key' },
+                {
+                  ...(provider ? { provider } : {}),
+                  protocol,
+                  base_url: baseUrl,
+                  model,
+                  api_key_ref: 'api_key',
+                },
                 this.home,
               ),
             );
           });
         });
         this.keySaved = true;
-        // The models listed are this endpoint's: what the form's probe found at the URL and
-        // kind of API being saved, or none until they are asked for.
+        // Keep the form's selected source: an online list or the provider presets.
         const probed = this.probed;
         this.discoveredModels =
           probed &&
@@ -5935,7 +5952,7 @@ export class RuntimeController {
         this.probed = {
           baseUrl,
           protocol: found.protocol,
-          models: found.status === 'preset' ? [] : [...found.models],
+          models: [...found.models],
         };
         return {
           status: found.status,
@@ -6054,6 +6071,7 @@ export class RuntimeController {
               saved,
               withConnection(
                 {
+                  provider: 'chatgpt',
                   protocol: 'chatgpt',
                   base_url: base,
                   model,
@@ -6816,10 +6834,9 @@ export class RuntimeController {
       case 'discover-models': {
         const settings = loadSettings(this.home);
         if (!isReady(settings)) throw Error('connect an endpoint first');
-        const found = await resolveEndpoint(
-          settings.auth.base_url,
+        const found = await availableModels(
+          settings.auth,
           await connectionKey(settings, this.home),
-          { protocol: settings.auth.protocol },
         );
         // An endpoint that does not list its models (an Anthropic-style path without
         // GET /v1/models) is not an error: its model ids are typed instead.

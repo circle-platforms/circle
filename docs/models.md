@@ -31,15 +31,15 @@ The protocol is set by setup, never guessed from a model name: a model called `c
 ## Switch models
 
 ```text
-/models                 choose from what the endpoint offers
+/models                 choose an available model
 /models qwen3.8-flash   use this id
 ```
 
-`/models` (or `alt+l`) lists the models the endpoint offers, asking it with the saved protocol; when it cannot be asked, a red line says why. Type to search. `enter` uses the model for this session; `alt+d` uses it and saves it as the default for new sessions. The row for the model this session is using starts with `●` and says `current`, including when the endpoint lists it with a vendor prefix. The saved default is marked `default`. `ctrl+l` redraws the screen and does not open this list.
+`/models` (or `alt+l`) uses the connection's model source. A provider with released presets lists those ids without asking the endpoint. An online provider or custom endpoint is asked with the saved protocol; if discovery fails, the list still opens with the current model and literal ids in `enabled_models`, and says why. Type to search; when no row matches, `enter` uses the typed id. `enter` on a row uses the model for this session; `alt+d` uses it and saves it as the default for new sessions. The row for the model this session is using starts with `●` and says `current`, including when the available list gives it with a vendor prefix. The saved default is marked `default`. `ctrl+l` redraws the screen and does not open this list.
 
-`/models <id>` (and `/model <id>`) sets that id for this session. The footer says `model set to <id>` for a few seconds, and the same line stays in the transcript. When the endpoint can be asked and does not list that id, both add `not listed by this endpoint`; the id is still used. To keep it, open `/models` and press `alt+d` on it. An id the endpoint rejects on a turn is shown as a short message that points back at `/models`, not as the raw error body.
+`/models <id>` (and `/model <id>`) sets that id for this session. The footer says `model set to <id>` for a few seconds, and the same line stays in the transcript. An id absent from an online list adds `not listed by this endpoint`; one absent from released presets adds `not in provider presets`. Discovery failure adds neither claim, and the id is still used. To keep it, open `/models` and press `alt+d` on it. An id the endpoint rejects on a turn is shown as a short message that points back at `/models`, not as the raw error body.
 
-`alt+m` switches to the next model for this session. It goes through the models in `enabled_models` in `settings.json`, for example `["step-3.7-flash", "step-5-*"]`, where a pattern is matched against what the endpoint lists. With no `enabled_models` it goes through every listed model. Rows in the scope are marked `in alt+m` in `/models`, and `tab` there adds the marked model to the scope or takes it out; the list is saved as `enabled_models` (for this run only when Circle was started with `--models`).
+`alt+m` switches to the next model for this session. It goes through the models in `enabled_models` in `settings.json`, for example `["step-3.7-flash", "step-5-*"]`, where a pattern is matched against the available list. With no `enabled_models` it goes through every listed model. If discovery fails, wildcard patterns cannot be expanded: only literal ids in the scope are cycled, or only the current model when no scope is set. Rows in the scope are marked `in alt+m` in `/models`, and `tab` there adds the marked model to the scope or takes it out; the list is saved as `enabled_models` (for this run only when Circle was started with `--models`).
 
 A model cannot be switched while a turn runs. The footer shows cost and context for the current model.
 
