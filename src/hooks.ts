@@ -1201,17 +1201,19 @@ export class HookRunner {
     const screenshot = () =>
       (taken ??= (async (): Promise<HookFile | undefined> => {
         let bytes: Buffer | undefined;
+        let path: string;
+        // A picture that cannot be taken or kept is no file: the hooks still run, without `files`
         try {
           bytes = await request.screenshot?.(
             request.signal ?? new AbortController().signal,
           );
+          if (!bytes?.length) return undefined;
+          folder = mkdtempSync(join(tmpdir(), 'circle-hook-'));
+          path = join(folder, 'screenshot.png');
+          writeFileSync(path, bytes, { mode: 0o600 });
         } catch {
           return undefined;
         }
-        if (!bytes?.length) return undefined;
-        folder = mkdtempSync(join(tmpdir(), 'circle-hook-'));
-        const path = join(folder, 'screenshot.png');
-        writeFileSync(path, bytes, { mode: 0o600 });
         return {
           kind: 'screenshot',
           path,

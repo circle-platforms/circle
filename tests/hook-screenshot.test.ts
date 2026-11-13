@@ -154,6 +154,47 @@ test('nothing is captured when no hook asks, and no page means no file', async (
   assert.equal(seen(home, 'keep').files, undefined);
 });
 
+test('a picture that cannot be kept is no file, and every hook of the call still runs', async (t) => {
+  const { root, home, workspace, userHome } = layout(t);
+  writeJson(join(home, 'hooks.json'), {
+    hooks: {
+      after_tool: [
+        { name: 'keep', command: keeper(home, 'keep'), screenshot: true },
+        { name: 'plain', command: keeper(home, 'plain') },
+      ],
+    },
+  });
+  const runner = new HookRunner(
+    loadHooks({ workspace, home, trusted: true, userHome }),
+    { workspace, home },
+  );
+  // The temporary folder is a file: no folder can be made in it
+  const blocked = join(root, 'not-a-folder');
+  writeFileSync(blocked, 'synthetic');
+  const names = ['TMPDIR', 'TMP', 'TEMP'] as const;
+  const before = names.map((name) => process.env[name]);
+  for (const name of names) process.env[name] = blocked;
+  try {
+    await runner.run({
+      event: 'after_tool',
+      sessionId: 's',
+      cwd: workspace,
+      toolName: 'browser_navigate',
+      toolInput: {},
+      toolOutput: 'page',
+      toolStatus: 'success',
+      screenshot: async () => PNG,
+    });
+  } finally {
+    names.forEach((name, index) => {
+      if (before[index] === undefined) delete process.env[name];
+      else process.env[name] = before[index];
+    });
+  }
+  assert.equal(seen(home, 'keep').files, undefined);
+  assert.equal(seen(home, 'plain').files, undefined);
+});
+
 test('only after_tool takes screenshot, and turning it on in a project file waits for approval again', (t) => {
   const { home, workspace, userHome } = layout(t);
   writeJson(join(home, 'hooks.json'), {

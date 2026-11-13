@@ -3363,14 +3363,17 @@ export class BrowserSessions {
     signal: AbortSignal,
   ): Promise<BrowserResult> {
     const request = validateBrowserRequest(value);
-    const conversation = this.conversation(this.validId(request.sessionId));
     if (request.action === 'capture') {
+      // A session that never used the browser has no page, and gets no record for asking
+      const known = this.conversations.get(this.validId(request.sessionId));
+      if (!known) return { text: 'no page to capture' };
       // After the conversation's own actions, and without being one: nothing waiting on the person changes
-      const capture = () => this.capturePage(conversation, signal);
-      const captured = conversation.queue.then(capture, capture);
-      conversation.queue = captured.catch(() => {});
+      const capture = () => this.capturePage(known, signal);
+      const captured = known.queue.then(capture, capture);
+      known.queue = captured.catch(() => {});
       return captured;
     }
+    const conversation = this.conversation(this.validId(request.sessionId));
     const run = async (): Promise<BrowserResult> => {
       signal.throwIfAborted();
       const approval = request.args.approval as

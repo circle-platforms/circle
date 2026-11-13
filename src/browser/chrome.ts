@@ -2134,14 +2134,17 @@ export class ChromeBrowser implements BrowserPort {
     signal: AbortSignal,
   ): Promise<BrowserResult> {
     if (this.closed) return Promise.reject(Error('the browser is closed'));
-    const conversation = this.conversation(sessionId);
     if (action === 'capture') {
+      // A session that never used the browser has no page, and gets no record for asking
+      const known = this.conversations.get(sessionId);
+      if (!known) return Promise.resolve({ text: 'no page to capture' });
       // After the conversation's own actions, and without being one: what waits on the person stays as it was
-      const capture = () => this.capturePage(conversation, signal);
-      const captured = conversation.queue.then(capture, capture);
-      conversation.queue = captured.catch(() => {});
+      const capture = () => this.capturePage(known, signal);
+      const captured = known.queue.then(capture, capture);
+      known.queue = captured.catch(() => {});
       return captured;
     }
+    const conversation = this.conversation(sessionId);
     const run = async () => {
       signal.throwIfAborted();
       this.current = conversation;
@@ -2202,6 +2205,14 @@ export class ChromeBrowser implements BrowserPort {
       : undefined;
     if (!this.cdp || this.cdp.closed || !tab || tab.dialogs.length)
       return { text: 'no page to capture' };
+    // A page behind another tab gives no picture, and a hook does not bring it to the front: the action that just ran
+    // did, so a page still behind is another conversation's turn
+    const shown = await this.evaluate<string>(
+      tab,
+      'document.visibilityState',
+      signal,
+    ).catch(() => 'hidden');
+    if (shown === 'hidden') return { text: 'no page to capture' };
     await this.js(tab, 'overlay-hidden', { hidden: true }, signal).catch(
       () => {},
     );
@@ -2211,6 +2222,7 @@ export class ChromeBrowser implements BrowserPort {
           'Page.captureScreenshot',
           { format: 'png' },
           tab.session,
+          { signal },
         ),
         signal,
         10000,

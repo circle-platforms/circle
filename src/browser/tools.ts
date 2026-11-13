@@ -188,10 +188,6 @@ export interface BrowserToolOptions {
   secrets?: () => Record<string, string>;
 }
 /**
- * Browser tool schemas are large. Send them once this session has used the browser,
- * or the new message asks for one (a URL, or the word browser). A plain greeting does not.
- */
-/**
  * The page a session's browser shows, as PNG bytes, for an after_tool hook that asked for a screenshot (#502): the
  * browser's own `capture`, which no model tool sends. Undefined when the browser shows no page.
  */
@@ -204,6 +200,10 @@ export function hookScreenshot(
   };
 }
 
+/**
+ * Browser tool schemas are large. Send them once this session has used the browser,
+ * or the new message asks for one (a URL, or the word browser). A plain greeting does not.
+ */
 export function browserToolsWanted(messages: Message[], prompt = ''): boolean {
   if (
     messages.some(

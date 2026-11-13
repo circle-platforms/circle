@@ -80,4 +80,57 @@ test('with no page open there is nothing to capture, and no browser is started f
     await chrome.request('c', 'capture', {}, new AbortController().signal),
     { text: 'no page to capture' },
   );
+  // Asking keeps no record for a session that never used the browser
+  assert.equal((chrome as any).conversations.has('c'), false);
 });
+
+test(
+  "a page another conversation's tab hides gives no capture at once, and is not brought to the front for it",
+  { skip },
+  async (t) => {
+    const temp = made(t, 'circle-capture-hidden-');
+    const site = createHttp((_req, res) => {
+      res.setHeader('Content-Type', 'text/html');
+      res.end('<!doctype html><title>shared</title><p>shared browser</p>');
+    });
+    const url = `http://127.0.0.1:${await listen(site)}/`;
+    cleanupServer(t, site);
+    const chrome = new ChromeBrowser({
+      executable: executable!,
+      headless: true,
+      downloads: join(temp, 'downloads'),
+      mode: () => 'manual',
+    });
+    cleanup(t, () => chrome.close());
+    const signal = new AbortController().signal;
+    await chrome.request('a', 'navigate', { url }, signal);
+    await chrome.request('b', 'navigate', { url }, signal);
+    const internal = chrome as any;
+    const shown = (id: string) =>
+      internal.evaluate(
+        internal.conversations
+          .get(id)
+          .tabs.get(internal.conversations.get(id).active),
+        'document.visibilityState',
+        signal,
+      );
+    assert.equal(await shown('a'), 'hidden');
+    const started = Date.now();
+    assert.deepEqual(await chrome.request('a', 'capture', {}, signal), {
+      text: 'no page to capture',
+    });
+    assert.ok(
+      Date.now() - started < 5000,
+      'no wait for a frame that never comes',
+    );
+    assert.equal(await shown('a'), 'hidden');
+    assert.equal(await shown('b'), 'visible');
+    const front = await chrome.request('b', 'capture', {}, signal);
+    assert.equal(
+      Buffer.from(front.image ?? '', 'base64')
+        .subarray(0, 8)
+        .toString('hex'),
+      '89504e470d0a1a0a',
+    );
+  },
+);

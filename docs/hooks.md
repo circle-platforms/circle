@@ -156,7 +156,7 @@ A hook can keep evidence of a page without the model ever seeing a picture of it
 
 - The capture is the page as shown, without Circle's own marks on it. It is not a `browser_screenshot`: the model gets nothing from it, and `browser_click_at` keeps going by the screenshot the model took last.
 - It is taken once per tool call, however many hooks ask for it, and only when a hook that asks matches the call.
-- No browser is started for it. With no page open, a page waiting on a dialog, a page that failed to load, or (in the desktop application) the browser in your hands, there is no file and no `files`.
+- No browser is started for it. With no page open, a page waiting on a dialog, a page that failed to load, (in the terminal) a page another conversation's tab hides, or (in the desktop application) the browser in your hands, there is no file and no `files`. A picture that cannot be written to the temporary folder is no file either; the hooks still run.
 - The file is in a folder of its own under the system's temporary folder, readable only by you, and Circle removes it once the call's hooks have finished. A hook that hands the file to something that keeps running copies it first.
 - The approval card of a project hooks file, `/hooks` and the desktop settings show `with screenshot` on such a hook. Turning it on in a project's file changes the file, so the file waits for approval again.
 
