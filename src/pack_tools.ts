@@ -4,6 +4,7 @@ import { Ajv, type ValidateFunction } from 'ajv';
 import { LIMITS, runTool, verifyInstalled } from './local_skills.js';
 import { mcpToolName } from './mcp_loader.js';
 import { isSafePackPath } from './pack_files.js';
+import { identityEnvironment } from './sandbox.js';
 import { expandVariables } from './secrets.js';
 import type { Tool } from './types.js';
 
@@ -39,7 +40,14 @@ const MAX_TOOLS = 32;
 const NAME = '^[A-Za-z_][A-Za-z0-9_]{0,63}$';
 const PARAM = /^\{([A-Za-z_][A-Za-z0-9_]{0,63})\}$/;
 /** What Circle itself gives every script, which a declaration cannot replace. */
-const RESERVED_ENV = new Set(['PATH', 'HOME', 'TMPDIR', 'NODE_OPTIONS']);
+const RESERVED_ENV = new Set([
+  'PATH',
+  'HOME',
+  'TMPDIR',
+  'NODE_OPTIONS',
+  'CIRCLE_SESSION_ID',
+  'CIRCLE_AGENT_ID',
+]);
 
 const SCALAR = { type: ['string', 'number', 'boolean'] };
 const PROPERTY = {
@@ -298,15 +306,18 @@ export function packTool(options: {
     // What the model writes is checked against the schema and runs as written, %NAME% included: values from
     // variables and secrets go only where the pack declared them
     variables: false,
-    run: async (args) => {
+    run: async (args, context) => {
       const variables = options.variables();
       const secrets = options.secrets();
-      const env = Object.fromEntries(
-        Object.entries(declaration.env).map(([name, value]) => [
-          name,
-          expandVariables(value, { ...variables, ...secrets }),
-        ]),
-      );
+      const env = {
+        ...Object.fromEntries(
+          Object.entries(declaration.env).map(([name, value]) => [
+            name,
+            expandVariables(value, { ...variables, ...secrets }),
+          ]),
+        ),
+        ...identityEnvironment(context.identity),
+      };
       return JSON.stringify(
         await runTool({
           root,

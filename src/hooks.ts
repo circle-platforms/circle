@@ -27,7 +27,11 @@ import {
 } from 'node:path';
 import { canonicalPath, ensureHome } from './paths.js';
 import { redactSecrets } from './secrets.js';
-import { isHostAbsolutePath, shellEnvironment } from './sandbox.js';
+import {
+  identityEnvironment,
+  isHostAbsolutePath,
+  shellEnvironment,
+} from './sandbox.js';
 import { discoverSkills } from './skills.js';
 import { isRecord, withPrivateJsonLock, writePrivateJson } from './settings.js';
 
@@ -169,7 +173,9 @@ export interface HookBatch {
 
 export interface HookRunRequest {
   event: HookEvent;
+  /** The conversation's session. In a subagent, `agent` names the agent the call came from. */
   sessionId: string;
+  agent?: { id: string; type: string };
   cwd: string;
   toolName?: string;
   toolInput?: Record<string, unknown>;
@@ -1355,6 +1361,9 @@ export class HookRunner {
         session_id: request.sessionId,
         cwd: request.cwd,
         hook: hook.name,
+        ...(request.agent
+          ? { agent_id: request.agent.id, agent_type: request.agent.type }
+          : {}),
         source: hook.source,
         source_label: hook.sourceLabel,
         tool_name: request.toolName,
@@ -1379,8 +1388,15 @@ export class HookRunner {
           hook.timeoutMs,
           request.signal ?? new AbortController().signal,
           secrets,
-          // Only a skill's hook has its folder; no other hook inherits one from Circle's own environment
-          { [SKILL_DIR_VARIABLE]: hook.skillDir },
+          // Only a skill's hook has its folder; no other hook inherits one from Circle's own environment. Every hook
+          // knows whose call it judges, as the call's own processes do (#551).
+          {
+            [SKILL_DIR_VARIABLE]: hook.skillDir,
+            ...identityEnvironment({
+              sessionId: request.sessionId,
+              ...(request.agent ? { agentId: request.agent.id } : {}),
+            }),
+          },
         );
       } catch (error) {
         command = {
@@ -1477,6 +1493,7 @@ export class HookRunner {
     const line = {
       ts: new Date().toISOString(),
       session_id: request.sessionId,
+      ...(request.agent ? { agent_id: request.agent.id } : {}),
       event: request.event,
       source: outcome.hook.source,
       source_label: outcome.hook.sourceLabel,

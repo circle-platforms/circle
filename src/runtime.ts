@@ -1177,6 +1177,8 @@ export class AgentRuntime {
           secrets: () => this.runSecrets(),
           redact: this.redact,
           model: childModel,
+          // Hooks, MCP servers and its processes hear the conversation's session, with this one as the agent's
+          agent: { sessionId: parentSessionId, type: name },
           // A depth of its own: the definition's, unless the run's CIRCLE_REASONING_EFFORT says otherwise (#549)
           ...(custom?.spec.effort
             ? {

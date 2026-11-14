@@ -109,7 +109,7 @@ Every matching hook for an event runs. Nothing stops the list early. For the thr
 | `before_stop`        | When the model ends a turn with no tool call and no steering message   | `deny`, exit 2, or `ask` blocks the stop and sends the reason back. The turn continues, and the step still counts toward the turn's step limit.                                                                                                         |
 | `session_start`      | Once, before the first model request of the session                    | Decisions are ignored. Output is added to the system prompt for that session and shown as a notice.                                                                                                                                                     |
 
-A subagent runs `before_tool`, `after_tool` and `permission_request`. It does not run `session_start` or `before_stop`.
+A subagent runs `before_tool`, `after_tool` and `permission_request`. It does not run `session_start` or `before_stop`. In a subagent, `session_id` is still the conversation's session, as in Claude Code and Codex, and the JSON adds `agent_id`, the subagent's own session, and `agent_type`, the name `task` was given (`general-purpose`, `explore` or yours). The conversation's own calls have neither field. Before this change, a subagent's hooks got the subagent's session as `session_id`: a hook that told subagents apart by it reads `agent_id` now.
 
 ### What a hook cannot override
 
@@ -175,6 +175,8 @@ A hook with `"screenshot": true` also gets `"files": [{ "kind": "screenshot", "p
 A hook that ships with a skill also gets `"skill_dir": "/path/to/the/skill"`, the folder of its `SKILL.md`. See [A skill can ship hooks](#a-skill-can-ship-hooks).
 
 `tool_input` is the arguments after variables are filled in, with one exception: a saved secret's value is written back as `%NAME%` everywhere it appears in the arguments, the paths, the tool output, and the hook's environment. The hook runs as you, but it does not receive the secret. `paths` are canonical (symlinks resolved through `canonicalPath`). `tool_output` and `tool_status` are set for `after_tool`. `permission_reason` is set for `permission_request`. `stop_attempt` is set for `before_stop` and starts at 1.
+
+The hook's environment says the same as its JSON: `CIRCLE_SESSION_ID` is the conversation's session, and `CIRCLE_AGENT_ID` the subagent's in a subagent. The commands, scripts and MCP requests of the call carry the same values (see [the shell environment](security.md#the-shell-environment) and [MCP](mcp.md)).
 
 ### A screenshot for the hook
 

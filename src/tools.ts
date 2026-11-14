@@ -13,7 +13,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { glob } from 'glob';
 import type { Tool, ToolContext } from './types.js';
-import { Sandbox } from './sandbox.js';
+import { Sandbox, identityEnvironment } from './sandbox.js';
 import { loadToolPrompt } from './system_prompt.js';
 import { applyPatch, patchFilePaths } from './apply_patch.js';
 import { QUESTION_SCHEMA } from './questions.js';
@@ -459,6 +459,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
           ...notificationOwner,
           origin: {
             executionSessionId: context.sessionId,
+            ...(context.identity ? { identity: context.identity } : {}),
             toolCallId: context.callId,
             ...(typeof rawCommand === 'string' && hooks.displayCommand
               ? { displayCommand: hooks.displayCommand(rawCommand, context) }
@@ -502,6 +503,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         context.readOnlyCommand ?? string(args, 'command'),
         context.signal,
         Math.max(1, Number(args.timeout) || 120) * 1000,
+        context.identity,
       );
       return `${result.output}\nExit code: ${result.exit_code}`;
     },
@@ -603,7 +605,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         },
         ['pack', 'script'],
       ),
-      async (args) => {
+      async (args, context) => {
         // A script whose parameters the pack declares runs through its own tool, which checks them first
         const typed = localSkills.typed?.(
           string(args, 'pack'),
@@ -625,6 +627,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
               ...(typeof args.stdin === 'string' ? { stdin: args.stdin } : {}),
               variables: localSkills.variables(),
               secrets: localSkills.secrets(),
+              env: identityEnvironment(context.identity),
             }),
           );
         } catch (error) {

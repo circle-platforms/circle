@@ -162,6 +162,7 @@ test('a loaded pack offers its declared scripts as typed tools that check their 
 appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
   argv: process.argv.slice(2),
   token: process.env.HUB_TOKEN ?? null,
+  session: process.env.CIRCLE_SESSION_ID ?? null,
   stdin: readFileSync(0, 'utf8'),
 }) + '\\n');
 console.log('converted with ' + process.env.HUB_TOKEN);
@@ -171,6 +172,8 @@ console.log('converted with ' + process.env.HUB_TOKEN);
       '---\nname: example-pack\ndescription: Converts text files.\n---\n\nUse the convert tool.\n',
     'tools.json': JSON.stringify({ version: 1, tools: [CONVERT] }),
     'tools/convert.mjs': script,
+    'tools/env.mjs':
+      'console.log(JSON.stringify([process.env.CIRCLE_SESSION_ID ?? null, process.env.CIRCLE_AGENT_ID ?? null]));\n',
   });
   saveSecret(home, 'HUB_TOKEN', 'synthetic-hub-token');
   const call = (id: string, name: string, args: Record<string, unknown>) => ({
@@ -197,6 +200,11 @@ console.log('converted with ' + process.env.HUB_TOKEN);
       pack: 'example-pack',
       script: 'tools/Convert.mjs',
       args: ['--in', 'a.txt'],
+    }),
+    // A script with no declaration runs through skill_run, and knows the conversation too (#551)
+    call('plain', 'skill_run', {
+      pack: 'example-pack',
+      script: 'tools/env.mjs',
     }),
     {
       message: { id: crypto.randomUUID(), role: 'assistant', content: 'done' },
@@ -255,6 +263,8 @@ console.log('converted with ' + process.env.HUB_TOKEN);
     {
       argv: ['--in', '%IN_FILE%', '--format', 'pdf', '--title', '%HUB_TOKEN%'],
       token: 'synthetic-hub-token',
+      // The conversation the call runs for (#551)
+      session: runtime.session.id,
       stdin: '',
     },
   ]);
@@ -271,6 +281,10 @@ console.log('converted with ' + process.env.HUB_TOKEN);
     String(results[4]?.content),
     /The pack declares this script's parameters: call example-pack_convert/,
   );
+  assert.deepEqual(JSON.parse(JSON.parse(String(results[5]?.content)).stdout), [
+    runtime.session.id,
+    null,
+  ]);
   // Loaded again, the skill tells the model again which tools it has
   assert.match(
     await runtime.activateSkillHooks('example-pack'),

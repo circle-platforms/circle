@@ -104,7 +104,11 @@ interface SignInShown {
 /** What a server waiting for its browser sign-in says in place of its tools. */
 export const SIGN_IN_WAITING = 'waiting for sign-in in the browser';
 /** The headers Circle sends of its own; lowercase, as compared. */
-const OWN_HEADERS = new Set(['circle-session-id', 'traceparent']);
+const OWN_HEADERS = new Set([
+  'circle-session-id',
+  'circle-agent-id',
+  'traceparent',
+]);
 /** What the manager needs from the runtime it serves. */
 export interface McpServices {
   /** The saved secrets, read on each connect for `${secret:NAME}` in headers. */
@@ -411,7 +415,12 @@ function hiddenError(error: unknown, hide: (text: string) => string): unknown {
   return message === error.message ? error : new Error(message);
 }
 /** The tool call a request is made for, while the call is under way. */
-const toolCalls = new AsyncLocalStorage<{ traceparent: string }>();
+/** The call under way: its trace, and who it runs for (#551), as its requests carry them. */
+const toolCalls = new AsyncLocalStorage<{
+  traceparent: string;
+  sessionId?: string;
+  agentId?: string;
+}>();
 /**
  * A W3C trace context for one tool call: version 00, a new random trace id and parent id
  * (never all zeros), sampled.
@@ -436,10 +445,14 @@ function requestFetch(sessionId?: () => string | undefined): FetchLike {
   return (url, init) => {
     const headers = new Headers(init?.headers);
     headers.delete('Circle-Session-Id');
+    headers.delete('Circle-Agent-Id');
     headers.delete('traceparent');
-    const session = sessionId?.();
-    if (session) headers.set('Circle-Session-Id', session);
+    // A call says whose it is: the conversation's session, and a subagent's own as Circle-Agent-Id. Outside a
+    // call, the runtime's session of the moment.
     const call = toolCalls.getStore();
+    const session = call?.sessionId ?? sessionId?.();
+    if (session) headers.set('Circle-Session-Id', session);
+    if (call?.agentId) headers.set('Circle-Agent-Id', call.agentId);
     if (call) headers.set('traceparent', call.traceparent);
     return fetch(url, { ...init, headers });
   };
@@ -791,7 +804,10 @@ export class McpManager {
         try {
           // A new trace for each call, on the requests made for it
           result = await toolCalls.run(
-            { traceparent: traceparent() },
+            {
+              traceparent: traceparent(),
+              ...(context.identity ?? {}),
+            },
             async () => {
               // The SDK sends the cancellation from a listener on the signal, which runs
               // where the abort came from, such as a key press: a signal of this call's own,

@@ -539,7 +539,7 @@ export async function runTool(options: {
   variables?: Record<string, string>;
   secrets?: Record<string, string>;
   /** More environment for the script, with values already filled in (a pack's declared tool). */
-  env?: Record<string, string>;
+  env?: Record<string, string | undefined>;
   /** False: `args` and `stdin` are used as given, with no `%NAME%` filled in (a declared tool built them). */
   expand?: boolean;
   timeoutMs?: number;

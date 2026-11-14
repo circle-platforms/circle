@@ -21,6 +21,7 @@ import { CheckpointStore, type Session } from './checkpoint_store.js';
 import { attachPrompt } from './mentions.js';
 import { prepareToolCall, RecoverableToolError } from './tool_call_compat.js';
 import { redact } from './redact.js';
+import type { CallIdentity } from './sandbox.js';
 import { isRecord } from './settings.js';
 import {
   expandVariables,
@@ -121,6 +122,11 @@ export type ApprovalDecision =
   // a rejection with the user's reason, which the model reads in the tool result
   | { decision: 'reject'; message: string };
 export interface HarnessOptions {
+  /**
+   * Set in a subagent (#550, #551): the conversation's session and this agent's type. Hooks, MCP servers and
+   * child processes are told the conversation's session, with this harness's own as the agent's.
+   */
+  agent?: { sessionId: string; type: string };
   /**
    * A subagent's own thinking depth, sent with each of its requests in place of the model's. Unset, the model's
    * depth applies, as for the conversation.
@@ -1584,7 +1590,7 @@ export class Harness {
     if (!this.options.hooks) return undefined;
     const batch = await this.options.hooks.run({
       event,
-      sessionId: this.sessionId,
+      ...this.hookIdentity(),
       cwd: this.options.session.workspace,
       toolName: call.name,
       toolInput: args,
@@ -1599,6 +1605,24 @@ export class Harness {
       if (!told.has(JSON.stringify(notice)))
         this.queueHook(notice, notice.kind === 'denied');
     return batch;
+  }
+  /** Who this harness's calls run for (#551): the conversation's session, and in a subagent its own as the agent's. */
+  private identity(): CallIdentity {
+    return this.options.agent
+      ? { sessionId: this.options.agent.sessionId, agentId: this.sessionId }
+      : { sessionId: this.sessionId };
+  }
+  /** A hook hears the conversation's session; in a subagent also which agent the call came from (#550). */
+  private hookIdentity(): {
+    sessionId: string;
+    agent?: { id: string; type: string };
+  } {
+    return this.options.agent
+      ? {
+          sessionId: this.options.agent.sessionId,
+          agent: { id: this.sessionId, type: this.options.agent.type },
+        }
+      : { sessionId: this.sessionId };
   }
   private hookSecrets(): Record<string, string> {
     return this.options.secrets?.() ?? {};
@@ -1973,6 +1997,7 @@ export class Harness {
         signal,
         ...(readOnlyCommand ? { readOnlyCommand } : {}),
         sessionId: this.sessionId,
+        identity: this.identity(),
         callId: call.id,
         ...(used.size ? { rawArgs: structuredClone(raw) } : {}),
         ...(usedSecrets.length ? { secretNames: usedSecrets } : {}),
@@ -2035,7 +2060,7 @@ export class Harness {
       const after = this.options.hooks
         ? await this.options.hooks.run({
             event: 'after_tool',
-            sessionId: this.sessionId,
+            ...this.hookIdentity(),
             cwd: this.options.session.workspace,
             toolName: call.name,
             toolInput: args,
