@@ -4263,7 +4263,10 @@ export class RuntimeController {
         input: structuredClone(call.args),
         title: `${call.name} · ${review.reason}`,
         reason: review.reason,
-        ...(call.hook_reason ? { hookReason: call.hook_reason } : {}),
+        // The words the hook wrote for the person, when it gave them; the model reads its reason
+        ...(call.hook_message || call.hook_reason
+          ? { hookReason: call.hook_message || call.hook_reason }
+          : {}),
         prefix: review.prefix.length ? review.prefix.join(' ') : undefined,
         tool: call.name,
         command:

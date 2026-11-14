@@ -923,6 +923,134 @@ test('a failed after_tool hook notifies without giving the model its error text'
   assert.doesNotMatch(stored?.content ?? '', /private lint detail/);
 });
 
+test('a hook reason reaches the model once, and user_message is only for the person', async (t) => {
+  const dirs = layout(t);
+  writeFileSync(join(dirs.workspace, 'note.txt'), 'hello');
+  const script = join(dirs.workspace, 'canon.mjs');
+  writeFileSync(
+    script,
+    `
+import { readFileSync } from 'node:fs';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+const answer =
+  input.event === 'after_tool'
+    ? { context: 'lint found 2 warnings\\nline 3: unused', user_message: 'lint · 2 warnings' }
+    : input.tool_name === 'write_file'
+      ? { decision: 'ask', reason: 'Check the file name first.', user_message: 'check the name' }
+      : { decision: 'deny', reason: 'Write --name value, not --name=value.', user_message: 'use --name value' };
+process.stdout.write(JSON.stringify(answer));
+`,
+  );
+  writeJson(join(dirs.home, 'hooks.json'), {
+    hooks: {
+      before_tool: [
+        {
+          name: 'canon',
+          command: nodeCommand(script),
+          tools: ['execute', 'write_file'],
+        },
+      ],
+      after_tool: [
+        { name: 'lint', command: nodeCommand(script), tools: 'read_file' },
+      ],
+    },
+  });
+  const modelText = (run: Awaited<ReturnType<typeof turn>>) =>
+    run.model.requests[1]!.messages.map((message) =>
+      String(message.content),
+    ).join('\n');
+  const count = (text: string, part: string) => text.split(part).length - 1;
+
+  // A deny: the reason is in the tool result, and the notice the model reads names only the tool
+  const denied = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    replies: [
+      assistant('', [
+        {
+          id: 'e',
+          name: 'execute',
+          args: { command: 'example-tool --name=value' },
+        },
+      ]),
+      assistant('done'),
+    ],
+  });
+  let seen = modelText(denied);
+  assert.equal(count(seen, 'Write --name value, not --name=value.'), 1);
+  assert.match(
+    seen,
+    /Hook denied this call: Write --name value, not --name=value\./,
+  );
+  assert.match(seen, /hook denied execute\n/);
+  assert.doesNotMatch(seen, /use --name value/);
+  const deniedNotice = denied.harness.messages.find(
+    (message) => message.hook?.kind === 'denied',
+  );
+  assert.equal(deniedNotice?.hook?.message, 'use --name value');
+  assert.equal(deniedNotice?.display, 'hook denied execute · use --name value');
+
+  // An ask: the card shows the person's words, the model reads the reason
+  const cards: ToolCall[] = [];
+  const asked = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    replies: [
+      assistant('', [
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'ask.txt', content: 'yes' },
+        },
+      ]),
+      assistant('done'),
+    ],
+    approve: (call) => {
+      cards.push(call);
+      return 'approve';
+    },
+  });
+  assert.equal(cards[0]?.hook_message, 'check the name');
+  assert.equal(cards[0]?.hook_reason, 'Check the file name first.');
+  seen = modelText(asked);
+  assert.match(
+    seen,
+    /^Hook asked before this call: Check the file name first\./m,
+  );
+  assert.doesNotMatch(seen, /check the name/);
+  assert.equal(
+    asked.harness.messages.find((message) => message.hook?.kind === 'asked')
+      ?.display,
+    'hook asked write_file · check the name',
+  );
+
+  // after_tool output: the tool result carries it, the notice the model reads names only the hook
+  const output = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    replies: [
+      assistant('', [
+        { id: 'r', name: 'read_file', args: { file_path: 'note.txt' } },
+      ]),
+      assistant('done'),
+    ],
+  });
+  seen = modelText(output);
+  assert.equal(count(seen, 'lint found 2 warnings'), 1);
+  assert.match(seen, /Hook output \(lint\):\nlint found 2 warnings/);
+  assert.match(seen, /hook lint\n/);
+  assert.doesNotMatch(seen, /lint · 2 warnings/);
+  assert.equal(
+    output.harness.messages.find((message) => message.hook?.kind === 'output')
+      ?.display,
+    'hook lint · lint · 2 warnings',
+  );
+});
+
 test('an allow does not skip an always-ask, a hard refusal, or read-only mode', async (t) => {
   const dirs = layout(t);
   const marker = join(dirs.workspace, 'hook-ran');

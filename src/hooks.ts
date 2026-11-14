@@ -58,6 +58,8 @@ export interface HookNotice {
   tool?: string;
   name?: string;
   reason?: string;
+  /** What the person reads in place of `reason`: the hook's `user_message`. It never reaches the model. */
+  message?: string;
   count?: number;
 }
 
@@ -134,6 +136,8 @@ export interface HookOutcome {
   stderr: string;
   decision: HookDecision | 'none';
   reason: string;
+  /** `user_message`: for the person, in place of the reason. Empty when the hook gave none. */
+  userMessage: string;
   context: string;
   durationMs: number;
   failed: boolean;
@@ -142,6 +146,8 @@ export interface HookOutcome {
 export interface HookBatch {
   decision: HookDecision | 'none';
   reason: string;
+  /** The `user_message` of the hooks that decided, joined as their reasons are. */
+  userMessage: string;
   context: string;
   outcomes: HookOutcome[];
   notices: HookNotice[];
@@ -840,14 +846,29 @@ function interpretOutput(
   stderr: string,
   timedOut: boolean,
   spawnError?: string,
-): Pick<HookOutcome, 'decision' | 'reason' | 'context' | 'failed'> {
+): Pick<
+  HookOutcome,
+  'decision' | 'reason' | 'userMessage' | 'context' | 'failed'
+> {
   const gating = GATING.has(event);
   // A gating failure denies. Anywhere else it is only a notice: the tool
   // result and the session keep going, and the error text is not fed back.
   const fail = (reason: string) =>
     gating
-      ? { decision: 'deny' as const, reason, context: '', failed: true }
-      : { decision: 'none' as const, reason, context: '', failed: true };
+      ? {
+          decision: 'deny' as const,
+          reason,
+          userMessage: '',
+          context: '',
+          failed: true,
+        }
+      : {
+          decision: 'none' as const,
+          reason,
+          userMessage: '',
+          context: '',
+          failed: true,
+        };
   if (timedOut) return fail('hook timed out');
   if (spawnError) return fail(spawnError);
   const { parsed, invalid, text } = hookStdout(stdout);
@@ -856,6 +877,8 @@ function interpretOutput(
     (item) => item === named,
   );
   const reason = textField(parsed?.reason) || stderr.trim().slice(0, 2000);
+  // What the person reads in place of the reason. The model never gets it.
+  const userMessage = textField(parsed?.user_message).slice(0, 2000);
   // Plain text is the hook's own message. A JSON object is not, unless it
   // named a reason: the raw object must not become the denial text.
   const message = reason || (parsed ? '' : text.slice(0, MAX_OUTPUT));
@@ -868,6 +891,7 @@ function interpretOutput(
     return {
       decision: 'deny',
       reason: message || 'hook denied',
+      userMessage,
       context: '',
       failed: false,
     };
@@ -879,6 +903,7 @@ function interpretOutput(
     return {
       decision: 'none',
       reason: '',
+      userMessage: '',
       context: text.slice(0, MAX_OUTPUT),
       failed: false,
     };
@@ -888,17 +913,19 @@ function interpretOutput(
       return {
         decision: 'deny',
         reason: reason || context || 'hook blocked stop',
+        userMessage,
         context: '',
         failed: false,
       };
     return {
       decision,
       reason: reason || (decision === 'deny' ? 'hook denied' : ''),
+      userMessage,
       context: '',
       failed: false,
     };
   }
-  return { decision: 'none', reason: '', context, failed: false };
+  return { decision: 'none', reason: '', userMessage, context, failed: false };
 }
 
 function clip(text: string): string {
@@ -1058,27 +1085,16 @@ function noticeFor(
   outcome: HookOutcome,
   tool?: string,
 ): HookNotice | undefined {
+  const base = {
+    tool,
+    name: outcome.hook.name,
+    reason: outcome.reason,
+    ...(outcome.userMessage ? { message: outcome.userMessage } : {}),
+  };
   if (outcome.decision === 'deny' && outcome.hook.event !== 'before_stop')
-    return {
-      kind: 'denied',
-      tool,
-      name: outcome.hook.name,
-      reason: outcome.reason,
-    };
-  if (outcome.decision === 'ask')
-    return {
-      kind: 'asked',
-      tool,
-      name: outcome.hook.name,
-      reason: outcome.reason,
-    };
-  if (outcome.decision === 'allow')
-    return {
-      kind: 'allowed',
-      tool,
-      name: outcome.hook.name,
-      reason: outcome.reason,
-    };
+    return { kind: 'denied', ...base };
+  if (outcome.decision === 'ask') return { kind: 'asked', ...base };
+  if (outcome.decision === 'allow') return { kind: 'allowed', ...base };
   if (outcome.failed)
     return {
       kind: 'failed',
@@ -1089,8 +1105,7 @@ function noticeFor(
   if (outcome.context && outcome.hook.event !== 'before_tool')
     return {
       kind: 'output',
-      tool,
-      name: outcome.hook.name,
+      ...base,
       reason: outcome.context.split('\n')[0]?.slice(0, 200),
     };
   return undefined;
@@ -1099,35 +1114,23 @@ function noticeFor(
 function strictest(outcomes: HookOutcome[]): {
   decision: HookDecision | 'none';
   reason: string;
+  userMessage: string;
 } {
-  const denies = outcomes.filter((item) => item.decision === 'deny');
-  if (denies.length)
-    return {
-      decision: 'deny',
-      reason: denies
-        .map((item) => item.reason)
-        .filter(Boolean)
-        .join('\n'),
-    };
-  const asks = outcomes.filter((item) => item.decision === 'ask');
-  if (asks.length)
-    return {
-      decision: 'ask',
-      reason: asks
-        .map((item) => item.reason)
-        .filter(Boolean)
-        .join('\n'),
-    };
-  const allows = outcomes.filter((item) => item.decision === 'allow');
-  if (allows.length)
-    return {
-      decision: 'allow',
-      reason: allows
-        .map((item) => item.reason)
-        .filter(Boolean)
-        .join('\n'),
-    };
-  return { decision: 'none', reason: '' };
+  const joined = (decided: HookOutcome[], field: 'reason' | 'userMessage') =>
+    decided
+      .map((item) => item[field])
+      .filter(Boolean)
+      .join('\n');
+  for (const decision of ['deny', 'ask', 'allow'] as const) {
+    const decided = outcomes.filter((item) => item.decision === decision);
+    if (decided.length)
+      return {
+        decision,
+        reason: joined(decided, 'reason'),
+        userMessage: joined(decided, 'userMessage'),
+      };
+  }
+  return { decision: 'none', reason: '', userMessage: '' };
 }
 
 export class HookRunner {
@@ -1325,6 +1328,7 @@ export class HookRunner {
           stderr: command.stderr,
           decision: 'none',
           reason: 'hook stopped',
+          userMessage: '',
           context: '',
           durationMs: Date.now() - started,
           failed: false,

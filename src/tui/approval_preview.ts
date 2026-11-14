@@ -391,7 +391,9 @@ export function approvalRequest(
       : approvalPreview(call.name, call.args, resolve),
     policy: [
       review.reason,
-      call.hook_reason ? `hook · ${call.hook_reason}` : '',
+      call.hook_message || call.hook_reason
+        ? `hook · ${call.hook_message || call.hook_reason}`
+        : '',
     ]
       .filter(Boolean)
       .join('\n'),

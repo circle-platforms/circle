@@ -6,6 +6,8 @@ export interface ToolCall {
   argument_error?: string;
   /** Set when a hook asked for a decision. Not part of what the model sent. */
   hook_reason?: string;
+  /** What a hook that asked wrote for the person (`user_message`). Shown on the card, never sent to the model. */
+  hook_message?: string;
 }
 export interface Usage {
   input_tokens: number;

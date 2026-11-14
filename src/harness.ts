@@ -227,6 +227,14 @@ export interface QueuedMessage {
   pastes?: Record<string, string>;
   attachments?: MediaAttachment[];
 }
+/** A hook asked about this call: the card shows what it wrote for the person, the model reads its reason. */
+function hookAsked(call: ToolCall, batch: HookBatch): ToolCall {
+  return {
+    ...call,
+    ...(batch.reason ? { hook_reason: batch.reason } : {}),
+    ...(batch.userMessage ? { hook_message: batch.userMessage } : {}),
+  };
+}
 /** Facts a tool read from the values a call runs with, as the person and the hooks see them. */
 function namedSecrets(
   facts: Record<string, unknown>,
@@ -1394,13 +1402,20 @@ export class Harness {
       throw failure;
     }
   }
-  private queueHook(notice: HookNotice): void {
-    const text = hookNoticeText(notice);
-    // A failed hook's error text is for the person; the model only learns it failed.
-    const told =
-      notice.kind === 'failed'
-        ? hookNoticeText({ ...notice, reason: undefined })
-        : text;
+  /**
+   * The person reads the hook's own words for them (`user_message`), or else its reason. The model reads each
+   * reason once: a failed hook's error text is for the person, and a reason the tool result or the system prompt
+   * already carries (`given`) is not repeated here.
+   */
+  private queueHook(notice: HookNotice, given = false): void {
+    const text = hookNoticeText({
+      ...notice,
+      reason: notice.message || notice.reason,
+    });
+    const told = hookNoticeText({
+      ...notice,
+      reason: notice.kind === 'failed' || given ? undefined : notice.reason,
+    });
     this.hookNotes.push({
       id: randomUUID(),
       role: 'user',
@@ -1419,8 +1434,8 @@ export class Harness {
       payload: { hook_notice: true, count: notes.length },
     });
   }
-  private saveHook(notice: HookNotice): void {
-    this.queueHook(notice);
+  private saveHook(notice: HookNotice, given = false): void {
+    this.queueHook(notice, given);
     this.flushHookNotes();
   }
   private async announceHooks(signal: AbortSignal): Promise<void> {
@@ -1460,7 +1475,9 @@ export class Harness {
       secrets: this.hookSecrets(),
       signal,
     });
-    for (const notice of batch.notices) this.saveHook(notice);
+    // Its output is in the system prompt
+    for (const notice of batch.notices)
+      this.saveHook(notice, notice.kind === 'output');
     if (batch.context)
       this.hookPreface = `Hook session_start output:\n${batch.context}`;
   }
@@ -1482,8 +1499,15 @@ export class Harness {
       role: 'user',
       internal: 'hook_notice',
       content: `<system-reminder data-source="circle-hooks">\nA hook blocked the end of this turn: ${reason}\nFix the problem and finish the task. Do not stop while the hook blocks.\n</system-reminder>`,
-      display: hookNoticeText({ kind: 'blocked', reason }),
-      hook: { kind: 'blocked', reason },
+      display: hookNoticeText({
+        kind: 'blocked',
+        reason: batch.userMessage || reason,
+      }),
+      hook: {
+        kind: 'blocked',
+        reason,
+        ...(batch.userMessage ? { message: batch.userMessage } : {}),
+      },
     });
     return true;
   }
@@ -1507,7 +1531,9 @@ export class Harness {
       secrets: this.hookSecrets(),
       signal,
     });
-    for (const notice of batch.notices) this.queueHook(notice);
+    // Every deny's reason is in the tool result (`Hook denied this call:`). An ask's is not on every path.
+    for (const notice of batch.notices)
+      this.queueHook(notice, notice.kind === 'denied');
     return batch;
   }
   private hookSecrets(): Record<string, string> {
@@ -1539,7 +1565,9 @@ export class Harness {
       onlyIds: starting.map((hook) => hook.id),
       signal,
     });
-    for (const notice of batch.notices) this.saveHook(notice);
+    // Its output is in the system prompt
+    for (const notice of batch.notices)
+      this.saveHook(notice, notice.kind === 'output');
     if (batch.context)
       this.hookPreface = this.hookPreface
         ? `${this.hookPreface}\n\n${batch.context}`
@@ -1647,8 +1675,7 @@ export class Harness {
       );
       if (before?.decision === 'deny')
         throw new Error(hookDeniedMessage(before.reason || 'hook denied'));
-      if (before?.decision === 'ask' && before.reason)
-        call = { ...call, hook_reason: before.reason };
+      if (before?.decision === 'ask') call = hookAsked(call, before);
       let hookLine = '';
       // A command the settings' allowed_commands patterns cover runs without
       // asking: in every mode, including the always-asking calls and the
@@ -1706,11 +1733,13 @@ export class Harness {
           throw new Error(
             hookDeniedMessage(permission.reason || 'hook denied'),
           );
-        if (permission?.decision === 'ask' && permission.reason)
-          call = { ...call, hook_reason: permission.reason };
+        if (permission?.decision === 'ask') call = hookAsked(call, permission);
         if (permission?.decision !== 'allow' || alwaysAsk || hookAsk) {
           this.bus.emit('tool_waiting', {
-            payload: { ...call, reason: call.hook_reason || found.reason },
+            payload: {
+              ...call,
+              reason: call.hook_message || call.hook_reason || found.reason,
+            },
           });
           if (!this.options.approve)
             throw new Error(
@@ -1838,7 +1867,9 @@ export class Harness {
           })
         : undefined;
       if (after) {
-        for (const notice of after.notices) this.queueHook(notice);
+        // The output is in the tool result below
+        for (const notice of after.notices)
+          this.queueHook(notice, notice.kind === 'output');
         const reported = after.outcomes.filter((item) => item.context);
         if (reported.length)
           content += `\n\n${HOOK_OUTPUT_LINE} (${reported
