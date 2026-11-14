@@ -7,7 +7,7 @@ import { AgentRuntime } from '../src/runtime.js';
 import { defaultSettings } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import type { Message, ModelResponse } from '../src/types.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 import { mcpStub, type McpStub } from './mcp-stub.js';
 
 // A server's question in the middle of a call (`elicitation/create`, form mode, #556)
@@ -121,7 +121,7 @@ test('a form is asked field by field; answers that do not fit are asked again, a
   );
 });
 
-test('a server is told when the person declines, closes the panel, or no one can be asked', async (t) => {
+test('a server is told when the person declines or closes the panel', async (t) => {
   const answer = (decision: string) => async () =>
     JSON.stringify(['Ada', '3', 'Gold', '', [], decision]);
   assert.deepEqual(
@@ -132,9 +132,54 @@ test('a server is told when the person declines, closes the panel, or no one can
     ((await ordered(t, await shop(t), async () => '')) as any).result,
     { action: 'cancel' },
   );
-  assert.deepEqual(((await ordered(t, await shop(t))) as any).result, {
-    action: 'cancel',
+});
+
+test('where no one can be asked the client does not take forms, and a server that asks anyway is told so', async (t) => {
+  const stub = await shop(t);
+  const reply = (await ordered(t, stub)) as any;
+  assert.equal(reply.error.code, -32601);
+  const start = stub.requests.find(
+    (request) => request.message?.method === 'initialize',
+  )!;
+  assert.equal(start.message!.params!.capabilities.elicitation, undefined);
+});
+
+test('esc on the call closes the panel of a question the server sent on a stream of its own', async (t) => {
+  const stub = await mcpStub(t, {
+    tools: [{ name: 'order', inputSchema: { type: 'object', properties: {} } }],
+    listChanged: true,
+    serverRequestOnStream: true,
+    serverRequest: () => ({
+      method: 'elicitation/create',
+      params: {
+        message: 'Confirm',
+        requestedSchema: { type: 'object', properties: {} },
+      },
+    }),
   });
+  let panel: AbortSignal | undefined;
+  const manager = new McpManager(scratch(t), undefined, undefined, {
+    // The panel stays up until it is closed
+    ask: (_args, signal) => {
+      panel = signal;
+      return new Promise((resolve) =>
+        signal.addEventListener('abort', () => resolve(''), { once: true }),
+      );
+    },
+  });
+  cleanup(t, () => manager.close());
+  await manager.load([
+    { name: 'shop', url: stub.url, transport: 'streamable_http' },
+  ]);
+  const controller = new AbortController();
+  const running = manager.tools[0]!.run(
+    {},
+    { sessionId: 'one', signal: controller.signal },
+  );
+  await until(() => panel !== undefined, { timeout: 10_000 });
+  controller.abort(new Error('esc'));
+  await assert.rejects(running);
+  await until(() => panel!.aborted, { timeout: 10_000 });
 });
 
 test('a request to open a page is refused: the client takes forms only', async (t) => {

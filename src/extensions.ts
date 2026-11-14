@@ -268,7 +268,6 @@ export class ExtensionAPI {
     this.ext.view = masked;
     this.services?.onStatus?.();
   }
-  /** Open a web address in the browser: the system's, from the terminal or the application. */
   /**
    * Saves an MCP server entry in settings.json, replacing the entry of the same name, and connects that server alone
    * again, as `/mcp reload <name>` does; the other servers are left as they are. What any extension may offer, as a
@@ -289,6 +288,7 @@ export class ExtensionAPI {
       );
     return save(structuredClone(entry));
   }
+  /** Open a web address in the browser: the system's, from the terminal or the application. */
   async openUrl(url: string): Promise<void> {
     const open = this.services?.openUrl;
     if (!open) throw new ExtensionError('this interface cannot open links');

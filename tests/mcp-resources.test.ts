@@ -135,3 +135,26 @@ test('a server that declares no resources offers no resource tools', async (t) =
   ]);
   assert.deepEqual(manager.resourceTools, []);
 });
+
+test("the resource tools ask, as the server's tools do, while a server that offers resources is not trusted with what it says of its tools", async (t) => {
+  const stub = await mcpStub(t, {
+    tools: [{ name: 'echo', inputSchema: { type: 'object', properties: {} } }],
+    capabilities: { resources: {} },
+  });
+  const effects = async (entry: Record<string, unknown>) => {
+    const manager = new McpManager(scratch(t));
+    cleanup(t, () => manager.close());
+    await manager.load([
+      { name: 'docs', url: stub.url, transport: 'streamable_http', ...entry },
+    ]);
+    return manager.resourceTools.map((tool) => [tool.name, tool.effect]);
+  };
+  assert.deepEqual(await effects({}), [
+    ['read_mcp_resource', 'read'],
+    ['list_mcp_resources', 'read'],
+  ]);
+  assert.deepEqual(await effects({ trust_annotations: false }), [
+    ['read_mcp_resource', 'unknown'],
+    ['list_mcp_resources', 'unknown'],
+  ]);
+});

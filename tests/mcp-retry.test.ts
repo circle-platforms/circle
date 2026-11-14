@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { McpManager } from '../src/mcp_loader.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 import { mcpStub, type McpStub, type StubRequest } from './mcp-stub.js';
 
 // What a transport failure of a tool call does (#555): sent again when it surely never left, sent again once only
@@ -34,6 +34,10 @@ const calls = (stub: McpStub, name: string) =>
 const starts = (stub: McpStub) =>
   stub.requests.filter((request) => request.message?.method === 'initialize')
     .length;
+/** The manager's connection to the server, closed as a server's ending program closes it. */
+const serverOf = (manager: McpManager) =>
+  (manager as unknown as { servers: { client: { close(): Promise<void> } }[] })
+    .servers[0]!;
 /** The first tools/call of each tool. */
 function firstOfEach(): (request: StubRequest) => boolean {
   const seen = new Set<string>();
@@ -82,10 +86,10 @@ test('a server that cannot be reached after the last wait: the error says the re
 test('a call cut off after it reached the server is sent again, once, only for a tool the server says is read-only', async (t) => {
   const stub = await mcpStub(t, { tools, drop: firstOfEach() });
   const manager = await connected(t, stub);
-  // Read-only: sent again on a new connection
+  // Read-only: sent again, on the connection, which is still open: the other calls on it go on
   assert.match(String(await run(manager, 'look')), /ran look/);
   assert.equal(calls(stub, 'look'), 2);
-  assert.equal(starts(stub), 2);
+  assert.equal(starts(stub), 1);
   // Anything else: not sent again, and the model reads why
   await assert.rejects(
     run(manager, 'write'),
@@ -127,10 +131,7 @@ test('a connection that ended by itself is connected again for the next call, no
   const stub = await mcpStub(t, { tools });
   const manager = await connected(t, stub);
   // As when a server's program exits
-  const server = (
-    manager as unknown as { servers: { client: { close(): Promise<void> } }[] }
-  ).servers[0]!;
-  await server.client.close();
+  await serverOf(manager).client.close();
   assert.match(
     manager.status[0]!.error,
     /the connection ended; the next call connects it again/,
@@ -139,4 +140,61 @@ test('a connection that ended by itself is connected again for the next call, no
   assert.equal(calls(stub, 'write'), 1);
   assert.equal(starts(stub), 2);
   assert.equal(manager.status[0]!.error, '');
+});
+
+test("a server's own error is its answer: -32000 and 'terminated' in its words are not a cut connection", async (t) => {
+  const stub = await mcpStub(t, {
+    tools,
+    error: (request) =>
+      request.message?.method === 'tools/call'
+        ? { code: -32000, message: 'worker terminated' }
+        : undefined,
+  });
+  const manager = await connected(t, stub);
+  await assert.rejects(run(manager, 'look'), (error: Error) => {
+    assert.match(error.message, /worker terminated/);
+    assert.doesNotMatch(error.message, /may have reached/);
+    return true;
+  });
+  // Not sent again, and the connection is left as it was
+  assert.equal(calls(stub, 'look'), 1);
+  assert.equal(starts(stub), 1);
+});
+
+test('calls that find the connection ended connect it again once, together', async (t) => {
+  const stub = await mcpStub(t, { tools });
+  const manager = await connected(t, stub);
+  await serverOf(manager).client.close();
+  const [look, write] = await Promise.all([
+    run(manager, 'look'),
+    run(manager, 'write'),
+  ]);
+  assert.match(String(look), /ran look/);
+  assert.match(String(write), /ran write/);
+  assert.equal(starts(stub), 2);
+});
+
+test("a connection made again during a call carries none of that call's trace or identity", async (t) => {
+  const stub = await mcpStub(t, { tools });
+  const manager = await connected(t, stub);
+  await serverOf(manager).client.close();
+  await manager.tools
+    .find((tool) => tool.name === 'files_write')!
+    .run(
+      {},
+      {
+        sessionId: 'one',
+        signal: new AbortController().signal,
+        identity: { sessionId: 'conversation', agentId: 'agent-1' },
+      },
+    );
+  await until(() => starts(stub) === 2);
+  const again = stub.requests.filter(
+    (request) => request.message?.method === 'initialize',
+  )[1]!;
+  assert.equal(again.headers.traceparent, undefined);
+  assert.equal(again.headers['circle-agent-id'], undefined);
+  assert.notEqual(again.headers['circle-session-id'], 'conversation');
+  // The call itself carries them
+  assert.equal(stub.calls().at(-1)!.headers['circle-agent-id'], 'agent-1');
 });

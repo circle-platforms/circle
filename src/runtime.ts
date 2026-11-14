@@ -1510,34 +1510,7 @@ export class AgentRuntime {
         this.scheduleToolRefresh();
       },
       openUrl: this.options.openUrl,
-      saveMcpServer: async (entry) => {
-        const name = String(entry.name);
-        // The entry keeps the id it had, so the desktop's list keeps its row
-        saveSettingsChange(this.options.home, (settings) => {
-          const before = settings.mcp_servers.find((row) => row.name === name);
-          settings.mcp_servers = [
-            ...settings.mcp_servers.filter((row) => row.name !== name),
-            {
-              ...(typeof before?.id === 'string' ? { id: before.id } : {}),
-              ...entry,
-            },
-          ];
-        });
-        await this.reloadMcpServer(name);
-        const row = this.mcp.status.find((item) => item.name === name);
-        return {
-          name,
-          state: row?.authorize
-            ? 'signing-in'
-            : row?.error
-              ? 'failed'
-              : 'connected',
-          tools: row?.tools.length ?? 0,
-          ...(row?.error && !row.authorize ? { error: row.error } : {}),
-          ...(row?.authorize ? { signIn: row.authorize } : {}),
-          ...(row?.authorize && row.code ? { code: row.code } : {}),
-        };
-      },
+      saveMcpServer: (entry) => this.saveMcpServer(entry),
       settings: this.options.settings.extensions,
       reservedTools: new Set([...BUILTIN_TOOL_NAMES, ...reservedTools]),
       reservedCommands: new Set([
@@ -2455,22 +2428,59 @@ export class AgentRuntime {
    * Connects one MCP server again, from the settings as they are now, and lists its tools again; the other servers
    * and the programs started for them stay as they are (#559). Between turns, as a reload is.
    */
+  /**
+   * Saves an MCP server entry in settings.json, replacing the one of the same name, and connects that server alone, for
+   * an extension (#548). The entry keeps the id it had, so the desktop's list keeps its row. Refused, with nothing
+   * saved, while a turn runs.
+   */
+  async saveMcpServer(
+    entry: Record<string, unknown>,
+  ): Promise<import('./extensions.js').McpServerState> {
+    if (this.ownershipError) throw this.ownershipError;
+    if (this.closing || this.deleting) throw new Error('session is closing');
+    if (this.busy)
+      throw new Error(
+        'a turn is running: nothing was saved; try again after it',
+      );
+    const name = String(entry.name);
+    saveSettingsChange(this.options.home, (settings) => {
+      const before = settings.mcp_servers.find((row) => row.name === name);
+      settings.mcp_servers = [
+        ...settings.mcp_servers.filter((row) => row.name !== name),
+        {
+          ...(typeof before?.id === 'string' ? { id: before.id } : {}),
+          ...entry,
+        },
+      ];
+    });
+    await this.reloadMcpServer(name);
+    const row = this.mcp.status.find((item) => item.name === name);
+    return {
+      name,
+      state: row?.authorize
+        ? 'signing-in'
+        : row?.error
+          ? 'failed'
+          : 'connected',
+      tools: row?.tools.length ?? 0,
+      ...(row?.error && !row.authorize ? { error: row.error } : {}),
+      ...(row?.authorize ? { signIn: row.authorize } : {}),
+      ...(row?.authorize && row.code ? { code: row.code } : {}),
+    };
+  }
   async reloadMcpServer(name: string): Promise<void> {
     if (this.ownershipError) throw this.ownershipError;
     if (this.closing || this.deleting) throw new Error('session is closing');
     if (this.busy) throw new Error('reload after the current turn');
-    this.options.settings = settingsForRun(
+    // Only the servers are read again: the rest of the settings is /reload's, with what depends on it
+    const servers = settingsForRun(
       this.options.home,
       this.options.workspace,
       this.options.modelOverride,
-    ).settings;
-    const entry = this.options.settings.mcp_servers.find(
-      (item) => item.name === name,
-    );
-    if (!entry && !this.mcp.status.some((row) => row.name === name))
-      throw new Error(`no MCP server named ${name}`);
+    ).settings.mcp_servers;
     await this.integrationsReady;
-    await this.mcp.reloadServer(name, entry);
+    await this.mcp.reloadServer(name, servers);
+    this.options.settings.mcp_servers = servers;
     this.harness.tools = this.withIntegrationTools(
       this.coreTools.filter((tool) => tool.name !== 'wait_jobs'),
     );

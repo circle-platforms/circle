@@ -70,6 +70,12 @@ export interface StubOptions {
   serverRequest?: (
     request: StubRequest,
   ) => { method: string; params: Record<string, unknown> } | undefined;
+  /** Sends `serverRequest` on the streams a client holds open with GET (`listChanged`) instead of the call's own. */
+  serverRequestOnStream?: boolean;
+  /** Answers a request with this JSON-RPC error instead of a result. */
+  error?: (
+    request: StubRequest,
+  ) => { code: number; message: string } | undefined;
   /** Messages sent on an event stream before the answer to a request, such as progress notices. */
   before?: (request: StubRequest) => Record<string, unknown>[] | undefined;
   /** Answers a request with an event stream that ends without the answer. */
@@ -239,15 +245,17 @@ export async function mcpStub(
       const answered = new Promise<StubRequest['reply']>((resolve) =>
         asked.set(id, resolve),
       );
-      response.write(
-        `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id, ...ask })}\n\n`,
-      );
+      const event = `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id, ...ask })}\n\n`;
+      if (options.serverRequestOnStream)
+        for (const open of pushed) open.write(event);
+      else response.write(event);
       request.reply = await answered;
     }
+    const failure = options.error?.(request);
     const reply = JSON.stringify({
       jsonrpc: '2.0',
       id: request.message.id,
-      result: await answer(request),
+      ...(failure ? { error: failure } : { result: await answer(request) }),
     });
     if (first?.length || ask) {
       response.end(`event: message\ndata: ${reply}\n\n`);

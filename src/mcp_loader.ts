@@ -34,6 +34,7 @@ import type {
   ToolContext,
   MediaAttachment,
   PreparedRun,
+  Effect,
 } from './types.js';
 import { attachmentFromBase64 } from './media.js';
 import { isRecord } from './settings.js';
@@ -516,12 +517,7 @@ function watchAnswer(
   const [mine, theirs] = response.body.tee();
   void answerIn(mine, id).then((outcome) => {
     if (outcome === 'lost')
-      lost(
-        new McpError(
-          ErrorCode.ConnectionClosed,
-          'the stream the answer was to come on ended without it',
-        ),
-      );
+      lost(new Lost('the stream the answer was to come on ended without it'));
   });
   return new Response(theirs, {
     status: response.status,
@@ -620,7 +616,6 @@ function transportFor(
     ...(authProvider ? { authProvider } : {}),
   });
 }
-/** A tool result as the model reads it: its text, and the pictures and PDFs it carries. */
 /** Image and PDF content a model is given as an attachment rather than as text. */
 const ATTACHED_TYPES = [
   'image/png',
@@ -646,6 +641,7 @@ function resourceLinkText(
       : '';
   return `Resource link: ${label} <${uri}>${mime}${about}. Its content is not here; read_mcp_resource with server ${JSON.stringify(server)} and this uri reads it.`;
 }
+/** A tool result as the model reads it: its text, and the pictures and PDFs it carries. */
 function resultText(
   result: ToolResult,
   tool: string,
@@ -660,17 +656,13 @@ function resultText(
       if (block.type === 'text') return String(block.text || '');
       if (block.type === 'resource_link' && typeof block.uri === 'string')
         return resourceLinkText(block, server);
-      // A resource the result carries whole, as text: its words, under where it is from
-      const embedded: Record<string, unknown> | undefined =
-        block.type === 'resource' && isRecord(block.resource)
-          ? block.resource
-          : undefined;
-      if (embedded && typeof embedded.text === 'string')
-        return `Resource <${String(embedded.uri)}>${typeof embedded.mimeType === 'string' ? ` (${embedded.mimeType})` : ''}:\n${embedded.text}`;
       const resource: Record<string, unknown> | undefined =
         block.type === 'resource' && isRecord(block.resource)
           ? block.resource
           : undefined;
+      // A resource the result carries whole, as text: its words, under where it is from
+      if (resource && typeof resource.text === 'string')
+        return `Resource <${String(resource.uri)}>${typeof resource.mimeType === 'string' ? ` (${resource.mimeType})` : ''}:\n${resource.text}`;
       const data = block.type === 'image' ? block.data : resource?.blob;
       const mime = block.type === 'image' ? block.mimeType : resource?.mimeType;
       if (
@@ -743,18 +735,34 @@ function notSent(error: unknown): boolean {
     (cause) => typeof cause.code === 'string' && NOT_SENT_CODES.has(cause.code),
   );
 }
-/** The connection ended after the request was sent, so it may have reached the server (#555). */
-function droppedAfterSending(error: unknown): boolean {
-  return causes(error).some(
-    (cause) =>
-      (cause instanceof McpError &&
-        cause.code === ErrorCode.ConnectionClosed) ||
+/** A call that reached the server and whose answer cannot come: its answer's stream ended, or its task was lost. */
+class Lost extends McpError {
+  constructor(message: string) {
+    super(ErrorCode.ConnectionClosed, message);
+  }
+}
+/**
+ * The connection ended after the request was sent, so it may have reached the server (#555): the MCP library closed
+ * the connection under the call (it has no transport since), the call's answer was lost, or the socket was cut. A
+ * server's own error is none of these, whatever its code or words: -32000 is the library's code for a closed
+ * connection and also a server's for an error of its own.
+ */
+function droppedAfterSending(error: unknown, client: Client): boolean {
+  return causes(error).some((cause) => {
+    if (cause instanceof Lost) return true;
+    if (cause instanceof McpError)
+      return (
+        cause.code === ErrorCode.ConnectionClosed &&
+        client.transport === undefined
+      );
+    return (
       cause.code === 'UND_ERR_SOCKET' ||
       cause.code === 'ECONNRESET' ||
-      /\b(terminated|other side closed|socket hang up|SSE stream disconnected)\b/i.test(
+      /\b(terminated|other side closed|socket hang up)\b/i.test(
         String(cause.message ?? ''),
-      ),
-  );
+      )
+    );
+  });
 }
 /**
  * Calls a server's tool and gives its result as the server sent it. The SDK's `callTool` checks a result against the
@@ -940,6 +948,13 @@ export class McpManager {
     );
     if (!readable.length) return [];
     const names = readable.map((server) => server.name);
+    // A read, as a read-only tool of theirs is, while every such server is trusted with what it says of its tools;
+    // otherwise these ask as that server's tools do
+    const effect: Effect = readable.every(
+      (server) => server.connection.trustAnnotations !== false,
+    )
+      ? 'read'
+      : 'unknown';
     const find = (name: unknown): Connected => {
       const server = this.servers.find(
         (item) =>
@@ -972,7 +987,7 @@ export class McpManager {
           required: ['server', 'uri'],
           additionalProperties: false,
         },
-        effect: 'read',
+        effect: effect,
         run: async (args, context) => {
           const { client, name } = find(args.server);
           const { contents } = await client.readResource(
@@ -1016,7 +1031,7 @@ export class McpManager {
           properties: { server },
           additionalProperties: false,
         },
-        effect: 'read',
+        effect: effect,
         run: async (args, context) => {
           const from =
             args.server === undefined ? readable : [find(args.server)];
@@ -1078,7 +1093,6 @@ export class McpManager {
    */
   private async sender(
     connection: McpConnection,
-    listed: Client,
     signal: AbortSignal,
   ): Promise<Client> {
     const live = this.servers.find((item) => item.name === connection.name);
@@ -1188,6 +1202,8 @@ export class McpManager {
             last = line;
             context.progress?.(line);
           };
+          // While it is under way, a question the server asks may be for it (#556)
+          const finished = this.callUnderway(connection.name);
           // A new trace for each call, on the requests made for it
           const store: CallStore = {
             traceparent: traceparent(),
@@ -1208,7 +1224,7 @@ export class McpManager {
               // A transport failure (#555). A request that surely never left this machine is sent again, a few
               // times. One that may have reached the server is sent again only for a tool its trusted server says
               // is read-only or idempotent, once, after connecting the server again; any other says it may have.
-              let target = await this.sender(connection, client, own.signal);
+              let target = await this.sender(connection, own.signal);
               let resent = false;
               for (let tries = 0; ; tries++) {
                 const attempt = new AbortController();
@@ -1248,11 +1264,11 @@ export class McpManager {
                       { cause: error },
                     );
                   }
-                  if (!droppedAfterSending(error)) throw error;
+                  if (!droppedAfterSending(error, target)) throw error;
                   const fresh =
                     !resent && (hints.readOnly || hints.idempotent)
                       ? await abortable(
-                          this.connectedAgain(connection),
+                          this.resendTarget(connection),
                           own.signal,
                         )
                       : undefined;
@@ -1270,6 +1286,7 @@ export class McpManager {
               }
             } finally {
               ended = true;
+              finished();
               context.signal.removeEventListener('abort', forward);
             }
           });
@@ -1465,13 +1482,15 @@ export class McpManager {
         version: VERSION,
         platform: process.platform,
       } as Implementation,
-      // A server may ask the person for input in the middle of a call, with a form (#556). The MCP library answers a
-      // request of another mode (a page to open) with an error.
-      { capabilities: { elicitation: { form: {} } } },
+      // A server may ask the person for input in the middle of a call, with a form (#556), where someone can be asked.
+      // The MCP library answers a request of another mode (a page to open) with an error; without a question panel
+      // (print, line and RPC mode) Circle does not say it takes forms, so a server does not ask.
+      { capabilities: this.services.ask ? { elicitation: { form: {} } } : {} },
     );
-    client.setRequestHandler(ElicitRequestSchema, (request, extra) =>
-      this.elicit(connection.name, request.params, extra.signal),
-    );
+    if (this.services.ask)
+      client.setRequestHandler(ElicitRequestSchema, (request, extra) =>
+        this.elicit(connection.name, request.params, extra.signal),
+      );
     let transport: Transport | undefined;
     let provider: McpAuthProvider | undefined;
     const timeout = AbortSignal.timeout(this.timeout);
@@ -1853,9 +1872,8 @@ export class McpManager {
             await this.wait(this.retryWaitsMs[tries]!, signal);
             continue;
           }
-          if (notSent(error) || droppedAfterSending(error))
-            throw new McpError(
-              ErrorCode.ConnectionClosed,
+          if (notSent(error) || droppedAfterSending(error, client))
+            throw new Lost(
               `the server made task ${taskId} for the call, and following it failed: ${error instanceof Error ? error.message : String(error)}`,
             );
           throw error;
@@ -1907,6 +1925,27 @@ export class McpManager {
       signal.removeEventListener('abort', cancel);
     }
   }
+  /** The calls under way to each server: a question from a server is withdrawn once none of them is (#556). */
+  private underway = new Map<
+    string,
+    { calls: number; idle: AbortController }
+  >();
+  private callUnderway(server: string): () => void {
+    const entry = this.underway.get(server) ?? {
+      calls: 0,
+      idle: new AbortController(),
+    };
+    this.underway.set(server, entry);
+    entry.calls++;
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      if (--entry.calls > 0) return;
+      this.underway.delete(server);
+      entry.idle.abort();
+    };
+  }
   /**
    * A server's question in the middle of a call (form mode, #556), in the question panel: a question for each field,
    * then whether to send the answers. Answers that do not fit the form are asked for again; closing the panel, esc on
@@ -1919,11 +1958,15 @@ export class McpManager {
   ): Promise<ElicitResult> {
     const ask = this.services.ask;
     if (!ask) return { action: 'cancel' };
+    // The call it came with, when its answer's stream brought it; and in any case once no call to the server is under
+    // way, as a program's question comes on a stream of its own
     const call = toolCalls.getStore()?.signal;
+    const idle = this.underway.get(server)?.idle.signal;
     const signal = AbortSignal.any([
       cancelled,
       this.lifetime.signal,
       ...(call ? [call] : []),
+      ...(idle ? [idle] : []),
     ]);
     const fields = elicitationFields(params.requestedSchema);
     let problems: string[] = [];
@@ -1951,18 +1994,43 @@ export class McpManager {
       problems = outcome.problems;
     }
   }
-  /** Connects a server again for a call to be sent on, and gives its new client, or nothing if it is not back. */
-  private async connectedAgain(
+  /**
+   * Where a call cut after it was sent goes once more: the server's connection when it is still open, as an HTTP one
+   * is after one request's socket was cut, so the other calls on it go on; otherwise the server connected again.
+   * Nothing, when the server is gone.
+   */
+  private async resendTarget(
     connection: McpConnection,
   ): Promise<Client | undefined> {
-    try {
-      await this.connectAgain(connection, this.lifetime.signal);
-    } catch {
-      return undefined;
-    }
-    return this.servers.find(
-      (server) => server.name === connection.name && server.open,
-    )?.client;
+    const live = this.servers.find((item) => item.name === connection.name);
+    if (!live) return undefined;
+    return live.open ? live.client : this.connectedAgain(live.connection);
+  }
+  private reconnects = new Map<string, Promise<Client | undefined>>();
+  /**
+   * Connects a server again for calls to be sent on, and gives its new client, or nothing if it is not back: once for
+   * all the calls that need it at the same time. It runs outside the call that asked, since the connection outlives
+   * that call: its requests and its streams carry no call's trace or identity.
+   */
+  private connectedAgain(
+    connection: McpConnection,
+  ): Promise<Client | undefined> {
+    const running = this.reconnects.get(connection.name);
+    if (running) return running;
+    const reconnect = toolCalls.exit(async () => {
+      try {
+        await this.connectAgain(connection, this.lifetime.signal);
+      } catch {
+        return undefined;
+      } finally {
+        this.reconnects.delete(connection.name);
+      }
+      return this.servers.find(
+        (server) => server.name === connection.name && server.open,
+      )?.client;
+    });
+    this.reconnects.set(connection.name, reconnect);
+    return reconnect;
   }
   /**
    * One server again, from its entry as the settings have it now: connected again and its tools listed again, while
@@ -1971,10 +2039,17 @@ export class McpManager {
    */
   async reloadServer(
     name: string,
-    entry: Record<string, unknown> | undefined,
+    entries: Record<string, unknown>[],
   ): Promise<void> {
-    const { connections, skipped } = buildMcpConnections(entry ? [entry] : []);
+    // The whole list, so a server named by its id or its place is named as when it connected
+    const { connections, skipped } = buildMcpConnections(entries);
     const connection = connections.find((item) => item.name === name);
+    if (
+      !connection &&
+      !skipped.some((item) => item.name === name) &&
+      !this.status.some((item) => item.name === name)
+    )
+      throw new Error(`no MCP server named ${name}`);
     if (connection) {
       await this.connectAgain(connection, this.lifetime.signal);
       return;

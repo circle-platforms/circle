@@ -3,9 +3,13 @@ import { test } from 'node:test';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { AgentRuntime } from '../src/runtime.js';
-import { defaultSettings, saveSettings } from '../src/settings.js';
+import {
+  defaultSettings,
+  loadSettings,
+  saveSettings,
+} from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
-import { cleanup, scratch } from './helpers.js';
+import { cleanup, scratch, until } from './helpers.js';
 import { mcpStub } from './mcp-stub.js';
 
 test('one MCP server connects again and lists its tools again, and the others are left as they are', async (t) => {
@@ -61,4 +65,80 @@ test('one MCP server connects again and lists its tools again, and the others ar
     runtime.reloadMcpServer('nobody'),
     /no MCP server named nobody/,
   );
+});
+
+async function runtimeWith(
+  t: Parameters<typeof scratch>[0],
+  servers: Record<string, unknown>[],
+  model = new ScriptedModel([]),
+) {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  mkdirSync(home);
+  mkdirSync(workspace);
+  const settings = defaultSettings();
+  settings.mcp_servers = servers;
+  saveSettings(settings, home);
+  const runtime = new AgentRuntime({
+    home,
+    workspace,
+    userHome: join(root, 'user'),
+    settings,
+    model,
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.initialize();
+  return { runtime, home };
+}
+
+test('a server the settings name by its id is connected again by that name, not taken away', async (t) => {
+  const stub = await mcpStub(t, {
+    tools: [{ name: 'echo', inputSchema: { type: 'object', properties: {} } }],
+  });
+  const { runtime } = await runtimeWith(t, [
+    { id: 'docs', url: stub.url, transport: 'streamable_http' },
+  ]);
+  const names = () => runtime.harness.tools.map((tool) => tool.name);
+  assert.ok(names().includes('docs_echo'));
+  await runtime.reloadMcpServer('docs');
+  assert.ok(names().includes('docs_echo'));
+  assert.equal(
+    stub.requests.filter((request) => request.message?.method === 'initialize')
+      .length,
+    2,
+  );
+});
+
+test('an extension saving a server while a turn runs is refused, and nothing is saved', async (t) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const { runtime, home } = await runtimeWith(
+    t,
+    [],
+    new ScriptedModel([
+      async () => {
+        await gate;
+        return {
+          message: {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: 'done',
+          },
+          usage: { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0 },
+        } as never;
+      },
+    ]),
+  );
+  const turn = runtime.harness.run('wait');
+  await until(() => runtime.busy);
+  await assert.rejects(
+    runtime.saveMcpServer({ name: 'later', url: 'http://127.0.0.1:9/mcp' }),
+    /a turn is running: nothing was saved/,
+  );
+  assert.ok(
+    !loadSettings(home).mcp_servers.some((row) => row.name === 'later'),
+  );
+  release();
+  await turn;
 });

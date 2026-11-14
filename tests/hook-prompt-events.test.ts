@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { AgentRuntime } from '../src/runtime.js';
 import { defaultSettings } from '../src/settings.js';
@@ -61,10 +67,12 @@ process.stdout.write(JSON.stringify({ context }));
   });
   cleanup(t, () => runtime.close());
   const seen = () =>
-    readFileSync(log, 'utf8')
-      .trim()
-      .split('\n')
-      .map((line) => JSON.parse(line));
+    existsSync(log)
+      ? readFileSync(log, 'utf8')
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line))
+      : [];
   return { runtime, model, seen };
 }
 
@@ -142,4 +150,11 @@ test('a new session starts with nothing a hook said in the one before', async (t
   const second = JSON.stringify(model.requests[1]!.messages);
   assert.match(second, /Scope: hello/);
   assert.doesNotMatch(second, /Scope: Only a\.txt/);
+});
+
+test('a turn started with no message of its own, as after a compaction, gives user_prompt hooks nothing', async (t) => {
+  const { runtime, seen } = setup(t, [reply('ok')]);
+  await runtime.initialize();
+  await runtime.harness.run('');
+  assert.deepEqual(seen(), []);
 });

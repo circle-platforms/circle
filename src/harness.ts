@@ -1559,7 +1559,9 @@ export class Harness {
     signal: AbortSignal,
   ): Promise<void> {
     const runner = this.options.hooks;
+    // A turn started only for messages that wait (after a compaction) has none of its own: they get theirs
     if (
+      !prompt.trim() ||
       this.options.sessionHooks === false ||
       !runner?.active().some((hook) => hook.event === 'user_prompt')
     )
