@@ -7,7 +7,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { EFFORT_LEVELS } from './model.js';
+import { EFFORT_LEVELS } from './effort.js';
 import { parseFrontmatter } from './skills.js';
 import type { SubagentSpec } from './extensions.js';
 

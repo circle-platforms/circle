@@ -1,4 +1,4 @@
-import { EFFORT_LEVELS } from './model.js';
+import { EFFORT_LEVELS } from './effort.js';
 import {
   existsSync,
   mkdirSync,
