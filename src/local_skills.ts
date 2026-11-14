@@ -792,7 +792,8 @@ export async function runTool(
         return;
       }
       resolvePromise({
-        exit_code: code,
+        // Ended at its time by Circle: no exit code of its own, on any system (Windows' taskkill leaves 1)
+        exit_code: timedOut ? null : code,
         stdout: redactSecrets(stdout.text(), secrets),
         stderr: redactSecrets(stderr.text(), secrets),
         truncated,
