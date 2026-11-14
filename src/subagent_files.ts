@@ -71,8 +71,8 @@ function markdownFiles(directory: string): string[] {
 }
 
 /**
- * The definitions in one folder, and why a file there was passed over: the folders below, and the `agents` folder a
- * skill ships (#552).
+ * The definitions in one folder, and why a file there was passed over: the folders below, and the `agents` folder an
+ * installed pack ships (#552).
  */
 export function readSubagentFolder(
   root: string,
