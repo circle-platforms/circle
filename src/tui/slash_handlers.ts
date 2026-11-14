@@ -1234,6 +1234,7 @@ function agents(host: CommandHost, args: string): void {
         `${one.name} · ${one.description}`,
         `  source: ${one.source}`,
         one.model ? `  model: ${one.model}` : '  model: the conversation’s',
+        one.effort ? `  effort: ${one.effort}` : '  effort: the conversation’s',
         one.tools
           ? `  tools: ${one.tools.join(', ')}`
           : '  tools: every tool a subagent may have',

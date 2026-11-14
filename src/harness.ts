@@ -121,6 +121,11 @@ export type ApprovalDecision =
   // a rejection with the user's reason, which the model reads in the tool result
   | { decision: 'reject'; message: string };
 export interface HarnessOptions {
+  /**
+   * A subagent's own thinking depth, sent with each of its requests in place of the model's. Unset, the model's
+   * depth applies, as for the conversation.
+   */
+  effort?: string;
   /** Trusted host lookup, never model-supplied execution metadata or authority. */
   commandExecution?: {
     epoch: string;
@@ -1203,6 +1208,7 @@ export class Harness {
                 : this.options.store.projectedMessages(this.sessionId),
             ),
             tools: this.tools,
+            ...(this.options.effort ? { effort: this.options.effort } : {}),
             signal: stepSignal,
             notice: (event) =>
               this.bus.emit('info', { payload: { model_notice: event } }),

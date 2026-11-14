@@ -30,6 +30,7 @@ the file and the line. Change nothing.
 | `description` | yes | the line the model reads to decide when to use the agent |
 | `tools` | no | the exact tool names it may use; without the key it gets everything a subagent may have |
 | `model` | no | an id on the same endpoint; without it the agent uses the conversation's model |
+| `effort` | no | its thinking depth, one of `minimal`, `low`, `medium`, `high`, `xhigh` or `max`, sent with each of its requests; without it the agent follows the conversation's depth. `CIRCLE_REASONING_EFFORT` set for the run wins over it. Another word means the file is not offered, and `/agents` says why. `/agents <name>` shows the depth |
 
 ## Where the files live
 

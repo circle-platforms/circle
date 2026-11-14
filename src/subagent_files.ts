@@ -7,6 +7,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { EFFORT_LEVELS } from './model.js';
 import { parseFrontmatter } from './skills.js';
 import type { SubagentSpec } from './extensions.js';
 
@@ -115,6 +116,14 @@ export function discoverSubagents(
         problems.push(`${path}: no prompt after the --- lines`);
         continue;
       }
+      // A depth of its own, as Claude Code's `effort`; a word that is not one does not load
+      const effort = meta.effort?.trim();
+      if (effort && !(EFFORT_LEVELS as readonly string[]).includes(effort)) {
+        problems.push(
+          `${path}: effort '${effort}' is not one of ${EFFORT_LEVELS.join(', ')}`,
+        );
+        continue;
+      }
       const listed = (meta.tools || '')
         .split(/[,;\s]+/)
         .map((word) => word.trim())
@@ -126,6 +135,7 @@ export function discoverSubagents(
           description: description.slice(0, 1024),
           system_prompt: prompt,
           ...(meta.model?.trim() ? { model: meta.model.trim() } : {}),
+          ...(effort ? { effort } : {}),
         },
         ...(meta.tools?.trim() ? { tools: listed } : {}),
         path: existsSync(path) ? realpathSync(path) : path,

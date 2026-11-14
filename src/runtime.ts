@@ -1177,6 +1177,15 @@ export class AgentRuntime {
           secrets: () => this.runSecrets(),
           redact: this.redact,
           model: childModel,
+          // A depth of its own: the definition's, unless the run's CIRCLE_REASONING_EFFORT says otherwise (#549)
+          ...(custom?.spec.effort
+            ? {
+                effort: defaultEffort(
+                  this.options.settings.auth.protocol,
+                  custom.spec.effort,
+                ),
+              }
+            : {}),
           tools: ownedChildTools,
           store: this.store,
           session,
@@ -1554,6 +1563,7 @@ export class AgentRuntime {
       description: string;
       source: string;
       model?: string;
+      effort?: string;
       tools?: string[];
       path?: string;
     }[];
@@ -1589,6 +1599,7 @@ export class AgentRuntime {
         description: string;
         source: string;
         model?: string;
+        effort?: string;
         tools?: string[];
       },
     ][]);
@@ -1598,6 +1609,7 @@ export class AgentRuntime {
         description: agent.spec.description,
         source: agent.source,
         ...(agent.spec.model ? { model: agent.spec.model } : {}),
+        ...(agent.spec.effort ? { effort: agent.spec.effort } : {}),
         ...(agent.tools ? { tools: agent.tools.map((tool) => tool.name) } : {}),
         ...(agent.path ? { path: agent.path } : {}),
       });

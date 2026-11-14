@@ -1,3 +1,4 @@
+import { EFFORT_LEVELS } from './model.js';
 import {
   existsSync,
   mkdirSync,
@@ -50,6 +51,8 @@ export interface SubagentSpec {
   description: string;
   system_prompt: string;
   model?: string;
+  /** Thinking depth for this agent's requests (`EFFORT_LEVELS`). Unset, it follows the conversation's. */
+  effort?: string;
 }
 export interface ToolInvocation {
   tool: Tool;
@@ -500,6 +503,13 @@ export class ExtensionAPI {
       );
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(spec.name))
       throw new ExtensionError('invalid subagent name');
+    if (
+      spec.effort !== undefined &&
+      !(EFFORT_LEVELS as readonly unknown[]).includes(spec.effort)
+    )
+      throw new ExtensionError(
+        `subagent effort must be one of ${EFFORT_LEVELS.join(', ')}`,
+      );
     if (
       !Array.isArray(tools) ||
       !tools.every((tool) => typeof tool === 'string')
