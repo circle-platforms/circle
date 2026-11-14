@@ -213,6 +213,25 @@ function segments(tokens: string[]): string[][] {
   }
   return out.filter((words) => words.length);
 }
+/**
+ * The commands a command line runs, one per segment between `&&`, `;`, `|` and the like, each without the variable
+ * assignments it starts with. Null when the line cannot be split into words.
+ */
+export function commandSegments(
+  command: string,
+  platform: string = process.platform,
+): string[] | null {
+  const tokens = commandTokens(command, platform);
+  if (!tokens) return null;
+  return segments(tokens)
+    .map((words) => {
+      let i = 0;
+      while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]!))
+        i++;
+      return words.slice(i).join(' ');
+    })
+    .filter(Boolean);
+}
 function flag(args: string[], short: string, long: string): boolean {
   return args
     .slice(0, args.includes('--') ? args.indexOf('--') : undefined)

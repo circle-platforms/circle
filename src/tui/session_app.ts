@@ -123,8 +123,6 @@ import {
 import { PlanPanel } from '../ink/components/plan_panel.js';
 import { stripAnsi, truncate } from '../ink/string_width.js';
 import { modelScope, sameModel } from '../model_scope.js';
-import { hookFileShown, type HookChange } from '../hooks.js';
-import { HookApprovalCard } from '../ink/components/hook_card.js';
 import { resumeHint, runningJobs, stoppedJobsLine } from './exit_lines.js';
 import { ChromeBrowser, findBrowser } from '../browser/chrome.js';
 import {
@@ -1811,7 +1809,7 @@ export class SessionApp {
   // a time, the turn's own before a background agent's, none while you are typing.
   private cardHooks(
     view: SessionView = this.view,
-  ): Pick<RuntimeOptions, 'approve' | 'question' | 'secret' | 'approveHooks'> {
+  ): Pick<RuntimeOptions, 'approve' | 'question' | 'secret'> {
     const asCard = <T>(
       action: () => Promise<T>,
       signal: AbortSignal,
@@ -1871,32 +1869,7 @@ export class SessionApp {
           signal,
           origin,
         ),
-      // A project hooks file waiting for approval, when a turn starts: the card waits,
-      // like the others, until typing pauses.
-      approveHooks: (change, signal) =>
-        asCard(() => this.askHooks(change, signal), signal),
     };
-  }
-  /** `--approve-hooks`: approve the files this session waits for, as they were read. */
-  approveWaitingHooks(): void {
-    const runtime = this.runtime;
-    if (!runtime || runtime.viewOnly) return;
-    for (const change of runtime.pendingHooks())
-      if (runtime.approveHooks(change))
-        this.notice(
-          `project hooks approved · ${hookFileShown(change.file, this.workspace)}`,
-        );
-  }
-  private async askHooks(
-    change: HookChange,
-    signal: AbortSignal,
-  ): Promise<boolean> {
-    const answer = await this.showCard(new HookApprovalCard(change), signal);
-    if (answer === 'approve')
-      this.notice(
-        `project hooks approved · ${hookFileShown(change.file, this.workspace)}`,
-      );
-    return answer === 'approve';
   }
   private async showCard<T>(card: Card<T>, signal?: AbortSignal): Promise<T> {
     const view = this.view;
@@ -4345,8 +4318,6 @@ export async function runTui(
   options: Omit<RuntimeOptions, 'approve' | 'question'> & {
     init?: boolean;
     trust?: boolean;
-    /** `--approve-hooks`: the waiting project hooks files are approved as they are. */
-    approveProjectHooks?: boolean;
     pickSession?: boolean;
     prompts?: string[];
     // What the conversation shows for each prompt, when it differs (`@file`)
@@ -4359,7 +4330,6 @@ export async function runTui(
     if (!(await app.initialize(options.init, options.trust))) return 0;
     app.applyRunSettings(options.modelOverride);
     await app.attach(options);
-    if (options.approveProjectHooks) app.approveWaitingHooks();
     void app.checkForUpdate();
     if (options.pickSession) await app.command('resume', '');
     // The first message starts a turn; the others follow it, one turn each.

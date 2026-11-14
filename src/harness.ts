@@ -60,18 +60,20 @@ import {
 import { BudgetExceeded, requestBudget } from './request_budget.js';
 import {
   activeHookSummary,
+  canonicalJson,
   hookDeniedMessage,
   hookFileLabel,
-  hookFileShown,
   hookNoticeText,
+  hookPermissionMode,
   hookToolPaths,
-  canonicalJson,
   redactHookValue,
+  stopHookCap,
   HOOK_ASKED_LINE,
   HOOK_CHANGED_LINE,
   HOOK_OUTPUT_LINE,
   type HookBatch,
   type HookDefinition,
+  type HookEvent,
   type HookNotice,
   type HookRunner,
 } from './hooks.js';
@@ -229,11 +231,10 @@ export interface HarnessOptions {
   ) => Promise<Buffer | undefined>;
   /** False for a subagent: tool hooks still run, session start and stop do not. */
   sessionHooks?: boolean;
-  /**
-   * Before a turn's first step: project hooks files waiting for approval are asked
-   * about, or approved elsewhere, before the session's hooks are read.
-   */
-  reviewHooks?: (signal: AbortSignal) => Promise<void>;
+  /** How this session started, for SessionStart hooks; a session with history is resumed. */
+  sessionSource?: 'startup' | 'resume' | 'clear';
+  /** The background work still running, for Stop hooks. */
+  backgroundTasks?: () => Record<string, unknown>[];
 }
 /** A message that waits for the model, as the input box showed it. */
 export interface QueuedMessage {
@@ -313,10 +314,21 @@ function namedSecrets(
   );
 }
 
+/** A hook's words go to the model inside a reminder: a tag of that name in them is written so it cannot close one. */
+function escapeReminder(text: string): string {
+  return text.replace(/<(\/?system-reminder)/gi, '&lt;$1');
+}
+
 export class Harness {
-  /** Text from session_start, added to the system prompt without replacing it. */
-  hookPreface = '';
   private hooksAnnounced = false;
+  /** Whether this conversation's hooks have started: its SessionStart ran, or would have. */
+  get hooksStarted(): boolean {
+    return this.hooksAnnounced;
+  }
+  /** How many times in a row Stop hooks sent this turn back to work; a tool call starts the count again. */
+  private stopContinuations = 0;
+  /** A hook said `continue: false`: the turn ends once the calls under way are done. */
+  private hookStop: string | undefined;
   private hookNotes: Message[] = [];
   private promptFileAllowed(path: string): boolean {
     const name = path.replaceAll('\\', '/').split('/').at(-1)!;
@@ -795,6 +807,17 @@ export class Harness {
       display: input.payload.display,
       ...(input.payload.pastes ? { pastes: input.payload.pastes } : {}),
     });
+    this.takeInput(input);
+  }
+  /** A queued message a hook kept from the model: it leaves the queue, and the conversation keeps only the note. */
+  private dropInput(input: StoredInput, note: Message): void {
+    this.options.store.appendInput(this.sessionId, input.id, this.inputEpoch, {
+      ...note,
+      id: input.id,
+    });
+    this.takeInput(input);
+  }
+  private takeInput(input: StoredInput): void {
     const ids = this.inputIds(input.kind),
       index = ids.indexOf(input.id);
     if (index < 0) throw new Error('queued input changed before consumption');
@@ -1115,6 +1138,9 @@ export class Harness {
       : prompt === undefined
         ? undefined
         : this.shownAs(prompt);
+    this.stopContinuations = 0;
+    // SessionStart's words come before the first prompt
+    await this.announceHooks(signal);
     if (prompt !== undefined) {
       const content = await this.attach(
         prompt,
@@ -1122,20 +1148,33 @@ export class Harness {
         signal,
         given,
       );
-      if (queued) {
-        if (
-          this.inputIds(queued.kind)[0] !== queued.id ||
+      const changed = () =>
+        !!queued &&
+        (this.inputIds(queued.kind)[0] !== queued.id ||
           JSON.stringify(this.input(queued.id).payload) !==
-            JSON.stringify(queued.payload)
-        ) {
-          const next = this.nextQueued(queued.kind);
-          return next
-            ? this.runTurn(next.payload.text, signal, next)
-            : { answer: '', usage: emptyUsage() };
-        }
-        this.consumeInput(queued, content);
-      } else
-        this.save({ id: randomUUID(), role: 'user', ...content, ...shown });
+            JSON.stringify(queued.payload));
+      const again = () => {
+        const next = this.nextQueued(queued!.kind);
+        return next
+          ? this.runTurn(next.payload.text, signal, next)
+          : Promise.resolve({ answer: '', usage: emptyUsage() });
+      };
+      if (changed()) return again();
+      // UserPromptSubmit sees the message before the model does, and can keep it from the model
+      const verdict = await this.promptHooks(prompt, signal);
+      signal.throwIfAborted();
+      if (changed()) return again();
+      if (verdict && (verdict.blocked || verdict.stop)) {
+        const note = this.blockedPrompt(prompt, verdict);
+        // The turn never starts: the model is not asked, and nothing waits for an answer
+        if (queued) this.dropInput(queued, note);
+        else this.save(note);
+        this.flushHookNotes();
+        return { answer: '', usage };
+      }
+      if (queued) this.consumeInput(queued, content);
+      else this.save({ id: randomUUID(), role: 'user', ...content, ...shown });
+      if (verdict) this.hookContext(verdict, 'UserPromptSubmit');
     }
     const session = this.options.store.get(this.sessionId)!;
     if (!session.title && shown?.display !== undefined) {
@@ -1161,12 +1200,6 @@ export class Harness {
     try {
       for (let step = 0; step < (this.options.maxSteps ?? 9999); step++) {
         signal.throwIfAborted();
-        if (step === 0) {
-          if (this.options.sessionHooks !== false)
-            await this.options.reviewHooks?.(signal);
-          await this.announceHooks(signal);
-          if (prompt !== undefined) await this.promptHooks(prompt, signal);
-        }
         // The step starts here: a steerNow while the messages before are read stops it
         const stepControl = new AbortController();
         this.step = stepControl;
@@ -1185,10 +1218,20 @@ export class Harness {
           );
           if (version !== this.queueVersion || this.steering[0] !== message)
             continue;
+          const verdict = await this.promptHooks(message, signal);
+          signal.throwIfAborted();
+          if (version !== this.queueVersion || this.steering[0] !== message)
+            continue;
+          if (verdict && (verdict.blocked || verdict.stop)) {
+            this.dropInput(input, this.blockedPrompt(message, verdict));
+            this.flushHookNotes();
+            continue;
+          }
           this.consumeInput(input, content);
           this.bus.emit('steer', { payload: { message } });
-          await this.promptHooks(message, signal);
+          if (verdict) this.hookContext(verdict, 'UserPromptSubmit');
         }
+        this.deliverBackgroundHooks();
         this.options.beforeStep?.();
         try {
           stepSignal.throwIfAborted();
@@ -1204,7 +1247,6 @@ export class Harness {
             cacheKey: this.sessionId,
             system:
               this.system +
-              (this.hookPreface ? `\n\n${this.hookPreface}` : '') +
               (this.readOnly
                 ? this.options.planPrompt
                   ? '\n\n' + this.options.planPrompt()
@@ -1327,7 +1369,12 @@ export class Harness {
           if (!calls.length) {
             answer = response.message.content;
             if (this.steering.length) continue;
-            if (await this.blockStop(signal)) continue;
+            if (
+              this.hookStop === undefined &&
+              (await this.blockStop(answer, signal))
+            )
+              continue;
+            this.hookStop = undefined;
             this.bus.emit('run_end', {
               payload: { answer },
               usage: { ...usage },
@@ -1336,6 +1383,8 @@ export class Harness {
             this.flushTitle();
             return { answer, usage };
           }
+          // A tool call starts the Stop hooks' count again
+          this.stopContinuations = 0;
           // The subagents of task calls next to each other run at the same time;
           // every other call runs on its own, in order. Results are stored in the order of the
           // calls, each once those before it are in.
@@ -1359,6 +1408,17 @@ export class Harness {
             index = end;
           }
           stepSignal.throwIfAborted();
+          // A hook said `continue: false`: the turn ends with the calls it has made
+          if (this.hookStop !== undefined) {
+            this.hookStop = undefined;
+            this.bus.emit('run_end', {
+              payload: { answer },
+              usage: { ...usage },
+              elapsed_ms: Date.now() - start,
+            });
+            this.flushTitle();
+            return { answer, usage };
+          }
         } catch (error) {
           // Stopped by `steerNow`: the next step reads the messages; the turn goes on
           if (signal.aborted || !stepControl.signal.aborted) throw error;
@@ -1512,16 +1572,9 @@ export class Harness {
     const runner = this.options.hooks;
     if (!runner) return;
     const loaded = runner.loaded;
-    if (loaded.projectIgnored) this.saveHook({ kind: 'untrusted' });
-    if (loaded.projectChanged.length)
-      this.saveHook({
-        kind: 'changed',
-        name: loaded.projectChanged
-          .map((change) =>
-            hookFileShown(change.file, this.options.session.workspace),
-          )
-          .join(', '),
-      });
+    for (const note of loaded.notes)
+      this.saveHook({ kind: 'message', name: 'migration', reason: note });
+    if (loaded.untrusted) this.saveHook({ kind: 'untrusted' });
     for (const error of loaded.errors)
       this.saveHook({
         kind: 'failed',
@@ -1535,57 +1588,117 @@ export class Harness {
         count: running.length,
         reason: activeHookSummary(running),
       });
-    if (!running.some((hook) => hook.event === 'session_start')) return;
-    const batch = await runner.run({
-      event: 'session_start',
-      sessionId: this.sessionId,
-      cwd: this.options.session.workspace,
-      secrets: this.hookSecrets(),
+    await this.sessionStartHooks(
+      this.options.sessionSource ??
+        (this.messages.some((message) => message.role === 'assistant')
+          ? 'resume'
+          : 'startup'),
       signal,
-    });
-    // Its output is in the system prompt
-    for (const notice of batch.notices)
-      this.saveHook(notice, notice.kind === 'output');
-    if (batch.context)
-      this.hookPreface = `Hook session_start output:\n${batch.context}`;
+    );
+  }
+  /** The permission mode hooks are told: the session's, or plan while it is read-only. */
+  private hookMode(): string | undefined {
+    return hookPermissionMode(
+      this.options.policy.mode(
+        this.options.approvalSessionId ?? this.sessionId,
+      ),
+      this.readOnly,
+    );
+  }
+  /** Who and where, for every hook this conversation runs. */
+  private hookBase(): {
+    sessionId: string;
+    agent?: { id: string; type: string };
+    cwd: string;
+    permissionMode?: string;
+    secrets: Record<string, string>;
+  } {
+    const mode = this.hookMode();
+    return {
+      ...this.hookIdentity(),
+      cwd: this.options.session.workspace,
+      ...(mode ? { permissionMode: mode } : {}),
+      secrets: this.hookSecrets(),
+    };
   }
   /**
-   * user_prompt hooks (#557): each gets the person's message as written, and what they say back is added to the turn
-   * for the model, after the message. The screen shows each hook's first line, as for any hook output. Not in a
-   * subagent, whose first message is the task the model wrote.
+   * SessionStart hooks: what they say goes at the start of the conversation, before the first prompt, and again after
+   * a compaction (`compact`).
+   */
+  async sessionStartHooks(
+    source: 'startup' | 'resume' | 'clear' | 'compact',
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const runner = this.options.hooks;
+    if (this.options.sessionHooks === false || !runner?.has('SessionStart'))
+      return;
+    const batch = await runner.run({
+      event: 'SessionStart',
+      ...this.hookBase(),
+      matchValue: source,
+      fields: { source, model: this.model.model },
+      ...(signal ? { signal } : {}),
+    });
+    this.hookContext(batch, 'SessionStart');
+    if (batch.sessionTitle && source !== 'compact' && source !== 'clear') {
+      this.options.store.rename(this.sessionId, batch.sessionTitle);
+      this.bus.emit('info', {
+        payload: { title: batch.sessionTitle, session_id: this.sessionId },
+      });
+    }
+    if (batch.stop) this.hookStop = batch.stop.reason;
+  }
+  /**
+   * UserPromptSubmit hooks: each gets the person's message as written, before the model reads it. Not in a subagent,
+   * whose first message is the task the model wrote.
    */
   private async promptHooks(
     prompt: string,
     signal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<HookBatch | undefined> {
     const runner = this.options.hooks;
     // A turn started only for messages that wait (after a compaction) has none of its own: they get theirs
     if (
       !prompt.trim() ||
       this.options.sessionHooks === false ||
-      !runner?.active().some((hook) => hook.event === 'user_prompt')
+      !runner?.has('UserPromptSubmit')
     )
-      return;
-    const batch = await runner.run({
-      event: 'user_prompt',
-      sessionId: this.sessionId,
-      cwd: this.options.session.workspace,
-      prompt,
-      secrets: this.hookSecrets(),
+      return undefined;
+    return runner.run({
+      event: 'UserPromptSubmit',
+      ...this.hookBase(),
+      fields: { prompt },
       signal,
     });
-    this.hookOutput(batch, 'user_prompt');
+  }
+  /** What a hook that kept a message from the model leaves in the conversation: the person sees why. */
+  private blockedPrompt(prompt: string, batch: HookBatch): Message {
+    for (const notice of batch.notices)
+      if (notice.kind !== 'output' && notice.kind !== 'stopped')
+        this.queueHook(notice);
+    const reason = batch.blocked
+      ? batch.reason || 'hook blocked'
+      : batch.stop?.reason || 'hook stopped the turn';
+    const notice: HookNotice = { kind: 'blocked', tool: 'prompt', reason };
+    return {
+      id: randomUUID(),
+      role: 'user',
+      internal: 'hook_notice',
+      // The model learns only that a message was held back: not what it said, nor why
+      content: `<system-reminder data-source="circle-hooks">\n${hookNoticeText({ kind: 'blocked', tool: 'prompt' })}\n</system-reminder>`,
+      display:
+        hookNoticeText(notice) +
+        (batch.suppressOriginalPrompt ? '' : `\nOriginal prompt: ${prompt}`),
+      hook: notice,
+    };
   }
   /**
-   * What hooks of an event said back: their notices, and their output for the model. user_prompt's goes in the turn,
-   * with the first notice of an output; subagent_start's is in the subagent's system prompt, so it holds after a
-   * compaction.
+   * What hooks of an event said: their notices, and their words for the model as a reminder at this point of the
+   * conversation. The first notice of an output carries the words; the others only name their hook.
    */
-  hookOutput(
-    batch: { notices: HookNotice[]; context: string },
-    event: 'user_prompt' | 'subagent_start',
-  ): void {
-    let told = event !== 'user_prompt' || !batch.context;
+  hookContext(batch: HookBatch, event: HookEvent): void {
+    const context = escapeReminder(batch.context);
+    let told = !context;
     for (const notice of batch.notices) {
       if (notice.kind === 'output' && !told) {
         told = true;
@@ -1593,7 +1706,7 @@ export class Harness {
           id: randomUUID(),
           role: 'user',
           internal: 'hook_notice',
-          content: `<system-reminder data-source="circle-hooks">\nHook user_prompt output, for this message:\n${batch.context}\n</system-reminder>`,
+          content: `<system-reminder data-source="circle-hooks">\n${event} hook additional context:\n${context}\n</system-reminder>`,
           display: hookNoticeText({
             ...notice,
             reason: notice.message || notice.reason,
@@ -1603,71 +1716,102 @@ export class Harness {
       } else this.queueHook(notice, notice.kind === 'output');
     }
     this.flushHookNotes();
-    if (event === 'subagent_start' && batch.context)
-      this.hookPreface = [
-        this.hookPreface,
-        `Hook subagent_start output:\n${batch.context}`,
-      ]
-        .filter(Boolean)
-        .join('\n\n');
+    if (batch.sessionTitle && event === 'UserPromptSubmit') {
+      this.options.store.rename(this.sessionId, batch.sessionTitle);
+      this.bus.emit('info', {
+        payload: { title: batch.sessionTitle, session_id: this.sessionId },
+      });
+    }
+    if (batch.stop) this.hookStop = batch.stop.reason;
   }
-  private async blockStop(signal: AbortSignal): Promise<boolean> {
-    if (this.options.sessionHooks === false || !this.options.hooks)
+  /**
+   * Stop hooks, when the model ends a turn: a block, or words for the model, send it back to work. At most a few
+   * times in a row; a tool call starts the count again.
+   */
+  private async blockStop(
+    answer: string,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    const runner = this.options.hooks;
+    if (this.options.sessionHooks === false || !runner?.has('Stop'))
       return false;
-    const batch = await this.options.hooks.run({
-      event: 'before_stop',
-      sessionId: this.sessionId,
-      cwd: this.options.session.workspace,
-      secrets: this.hookSecrets(),
+    const batch = await runner.run({
+      event: 'Stop',
+      ...this.hookBase(),
+      fields: {
+        stop_hook_active: this.stopContinuations > 0,
+        last_assistant_message: answer,
+        background_tasks: this.options.backgroundTasks?.() ?? [],
+        session_crons: [],
+      },
       signal,
     });
-    for (const notice of batch.notices) this.saveHook(notice);
-    if (batch.decision !== 'deny') return false;
+    for (const notice of batch.notices)
+      if (notice.kind !== 'output') this.saveHook(notice);
+    // `continue: false` comes before any block: the turn ends
+    if (batch.stop || (!batch.blocked && !batch.context)) return false;
+    if (this.stopContinuations >= stopHookCap()) {
+      this.saveHook({
+        kind: 'limit',
+        name: batch.outcomes.map((item) => item.hook.name).join(', '),
+      });
+      return false;
+    }
+    this.stopContinuations++;
     const reason = batch.reason || 'hook blocked stop';
+    const notice: HookNotice = batch.blocked
+      ? {
+          kind: 'blocked',
+          reason,
+          ...(batch.userMessage ? { message: batch.userMessage } : {}),
+        }
+      : {
+          kind: 'output',
+          name: batch.outcomes
+            .filter((item) => item.answer?.additionalContext)
+            .map((item) => item.hook.name)
+            .join(', '),
+          reason: batch.context.split('\n')[0]?.slice(0, 200),
+        };
     this.save({
       id: randomUUID(),
       role: 'user',
       internal: 'hook_notice',
-      content: `<system-reminder data-source="circle-hooks">\nA hook blocked the end of this turn: ${reason}\nFix the problem and finish the task. Do not stop while the hook blocks.\n</system-reminder>`,
+      content: batch.blocked
+        ? `<system-reminder data-source="circle-hooks">\nA hook blocked the end of this turn: ${escapeReminder(reason)}${batch.context ? `\n${escapeReminder(batch.context)}` : ''}\nFix the problem and finish the task. Do not stop while the hook blocks.\n</system-reminder>`
+        : `<system-reminder data-source="circle-hooks">\nStop hook feedback:\n${escapeReminder(batch.context)}\n</system-reminder>`,
       display: hookNoticeText({
-        kind: 'blocked',
-        reason: batch.userMessage || reason,
+        ...notice,
+        reason: notice.message || notice.reason,
       }),
-      hook: {
-        kind: 'blocked',
-        reason,
-        ...(batch.userMessage ? { message: batch.userMessage } : {}),
-      },
+      hook: notice,
     });
     return true;
   }
   private async gateTool(
-    event: 'before_tool' | 'permission_request',
+    event: 'PreToolUse' | 'PermissionRequest',
     call: ToolCall,
     args: Record<string, unknown>,
     paths: string[],
     signal: AbortSignal,
-    permissionReason?: string,
-    /** Notices the hooks already gave about this call: the same again, on its rewrite, is not repeated. */
-    already: readonly HookNotice[] = [],
   ): Promise<HookBatch | undefined> {
-    if (!this.options.hooks) return undefined;
+    if (!this.options.hooks?.has(event)) return undefined;
     const batch = await this.options.hooks.run({
       event,
-      ...this.hookIdentity(),
-      cwd: this.options.session.workspace,
+      ...this.hookBase(),
       toolName: call.name,
       toolInput: args,
+      toolUseId: call.id,
       paths,
-      permissionReason,
-      secrets: this.hookSecrets(),
       signal,
     });
     // Every deny's reason is in the tool result (`Hook denied this call:`). An ask's is not on every path.
-    const told = new Set(already.map((notice) => JSON.stringify(notice)));
     for (const notice of batch.notices)
-      if (!told.has(JSON.stringify(notice)))
-        this.queueHook(notice, notice.kind === 'denied');
+      this.queueHook(
+        notice,
+        notice.kind === 'denied' || notice.kind === 'output',
+      );
+    if (batch.stop) this.hookStop ??= batch.stop.reason;
     return batch;
   }
   /** Who this harness's calls run for (#551): the conversation's session, and in a subagent its own as the agent's. */
@@ -1691,14 +1835,44 @@ export class Harness {
   private hookSecrets(): Record<string, string> {
     return this.options.secrets?.() ?? {};
   }
-  /**
-   * A skill was loaded after the session's hooks were announced. Its hooks
-   * start now, and a session_start hook it ships runs once.
-   */
-  async skillHooksArmed(
-    hooks: HookDefinition[],
-    signal?: AbortSignal,
-  ): Promise<void> {
+  /** What background hooks said since the last request: for the model, not shown. */
+  private deliverBackgroundHooks(): void {
+    const identity = this.hookIdentity();
+    const delivered =
+      this.options.hooks?.takeDelivered(
+        identity.sessionId,
+        identity.agent?.id,
+      ) ?? [];
+    for (const item of delivered) {
+      const text = [item.context, item.message].filter(Boolean).join('\n');
+      if (!text) continue;
+      this.save({
+        id: randomUUID(),
+        role: 'user',
+        internal: 'hook_context',
+        content: `<system-reminder data-source="circle-hooks">\nA background hook (${item.name}) said:\n${escapeReminder(text)}\n</system-reminder>`,
+      });
+    }
+  }
+  /** What PostToolUse and PostToolUseFailure hooks said, beside the result the model reads. */
+  private afterToolHooks(batch: HookBatch, content: string): string {
+    for (const notice of batch.notices)
+      this.queueHook(notice, notice.kind === 'output');
+    if (batch.stop) this.hookStop ??= batch.stop.reason;
+    const said = [batch.blocked ? batch.reason : '', batch.context].filter(
+      Boolean,
+    );
+    if (!said.length) return content;
+    const names = batch.outcomes
+      .filter(
+        (item) =>
+          item.answer?.additionalContext || item.answer?.block || item.blocking,
+      )
+      .map((item) => item.hook.name);
+    return `${content}\n\n${HOOK_OUTPUT_LINE} (${[...new Set(names)].join(', ') || 'hook'}):\n${said.join('\n\n')}`;
+  }
+  /** A skill was loaded after the session's hooks were announced: its hooks run from now on. */
+  skillHooksArmed(hooks: HookDefinition[]): void {
     if (!hooks.length || !this.hooksAnnounced || !this.options.hooks) return;
     this.saveHook({
       kind: 'active',
@@ -1707,23 +1881,6 @@ export class Harness {
         ', ',
       ),
     });
-    const starting = hooks.filter((hook) => hook.event === 'session_start');
-    if (!starting.length) return;
-    const batch = await this.options.hooks.run({
-      event: 'session_start',
-      sessionId: this.sessionId,
-      cwd: this.options.session.workspace,
-      secrets: this.hookSecrets(),
-      onlyIds: starting.map((hook) => hook.id),
-      signal,
-    });
-    // Its output is in the system prompt
-    for (const notice of batch.notices)
-      this.saveHook(notice, notice.kind === 'output');
-    if (batch.context)
-      this.hookPreface = this.hookPreface
-        ? `${this.hookPreface}\n\n${batch.context}`
-        : `Hook session_start output:\n${batch.context}`;
   }
   // A task call (its name as the tool table resolves it): its subagent can run beside others.
   private parallel(call: ToolCall): boolean {
@@ -1747,6 +1904,10 @@ export class Harness {
     let changedLine = '';
     let status: 'success' | 'error' = 'success';
     let recoverable = false;
+    // What the tool hooks heard, and when the tool itself started: a failure after that is the tool's
+    let hookArgs: Record<string, unknown> = {};
+    let hookPaths: string[] = [];
+    let ranAt: number | undefined;
     let attachments: MediaAttachment[] = [];
     let acceptingAttachments = true;
     let previousExecutionId: string | undefined;
@@ -1853,8 +2014,8 @@ export class Harness {
       // Hooks see the arguments with secret values put back to %NAME%. A deny
       // stands in every approval mode. A hard denial above is not reconsidered.
       // An allow can skip an ordinary card only: an always-ask stays a card.
-      let before = await this.gateTool(
-        'before_tool',
+      const before = await this.gateTool(
+        'PreToolUse',
         checked.call,
         checked.resolved,
         checked.paths,
@@ -1862,6 +2023,13 @@ export class Harness {
       );
       if (before?.decision === 'deny')
         throw new Error(hookDeniedMessage(before.reason || 'hook denied'));
+      // Hooks that each rewrote the call differently leave no form it can run in
+      if (before?.conflict.length)
+        throw new Error(
+          hookDeniedMessage(
+            `hooks ${[...new Set(before.conflict)].join(', ')} each changed this call's input differently, so it does not run`,
+          ),
+        );
       // A hook rewrote the input: the call runs as rewritten, and so is checked, matched by the rules, shown on
       // the card and remembered, as if the model had sent it. Nothing on screen marks it (owner, 2026-11-14): only
       // the model is told what changed, at the start of the tool result.
@@ -1907,46 +2075,13 @@ export class Harness {
             (name) => !carried.has(name),
           );
           changedLine = hookChangedLine(by, changed, checked.plain);
-          // Every before_tool hook judges what runs: they all see the rewrite once more, matched by its paths. An
-          // allow given before the rewrite does not carry over, and a hook that changes it again stops the call.
-          const again = await this.gateTool(
-            'before_tool',
-            checked.call,
-            checked.resolved,
-            checked.paths,
-            signal,
-            undefined,
-            before.notices,
-          );
-          if (again?.decision === 'deny')
-            throw new Error(hookDeniedMessage(again.reason || 'hook denied'));
-          if (again?.updatedInput)
-            throw new Error(
-              `Hook ${again.changedBy.join(', ')} changed the rewrite again when shown it, so the call does not run. A rewrite must come back unchanged.`,
-            );
-          if (again) {
-            const asked = [before, again].filter(
-              (batch) => batch.decision === 'ask',
-            );
-            // A hook that asked in both rounds asked once
-            const once = (field: 'reason' | 'userMessage') =>
-              [...new Set(asked.flatMap((batch) => batch[field].split('\n')))]
-                .filter(Boolean)
-                .join('\n');
-            before = asked.length
-              ? {
-                  ...again,
-                  decision: 'ask',
-                  reason: once('reason'),
-                  userMessage: once('userMessage'),
-                }
-              : again;
-          }
         }
       }
       const { tool, used, raw, resolved, usedSecrets, effect, paths, found } =
         checked;
       call = checked.call;
+      hookArgs = resolved;
+      hookPaths = paths;
       if (before?.decision === 'ask') call = hookAsked(call, before);
       let hookLine = '';
       // A command the settings' allowed_commands patterns cover runs without
@@ -1996,19 +2131,34 @@ export class Harness {
             (this.options.headless && found.verdict === 'ASK_FORCED')));
       if (!hookAllow && (hookAsk || wouldAsk)) {
         const permission = await this.gateTool(
-          'permission_request',
+          'PermissionRequest',
           call,
           resolved,
           paths,
           signal,
-          found.reason,
         );
-        if (permission?.decision === 'deny')
+        if (permission?.decision === 'deny') {
+          if (permission.interrupt)
+            this.hookStop ??= permission.reason || 'hook denied';
           throw new Error(
             hookDeniedMessage(permission.reason || 'hook denied'),
           );
-        if (permission?.decision === 'ask') call = hookAsked(call, permission);
-        if (permission?.decision !== 'allow' || alwaysAsk || hookAsk) {
+        }
+        // An allow that would run the call in another form is not applied: the card stays the person's
+        const granted =
+          permission?.decision === 'allow' &&
+          !permission.updatedInput &&
+          !permission.conflict.length;
+        if (permission?.decision === 'allow' && !granted)
+          this.queueHook({
+            kind: 'message',
+            name:
+              [...permission.changedBy, ...permission.conflict].join(', ') ||
+              'hook',
+            reason:
+              'allowed this call in another form, which Circle does not apply here, so the card asks you',
+          });
+        if (!granted || alwaysAsk) {
           this.bus.emit('tool_waiting', {
             payload: {
               ...call,
@@ -2117,23 +2267,21 @@ export class Harness {
             : run();
         },
       };
-      content = this.options.toolBoundary
+      ranAt = Date.now();
+      const output = this.options.toolBoundary
         ? await this.options.toolBoundary(guardedTool, args, context)
         : await guardedTool.run(args, context);
-      if (typeof content !== 'string') throw new Error('tool must return text');
+      if (typeof output !== 'string') throw new Error('tool must return text');
       signal.throwIfAborted();
-      if (hookLine) content = `${hookLine}\n\n${content}`;
-      const after = this.options.hooks
+      const after = this.options.hooks?.has('PostToolUse')
         ? await this.options.hooks.run({
-            event: 'after_tool',
-            ...this.hookIdentity(),
-            cwd: this.options.session.workspace,
+            event: 'PostToolUse',
+            ...this.hookBase(),
             toolName: call.name,
             toolInput: args,
+            toolUseId: call.id,
             paths,
-            toolOutput: content,
-            toolStatus: 'success',
-            secrets: this.hookSecrets(),
+            fields: { tool_response: output, duration_ms: Date.now() - ranAt },
             ...(this.options.hookScreenshot
               ? {
                   screenshot: (capture: AbortSignal) =>
@@ -2143,21 +2291,37 @@ export class Harness {
             signal,
           })
         : undefined;
-      if (after) {
-        // The output is in the tool result below
-        for (const notice of after.notices)
-          this.queueHook(notice, notice.kind === 'output');
-        const reported = after.outcomes.filter((item) => item.context);
-        if (reported.length)
-          content += `\n\n${HOOK_OUTPUT_LINE} (${reported
-            .map((item) => item.hook.name)
-            .join(', ')}):\n${after.context}`;
-      }
+      // A hook can put another text in place of the result the model reads; the tool has run all the same
+      content = after?.updatedToolOutput ?? output;
+      if (hookLine) content = `${hookLine}\n\n${content}`;
+      if (after) content = this.afterToolHooks(after, content);
     } catch (error) {
       status = 'error';
       recoverable = error instanceof RecoverableToolError;
       attachments = [];
       content = redact(error instanceof Error ? error.message : String(error));
+      // The tool itself failed, not a check before it, and nobody stopped it: PostToolUseFailure hooks hear of it
+      if (
+        ranAt !== undefined &&
+        !signal.aborted &&
+        this.options.hooks?.has('PostToolUseFailure')
+      ) {
+        const failed = await this.options.hooks.run({
+          event: 'PostToolUseFailure',
+          ...this.hookBase(),
+          toolName: call.name,
+          toolInput: hookArgs,
+          toolUseId: call.id,
+          paths: hookPaths,
+          fields: {
+            error: content,
+            is_interrupt: false,
+            duration_ms: Date.now() - ranAt,
+          },
+          signal,
+        });
+        content = this.afterToolHooks(failed, content);
+      }
     } finally {
       acceptingAttachments = false;
     }

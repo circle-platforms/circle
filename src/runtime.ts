@@ -142,13 +142,15 @@ import { UserShells } from './user_shell.js';
 import { toolCallLine } from './headless.js';
 import { canScreenshot, type ScreenshotOptions } from './screenshot.js';
 import { titleNeedsRefresh, userPrompts } from './session_title.js';
+import { migrateHookFiles } from './hook_migration.js';
 import {
+  combineOutcomes,
   HookRunner,
-  approveHookFile,
-  approvedHookDigest,
   loadHooks,
-  type HookChange,
   type HookDefinition,
+  hookPermissionMode,
+  stopHookCap,
+  type HookLoadError,
 } from './hooks.js';
 const BUILTIN_TOOL_NAMES = new Set([
   'knowledge_search',
@@ -212,6 +214,8 @@ export interface RuntimeOptions {
   userHome?: string;
   /** Where `skill_install` puts packs and `skill_run` runs them. Tests give their own. */
   localSkillsRoot?: string;
+  /** How long an approval card waits, and a finished turn idles, before Notification hooks hear of it (ms). */
+  notificationDelays?: { permission?: number; idle?: number };
   localContext?: boolean;
   settings: CircleSettings;
   run?: RunOptions;
@@ -282,7 +286,7 @@ export interface RuntimeOptions {
    * version when a turn starts, and again after a reload or in a new session. Without
    * it (print, line and rpc mode) such a file does not run and the turn says so.
    */
-  approveHooks?: (change: HookChange, signal: AbortSignal) => Promise<boolean>;
+
   /**
    * The terminal's `circle -c`: a session another terminal holds opens view only
    * instead of failing. Nothing else gets this; the desktop starts a session of its own.
@@ -763,6 +767,12 @@ export class AgentRuntime {
     this.lsp = new LspManager(this.sandbox);
     this.context = new ContextManager(this.store, this.sandbox.offloadRoot!, {
       readOnly: () => this.viewOnly,
+      compactHooks: {
+        before: (sessionId, trigger, hint, signal) =>
+          this.preCompactHooks(sessionId, trigger, hint, signal),
+        after: (sessionId, trigger, summary) =>
+          this.postCompactHooks(sessionId, trigger, summary),
+      },
       progress: (event) => {
         const owner = this.childJobOwners.get(event.sessionId);
         this.bus.emit('compaction', {
@@ -1230,8 +1240,10 @@ export class AgentRuntime {
           bus: childBus,
           approve: this.options.approve
             ? (call, signal) =>
-                interact((origin) =>
-                  this.options.approve!(call, signal, origin),
+                this.noticeWaiting(call, () =>
+                  interact((origin) =>
+                    this.options.approve!(call, signal, origin),
+                  ),
                 )
             : undefined,
           hooks: this.ensureHooks(),
@@ -1296,7 +1308,12 @@ export class AgentRuntime {
           };
           signal.addEventListener('abort', abort, { once: true });
           // While it runs, a skill it loads can add its pack's tools to it
-          this.childHarnesses.set(session.id, { harness: child, allows });
+          this.childHarnesses.set(session.id, {
+            harness: child,
+            allows,
+            type: name,
+            parent: parentSessionId,
+          });
           try {
             signal.throwIfAborted();
             // subagent_start hooks (#557): what they say back is in its system prompt from its first request on
@@ -1306,7 +1323,35 @@ export class AgentRuntime {
               String(args.description || ''),
               signal,
             );
-            return (await child.run(String(args.description || ''))).answer;
+            let { answer } = await child.run(String(args.description || ''));
+            // SubagentStop hooks can send it back to work, a few times in a row at most
+            const agent = {
+              sessionId: parentSessionId,
+              id: session.id,
+              type: name,
+            };
+            for (let again = 0; ; again++) {
+              const next = await this.subagentStopHooks(
+                child,
+                agent,
+                answer,
+                again > 0,
+                signal,
+              );
+              if (next === undefined) break;
+              if (again >= stopHookCap()) {
+                child.hookContext(
+                  {
+                    ...combineOutcomes('SubagentStop', [], undefined, {}),
+                    notices: [{ kind: 'limit', name: 'SubagentStop' }],
+                  },
+                  'SubagentStop',
+                );
+                break;
+              }
+              ({ answer } = await child.run(next));
+            }
+            return answer;
           } finally {
             signal.removeEventListener('abort', abort);
             await this.jobs.stopOwned(backgroundJob?.id ?? session.id);
@@ -1391,13 +1436,21 @@ export class AgentRuntime {
       system,
       bus: this.bus,
       headless: this.options.headless,
-      approve: this.options.approve,
+      approve: this.options.approve
+        ? (call: ToolCall, signal: AbortSignal) =>
+            this.noticeWaiting(call, () => this.options.approve!(call, signal))
+        : undefined,
       hooks: this.ensureHooks(),
       hookScreenshot: this.options.hookScreenshot,
-      reviewHooks: (signal) => this.reviewHooks(signal),
+      backgroundTasks: () => this.backgroundTasks(),
+      ...(this.nextSessionSource
+        ? { sessionSource: this.nextSessionSource }
+        : {}),
       priceUsage: (model, usage) =>
         priceCall(this.catalog.facts(model, this.options.settings), usage),
       beforeRun: async (signal) => {
+        if (this.idleTimer) clearTimeout(this.idleTimer);
+        this.idleTimer = undefined;
         if (this.ownershipError) throw this.ownershipError;
         this.requireTurnConnection();
         if (this.closing || this.deleting)
@@ -1447,7 +1500,10 @@ export class AgentRuntime {
           this.harness.tools,
           signal,
         ),
-      settled: () => this.releaseIfAway(),
+      settled: () => {
+        this.releaseIfAway();
+        this.waitForInput();
+      },
       planFileMutation: (call) => {
         let paths: string[];
         if (call.name === 'write_file' || call.name === 'edit_file')
@@ -2201,70 +2257,191 @@ export class AgentRuntime {
   /** Configured hooks, including skill hooks this session has not loaded. */
   listHooks(): {
     hooks: { hook: HookDefinition; active: boolean }[];
-    projectIgnored: boolean;
-    projectChanged: HookChange[];
+    untrusted: boolean;
+    disabled: boolean;
+    errors: HookLoadError[];
   } {
     const runner = this.ensureHooks();
-    this.syncHookApprovals(runner);
     return {
       hooks: runner.listing(),
-      projectIgnored: runner.loaded.projectIgnored,
-      projectChanged: [...runner.loaded.projectChanged],
+      untrusted: runner.loaded.untrusted,
+      disabled: runner.loaded.disabled,
+      errors: [...runner.loaded.errors],
     };
   }
-  /** Project hooks files this session is not running because they wait for approval. */
-  pendingHooks(): HookChange[] {
-    const runner = this.ensureHooks();
-    this.syncHookApprovals(runner);
-    return [...runner.loaded.projectChanged];
+  /** How the next session's harness started, for SessionStart: after /new, `clear`. */
+  private nextSessionSource: 'clear' | undefined;
+  private idleTimer?: NodeJS.Timeout;
+  /** Notification hooks, for their side effects; what they say is not used, and nothing waits for them. */
+  private notificationHooks(
+    type: 'permission_prompt' | 'idle_prompt',
+    title: string,
+    message: string,
+  ): void {
+    const runner = this.hookRunner;
+    if (!runner?.has('Notification')) return;
+    void runner
+      .run({
+        event: 'Notification',
+        sessionId: this.session.id,
+        cwd: this.options.workspace,
+        matchValue: type,
+        fields: { notification_type: type, title, message },
+        secrets: this.runSecrets(),
+      })
+      .catch(() => {});
   }
-  /**
-   * Approve a file that waits in this session: the digest, and the hooks that load,
-   * are those of `change`, the read the person was shown. False when this session is
-   * not waiting for exactly that version (the file was read again since).
-   */
-  approveHooks(change: HookChange): boolean {
-    if (this.viewOnly) throw new Error(occupiedSessionMessage(this.session.id));
-    const runner = this.ensureHooks();
-    const waiting = runner.loaded.projectChanged.find(
-      (item) => item.file === change.file && item.digest === change.digest,
+  /** An approval card that waits a while tells the Notification hooks, once. */
+  private async noticeWaiting<T>(
+    call: { name: string },
+    wait: () => Promise<T>,
+  ): Promise<T> {
+    const timer = setTimeout(
+      () =>
+        this.notificationHooks(
+          'permission_prompt',
+          'Permission needed',
+          `Circle needs your permission to use ${call.name}`,
+        ),
+      this.options.notificationDelays?.permission ?? 6_000,
     );
-    if (!waiting) return false;
-    approveHookFile(this.options.home, waiting);
-    return runner.approve(waiting);
-  }
-  /** A file approved elsewhere (another session, another Circle) loads here too. */
-  private syncHookApprovals(runner: HookRunner): void {
-    for (const change of [...runner.loaded.projectChanged])
-      if (approvedHookDigest(this.options.home, change.file) === change.digest)
-        runner.approve(change);
-  }
-  /** Files this session asked about and the person left off. A reload asks again. */
-  private hooksAsked = new Set<string>();
-  /**
-   * When a turn starts: load files approved elsewhere (another session, another
-   * Circle), then ask the person about each version not asked about yet.
-   */
-  private async reviewHooks(signal: AbortSignal): Promise<void> {
-    const runner = this.ensureHooks();
-    this.syncHookApprovals(runner);
-    if (this.viewOnly || !runner.loaded.projectChanged.length) return;
-    const ask = this.options.approveHooks;
-    if (!ask) return;
-    for (const change of [...runner.loaded.projectChanged]) {
-      const key = `${change.file}\0${change.digest}`;
-      if (this.hooksAsked.has(key)) continue;
-      let approved: boolean;
-      try {
-        approved = await ask(change, signal);
-      } catch (error) {
-        // An interrupted turn did not answer; the next turn asks again.
-        if (signal.aborted) throw error;
-        approved = false;
-      }
-      this.hooksAsked.add(key);
-      if (approved) this.approveHooks(change);
+    timer.unref?.();
+    try {
+      return await wait();
+    } finally {
+      clearTimeout(timer);
     }
+  }
+  /** A turn ended where someone can answer: a minute without a new message tells the Notification hooks. */
+  private waitForInput(): void {
+    if (this.options.headless || this.closing) return;
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = undefined;
+      this.notificationHooks(
+        'idle_prompt',
+        'Waiting for input',
+        'Circle is waiting for your input',
+      );
+    }, this.options.notificationDelays?.idle ?? 60_000);
+    this.idleTimer.unref?.();
+  }
+  /** SessionEnd hooks of the conversation that ends, if it started: a short budget, and what they say is not used. */
+  private async sessionEndHooks(
+    reason: 'clear' | 'resume' | 'other',
+  ): Promise<void> {
+    const runner = this.hookRunner;
+    if (!runner?.has('SessionEnd') || !this.harness?.hooksStarted) return;
+    try {
+      await runner.run({
+        event: 'SessionEnd',
+        sessionId: this.session.id,
+        cwd: this.options.workspace,
+        matchValue: reason,
+        fields: { reason },
+        secrets: this.runSecrets(),
+      });
+    } catch {
+      /* A conversation ends whatever its hooks do. */
+    }
+  }
+  /**
+   * The conversation's PreCompact hooks, before it is compacted: a block keeps it as it is, and what they print goes
+   * to the summary as instructions. A subagent's compaction runs none.
+   */
+  private async preCompactHooks(
+    sessionId: string,
+    trigger: 'manual' | 'auto',
+    hint: string,
+    signal: AbortSignal,
+  ): Promise<{ blocked?: string; instructions: string }> {
+    const runner = this.hookRunner;
+    if (sessionId !== this.session.id || !runner?.has('PreCompact'))
+      return { instructions: '' };
+    const batch = await runner.run({
+      event: 'PreCompact',
+      sessionId,
+      cwd: this.options.workspace,
+      matchValue: trigger,
+      fields: {
+        trigger,
+        custom_instructions: trigger === 'manual' && hint ? hint : null,
+      },
+      secrets: this.runSecrets(),
+      signal,
+    });
+    const blocked = batch.blocked ? batch.reason || 'hook blocked' : undefined;
+    this.harness.hookContext(
+      {
+        ...batch,
+        context: '',
+        notices: [
+          ...batch.notices.filter((notice) => notice.kind !== 'output'),
+          ...(blocked !== undefined
+            ? [
+                {
+                  kind: 'blocked' as const,
+                  tool: 'compaction',
+                  reason: blocked,
+                },
+              ]
+            : []),
+        ],
+      },
+      'PreCompact',
+    );
+    return {
+      ...(blocked !== undefined ? { blocked } : {}),
+      instructions: batch.context,
+    };
+  }
+  /**
+   * After a compaction: the conversation's PostCompact hooks hear the summary, and SessionStart hooks run again so
+   * what they said is in the conversation again. A subagent's SubagentStart hooks run again for it.
+   */
+  private async postCompactHooks(
+    sessionId: string,
+    trigger: 'manual' | 'auto',
+    summary: string,
+  ): Promise<void> {
+    const runner = this.hookRunner;
+    if (!runner) return;
+    const child = this.childHarnesses.get(sessionId);
+    if (child) {
+      await this.subagentStartHooks(
+        child.harness,
+        { sessionId: child.parent, id: sessionId, type: child.type },
+        '',
+        new AbortController().signal,
+      ).catch(() => {});
+      return;
+    }
+    if (sessionId !== this.session.id) return;
+    if (runner.has('PostCompact')) {
+      const batch = await runner.run({
+        event: 'PostCompact',
+        sessionId,
+        cwd: this.options.workspace,
+        matchValue: trigger,
+        fields: { trigger, compact_summary: summary },
+        secrets: this.runSecrets(),
+      });
+      this.harness.hookContext({ ...batch, context: '' }, 'PostCompact');
+    }
+    await this.harness.sessionStartHooks('compact');
+  }
+  /** The background work still running in this conversation, as Stop hooks get it. */
+  private backgroundTasks(): Record<string, unknown>[] {
+    return this.jobs
+      .list(this.session.id)
+      .filter((job) => job.status === 'running')
+      .map((job) => ({
+        id: job.id,
+        type: job.kind === 'agent' ? 'subagent' : 'shell',
+        status: job.status,
+        description: job.title.slice(0, 1000),
+        ...(job.command ? { command: job.command.slice(0, 1000) } : {}),
+      }));
   }
   /** Skills whose hooks are armed for the current session. */
   private armedSkills = new Set<string>();
@@ -2274,18 +2451,27 @@ export class AgentRuntime {
         this.options.settings,
         this.options.workspace,
       );
+      // Hooks files of the format before this one move into settings first, once
+      const notes = migrateHookFiles({
+        home: this.options.home,
+        workspace: this.options.workspace,
+        trusted,
+        userHome: this.options.userHome,
+      });
       this.hookRunner = new HookRunner(
         loadHooks({
           workspace: this.options.workspace,
           home: this.options.home,
           trusted,
           userHome: this.options.userHome,
+          ...(this.options.localSkillsRoot
+            ? { packsRoot: this.options.localSkillsRoot }
+            : {}),
         }),
         { workspace: this.options.workspace, home: this.options.home },
       );
+      this.hookRunner.loaded.notes.push(...notes);
       for (const name of this.armedSkills) this.hookRunner.activateSkill(name);
-      // A fresh read asks again about every file still waiting.
-      this.hooksAsked.clear();
     }
     return this.hookRunner;
   }
@@ -2307,7 +2493,13 @@ export class AgentRuntime {
   /** The subagents at work, by their session: the harness and the tools each may have. */
   private childHarnesses = new Map<
     string,
-    { harness: Harness; allows: (tool: Tool) => boolean }
+    {
+      harness: Harness;
+      allows: (tool: Tool) => boolean;
+      /** Its type and the conversation it works for, for the hooks that hear of it. */
+      type: string;
+      parent: string;
+    }
   >();
   /** Adds the tools of a loaded skill's pack to a subagent, and says which it got and which it may not have. */
   private offerPackTools(
@@ -2353,8 +2545,7 @@ export class AgentRuntime {
     const runner = this.hookRunner;
     if (!runner) return tools;
     const armed = runner.activateSkill(key);
-    if (this.harness && armed.length)
-      await this.harness.skillHooksArmed(armed, signal);
+    if (this.harness && armed.length) this.harness.skillHooksArmed(armed);
     return tools;
   }
   /**
@@ -2440,8 +2631,9 @@ export class AgentRuntime {
       .join('\n');
   }
   /**
-   * The conversation's subagent_start hooks, before a subagent's first request (#557): each gets the conversation's
-   * session, the subagent's own as `agent_id`, its type and its task.
+   * The conversation's SubagentStart hooks, before a subagent's first request: matched by the subagent's type, each
+   * gets the conversation's session, the subagent's own as `agent_id`, its type and its task. What they say starts
+   * the subagent's conversation, before its task.
    */
   private async subagentStartHooks(
     child: Harness,
@@ -2450,19 +2642,53 @@ export class AgentRuntime {
     signal: AbortSignal,
   ): Promise<void> {
     const runner = this.hookRunner;
-    if (!runner?.active().some((hook) => hook.event === 'subagent_start'))
-      return;
+    if (!runner?.has('SubagentStart')) return;
+    const mode = hookPermissionMode(this.policy.mode(this.session.id));
     const batch = await runner.run({
-      event: 'subagent_start',
+      event: 'SubagentStart',
       sessionId: agent.sessionId,
       agent: { id: agent.id, type: agent.type },
       cwd: this.options.workspace,
-      description,
+      ...(mode ? { permissionMode: mode } : {}),
+      matchValue: agent.type,
+      fields: { description },
       secrets: this.runSecrets(),
       signal,
     });
     signal.throwIfAborted();
-    child.hookOutput(batch, 'subagent_start');
+    child.hookContext(batch, 'SubagentStart');
+  }
+  /**
+   * The conversation's SubagentStop hooks, when a subagent has answered: a block, or words for it, send it back to
+   * work with them as its next instruction. Undefined when it may stop.
+   */
+  private async subagentStopHooks(
+    child: Harness,
+    agent: { sessionId: string; id: string; type: string },
+    answer: string,
+    active: boolean,
+    signal: AbortSignal,
+  ): Promise<string | undefined> {
+    const runner = this.hookRunner;
+    if (!runner?.has('SubagentStop')) return undefined;
+    const mode = hookPermissionMode(this.policy.mode(this.session.id));
+    const batch = await runner.run({
+      event: 'SubagentStop',
+      sessionId: agent.sessionId,
+      agent: { id: agent.id, type: agent.type },
+      cwd: this.options.workspace,
+      ...(mode ? { permissionMode: mode } : {}),
+      matchValue: agent.type,
+      fields: { stop_hook_active: active, last_assistant_message: answer },
+      secrets: this.runSecrets(),
+      signal,
+    });
+    signal.throwIfAborted();
+    child.hookContext({ ...batch, context: '' }, 'SubagentStop');
+    if (batch.stop || (!batch.blocked && !batch.context)) return undefined;
+    return batch.blocked
+      ? `A hook blocked the end of this task: ${batch.reason || 'hook blocked stop'}${batch.context ? `\n${batch.context}` : ''}\nFix the problem and finish the task.`
+      : `Stop hook feedback:\n${batch.context}`;
   }
   /** Read hooks again. /reload uses this so a changed file applies to the next call. */
   reloadHooks(): void {
@@ -2909,7 +3135,11 @@ export class AgentRuntime {
         this.harness.model,
         signal,
         hint,
-        { system: this.harness.system, tools: this.harness.tools },
+        {
+          system: this.harness.system,
+          tools: this.harness.tools,
+          hookTrigger: 'auto',
+        },
       );
     if (this.activeCompaction || this.harness.busy)
       throw new Error('a turn is running');
@@ -3088,6 +3318,8 @@ export class AgentRuntime {
   }
   async newSession(): Promise<void> {
     this.requireIdleSession();
+    await this.sessionEndHooks('clear');
+    this.nextSessionSource = 'clear';
     const previous = this.session.id;
     const session = this.store.create(
       this.options.workspace,
@@ -3105,6 +3337,7 @@ export class AgentRuntime {
     this.armedSkills.clear();
     this.hookRunner = undefined;
     this.harness = this.createHarness(this.options.model);
+    this.nextSessionSource = undefined;
     this.todos = restoredTodos(this.harness.messages);
     this.applyDefaultMode();
     this.bus.setRunId(this.session.id);
@@ -3119,6 +3352,7 @@ export class AgentRuntime {
     this.requireIdleSession();
     let session = this.store.find(id);
     if (!session) throw new Error('unknown session');
+    await this.sessionEndHooks('resume');
     if (session.workspace !== this.options.workspace)
       session = this.store.fork(session.id, this.options.workspace);
     const previous = this.session.id;
@@ -3392,6 +3626,9 @@ It is input, not a decision: it answers no approval card, changes no mode and ad
   ): Promise<void> {
     await this.ownershipCleanup;
     if (this.toolsCheck) clearTimeout(this.toolsCheck);
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    if (!deleteSession) await this.sessionEndHooks('other');
+    this.hookRunner?.close();
     await this.catalog.close();
     this.compactionController?.abort(new Error('Interrupted'));
     await this.activeCompaction?.catch(() => {});

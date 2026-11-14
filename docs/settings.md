@@ -79,7 +79,7 @@ A project can set a few things for its folder in `.circle/settings.json`, as pi'
 
 Only these keys are read: `model`, `default_thinking`, `enabled_models`, `double_escape`, `hide_thinking`, `theme`, `credential_files`, `allowed_commands` and `attribution`. They apply while Circle works in that folder, once it is trusted (sessions, `-p`, line mode and RPC mode), and are never written to your `settings.json`. `--model` on the command line wins over the project's `model`. `credential_files` and `allowed_commands` are added to yours, so a project can protect more files and allow more of its own commands, but never narrow either list. The endpoint, the key, MCP servers, extensions, trusted folders, `default_mode`, `workspace_folder`, `editor_bridge` and `show_hook_allow` cannot be set by a project; a key Circle does not take is named in red at start (on standard error without the full-screen interface).
 
-Hooks are not a key here. They live in `hooks.json` in the data folder and in `.circle/hooks.json` in a trusted project. A changed project file has to be approved again; the digest is `hook-trust.json` in the data folder, not a settings key. See [Hooks](hooks.md).
+`hooks` and `disableAllHooks` are read here too, by the hooks rather than the settings: see [Hooks](hooks.md). Your own are `hooks` in your `settings.json`, and a project's file only for you is `.circle/settings.local.json`.
 
 When you change one of these in a session (`/themes`, `/settings`, `alt+d` in `/models` or `/effort`, `tab` in `/models`, `/approvals add`), your choice is saved as yours and used from then on in this session.
 
@@ -113,7 +113,7 @@ Secrets the model uses by name are in `secrets.json`, also next to it; see [Secr
 
 ## Reloading
 
-`/reload` re-reads `settings.json`, the project's `.circle/settings.json` and `credentials.json`, reconnects MCP servers, reloads extensions, and rebuilds the model. It applies `theme` and re-reads `allowed_commands`. It also re-reads `hooks.json` (yours, the project's and any skill's) for later events. It does not run `session_start` hooks again. It does not re-read `credential_files`, and it does not re-apply `default_mode` (a session-start setting). It is refused while a turn is running.
+`/reload` re-reads `settings.json`, the project's `.circle/settings.json` and `credentials.json`, reconnects MCP servers, reloads extensions, and rebuilds the model. It applies `theme` and re-reads `allowed_commands`. It also re-reads the hooks (yours, the project's, packs' and skills') for later events. It does not run `SessionStart` hooks again. It does not re-read `credential_files`, and it does not re-apply `default_mode` (a session-start setting). It is refused while a turn is running.
 
 ## Personal sync selection
 

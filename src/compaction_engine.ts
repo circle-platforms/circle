@@ -85,6 +85,8 @@ export interface CompactionFrame {
   system?: string;
   tools?: Tool[];
   trigger?: CompactionEvent['trigger'];
+  /** What hooks are told started it: a person (`manual`) or Circle and the model (`auto`). */
+  hookTrigger?: 'manual' | 'auto';
   minimalTail?: boolean;
 }
 

@@ -332,7 +332,7 @@ const HELP_ROWS: [string, string][] = [
   ['--no-tools', 'No tools except compaction'],
   ['--yolo', 'Auto mode for print or line'],
   ['--trust', 'Trust this folder and remember it'],
-  ['--approve-hooks', "Approve this folder's hooks files as they are now"],
+  ['--approve-hooks', 'No longer needed: a trusted folder runs its hooks'],
   [
     '--extensions',
     'Load extensions and MCP servers in print, line or rpc mode',
@@ -546,28 +546,16 @@ async function headlessSettings(
   return settings;
 }
 /**
- * Print, line and rpc mode cannot show the hooks card. `--approve-hooks` approves
- * the waiting files and lists what it approved; otherwise those hooks do not run,
- * and standard error says so once, naming each file and how to approve it.
+ * Hooks run in a trusted folder without a file of their own to approve. `--approve-hooks` is still taken, so a
+ * script that passes it keeps working, and says once that it does nothing.
  */
 export function reportProjectHooks(
-  runtime: import('./runtime.js').AgentRuntime,
   approve: boolean,
   write: (text: string) => void = (text) => process.stderr.write(text),
 ): void {
   if (approve)
-    for (const change of runtime.pendingHooks()) {
-      if (!runtime.approveHooks(change)) continue;
-      write(`circle: approved the hooks in ${change.file}\n`);
-      for (const hook of change.hooks)
-        if (hook.mark !== 'removed')
-          write(
-            `  ${hook.name} · ${hook.event}${hook.screenshot ? ' · with screenshot' : ''} · ${hook.command}\n`,
-          );
-    }
-  for (const change of runtime.pendingHooks())
     write(
-      `circle: the hooks in ${change.file} were not run: this version of the file is not approved. Approve it with circle in a terminal in this folder, or pass --approve-hooks.\n`,
+      'circle: --approve-hooks is no longer needed: a trusted folder runs its hooks\n',
     );
 }
 let networkConfigured = false;
@@ -731,7 +719,6 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         settings,
         init: options.init,
         trust: options.trust,
-        approveProjectHooks: options.approveHooks,
         pickSession: options.resume,
         prompts,
         shown,
@@ -749,7 +736,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     // full-screen interface; their tools reach the model from the first turn.
     if (options.extensions) await runtime.initialize();
     offSignals = installExitGuard(runtime);
-    reportProjectHooks(runtime, options.approveHooks);
+    reportProjectHooks(options.approveHooks);
     // Only --yolo turns auto on here; without it a saved default_mode stays.
     if (options.yolo) runtime.policy.setYolo(runtime.session.id, true);
     if (options.mode === 'rpc') {

@@ -487,6 +487,8 @@ export const PROJECT_KEYS = [
   'allowed_commands',
   'attribution',
 ] as const;
+/** Keys a project's settings.json holds that the hooks read, not the settings. */
+const PROJECT_HOOK_KEYS = ['hooks', 'disableAllHooks'];
 export type ProjectChanges = Record<string, [unknown, unknown]>;
 export function applyProjectSettings(
   settings: CircleSettings,
@@ -510,7 +512,9 @@ export function applyProjectSettings(
     return { changed, problems: [`${path} should be a JSON object`] };
   const problems = Object.keys(raw)
     .filter(
-      (key) => !PROJECT_KEYS.includes(key as (typeof PROJECT_KEYS)[number]),
+      (key) =>
+        !PROJECT_KEYS.includes(key as (typeof PROJECT_KEYS)[number]) &&
+        !PROJECT_HOOK_KEYS.includes(key),
     )
     .map((key) => `${path}: '${key}' is not a project setting`);
   const allowed = Object.fromEntries(

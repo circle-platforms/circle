@@ -913,7 +913,7 @@ test('a trusted parent covers a subfolder, and --trust remembers a folder for a 
   assert.equal(later.code, 0, later.stderr);
 });
 
-test('print mode leaves a project hooks file nobody approved off, says so once, and --approve-hooks runs that version', async (t) => {
+test("print mode runs a trusted project's hooks, moves an old hooks file into its settings, and --approve-hooks only says it is not needed", async (t) => {
   const home = scratch(t);
   const workspace = realpathSync.native(scratch(t));
   mkdirSync(join(workspace, '.circle'));
@@ -933,32 +933,31 @@ test('print mode leaves a project hooks file nobody approved off, says so once, 
       },
     }),
   );
-  const endpoint = await gateway(t, [{ content: 'ok' }]);
+  const endpoint = await gateway(t, [{ content: 'ok' }, { content: 'ok' }]);
   setUp(home, endpoint.base, [workspace]);
-  const off = await circle(home, ['-p', 'hello', workspace]);
-  assert.equal(off.code, 0, off.stderr);
-  const said = off.stderr.split('\n').filter((line) => line.includes('hooks'));
-  assert.equal(said.length, 1, off.stderr);
-  assert.match(said[0]!, /were not run/);
-  assert.ok(said[0]!.includes(file), said[0]);
-  assert.match(said[0]!, /--approve-hooks/);
-  assert.doesNotMatch(systemText(endpoint.bodies[0]!), /hook says hi/);
+  const run = await circle(home, ['-p', 'hello', workspace]);
+  assert.equal(run.code, 0, run.stderr);
+  const turns = endpoint.bodies.filter(
+    (body) => body.max_tokens !== TITLE_MAX_TOKENS,
+  );
+  // SessionStart's words open the conversation; they are not in the system prompt
+  assert.doesNotMatch(systemText(turns[0]!), /hook says hi/);
+  assert.match(JSON.stringify(turns[0]!.messages), /hook says hi/);
+  assert.equal(existsSync(file), false);
+  assert.equal(existsSync(`${file}.migrated`), true);
+  const project = JSON.parse(
+    readFileSync(join(workspace, '.circle', 'settings.json'), 'utf8'),
+  );
+  assert.ok(Array.isArray(project.hooks.SessionStart));
   assert.equal(existsSync(join(home, 'hook-trust.json')), false);
-  const approved = await circle(home, [
+  const flagged = await circle(home, [
     '-p',
     '--approve-hooks',
     'hello',
     workspace,
   ]);
-  assert.equal(approved.code, 0, approved.stderr);
-  assert.match(approved.stderr, /approved the hooks in /);
-  assert.match(approved.stderr, /greet · session_start · /);
-  assert.match(systemText(endpoint.bodies[1]!), /hook says hi/);
-  // The same bytes run later without the flag, and nothing is said.
-  const later = await circle(home, ['-p', 'hello', workspace]);
-  assert.equal(later.code, 0, later.stderr);
-  assert.doesNotMatch(later.stderr, /hooks/);
-  assert.match(systemText(endpoint.bodies[2]!), /hook says hi/);
+  assert.equal(flagged.code, 0, flagged.stderr);
+  assert.match(flagged.stderr, /--approve-hooks is no longer needed/);
 });
 
 test('an open stdin survives a slow real CLI startup, waits three seconds and reaches the local gateway', async (t) => {
@@ -1234,36 +1233,34 @@ test('print mode keeps routine hook allow out of tool results and preserves afte
   const after = join(workspace, 'after.mjs');
   writeFileSync(
     allow,
-    "process.stdout.write(JSON.stringify({ decision: 'allow', reason: 'safe' }));\n",
+    "process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', permissionDecisionReason: 'safe' } }));\n",
   );
   writeFileSync(
     after,
     `
 import { readFileSync } from 'node:fs';
 const input = JSON.parse(readFileSync(0, 'utf8'));
-if (input.tool_output.includes('Hook allowed this call.'))
-  throw new Error('routine allow reached after_tool');
-process.stdout.write('formatted output');
+if (input.tool_response.includes('Hook allowed this call.'))
+  throw new Error('routine allow reached PostToolUse');
+process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: 'formatted output' } }));
 `,
   );
+  const settings = JSON.parse(
+    readFileSync(join(home, 'settings.json'), 'utf8'),
+  );
+  const run = (name: string, file: string) => ({
+    type: 'command',
+    name,
+    command: process.execPath,
+    args: [file],
+  });
   writeFileSync(
-    join(home, 'hooks.json'),
+    join(home, 'settings.json'),
     JSON.stringify({
+      ...settings,
       hooks: {
-        before_tool: [
-          {
-            name: 'allow',
-            command: `${JSON.stringify(process.execPath)} ${JSON.stringify(allow)}`,
-            tools: 'write_file',
-          },
-        ],
-        after_tool: [
-          {
-            name: 'after',
-            command: `${JSON.stringify(process.execPath)} ${JSON.stringify(after)}`,
-            tools: 'write_file',
-          },
-        ],
+        PreToolUse: [{ matcher: 'write_file', hooks: [run('allow', allow)] }],
+        PostToolUse: [{ matcher: 'write_file', hooks: [run('after', after)] }],
       },
     }),
   );

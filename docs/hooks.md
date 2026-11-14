@@ -4,300 +4,351 @@ nav_order: 12.5
 
 # Hooks
 
-A hook is a shell command Circle runs at a fixed point in a turn. The model decides what to try; a hook decides whether that attempt is allowed. A deny from a hook stands in every approval mode, including accept-edits and auto.
+A hook is a command Circle runs at a fixed point of a session: before a tool call, after one, when a message is sent, when a turn ends, and so on. The model decides what to try; a hook can decide whether that attempt goes ahead, add words for the model, or only watch.
 
-Hooks are code execution. Circle shows which ones are active, runs a project's hooks only after you trust the folder and approve that version of the file, and appends one JSON line per run to `hooks.log` in the data folder.
+The format and the behavior follow Claude Code's hooks, so a hook written for it runs here with Circle's tool names (`execute`, `write_file`, …) in its matchers. What Circle does differently is said where it comes up, and listed under [Not here yet](#not-here-yet).
+
+Hooks are code execution. Circle shows which ones are active, runs a project's hooks only in a trusted folder, and appends one JSON line per run to `hooks.log` in the data folder.
 
 ## Where hooks live
 
-| File                                                            | When it runs                                                                                                                                                  |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hooks.json` in the data folder (`~/.circle`, or `CIRCLE_HOME`) | Every session. These are your own hooks.                                                                                                                      |
-| `<workspace>/.circle/hooks.json`                                | After the folder is trusted, and after you approve this version of the file.                                                                                  |
-| `hooks.json` next to a skill's `SKILL.md`                       | With that skill. A project skill's hooks also wait for the folder trust and for approval of that file. See [A skill can ship hooks](#a-skill-can-ship-hooks). |
+| Where | Scope |
+| --- | --- |
+| `hooks` in `settings.json` in the data folder (`~/.circle`, or `CIRCLE_HOME`) | Every session. Your own hooks. |
+| `hooks` in `<workspace>/.circle/settings.json` | This project, shared with the repository. Runs once the folder is trusted. |
+| `hooks` in `<workspace>/.circle/settings.local.json` | This project, for you only. Runs once the folder is trusted. Only `hooks` and `disableAllHooks` are read from this file. |
+| `hooks/hooks.json` in an installed pack | Every session while the pack is installed, like an enabled plugin. Its `hooks` key holds the hooks; `description` is optional. |
+| `hooks:` in a skill's `SKILL.md` frontmatter | The rest of the session once the skill is loaded, with `/skill` or the `skill` tool. A project's skill waits for the folder to be trusted. |
 
-Hooks are not a key in `settings.json`. A project settings file has a closed list of keys, and a bad `settings.json` stops Circle; a hooks file is separate so a mistake there does not.
+Hooks from every place run together. A folder that is not trusted runs no hook of the project's own, and the transcript says `project hooks need a trusted folder`; yours, your skills' and your installed packs' still run. Circle asks to trust a folder before a session starts there, so in practice every session is in a trusted folder.
 
-Trusting the folder is not enough for a project hooks file. See [Approving a project hooks file](#approving-a-project-hooks-file).
+`"disableAllHooks": true` turns every hook off. The project's settings come after yours, and its local file after them, so a project that sets `false` turns them back on. A project that is not trusted cannot turn yours off.
 
-Circle reads the files when a session starts, on `/new`, when you switch or import a session, and on `/reload`. `/reload` applies the new files to later events in the same session. It does not run `session_start` again, and it resets each `before_stop` hook's block count.
+Circle reads the hooks when a session starts, on `/new`, when you switch or import a session, and on `/reload`.
 
-A file whose `version` is present and is not `1` is skipped. A file can hold at most 100 hooks; further entries are left out and named in a notice. An entry without a command, an unknown event, or JSON that cannot be read is reported the same way, and the valid hooks in that file still load.
+An installed pack's files are checked against what was installed before its hooks first run. A pack whose files do not match runs none of its hooks, and the transcript says why. A pack lists `hooks/hooks.json` in its `pack.json` like its other files.
 
-## Approving a project hooks file
+## The format
 
-A project hooks file (`.circle/hooks.json`, or a `hooks.json` next to a project skill) runs only in a version you approved. `hook-trust.json` in the data folder keeps, for each approved file by its real path, the SHA-256 digest of its bytes and the name, event and command of each hook in that version. A file that has never been approved, or whose bytes changed since, does not load. Circle reads the file once for the digest, for what it shows you and for the hooks that load, so what runs is the version you were shown. A file with no hooks in it has nothing to approve. Your own `hooks.json` in the data folder, and a `hooks.json` next to a skill that is not the project's, are never asked about.
-
-**In the terminal**, when a turn starts and such a file waits, a card asks first: the file, then each hook in that version with its event and command, marked new, changed or removed against the version you approved last; unchanged hooks share one line. Like every card, it waits while you are typing. The choices are `skip` and `approve these hooks`, and the focus starts on `skip`: enter, `1` and esc leave the hooks off, and letters do nothing. `2`, or down and enter, approves. The hooks then run from that turn on, `session_start` included, and the transcript says `project hooks approved`. After a skip they stay off for the session: the transcript says `project hooks need approval · <file>`, `/hooks` lists the file as needing approval, and the card comes back after `/reload` or in a new session. `circle --approve-hooks` approves the waiting files when the session opens, without the card.
-
-**In the desktop**, the same card appears in the conversation when a turn starts, with `approve these hooks` and `skip`. After a skip the transcript says the hooks need approval, and a new conversation asks again. Settings → hooks names each file that waits.
-
-**In print, line and rpc mode** nobody can answer a card. A file that waits does not run. Standard error says so once for the run, naming the file and how to approve it: with `circle` in a terminal in that folder, or with `--approve-hooks`, which approves the waiting files as they are now and lists each hook it approved. The transcript keeps the same notice, so a later session shows it.
-
-Releases up to 1.9.1 ran a trusted folder's hooks without this approval and kept no `hook-trust.json`. After an upgrade, such a file waits as a new one: the terminal and the desktop ask on the next turn, and print mode says so on standard error until it is approved once, for example with `--approve-hooks`.
-
-## The file
+Each event holds matcher groups. A group's `matcher` says which occurrences of the event it is for, and its `hooks` are the handlers that run then:
 
 ```json
 {
-  "version": 1,
   "hooks": {
-    "before_tool": [
+    "PreToolUse": [
       {
-        "name": "no secrets",
-        "command": "node .circle/hooks/no-secrets.mjs",
-        "timeout_ms": 30000,
-        "tools": "write_file|edit_file",
-        "paths": ["**/*.env", "**/*secret*"]
-      }
-    ],
-    "after_tool": [],
-    "before_stop": [],
-    "session_start": [],
-    "permission_request": []
-  }
-}
-```
-
-| Field        | Meaning                                                                                                                                                                                                                                                                                                                                                                   |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`    | Required. The shell command, at most 4,000 characters. Circle starts it with `shell: true` in the workspace, so `/bin/sh` runs it on macOS and Linux and `cmd.exe` on Windows (write `node script.mjs` for a hook that runs on every system, or give each platform its own command below), with the [filtered environment](security.md#the-shell-environment) used for other commands.                                 |
-| `command_windows` | Optional. The command on Windows, at most 4,000 characters. When present it replaces `command` on Windows; on other systems `command` runs. See [Per-platform commands](#per-platform-commands). |
-| `command_darwin` | Optional. The command on macOS, at most 4,000 characters. When present it replaces `command` on macOS; on other systems `command` runs. See [Per-platform commands](#per-platform-commands). |
-| `command_linux` | Optional. The command on Linux, at most 4,000 characters. When present it replaces `command` on Linux; on other systems `command` runs. See [Per-platform commands](#per-platform-commands). |
-| `name`       | Optional, at most 80 characters. The transcript and the desktop settings use it. Without one, the command is the name — the command for the platform that runs, so an unnamed hook shows its platform command.                                                                                                                                                                                                                                                    |
-| `timeout_ms` | Optional. Default 30 seconds. Clamped between 100 milliseconds and 10 minutes. On timeout the process group is stopped (on Windows, `taskkill /T /F`, the same stop Circle uses for other commands).                                                                                                                                                                      |
-| `loop_limit` | Optional, only for `before_stop`. Default 5, clamped from 1 to 20. After this many blocks the hook is not run again for that session, until `/reload` or a new session.                                                                                                                                                                                                   |
-| `tools`      | Optional. A tool name, a list, or several names separated by `\|` or a comma. `*` or omitting it matches every tool. `matcher` is the same field. There is no regular expression. `session_start` and `before_stop` ignore it, so a copied matcher does not disable them.                                                                                                 |
-| `screenshot` | Optional, only for `after_tool`. `true` gives the hook a PNG of the page the conversation's browser shows, as a file: see [A screenshot for the hook](#a-screenshot-for-the-hook). Off by default; any other event, or a value that is not `true` or `false`, is an error in the file. |
-| `paths`      | Optional globs. Empty matches every call. A call that names no path does not match a hook that has globs. A call names the paths in its `file_path`, `path`, `file` and `paths` arguments, the files of a patch, and those an MCP tool's [file parameters](mcp.md#files-a-tool-takes) take. See [Path globs](#path-globs). Ignored for `session_start` and `before_stop`. |
-
-## Per-platform commands
-
-A hook whose command only works on one system can carry a command per platform instead of rewriting the logic to run everywhere:
-
-```json
-{
-  "version": 1,
-  "hooks": {
-    "before_tool": [
-      {
-        "command": "sh scripts/check.sh",
-        "command_windows": "powershell -NoProfile -File scripts/check.ps1",
-        "name": "check"
+        "matcher": "write_file|edit_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CIRCLE_PROJECT_DIR}/.circle/hooks/no-secrets.mjs"],
+            "if": "write_file(**/*.env)",
+            "timeout": 30,
+            "onFailure": "block"
+          }
+        ]
       }
     ]
   }
 }
 ```
 
-Circle resolves the command once, when the file loads: Windows runs `command_windows`, macOS runs `command_darwin`, Linux runs `command_linux`, and a platform without its own field runs `command`. A platform field that is present must be a string of 1 to 4,000 characters, like `command`; an empty, overlong or non-string override drops that entry and is reported by field name, while the other entries in the file still load. The resolved command is what the transcript, the approval card, `/hooks` and `hooks.log` show, and an unnamed hook takes its name from it.
+| Field | Meaning |
+| --- | --- |
+| `type` | `command`. Other types are reported and do not load; see [Not here yet](#not-here-yet). |
+| `command` | Without `args`, a shell command. With `args`, the program, started without a shell. |
+| `args` | The program's arguments, each passed as it is written. Use this form for a hook that names a path: no quoting is needed, and it runs the same on every system. |
+| `shell` | `bash` or `powershell`. On macOS and Linux a shell command runs with `sh -c`. On Windows it runs in Git Bash, or in PowerShell when Git Bash is not installed or `shell` is `powershell`. `CIRCLE_GIT_BASH_PATH` names Git Bash's `bash.exe` when it is somewhere else. |
+| `timeout` | Seconds. 600 by default; 30 for `UserPromptSubmit`. `SessionEnd` hooks share 1.5 seconds, raised to the longest `timeout` among them, at most 60 (`CIRCLE_SESSIONEND_HOOKS_TIMEOUT_MS` sets it). |
+| `if` | One rule the call must match: see [Matching](#matching). |
+| `onFailure` | `block` makes a hook that fails stop what it is about, as an exit 2 would. Without it a failure lets the action go ahead. See [When a hook fails](#when-a-hook-fails). |
+| `async` | `true` runs the hook in the background: it decides nothing, and what it says reaches the model with its next request. |
+| `once` | In a skill's frontmatter only: the hook is gone after its first run that did not fail. |
+| `statusMessage` | Accepted; Circle shows the hook's name instead. |
 
-The shell does not change: every platform command still starts with `shell: true`, so on Windows `command_windows` runs in `cmd.exe`. A PowerShell script needs the explicit `powershell -NoProfile -File ...` prefix; a `.ps1` suffix alone does not switch shells. A `command_windows` that calls Git Bash outright (`bash scripts/check.sh`) is the author's choice, and on a machine without Git Bash it fails to start like any other missing command.
+Circle's own fields beside those:
 
-Approval is unchanged: the trust digest covers the file's bytes, so editing any field makes the file wait for approval again, and the card lists the resolved command, which means a platform command's change shows as changed on that platform and nowhere else.
+| Field | Meaning |
+| --- | --- |
+| `name` | What the transcript, `/hooks` and the desktop settings call the hook. Without it, the command is the name. |
+| `screenshot` | `true` on a `PostToolUse` hook gives it a PNG of the page the conversation's browser shows. See [A screenshot for the hook](#a-screenshot-for-the-hook). |
+| `command_windows`, `command_darwin`, `command_linux` | The command on that system, in place of `command`. |
+
+A file with a mistake loses that entry only: the transcript names the file and the problem, and the other entries still load. An event Circle has no occasion for (`Setup`, `FileChanged`, …) is reported the same way.
+
+### Variables
+
+`${CIRCLE_PROJECT_DIR}` is the workspace. A pack's or a skill's hook also has `${CIRCLE_SKILL_DIR}`, its folder, and a pack's has `${CIRCLE_SKILL_DATA}`, a folder of its own that its updates keep. In `args` and an exec-form `command` they are put in as text. A shell command reads them from the environment: write `"${CIRCLE_PROJECT_DIR}"` with the quotes. In PowerShell Circle writes them as `${env:NAME}`.
+
+## Matching
+
+`matcher` is one of:
+
+- `*`, empty, or no matcher: every occurrence.
+- Only letters, digits, `_`, `-`, spaces, commas and `|`: exact names, such as `write_file|edit_file` or `write_file, edit_file`.
+- Anything else: a regular expression, tested anywhere in the value, such as `^read_` or `mcp_.*`. A pack's subagent type has a colon (`kit:reviewer`), so it is a regular expression: anchor it with `^` and `$`.
+
+What the matcher is tested against depends on the event:
+
+| Event | The matcher is tested against |
+| --- | --- |
+| `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure` | The tool's name |
+| `SessionStart` | `startup`, `resume`, `clear` or `compact` |
+| `SessionEnd` | `clear`, `resume` or `other` |
+| `SubagentStart`, `SubagentStop` | The subagent's type: `general-purpose`, `explore`, a name of yours, or `<pack>:<name>` |
+| `PreCompact`, `PostCompact` | `manual` or `auto` |
+| `Notification` | `permission_prompt` or `idle_prompt` |
+| `UserPromptSubmit`, `Stop` | Nothing: every group runs |
+
+`if` holds one rule, a tool's name with what its call must match in parentheses. It is read on the four tool events only; a hook with `if` on another event never runs.
+
+- `execute(git *)` runs for a command any part of which matches: `npm test && git push`, or `FOO=1 git status`. A command with `$(…)` or backticks always runs the hook, since what runs inside cannot be told.
+- A tool that names paths (`write_file(src/**)`) matches when a path it names matches the glob. `*` stays in one folder, `**` crosses folders, `?` is one character; a relative glob is from the workspace, and an absolute one is matched against the real path, symlinks resolved. Case does not matter on Windows. An MCP tool's file parameters count as its paths.
+- A tool with neither runs the hook whatever the pattern.
+
+The same handler in more than one settings file runs once for an occurrence. A pack's or a skill's copy runs on its own.
 
 ## Events
 
-Every matching hook for an event runs. Nothing stops the list early. For the three gating events the strictest decision wins: deny, then ask, then allow, then no opinion.
+| Event | When | What a hook can do |
+| --- | --- | --- |
+| `PreToolUse` | Before a call runs, after read-only mode and the hard refusals | Allow, deny or ask; rewrite the call; add words for the model |
+| `PermissionRequest` | When Circle would show an approval card | Answer the card: allow or deny |
+| `PostToolUse` | After a call returns | Add words beside the result; put another text in its place |
+| `PostToolUseFailure` | After the tool itself failed | Add words beside the error |
+| `UserPromptSubmit` | When you send a message, before the model reads it: the message a turn starts with, a queued one, and one that steers a turn | Keep it from the model; add words after it; name the session |
+| `Stop` | When the model ends a turn without a tool call | Send it back to work |
+| `SubagentStart` | When `task` starts a subagent, before its first request | Add words at the start of its conversation |
+| `SubagentStop` | When a subagent has answered | Send it back to work |
+| `SessionStart` | Before a session's first request (`startup`, `resume`, `clear`), and after a compaction (`compact`) | Add words at the start of the conversation; name the session |
+| `SessionEnd` | On `/new`, when you switch sessions, and when Circle exits | Nothing: for cleanup |
+| `PreCompact` | Before a compaction | Stop it; add instructions for the summary |
+| `PostCompact` | After a compaction | Nothing: it gets the summary |
+| `Notification` | When an approval card has waited about 6 seconds, or a turn ended about a minute ago with no message since | Nothing: for side effects |
 
-| Event                | When                                                                   | What a decision does                                                                                                                                                                                                                                    |
-| -------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `before_tool`        | After the approval policy's hard refusal, and before the approval card | `deny` blocks the call. `ask` forces the card, including in auto. `allow` skips an ordinary card only. `updated_input` makes the call run in another form: see [Rewrite a call](#rewrite-a-call). |
-| `permission_request` | When a card would be shown, or a hook asked                            | Same as `before_tool`. It does not run when nothing would ask and no hook asked, and it does not run after a `before_tool` allow that already skipped an ordinary card. An allow here cannot take back an ask, and cannot skip a call that always asks. |
-| `after_tool`         | After a tool returns text                                              | Decisions are ignored. Exit 0 appends standard output to the tool result the model reads. A non-zero exit, a timeout, or a failure to start does not undo the tool: Circle logs it and shows a notice.                                                  |
-| `before_stop`        | When the model ends a turn with no tool call and no steering message   | `deny`, exit 2, or `ask` blocks the stop and sends the reason back. The turn continues, and the step still counts toward the turn's step limit.                                                                                                         |
-| `session_start`      | Once, before the first model request of the session                    | Decisions are ignored. Output is added to the system prompt for that session and shown as a notice.                                                                                                                                                     |
-| `user_prompt`        | When you send a message, before the model reads it: the message a turn starts with, a queued one, and one that steers a turn under way | Decisions are ignored. The JSON has `prompt`, your message as you wrote it. Output is added after your message, for the model, and shown as a notice.                                                                                                   |
-| `subagent_start`     | When `task` starts a subagent, before its first model request                                                                          | Decisions are ignored. The JSON has `agent_id`, `agent_type` and `description`, the task the model wrote. Output is added to that subagent's system prompt, so it stays after a compaction.                                                             |
+A subagent runs the tool events of its own calls. `SessionStart`, `UserPromptSubmit` and `Stop` are the conversation's; `SubagentStart` and `SubagentStop` are the conversation's hooks about a subagent.
 
-A subagent runs `before_tool`, `after_tool` and `permission_request`. It does not run `session_start`, `before_stop` or `user_prompt`: its first message is the task the model wrote, not yours. `subagent_start` is the conversation's hook about a subagent. A hook of these four events runs whatever its `tools` and `paths` say. In a subagent, `session_id` is still the conversation's session, as in Claude Code and Codex, and the JSON adds `agent_id`, the subagent's own session, and `agent_type`, the name `task` was given (`general-purpose`, `explore` or yours). The conversation's own calls have neither field. Before this change, a subagent's hooks got the subagent's session as `session_id`: a hook that told subagents apart by it reads `agent_id` now.
+## What a hook receives
 
-### What a hook cannot override
+Circle writes one JSON object to standard input:
 
-These are decided before any hook runs:
+```json
+{
+  "session_id": "…",
+  "cwd": "/path/to/workspace",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "write_file",
+  "tool_input": { "file_path": "src/app.ts", "content": "…" },
+  "tool_use_id": "…",
+  "paths": ["/path/to/workspace/src/app.ts"]
+}
+```
 
-- Read-only mode, including plan mode. A hook cannot allow a write, and the hook does not run.
-- A hard refusal from the approval policy: `sudo`, `su`, `doas`, `pkexec`, `runas`, `gsudo`, and a command that names a credential file. The hook does not run.
+- `session_id` is the conversation's session. In a subagent, `agent_id` is the subagent's own session and `agent_type` its type.
+- `permission_mode` is `default` (manual, and a print, line or rpc run without `--yolo`), `acceptEdits`, `plan` (read-only) or `bypassPermissions` (auto).
+- Circle keeps sessions in a database, so there is no `transcript_path`. `Stop` and `SubagentStop` give the last answer as `last_assistant_message`.
+- `paths` is Circle's own: the paths the call names, canonical.
 
-A call that always asks, such as deleting files, still runs the hook. `allow` does not skip that card. A hook can only make the rule stricter: `deny` and `ask` still apply, including in auto, and a later `allow` cannot undo an earlier `ask`.
+The fields of each event:
 
-A file tool still refuses a credential file by name when the tool runs. That check is inside the tool, so a `before_tool` hook does run, and an allow does not make the write succeed.
+| Event | Fields |
+| --- | --- |
+| `PreToolUse` | `tool_name`, `tool_input`, `tool_use_id`, `paths` |
+| `PermissionRequest` | `tool_name`, `tool_input`, `paths` |
+| `PostToolUse` | Those of `PreToolUse`, `tool_response` (the text the model would read) and `duration_ms` |
+| `PostToolUseFailure` | Those of `PreToolUse`, `error`, `is_interrupt` and `duration_ms` |
+| `UserPromptSubmit` | `prompt`, the message as you wrote it |
+| `Stop` | `stop_hook_active`, `last_assistant_message`, `background_tasks` (the jobs still running) and `session_crons` (always empty) |
+| `SubagentStart` | `agent_id`, `agent_type`, and Circle's `description`, the task the model wrote |
+| `SubagentStop` | `agent_id`, `agent_type`, `stop_hook_active`, `last_assistant_message` |
+| `SessionStart` | `source`, `model` |
+| `SessionEnd` | `reason` |
+| `PreCompact` | `trigger`, `custom_instructions` (what you gave `/compact`, else `null`) |
+| `PostCompact` | `trigger`, `compact_summary` |
+| `Notification` | `notification_type`, `title`, `message` |
 
-`allowed_commands` still skips the card, unless a hook asked. A hook deny is already a block by then.
+A hook of a skill or a pack also gets `skill_dir`, and a `PostToolUse` hook with `screenshot` gets `files` (see below).
+
+A saved secret's value is written as `%NAME%` everywhere in what a hook gets: the input, the paths, the result and its environment. The hook runs as you, but it does not receive the secret.
+
+The environment is the [filtered environment](security.md#the-shell-environment) other commands get, with `CIRCLE_PROJECT_DIR`, `CIRCLE_SESSION_ID`, in a subagent `CIRCLE_AGENT_ID`, and for a pack's or a skill's hook `CIRCLE_SKILL_DIR` (and a pack's `CIRCLE_SKILL_DATA`). The commands, scripts and MCP requests of a call carry the same session and agent.
+
+## What a hook answers
+
+### Exit codes
+
+| Exit | Standard output | What happens |
+| --- | --- | --- |
+| 0 | A JSON object | Its fields apply. |
+| 0 | Plain text, or nothing | No decision. `UserPromptSubmit`, `SessionStart` and `PreCompact` give the text to the model (`PreCompact`: to the summary); other events keep it in `hooks.log` only. |
+| 0 | Starts with `{` and is not a JSON object, or a field has the wrong type | A failure. |
+| 2 | Anything | Blocks what the event is about (see the table below). Standard error is the reason. JSON fields are still read, but cannot undo the block. |
+| Another | A JSON object | Its fields apply, unless the hook has `onFailure: "block"`: then it is a failure. |
+| Another | Anything else | A failure. The notice gives the first line of standard error. |
+
+| Event | Exit 2 |
+| --- | --- |
+| `PreToolUse` | Denies the call |
+| `UserPromptSubmit` | Keeps the message from the model |
+| `Stop`, `SubagentStop` | Sends it back to work, with standard error as the reason |
+| `PreCompact` | Stops the compaction |
+| `PostToolUse`, `PostToolUseFailure` | Gives standard error to the model beside the result |
+| `PermissionRequest` | Nothing: answer with the `decision` object |
+| Others | Shows standard error to you |
+
+### JSON fields
+
+Every event reads these, except where the event's own section says otherwise:
+
+| Field | Meaning |
+| --- | --- |
+| `continue` | `false` ends the turn once the calls under way are done. `stopReason` is shown to you. |
+| `systemMessage` | Shown to you, not to the model. `Notification`, `PreCompact`, `PostCompact` and `SessionEnd` do not show it. |
+| `suppressOutput`, `terminalSequence` | Accepted; they do nothing here. |
+
+An event's own fields go in `hookSpecificOutput`, with `hookEventName` set to the event; a mismatched name makes the answer a failure. `UserPromptSubmit`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `SubagentStop` and `PreCompact` also read a top-level `"decision": "block"` with a `reason`.
+
+| Event | Fields |
+| --- | --- |
+| `PreToolUse` | `permissionDecision` (`allow`, `deny`, `ask`, `defer`), `permissionDecisionReason`, `updatedInput`, `additionalContext` |
+| `PermissionRequest` | `decision`: `{ "behavior": "allow" }` or `{ "behavior": "deny", "message": "…", "interrupt": true }`; `updatedInput` inside it |
+| `PostToolUse` | `decision: "block"` with `reason` (beside the result), `additionalContext`, `updatedToolOutput` (text the model reads in place of the result) |
+| `PostToolUseFailure` | `additionalContext` |
+| `UserPromptSubmit` | `decision: "block"` with `reason` (shown to you), `additionalContext`, `sessionTitle`, `suppressOriginalPrompt` |
+| `Stop`, `SubagentStop` | `decision: "block"` with `reason`, and `additionalContext`: either sends it back to work |
+| `SessionStart`, `SubagentStart` | `additionalContext`; `SessionStart` also `sessionTitle` |
+| `PreCompact` | `decision: "block"` with `reason` |
+
+`additionalContext` reaches the model as a reminder: next to the tool result for the tool events, after your message for `UserPromptSubmit`, at the start of the conversation for `SessionStart` and `SubagentStart`. A reminder tag inside it is escaped so it cannot close one. Each text a hook gives is cut at 10,000 characters.
+
+### Several hooks
+
+The matching hooks of an event run at the same time, and Circle waits for all of them. For `PreToolUse` a deny comes before an ask, which comes before an allow; `defer` is ignored with a notice, since Circle cannot hold a call for later. For `PermissionRequest` a deny comes before an allow. Every hook's `additionalContext` reaches the model. Any block blocks.
+
+### When a hook fails
+
+A hook fails when it cannot start, times out, exits with another code than 0 or 2 without a JSON answer, or answers with output that cannot be read. By default the action goes ahead, and the transcript says `hook failed · name · why`; the model is told only that the hook failed. With `"onFailure": "block"` the failure blocks as an exit 2 would, and on `PermissionRequest` it denies. It has no effect on `Stop`, `SubagentStop` and background hooks.
+
+A hook that guards something should set `onFailure: "block"`, and exit 2 or answer with JSON to refuse.
+
+### The format before this one
+
+A hook that still answers with Circle's earlier fields keeps its effect, and the transcript says once that its format is old. For `PreToolUse` and `PermissionRequest` a top-level `decision` of `allow`, `deny` or `ask` (and `approve` and `block`) with `reason` decides as `permissionDecision` would. `updated_input` is `updatedInput`, `context` and `additional_context` are `additionalContext`, and `user_message` is `systemMessage`.
+
+## Decisions about a call
+
+- **A deny** stands in every approval mode, including accept-edits and auto. The tool result starts with `Hook denied this call:` and the reason.
+- **An ask** shows the approval card even in auto. The card says `hook · reason`, and after you approve, the result starts with `Hook asked before this call:`.
+- **An allow** skips an ordinary card. It does not skip a call that always asks: one that names a secret the call did not carry, a first write to one of your terminal tabs, or one the policy always asks about.
+- **`PermissionRequest`** runs only when a card would show. Its allow answers the card, its deny refuses the call (`interrupt` also ends the turn). An allow with `updatedInput` would run the call in another form: Circle does not apply that, so the card asks you. In a print, line or rpc run nobody can answer a card; a call a hook does not allow does not run.
+
+These are decided before any hook runs, and no hook can undo them:
+
+- Read-only mode, including plan mode. A hook cannot allow a write.
+- A hard refusal from the approval policy: `sudo`, `su`, `doas`, `pkexec`, `runas`, `gsudo`, and a command that names a credential file.
+
+A file tool still refuses a credential file by name when it runs, after the hooks. `allowed_commands` still skips the card unless a hook asked.
 
 ## Rewrite a call
 
-A `before_tool` hook can let a call through in another form, rather than deny it and leave the model to try again. It answers with `updated_input`, the whole input the call runs with instead (not a patch: copy the fields you keep):
+A `PreToolUse` hook can let a call through in another form. `updatedInput` is the whole input the call runs with instead, not a patch:
 
 ```json
-{ "decision": "allow", "updated_input": { "command": "example-tool --name value" } }
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "updatedInput": { "command": "example-tool --name value" }
+  }
+}
 ```
 
-- **With a decision.** With `allow` the rewrite runs without an ordinary card, as an allow does. With `ask` the card shows the rewrite. With no decision the approval mode and the rules decide as for any call. A `deny` from any hook voids every rewrite: the call does not run in any form.
-- **Checked again.** The rewrite goes through everything the model's call went through before the hooks: the tool's schema, variables, read-only mode and the hard refusals. Then the rules, `allowed_commands`, `permission_request`, the card, an answer you keep for the session, the tool and `after_tool` all take the rewrite. What runs is what was checked and approved. A rewrite the tool's schema refuses, or a hard refusal, stops the call, and the tool result names the hook: `Hook changed this call's input (name), and it cannot run: …`.
-- **Secrets.** The hook sees each saved secret as `%NAME%` and writes it back that way. Circle puts the value in. A part of the input that no hook changed keeps what the model sent, values included, also for a tool such as `write_file` that takes `%NAME%` as written. A rewrite that names a secret the call did not carry always shows the card, even after an allow and in auto.
-- **Facts.** Facts Circle works out for the card, such as who sees a screenshot, are worked out again. A rewrite cannot set them.
-- **Several hooks.** Hooks run in order, and each gets the rewrite of the one before as `tool_input`. The call runs with the last rewrite. Which hooks run in this round is settled by the call as the model sent it. Handing back the input as it came, in any key order, is no rewrite.
-- **Once more.** Every `before_tool` hook then sees the rewrite, matched by the rewrite's own paths, so a hook that guards `config/**` also sees a call rewritten into `config/`. A deny stops the call, and an ask shows the card. Only an allow given to the rewrite skips an ordinary card: an allow given to the call as the model sent it does not carry over. A hook that changes the rewrite again stops the call, so a rewrite must come back unchanged when its hook sees it. Such a hook runs twice for one call.
-- **What you see.** The approval card shows the call that will run, the rewrite. Nothing on screen marks it as rewritten, by the owner's decision (2026-11-14): the transcript's row shows the call as the model sent it, and its result without the lines below.
-- **What the model sees.** Its call stays as it sent it. The tool result starts with what changed, so its next call can be written that way, also when the rewrite was then denied. Only the model reads these lines:
+- The rewrite goes through everything the model's call went through: the tool's schema, variables, read-only mode and the hard refusals; then the rules, `allowed_commands`, the card, an answer you keep for the session, the tool and `PostToolUse`. A rewrite that cannot run stops the call, and the result says `Hook changed this call's input (name), and it cannot run: …`.
+- Hooks that give the same rewrite give one. Hooks that each give a different one leave no form the call can run in: it does not run, and the result names them.
+- The hook sees each saved secret as `%NAME%` and writes it back that way. A part no hook changed keeps what the model sent. A rewrite that names a secret the call did not carry always shows the card.
+- The card shows the call that will run. Nothing on screen marks it as rewritten; the model's own call stays as it sent it, and the tool result starts with what changed, for the model only:
 
   ```text
   Hook changed this call's input (canon):
   command = "example-tool --name value"
   ```
 
-Only `before_tool` reads `updated_input`. Other events ignore it. A value that is not a JSON object denies the call, with the reason `hook updated_input is not a JSON object`.
+## A screenshot for the hook
 
-## What the command receives
+A hook can keep evidence of a page without the model seeing a picture of it. With `"screenshot": true` on a `PostToolUse` hook, Circle captures the page the conversation's browser shows once the tool has returned, before the hook runs, and names the PNG in the hook's `files`: `[{ "kind": "screenshot", "path": "…", "mime_type": "image/png", "sha256": "…", "size": 12345 }]`.
 
-Circle writes one JSON object to standard input:
+- It is the page as shown, without Circle's marks. The model gets nothing from it.
+- It is taken once per call, however many hooks ask, and only when a hook that asks matches the call.
+- No browser is started for it. With no page open, a page waiting on a dialog, a page that failed to load, or a browser in your hands, there is no file and no `files`.
+- The file is in a folder of its own under the system's temporary folder, readable only by you, and Circle removes it once the call's hooks have finished. A hook that hands it to something that keeps running copies it first.
 
-```json
-{
-  "event": "before_tool",
-  "session_id": "…",
-  "cwd": "/path/to/workspace",
-  "hook": "no secrets",
-  "source": "project",
-  "source_label": "project",
-  "tool_name": "write_file",
-  "tool_input": { "file_path": "src/app.ts", "content": "…" },
-  "paths": ["/path/to/workspace/src/app.ts"],
-  "tool_output": "…",
-  "tool_status": "success",
-  "permission_reason": "…",
-  "stop_attempt": 1
-}
+## Skills and packs
+
+A skill's hooks are written in its `SKILL.md` frontmatter, in the same format, as YAML:
+
+```yaml
+---
+name: secure-operations
+description: Operations with security checks
+hooks:
+  PreToolUse:
+    - matcher: execute
+      hooks:
+        - type: command
+          command: node
+          args: ["${CIRCLE_SKILL_DIR}/scripts/check.mjs"]
+---
 ```
 
-A hook with `"screenshot": true` also gets `"files": [{ "kind": "screenshot", "path": "…", "mime_type": "image/png", "sha256": "…", "size": 12345 }]`, when there is a page to capture (see below).
+They start when this session loads the skill and run for the rest of it. `once: true` removes one after its first run that did not fail. Installing a skill runs nothing.
 
-A hook that ships with a skill also gets `"skill_dir": "/path/to/the/skill"`, the folder of its `SKILL.md`. See [A skill can ship hooks](#a-skill-can-ship-hooks).
-
-`tool_input` is the arguments after variables are filled in, with one exception: a saved secret's value is written back as `%NAME%` everywhere it appears in the arguments, the paths, the tool output, and the hook's environment. The hook runs as you, but it does not receive the secret. `paths` are canonical (symlinks resolved through `canonicalPath`). `tool_output` and `tool_status` are set for `after_tool`. `permission_reason` is set for `permission_request`. `stop_attempt` is set for `before_stop` and starts at 1. `prompt` is set for `user_prompt`, and `description` with `agent_id` and `agent_type` for `subagent_start`; a saved secret's value in them is written as `%NAME%` too.
-
-The hook's environment says the same as its JSON: `CIRCLE_SESSION_ID` is the conversation's session, and `CIRCLE_AGENT_ID` the subagent's in a subagent. The commands, scripts and MCP requests of the call carry the same values (see [the shell environment](security.md#the-shell-environment) and [MCP](mcp.md)).
-
-### A screenshot for the hook
-
-A hook can keep evidence of a page without the model ever seeing a picture of it, for example to upload it, even when the model does not read images. With `"screenshot": true` on an `after_tool` hook, Circle captures the page the conversation's browser shows once the tool has returned, before the hook runs, and names the PNG in the hook's `files`:
-
-- The capture is the page as shown, without Circle's own marks on it. It is not a `browser_screenshot`: the model gets nothing from it, and `browser_click_at` keeps going by the screenshot the model took last.
-- It is taken once per tool call, however many hooks ask for it, and only when a hook that asks matches the call.
-- No browser is started for it. With no page open, a page waiting on a dialog, a page that failed to load, (in the terminal) a page another conversation's tab hides, or (in the desktop application) the browser in your hands, there is no file and no `files`. A picture that cannot be written to the temporary folder is no file either; the hooks still run.
-- The file is in a folder of its own under the system's temporary folder, readable only by you, and Circle removes it once the call's hooks have finished. A hook that hands the file to something that keeps running copies it first.
-- The approval card of a project hooks file, `/hooks` and the desktop settings show `with screenshot` on such a hook. Turning it on in a project's file changes the file, so the file waits for approval again.
-
-The command's standard output and standard error are kept up to 100,000 characters. A command that exits before it reads the input is still judged by its exit code. Closing the pipe does not stop Circle.
-
-## How Circle reads the result
-
-| Exit                                                                                                                        | Gating event (`before_tool`, `permission_request`, `before_stop`)                                                          | `after_tool`, `session_start`, `user_prompt` and `subagent_start`                                               |
-| ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| 0 and a JSON object `{"decision":"allow"\|"deny"\|"ask","reason":"…","context":"…","user_message":"…","updated_input":{…}}` | That decision. On `before_stop`, `ask` blocks like `deny`. Empty output, or a JSON object with no decision, is no opinion. | The decision is ignored. `context`, or `additional_context`, is fed back. Plain text is fed back too.           |
-| 0 and output that is not a JSON object                                               | Deny. The reason is `hook output is not JSON`.                                                                             | The text is context. The turn is not interrupted.                                                               |
-| 2                                                                                    | Deny. The reason is the JSON `reason`, otherwise standard error, otherwise standard output.                                | A notice only. The tool is not undone and the session is not blocked.                                           |
-| Any other exit, a timeout, or a failure to start                                     | Deny.                                                                                                                      | A notice only. The tool is not undone and the session is not blocked. The error text is not given to the model. |
-
-Claude Code blocks a command hook only on exit 2. Any other exit is a non-blocking error, and exit 0 with plain text is not a decision. Circle is stricter on `before_tool`, `permission_request` and `before_stop`: any non-zero exit, a timeout, a failure to start, or output that is not a JSON object is a deny. Exit 2 is a deny here too, so a hook written to that convention still blocks in Circle: exit 0 with a JSON decision, or exit 2 to refuse. A hook that prints plain text and exits 0 on a gating event is a deny in Circle, where Claude Code would let the call through. On `after_tool` and `session_start` a non-zero exit does not interrupt the turn. Circle writes it to `hooks.log` and shows a notice. The transcript keeps the hook's error text. The model is told only `hook failed · name`, so it does not quote that text back. In the desktop's 简体中文 that notice is Chinese (`钩子失败`, and Circle's own words such as a timeout); the hook's own text stays as it wrote it. Exit 0 still feeds the output back, which is how a formatter reports what it did.
-
-A deny the model sees starts with `Hook denied this call:`. An ask that you then reject includes `A hook asked:`. After you approve a call a hook asked about, the tool result starts with `Hook asked before this call:`. A routine allow does not add `Hook allowed this call.` to the tool result; an older result with that prefix hides it only on display. `after_tool` context is appended as `Hook output (name):`.
-
-The model reads a reason once. Beside a deny it also gets a notice, but the notice only names the tool (`hook denied write_file`), because the reason is already in the tool result. The notice beside `after_tool` or `session_start` output only names the hook, because the output is in the tool result or the system prompt. An ask's notice keeps its reason, since not every way out of an ask puts it in the tool result. So does an allow's notice: a routine allow adds nothing to the tool result.
-
-`user_message` is optional and is for you, not the model. The notice and the approval card show it in place of the reason, so a hook can give the model a detailed instruction in `reason` and you a short line. Several hooks' messages are joined like their reasons. Without it, you see the reason, as before.
-
-## Keep what you said for this session
-
-Circle keeps nothing of what you said beyond the conversation. Hooks can: `user_prompt` sees your message as you wrote it, `subagent_start` speaks to a subagent before it starts, and `before_tool` judges each call, all with the same `session_id`. A hook that keeps your scope for the session, gives it to every subagent and refuses a write outside it:
-
-```json
-{
-  "hooks": {
-    "user_prompt": [{ "name": "scope", "command": "node ~/.circle/scope.mjs" }],
-    "subagent_start": [
-      { "name": "scope", "command": "node ~/.circle/scope.mjs" }
-    ],
-    "before_tool": [
-      {
-        "name": "scope",
-        "tools": ["write_file", "edit_file", "apply_patch"],
-        "command": "node ~/.circle/scope.mjs"
-      }
-    ]
-  }
-}
-```
-
-```js
-// ~/.circle/scope.mjs: "only <file>" in a message keeps <file> as this session's scope
-import { readFileSync, writeFileSync } from 'node:fs';
-const input = JSON.parse(readFileSync(0, 'utf8'));
-const file = `${process.env.HOME}/.circle/scope-${input.session_id}.json`;
-const kept = (() => {
-  try {
-    return JSON.parse(readFileSync(file, 'utf8'));
-  } catch {
-    return null;
-  }
-})();
-const say = (value) => process.stdout.write(JSON.stringify(value));
-if (input.event === 'user_prompt') {
-  const only = /\bonly (\S+)/i.exec(input.prompt)?.[1];
-  if (only) writeFileSync(file, JSON.stringify({ only, said: input.prompt }));
-  if (only) say({ context: `Scope for this session: only ${only}.` });
-} else if (input.event === 'subagent_start') {
-  if (kept)
-    say({
-      context: `The person said: "${kept.said}". Change nothing but ${kept.only}.`,
-    });
-} else if (
-  kept &&
-  !input.paths.every((path) => path.endsWith(`/${kept.only}`))
-) {
-  say({
-    decision: 'deny',
-    reason: `The person asked to change only ${kept.only}.`,
-  });
-} else say({});
-```
-
-A new session has a new `session_id`, so it starts with no scope. The hook keeps the file, not Circle: delete it when you are done with the session.
-
-## Path globs
-
-`*` stays inside one path segment. `**` crosses segments. `?` is one character.
-
-A relative glob matches the path relative to the workspace. An absolute glob matches the canonical absolute path; the part before the first `*` or `?` is canonicalized, so a symlink and its target match the same glob. A pattern of `link/**/*.ts` does not match a file whose real path is `real/App.ts`.
-
-Matching is case-sensitive, except on Windows, where `\` and `/` are the same and case does not matter.
+An installed pack's `hooks/hooks.json` runs in every session while the pack is installed. A pack's hooks that belong to its skill go in the frontmatter instead.
 
 ## What you see
 
-The terminal keeps hook notices in English whatever the system language; the hook's own reason, the command and the tool name stay as written. A routine allow notice is hidden by default. Set `show_hook_allow: true` to show it in the terminal and desktop. Denials, questions, failures and `after_tool` output notices remain visible. The welcome inventory names `.circle/hooks.json` when that file is present. The approval card adds `hook · <reason>` when a hook asked, or `hook · <user_message>` when the hook wrote one.
+The terminal keeps hook notices in English; the hook's own words, the command and the tool name stay as written. A routine allow notice is hidden unless `show_hook_allow` is `true`. Denials, questions, failures, blocks and output notices stay visible.
 
-The desktop transcript uses the same notices. In 简体中文 the labels are fully Chinese, and the reason stays as the hook wrote it. Settings → hooks lists each hook's name, whether it came from you, the project or a skill (and which skill), the event, the tools when they are not `*`, and the command. A skill hook that this session has not loaded is listed as waiting and does not run. An untrusted project file is named there and is not run, and so is a project file that waits for approval.
+`/hooks` lists each hook with its name, where it came from, its event and matcher, its `if`, and its command, and a skill hook not loaded yet as waiting. It names a file with a problem. The desktop shows the same in Settings → hooks.
 
-The active-hook notice lists names, events and sources. It does not list commands, unless a hook has no name, in which case the name is the command.
+A message a hook blocked is not sent to the model. The conversation shows `hook blocked prompt · reason` with your message under it (`Original prompt:`), unless the hook set `suppressOriginalPrompt`. The model is told only that a message was held back.
 
 ## The log
 
-Each run appends one JSON line to `hooks.log` in the data folder. The fields are the time, session, event, source, name, command, tool name, exit code, decision, whether it timed out or failed, duration and the reason (500 characters). The tool's input is not logged, and a secret's value is replaced with `%NAME%` if it would otherwise appear in the line. A failure to write the log does not stop the hook. The file is not rotated.
+Each run appends one JSON line to `hooks.log` in the data folder: the time, session, event, source, name, command, tool, exit code, decision, whether it timed out or failed, its duration, the reason (500 characters), and plain output that no event reads (2,000 characters). The tool's input is not logged, and a secret's value is written as `%NAME%`. A failure to write the log does not stop the hook. The file is not rotated.
 
-## A skill can ship hooks
+## Moving from the format before
 
-A skill folder may contain `hooks.json` beside `SKILL.md`. Installing the skill does not run those commands. They run only after this session loads that skill, with `/skill` or with the model's `skill` tool, and they stop applying when you switch, import or start another session. A project skill's hooks still require the folder to be trusted, and approval of that file's bytes, the same way as `.circle/hooks.json`. Until then they are not loaded. Settings names the skill and, until it is loaded, that the hook is waiting.
+Circle used to read hooks from separate `hooks.json` files with its own event names. When a session starts, Circle moves them, once:
 
-A `session_start` hook in the skill runs with the session when the skill was loaded first, and runs once when the skill is loaded later. The other events apply to tool calls after that moment.
+- `hooks.json` in the data folder goes into your `settings.json`.
+- A trusted project's `.circle/hooks.json` goes into its `.circle/settings.json`.
+- A `hooks.json` beside a skill of your own goes into its `SKILL.md` frontmatter. A project's skills move once the folder is trusted.
 
-A skill's hook runs in the workspace, like any other hook, so a script the skill bundles is not found by a relative path. The hook gets the skill's folder, the one the model is told when the skill loads, symlinks resolved: as the environment variable `CIRCLE_SKILL_DIR`, and as `skill_dir` in its JSON. Write the variable with braces and in double quotes, so one command works on every system and in a folder whose name has a space:
+The old file is kept beside, renamed `hooks.json.migrated`, and the transcript says what moved. An installed pack is not changed, since its files are checked against what was installed: its old `hooks.json` is not read, and the transcript says it should move to `hooks/hooks.json` or its frontmatter.
 
-```json
-{ "hooks": { "after_tool": [{ "name": "log", "command": "node \"${CIRCLE_SKILL_DIR}/scripts/log.mjs\"" }] } }
-```
+What carries over:
 
-`/bin/sh` reads `${CIRCLE_SKILL_DIR}` from the environment. On Windows Circle changes `${CIRCLE_SKILL_DIR}` in the command to `%CIRCLE_SKILL_DIR%` for `cmd.exe`, which reads it from the environment in turn, and Node takes the forward slashes. Either way the folder's name is not written into the command. Other hooks do not have the variable, even when Circle itself was started with one. Approval still covers only the bytes of `hooks.json`, wherever the skill is installed.
+- `before_tool` is `PreToolUse`, `after_tool` `PostToolUse`, `before_stop` `Stop`, `session_start` `SessionStart`, `permission_request` `PermissionRequest`, `user_prompt` `UserPromptSubmit`, `subagent_start` `SubagentStart`.
+- `tools` becomes the matcher. Each of `paths` becomes an `if` per tool and glob; a hook whose globs applied to every tool now applies to Circle's file tools (`read_file`, `write_file`, `edit_file`, `apply_patch`, `ls`, `glob`, `grep`, `vision`), and an MCP tool needs an `if` of its own.
+- `timeout_ms` becomes `timeout` in seconds; a hook without one gets the old default, 30.
+- A `before_tool` or `permission_request` hook gets `onFailure: "block"`, since a failure denied before.
+- `name`, `screenshot` and the per-system commands stay.
 
-This is optional. A skill with no `hooks.json` is unchanged, and Circle still does not run other scripts bundled in the skill.
+What changes all the same:
+
+- `loop_limit` is gone: Stop hooks send a turn back at most 8 times in a row (`CIRCLE_STOP_HOOK_BLOCK_CAP`), and a tool call starts the count again.
+- A gating hook that printed plain text and exited 0 used to deny; now it decides nothing.
+- A `before_stop` hook that failed used to block the stop; now it lets the turn end.
+- Plain text from an `after_tool` hook used to reach the model; a `PostToolUse` hook gives it with `additionalContext`.
+- `session_start` output was in the system prompt; it now opens the conversation, and comes back after a compaction.
+- A project's hooks no longer wait for you to approve each version of the file: trusting the folder is enough. `--approve-hooks` is still accepted and does nothing.
+
+## Not here yet
+
+- Hook types other than `command`: `http`, `mcp_tool`, `prompt` and `agent` are reported and do not load. So is `asyncRewake`.
+- `Elicitation` and `ElicitationResult` hooks, which come with the next MCP changes.
+- A `PermissionRequest` allow with `updatedInput` or `updatedPermissions`: the first leaves the card to you, the second is ignored.
+- `transcript_path`, `prompt_id`, `effort` and `agent_transcript_path` in the input.
+- Events Circle has no occasion for: `Setup`, `InstructionsLoaded`, `UserPromptExpansion`, `MessageDisplay`, `PermissionDenied`, `PostToolBatch`, the task, teammate, config, directory, file, worktree and model-switch events.
