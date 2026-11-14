@@ -34,6 +34,8 @@ export interface StubRequest {
     method: string;
     params?: Record<string, any>;
   };
+  /** The client's answer to the request the stub sent it during this call (`serverRequest`). */
+  reply?: { result?: Record<string, any>; error?: Record<string, any> };
 }
 export interface StubOptions {
   name?: string;
@@ -61,6 +63,13 @@ export interface StubOptions {
   connectionClose?: boolean;
   /** Cuts the connection once a request arrived, before any answer. */
   drop?: (request: StubRequest) => boolean;
+  /**
+   * A request the stub sends the client during a tools/call, on the call's event stream, such as
+   * `elicitation/create`; it answers the call once the client answered, with that answer as the call's `reply`.
+   */
+  serverRequest?: (
+    request: StubRequest,
+  ) => { method: string; params: Record<string, unknown> } | undefined;
   /** Messages sent on an event stream before the answer to a request, such as progress notices. */
   before?: (request: StubRequest) => Record<string, unknown>[] | undefined;
   /** Answers a request with an event stream that ends without the answer. */
@@ -91,6 +100,9 @@ export async function mcpStub(
   options: StubOptions = {},
 ): Promise<McpStub> {
   const requests: StubRequest[] = [];
+  // Requests the stub sent a client, by id, waiting for its answer
+  const asked = new Map<string, (reply: StubRequest['reply']) => void>();
+  let sent = 0;
   let stream: ServerResponse | undefined;
   const pushed: ServerResponse[] = [];
   const answer = async (request: StubRequest): Promise<unknown> => {
@@ -122,7 +134,12 @@ export async function mcpStub(
         ? options.call(request)
         : {
             content: [
-              { type: 'text', text: `ran ${String(message.params?.name)}` },
+              {
+                type: 'text',
+                text: request.reply
+                  ? `asked: ${JSON.stringify(request.reply)}`
+                  : `ran ${String(message.params?.name)}`,
+              },
             ],
           };
     return (await options.answer?.(request)) ?? {};
@@ -185,6 +202,17 @@ export async function mcpStub(
       response.writeHead(405).end();
       return;
     }
+    // The client's answer to a request the stub sent it
+    if (
+      request.message.method === undefined &&
+      request.message.id !== undefined
+    ) {
+      asked.get(String(request.message.id))?.(
+        request.message as StubRequest['reply'] & object,
+      );
+      response.writeHead(202).end();
+      return;
+    }
     if (request.message.id === undefined) {
       response.writeHead(202).end();
       return;
@@ -196,19 +224,32 @@ export async function mcpStub(
     // Messages that go before the answer are sent at once, so a client reads them while the answer is made
     const first =
       request.path === '/messages' ? undefined : options.before?.(request);
-    if (first?.length) {
+    const ask =
+      request.path !== '/messages' && request.message.method === 'tools/call'
+        ? options.serverRequest?.(request)
+        : undefined;
+    if (first?.length || ask)
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      for (const message of first)
-        response.write(
-          `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', ...message })}\n\n`,
-        );
+    for (const message of first ?? [])
+      response.write(
+        `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', ...message })}\n\n`,
+      );
+    if (ask) {
+      const id = `server-${++sent}`;
+      const answered = new Promise<StubRequest['reply']>((resolve) =>
+        asked.set(id, resolve),
+      );
+      response.write(
+        `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id, ...ask })}\n\n`,
+      );
+      request.reply = await answered;
     }
     const reply = JSON.stringify({
       jsonrpc: '2.0',
       id: request.message.id,
       result: await answer(request),
     });
-    if (first?.length) {
+    if (first?.length || ask) {
       response.end(`event: message\ndata: ${reply}\n\n`);
       return;
     }

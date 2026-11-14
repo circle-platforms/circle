@@ -106,9 +106,31 @@ A tool its server lists with `execution.taskSupport` `optional` or `required` ru
 
 1. Circle sends `tools/call` with `task: {}`, and the server answers at once with the task.
 2. Circle asks how the task stands with `tasks/get`, as often as its `pollInterval` says (at least 50 ms and at most 30 seconds apart; every second when it says nothing), and shows its state on the call's row: `task working · <its status message>`.
-3. Once the task has completed, failed or needs input, `tasks/result` gives the call's result, which reaches the model as any result does. A task the server cancelled is an error.
+3. Once the task has completed, failed or needs input, `tasks/result` gives the call's result, which reaches the model as any result does. A task that needs input asks for it meanwhile ([Questions from a server](#questions-from-a-server)). A task the server cancelled is an error.
 
 `esc` sends `tasks/cancel`. A tool that must run as a task (`required`) on a server that does not say it runs them is not sent, and the model reads `<tool> runs only as a task, and <server> does not say it runs tool calls as tasks; nothing was sent`. One that may (`optional`) is called there as any other is. Once the server has made the task the call has reached it, so a failure to follow the task counts as a connection that ended after the call was sent ([above](#when-a-calls-connection-fails)). The tasks of the 2026-07-28 revision, an extension there (`io.modelcontextprotocol/tasks`), come with an MCP library that speaks that revision.
+
+### Questions from a server
+
+A server can ask you for input in the middle of a call (`elicitation/create`). Circle takes the form kind of question, where the server names the fields it wants. It does not take the kind that asks you to open a page: the MCP library answers that one with an error (`-32602`), and Circle says so when it connects (`elicitation: {form: {}}`).
+
+The question panel the [`question` tool](tools.md) uses shows the form, headed by the server's name. The first question is the server's message, then a question follows for each field and a last one asks whether to send the answers:
+
+- **Yes or no** is chosen from `yes` and `no`.
+- **A list of values** is chosen from (`enum`, or `oneOf` with titles), and a list of several (an `array` of them) takes more than one.
+- **Text and numbers** are typed. A number must be one, a whole number when the server asks for one, and inside its bounds. Text must be of the length and kind the server asks for: an email address, an address (`uri`), a date or a date and time.
+- **An optional field** says `(optional)` and can be left empty. A field with a default says what an empty answer gives (`empty: …`).
+
+When an answer does not fit, the panel comes back saying what was wrong (`Not sent: …`), and nothing reaches the server until the answers fit. The server gets:
+
+| What you do                     | What the server gets                                       |
+| ------------------------------- | ---------------------------------------------------------- |
+| Answer **send** (or **accept**) | `accept`, with the answers as the values its form asks for |
+| Answer **decline**              | `decline`                                                  |
+| Close the panel                 | `cancel`                                                   |
+| Press `esc` on the call         | `cancel`                                                   |
+
+The server can also take its question back. In print, JSON, line and RPC mode no one can be asked, so the question is cancelled. A task that needs input (`input_required`) asks this way while Circle reads its result. The 2026-07-28 revision asks by a result instead (`input_required` with `inputResponses`), and comes with an MCP library that speaks that revision.
 
 ### What the model reads of a result
 

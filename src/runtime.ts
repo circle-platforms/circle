@@ -707,6 +707,10 @@ export class AgentRuntime {
       openUrl: this.options.openUrl,
       readFile: (path, context, limit) =>
         readFileBytes(this.sandbox, fileReads, path, context, limit),
+      // A server's question in the middle of a call is asked in the question panel (#556)
+      ask: this.options.question
+        ? (args, signal) => this.options.question!(args, signal)
+        : undefined,
       // A server that went away leaves the system prompt between turns, as tools do
       onChange: () => {
         if (this.closing) return;

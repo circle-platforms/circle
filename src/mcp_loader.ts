@@ -11,6 +11,8 @@ import {
   CallToolResultSchema,
   CancelTaskResultSchema,
   CreateTaskResultSchema,
+  ElicitRequestSchema,
+  type ElicitResult,
   ErrorCode,
   GetTaskResultSchema,
   ListToolsResultSchema,
@@ -38,6 +40,11 @@ import { isRecord } from './settings.js';
 import { Sandbox, secretLookingName, shellEnvironment } from './sandbox.js';
 import { readFileBytes } from './file_access.js';
 import { abortable } from './watch.js';
+import {
+  elicitationFields,
+  elicitationOutcome,
+  elicitationQuestions,
+} from './mcp_elicitation.js';
 import {
   McpAuthProvider,
   redirectPort,
@@ -139,6 +146,11 @@ export interface McpServices {
     context: ToolContext,
     limit: number,
   ) => Promise<{ path: string; bytes: Buffer }>;
+  /**
+   * Asks the person in the question panel, as the `question` tool does: what a server asks in the middle of a call
+   * (#556). Without it such a request is cancelled.
+   */
+  ask?: (args: Record<string, unknown>, signal: AbortSignal) => Promise<string>;
 }
 /**
  * A tool's file parameters: its top-level properties that are base64 text
@@ -425,6 +437,8 @@ interface CallStore {
   traceparent: string;
   sessionId?: string;
   agentId?: string;
+  /** Fires when the call is stopped, as by esc. */
+  signal?: AbortSignal;
   /** Ends the attempt under way: the stream its answer was to come on ended without it (#555). */
   lost?: (error: McpError) => void;
 }
@@ -1189,6 +1203,7 @@ export class McpManager {
             );
             context.signal.addEventListener('abort', forward, { once: true });
             if (context.signal.aborted) forward();
+            store.signal = own.signal;
             try {
               // A transport failure (#555). A request that surely never left this machine is sent again, a few
               // times. One that may have reached the server is sent again only for a tool its trusted server says
@@ -1444,11 +1459,19 @@ export class McpManager {
       ...(connection.notSent ? { notSent: connection.notSent } : {}),
     };
     // The platform is an extra member of clientInfo, a declaration a server may read or ignore.
-    const client = new Client({
-      name: 'circle',
-      version: VERSION,
-      platform: process.platform,
-    } as Implementation);
+    const client = new Client(
+      {
+        name: 'circle',
+        version: VERSION,
+        platform: process.platform,
+      } as Implementation,
+      // A server may ask the person for input in the middle of a call, with a form (#556). The MCP library answers a
+      // request of another mode (a page to open) with an error.
+      { capabilities: { elicitation: { form: {} } } },
+    );
+    client.setRequestHandler(ElicitRequestSchema, (request, extra) =>
+      this.elicit(connection.name, request.params, extra.signal),
+    );
     let transport: Transport | undefined;
     let provider: McpAuthProvider | undefined;
     const timeout = AbortSignal.timeout(this.timeout);
@@ -1882,6 +1905,50 @@ export class McpManager {
       }
     } finally {
       signal.removeEventListener('abort', cancel);
+    }
+  }
+  /**
+   * A server's question in the middle of a call (form mode, #556), in the question panel: a question for each field,
+   * then whether to send the answers. Answers that do not fit the form are asked for again; closing the panel, esc on
+   * the call, or the server's own cancellation cancels it. Without a panel (print, line and RPC mode) it is cancelled.
+   */
+  private async elicit(
+    server: string,
+    params: { message: string; requestedSchema?: unknown },
+    cancelled: AbortSignal,
+  ): Promise<ElicitResult> {
+    const ask = this.services.ask;
+    if (!ask) return { action: 'cancel' };
+    const call = toolCalls.getStore()?.signal;
+    const signal = AbortSignal.any([
+      cancelled,
+      this.lifetime.signal,
+      ...(call ? [call] : []),
+    ]);
+    const fields = elicitationFields(params.requestedSchema);
+    let problems: string[] = [];
+    for (;;) {
+      let reply: string;
+      try {
+        reply = await ask(
+          {
+            questions: elicitationQuestions(
+              server,
+              params.message,
+              fields,
+              problems,
+            ),
+          },
+          signal,
+        );
+      } catch (error) {
+        if (signal.aborted) return { action: 'cancel' };
+        throw error;
+      }
+      if (signal.aborted) return { action: 'cancel' };
+      const outcome = elicitationOutcome(fields, reply);
+      if (outcome.action !== 'again') return outcome;
+      problems = outcome.problems;
     }
   }
   /** Connects a server again for a call to be sent on, and gives its new client, or nothing if it is not back. */
