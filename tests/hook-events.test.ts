@@ -517,9 +517,14 @@ test('hooks files of the format before this one move into settings once and keep
   const notes = runtime.harness.messages
     .map((message) => message.display ?? '')
     .join('\n');
-  assert.match(notes, /your hooks: its hooks were moved into settings\.json/);
-  assert.match(notes, /loop_limit of guard was left out/);
+  assert.match(
+    notes,
+    /your hooks\.json: moved into .*settings\.json under hooks/,
+  );
+  assert.match(notes, /the paths of guard now apply to Circle's file tools/);
   assert.match(notes, /pack kit has hooks in the old format/);
+  // Each moved hook keeps what it was written for until it is rewritten
+  assert.equal(settings.hooks.PreToolUse[0].hooks[0].legacy, true);
   // Once: nothing is left to move the next time
   assert.equal(
     existsSync(join(dirname(join(home, 'hooks.json')), 'hooks.json')),

@@ -757,10 +757,26 @@ test('a shell-form hook runs in sh, in Git Bash on Windows, or in PowerShell wit
   assert.equal(powershell.file, 'powershell.exe');
   const encoded =
     powershell.args[powershell.args.indexOf('-EncodedCommand') + 1]!;
+  // A program's exit code is the hook's: PowerShell would give 1 for any failure
   assert.equal(
     Buffer.from(encoded, 'base64').toString('utf16le'),
-    '& "${env:CIRCLE_PROJECT_DIR}\\check.ps1"',
+    '& "${env:CIRCLE_PROJECT_DIR}\\check.ps1"\nif ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }',
   );
+  // PowerShell standing in for a missing Git Bash, and cmd.exe for a hook moved from the format before this one
+  assert.equal(
+    hookLaunch({ command: 'x' }, { PATH: '' }, 'win32').fallback,
+    true,
+  );
+  const cmd = hookLaunch(
+    { command: 'node "${CIRCLE_SKILL_DIR}/a.mjs"', legacy: true },
+    { ComSpec: 'C:\\Windows\\system32\\cmd.exe' },
+    'win32',
+  );
+  assert.deepEqual(cmd, {
+    file: 'C:\\Windows\\system32\\cmd.exe',
+    args: ['/d', '/s', '/c', '"node "%CIRCLE_SKILL_DIR%/a.mjs""'],
+    verbatim: true,
+  });
   // Exec form: no shell, the placeholders put in as text
   assert.deepEqual(
     hookLaunch(

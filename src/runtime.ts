@@ -280,12 +280,6 @@ export interface RuntimeOptions {
     signal: AbortSignal,
     origin?: InteractionContext,
   ) => Promise<void>;
-  /**
-   * Ask the person whether a project hooks file that was never approved, or changed
-   * since, may run: true approves exactly the bytes in `change`. Asked once per file
-   * version when a turn starts, and again after a reload or in a new session. Without
-   * it (print, line and rpc mode) such a file does not run and the turn says so.
-   */
 
   /**
    * The terminal's `circle -c`: a session another terminal holds opens view only
@@ -493,7 +487,11 @@ export class AgentRuntime {
     return this.ensureHooks().loaded;
   }
   /** Configured hooks and whether this session will run them. */
-  hookListing(): { hook: HookDefinition; active: boolean }[] {
+  hookListing(): {
+    hook: HookDefinition;
+    active: boolean;
+    spent: boolean;
+  }[] {
     return this.ensureHooks().listing();
   }
   readonly mcp: McpManager;
@@ -2256,7 +2254,7 @@ export class AgentRuntime {
   }
   /** Configured hooks, including skill hooks this session has not loaded. */
   listHooks(): {
-    hooks: { hook: HookDefinition; active: boolean }[];
+    hooks: { hook: HookDefinition; active: boolean; spent: boolean }[];
     untrusted: boolean;
     disabled: boolean;
     errors: HookLoadError[];
@@ -2692,6 +2690,7 @@ export class AgentRuntime {
   }
   /** Read hooks again. /reload uses this so a changed file applies to the next call. */
   reloadHooks(): void {
+    this.hookRunner?.close();
     this.hookRunner = undefined;
     if (this.harness) this.harness.options.hooks = this.ensureHooks();
   }
@@ -3335,6 +3334,7 @@ export class AgentRuntime {
     this.memorySession = undefined;
     this.todos = [];
     this.armedSkills.clear();
+    this.hookRunner?.close();
     this.hookRunner = undefined;
     this.harness = this.createHarness(this.options.model);
     this.nextSessionSource = undefined;
@@ -3364,6 +3364,7 @@ export class AgentRuntime {
     const repaired = this.store.get(session.id);
     if (repaired) this.session = repaired;
     this.armedSkills.clear();
+    this.hookRunner?.close();
     this.hookRunner = undefined;
     this.harness = this.createHarness(this.options.model);
     this.todos = restoredTodos(this.harness.messages);
@@ -3388,6 +3389,7 @@ export class AgentRuntime {
       this.store.claimSession(session.id, (error) => this.ownershipLost(error));
       this.session = session;
       this.armedSkills.clear();
+      this.hookRunner?.close();
       this.hookRunner = undefined;
       this.harness = this.createHarness(this.options.model);
       this.todos = restoredTodos(this.harness.messages);

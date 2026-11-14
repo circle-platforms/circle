@@ -26,7 +26,7 @@ Hooks from every place run together. A folder that is not trusted runs no hook o
 
 Circle reads the hooks when a session starts, on `/new`, when you switch or import a session, and on `/reload`.
 
-An installed pack's files are checked against what was installed before its hooks first run. A pack whose files do not match runs none of its hooks, and the transcript says why. A pack lists `hooks/hooks.json` in its `pack.json` like its other files.
+An installed pack's files are checked against what was installed before its hooks first run, both those in `hooks/hooks.json` and those in its `SKILL.md` frontmatter. A pack whose files do not match runs none of its hooks, and the transcript says why; a hook of it with `onFailure: "block"` blocks, since the check failed it. A pack lists `hooks/hooks.json` in its `pack.json` like its other files.
 
 ## The format
 
@@ -58,8 +58,8 @@ Each event holds matcher groups. A group's `matcher` says which occurrences of t
 | --- | --- |
 | `type` | `command`. Other types are reported and do not load; see [Not here yet](#not-here-yet). |
 | `command` | Without `args`, a shell command. With `args`, the program, started without a shell. |
-| `args` | The program's arguments, each passed as it is written. Use this form for a hook that names a path: no quoting is needed, and it runs the same on every system. |
-| `shell` | `bash` or `powershell`. On macOS and Linux a shell command runs with `sh -c`. On Windows it runs in Git Bash, or in PowerShell when Git Bash is not installed or `shell` is `powershell`. `CIRCLE_GIT_BASH_PATH` names Git Bash's `bash.exe` when it is somewhere else. |
+| `args` | The program's arguments, each passed as it is written. Use this form for a hook that names a path: no quoting is needed. It runs the same on every system for a real program such as `node`; on Windows an `npx` or `npm` is a `.cmd` file that only a shell runs, so call `node` with the script's path instead, or use the shell form. |
+| `shell` | `bash` or `powershell`. On macOS and Linux a shell command runs with `sh -c`. On Windows it runs in Git Bash, or in PowerShell when Git Bash is not installed or `shell` is `powershell`. `CIRCLE_GIT_BASH_PATH` names Git Bash's `bash.exe` when it is somewhere else. In PowerShell the hook's exit code is that of the last program it ran. Without Git Bash, a `PreToolUse` or `PermissionRequest` hook with no `shell` set counts only exit 0 and 2 as its answer: anything else blocks the call, unless the hook says `"onFailure": "continue"`. |
 | `timeout` | Seconds. 600 by default; 30 for `UserPromptSubmit`. `SessionEnd` hooks share 1.5 seconds, raised to the longest `timeout` among them, at most 60 (`CIRCLE_SESSIONEND_HOOKS_TIMEOUT_MS` sets it). |
 | `if` | One rule the call must match: see [Matching](#matching). |
 | `onFailure` | `block` makes a hook that fails stop what it is about, as an exit 2 would. Without it a failure lets the action go ahead. See [When a hook fails](#when-a-hook-fails). |
@@ -74,6 +74,7 @@ Circle's own fields beside those:
 | `name` | What the transcript, `/hooks` and the desktop settings call the hook. Without it, the command is the name. |
 | `screenshot` | `true` on a `PostToolUse` hook gives it a PNG of the page the conversation's browser shows. See [A screenshot for the hook](#a-screenshot-for-the-hook). |
 | `command_windows`, `command_darwin`, `command_linux` | The command on that system, in place of `command`. |
+| `legacy`, `loopLimit` | Set by the move from the format before this one (see [Moving from the format before](#moving-from-the-format-before)): the hook keeps the input fields, shell and meanings it was written for. Remove them when the script is rewritten. |
 
 A file with a mistake loses that entry only: the transcript names the file and the problem, and the other entries still load. An event Circle has no occasion for (`Setup`, `FileChanged`, …) is reported the same way.
 
@@ -103,7 +104,7 @@ What the matcher is tested against depends on the event:
 
 `if` holds one rule, a tool's name with what its call must match in parentheses. It is read on the four tool events only; a hook with `if` on another event never runs.
 
-- `execute(git *)` runs for a command any part of which matches: `npm test && git push`, or `FOO=1 git status`. A command with `$(…)` or backticks always runs the hook, since what runs inside cannot be told.
+- `execute(git *)` runs for a command any part of which matches: `npm test && git push`, `FOO=1 git status`, `if …; then git push; fi`, `time git push` or `/usr/bin/git push`. A command whose part hands a command to another program (`bash -c`, `eval`, `xargs`, `find -exec`, `ssh`, …), or has `$(…)` or backticks, always runs the hook, since what it runs cannot be told.
 - A tool that names paths (`write_file(src/**)`) matches when a path it names matches the glob. `*` stays in one folder, `**` crosses folders, `?` is one character; a relative glob is from the workspace, and an absolute one is matched against the real path, symlinks resolved. Case does not matter on Windows. An MCP tool's file parameters count as its paths.
 - A tool with neither runs the hook whatever the pattern.
 
@@ -160,7 +161,7 @@ The fields of each event:
 | `PostToolUse` | Those of `PreToolUse`, `tool_response` (the text the model would read) and `duration_ms` |
 | `PostToolUseFailure` | Those of `PreToolUse`, `error`, `is_interrupt` and `duration_ms` |
 | `UserPromptSubmit` | `prompt`, the message as you wrote it |
-| `Stop` | `stop_hook_active`, `last_assistant_message`, `background_tasks` (the jobs still running) and `session_crons` (always empty) |
+| `Stop` | `stop_hook_active` (true once a Stop hook has sent this turn back to work, whatever the model did since), `last_assistant_message`, `background_tasks` (the jobs still running) and `session_crons` (always empty) |
 | `SubagentStart` | `agent_id`, `agent_type`, and Circle's `description`, the task the model wrote |
 | `SubagentStop` | `agent_id`, `agent_type`, `stop_hook_active`, `last_assistant_message` |
 | `SessionStart` | `source`, `model` |
@@ -229,7 +230,7 @@ The matching hooks of an event run at the same time, and Circle waits for all of
 
 ### When a hook fails
 
-A hook fails when it cannot start, times out, exits with another code than 0 or 2 without a JSON answer, or answers with output that cannot be read. By default the action goes ahead, and the transcript says `hook failed · name · why`; the model is told only that the hook failed. With `"onFailure": "block"` the failure blocks as an exit 2 would, and on `PermissionRequest` it denies. It has no effect on `Stop`, `SubagentStop` and background hooks.
+A hook fails when it cannot start, times out, exits with another code than 0 or 2 without a JSON answer, or answers with output that cannot be read. A hook whose own process has ended while something it started still holds its output open is read for 10 more seconds; then its output is not trusted, which blocks a `PreToolUse` or `PermissionRequest` call. A hook that starts something in the background prints its answer first and sends that program's output elsewhere (`> log 2>&1 &`). By default the action goes ahead, and the transcript says `hook failed · name · why`; the model is told only that the hook failed. With `"onFailure": "block"` the failure blocks as an exit 2 would, and on `PermissionRequest` it denies. It has no effect on `Stop`, `SubagentStop` and background hooks.
 
 A hook that guards something should set `onFailure: "block"`, and exit 2 or answer with JSON to refuse.
 
@@ -324,7 +325,7 @@ Circle used to read hooks from separate `hooks.json` files with its own event na
 
 - `hooks.json` in the data folder goes into your `settings.json`.
 - A trusted project's `.circle/hooks.json` goes into its `.circle/settings.json`.
-- A `hooks.json` beside a skill of your own goes into its `SKILL.md` frontmatter. A project's skills move once the folder is trusted.
+- A `hooks.json` beside a skill in Circle's own skill folders (`skills` in the data folder, and a project's `.circle/skills`) goes into its `SKILL.md` frontmatter. A project's skills move once the folder is trusted.
 
 The old file is kept beside, renamed `hooks.json.migrated`, and the transcript says what moved. An installed pack is not changed, since its files are checked against what was installed: its old `hooks.json` is not read, and the transcript says it should move to `hooks/hooks.json` or its frontmatter.
 
@@ -333,17 +334,20 @@ What carries over:
 - `before_tool` is `PreToolUse`, `after_tool` `PostToolUse`, `before_stop` `Stop`, `session_start` `SessionStart`, `permission_request` `PermissionRequest`, `user_prompt` `UserPromptSubmit`, `subagent_start` `SubagentStart`.
 - `tools` becomes the matcher. Each of `paths` becomes an `if` per tool and glob; a hook whose globs applied to every tool now applies to Circle's file tools (`read_file`, `write_file`, `edit_file`, `apply_patch`, `ls`, `glob`, `grep`, `vision`), and an MCP tool needs an `if` of its own.
 - `timeout_ms` becomes `timeout` in seconds; a hook without one gets the old default, 30.
-- A `before_tool` or `permission_request` hook gets `onFailure: "block"`, since a failure denied before.
+- A `before_tool` or `permission_request` hook gets `onFailure: "block"`.
 - `name`, `screenshot` and the per-system commands stay.
+- Every moved hook is marked `"legacy": true`, which keeps what it was written for until you rewrite it:
+  - its input also has the earlier fields (`event` with the earlier name, `hook`, `source`, `source_label`, `tool_output` and `tool_status` after a tool, `permission_reason`, `stop_attempt`);
+  - on Windows its shell command runs in `cmd.exe`, as before, with `${CIRCLE_SKILL_DIR}` read as `%CIRCLE_SKILL_DIR%`;
+  - on `PreToolUse`, `PermissionRequest` and `Stop`, plain text with exit 0, any failure, and on `PermissionRequest` exit 2, refuse as they did;
+  - its plain text after a tool, at session start, for a message and to a subagent reaches the model as it did;
+  - a `before_stop` hook blocks at most `loopLimit` times a session (its `loop_limit`, 5 by default).
 
 What changes all the same:
 
-- `loop_limit` is gone: Stop hooks send a turn back at most 8 times in a row (`CIRCLE_STOP_HOOK_BLOCK_CAP`), and a tool call starts the count again.
-- A gating hook that printed plain text and exited 0 used to deny; now it decides nothing.
-- A `before_stop` hook that failed used to block the stop; now it lets the turn end.
-- Plain text from an `after_tool` hook used to reach the model; a `PostToolUse` hook gives it with `additionalContext`.
 - `session_start` output was in the system prompt; it now opens the conversation, and comes back after a compaction.
 - A project's hooks no longer wait for you to approve each version of the file: trusting the folder is enough. `--approve-hooks` is still accepted and does nothing.
+- A `hooks.json` beside a skill in another agent's folder (`.claude/skills`, `.agents/skills`, …) is not changed and not read: the transcript names it, and its hooks belong in that skill's frontmatter. One whose `SKILL.md` frontmatter is not YAML stays where it is too, and the transcript says so.
 
 ## Not here yet
 

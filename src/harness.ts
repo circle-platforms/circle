@@ -327,6 +327,8 @@ export class Harness {
   }
   /** How many times in a row Stop hooks sent this turn back to work; a tool call starts the count again. */
   private stopContinuations = 0;
+  /** A Stop hook has sent this turn back to work: the next Stop hooks are told so. */
+  private stopHookActive = false;
   /** A hook said `continue: false`: the turn ends once the calls under way are done. */
   private hookStop: string | undefined;
   private hookNotes: Message[] = [];
@@ -1139,6 +1141,9 @@ export class Harness {
         ? undefined
         : this.shownAs(prompt);
     this.stopContinuations = 0;
+    this.stopHookActive = false;
+    // A `continue: false` belongs to the turn it was said in
+    this.hookStop = undefined;
     // SessionStart's words come before the first prompt
     await this.announceHooks(signal);
     if (prompt !== undefined) {
@@ -1220,7 +1225,8 @@ export class Harness {
             continue;
           const verdict = await this.promptHooks(message, signal);
           signal.throwIfAborted();
-          if (version !== this.queueVersion || this.steering[0] !== message)
+          // Taken back or replaced while the hooks ran: the next message is read; others queued meanwhile wait
+          if (this.steeringIds[0] !== input.id || this.steering[0] !== message)
             continue;
           if (verdict && (verdict.blocked || verdict.stop)) {
             this.dropInput(input, this.blockedPrompt(message, verdict));
@@ -1540,10 +1546,15 @@ export class Harness {
       ...notice,
       reason: notice.message || notice.reason,
     });
-    const told = hookNoticeText({
-      ...notice,
-      reason: notice.kind === 'failed' || given ? undefined : notice.reason,
-    });
+    const told = escapeReminder(
+      hookNoticeText({
+        ...notice,
+        reason:
+          notice.kind === 'failed' || notice.kind === 'message' || given
+            ? undefined
+            : notice.reason,
+      }),
+    );
     this.hookNotes.push({
       id: randomUUID(),
       role: 'user',
@@ -1739,7 +1750,7 @@ export class Harness {
       event: 'Stop',
       ...this.hookBase(),
       fields: {
-        stop_hook_active: this.stopContinuations > 0,
+        stop_hook_active: this.stopHookActive,
         last_assistant_message: answer,
         background_tasks: this.options.backgroundTasks?.() ?? [],
         session_crons: [],
@@ -1758,6 +1769,7 @@ export class Harness {
       return false;
     }
     this.stopContinuations++;
+    this.stopHookActive = true;
     const reason = batch.reason || 'hook blocked stop';
     const notice: HookNotice = batch.blocked
       ? {
@@ -1794,6 +1806,7 @@ export class Harness {
     args: Record<string, unknown>,
     paths: string[],
     signal: AbortSignal,
+    fields?: Record<string, unknown>,
   ): Promise<HookBatch | undefined> {
     if (!this.options.hooks?.has(event)) return undefined;
     const batch = await this.options.hooks.run({
@@ -1803,6 +1816,7 @@ export class Harness {
       toolInput: args,
       toolUseId: call.id,
       paths,
+      ...(fields ? { fields } : {}),
       signal,
     });
     // Every deny's reason is in the tool result (`Hook denied this call:`). An ask's is not on every path.
@@ -1908,6 +1922,8 @@ export class Harness {
     let hookArgs: Record<string, unknown> = {};
     let hookPaths: string[] = [];
     let ranAt: number | undefined;
+    // What the PreToolUse hooks said, for their words beside the result
+    let preHook: HookBatch | undefined;
     let attachments: MediaAttachment[] = [];
     let acceptingAttachments = true;
     let previousExecutionId: string | undefined;
@@ -2021,6 +2037,7 @@ export class Harness {
         checked.paths,
         signal,
       );
+      preHook = before;
       if (before?.decision === 'deny')
         throw new Error(hookDeniedMessage(before.reason || 'hook denied'));
       // Hooks that each rewrote the call differently leave no form it can run in
@@ -2136,6 +2153,7 @@ export class Harness {
           resolved,
           paths,
           signal,
+          found.reason ? { permission_reason: found.reason } : undefined,
         );
         if (permission?.decision === 'deny') {
           if (permission.interrupt)
@@ -2324,6 +2342,17 @@ export class Harness {
       }
     } finally {
       acceptingAttachments = false;
+    }
+    // What PreToolUse hooks said for the model goes beside the result, as what the hooks after the tool say does
+    if (preHook?.context) {
+      const names = preHook.outcomes
+        .filter(
+          (item) =>
+            item.answer?.additionalContext &&
+            item.answer.permissionDecision !== 'defer',
+        )
+        .map((item) => item.hook.name);
+      content = `${content}\n\n${HOOK_OUTPUT_LINE} (${[...new Set(names)].join(', ') || 'hook'}):\n${preHook.context}`;
     }
     if (changedLine) content = `${changedLine}\n\n${content}`;
     // A command or a page may show a secret back: the model reads its name instead, for the

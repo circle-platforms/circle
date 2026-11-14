@@ -461,6 +461,14 @@ const PLAIN_FOR_MODEL = new Set<HookEvent>([
   'SessionStart',
   'PreCompact',
 ]);
+/** Whether a hook's plain output reaches the model: the format before this one fed it back after a tool too. */
+function plainForModel(event: HookEvent, hook: HookDefinition): boolean {
+  return (
+    PLAIN_FOR_MODEL.has(event) ||
+    (hook.legacy === true &&
+      (event === 'PostToolUse' || event === 'SubagentStart'))
+  );
+}
 /** Events whose `systemMessage` and `continue` are not used. */
 const QUIET = new Set<HookEvent>([
   'Notification',
@@ -516,7 +524,7 @@ export function readHookAnswer(
     return read;
   };
   try {
-    if (value.continue !== undefined) {
+    if (value.continue != null) {
       if (typeof value.continue !== 'boolean')
         throw new Error('continue must be true or false');
       answer.continue = value.continue;
@@ -524,14 +532,14 @@ export function readHookAnswer(
     answer.stopReason = text(value, 'stopReason');
     answer.systemMessage = text(value, 'systemMessage');
     if (
-      value.suppressOutput !== undefined &&
+      value.suppressOutput != null &&
       typeof value.suppressOutput !== 'boolean'
     )
       throw new Error('suppressOutput must be true or false');
     text(value, 'terminalSequence');
     answer.reason = text(value, 'reason');
     const specific = value.hookSpecificOutput;
-    if (specific !== undefined) {
+    if (specific != null) {
       if (!isRecord(specific))
         throw new Error('hookSpecificOutput must be an object');
       if (specific.hookEventName !== event)
@@ -543,7 +551,7 @@ export function readHookAnswer(
       );
       if (event === 'PreToolUse') {
         const decision = specific.permissionDecision;
-        if (decision !== undefined) {
+        if (decision != null) {
           if (
             decision !== 'allow' &&
             decision !== 'deny' &&
@@ -560,13 +568,13 @@ export function readHookAnswer(
           'permissionDecisionReason',
           'hookSpecificOutput.permissionDecisionReason',
         );
-        if (specific.updatedInput !== undefined) {
+        if (specific.updatedInput != null) {
           if (!isRecord(specific.updatedInput))
             throw new Error('updatedInput must be an object');
           answer.updatedInput = specific.updatedInput;
         }
       }
-      if (event === 'PermissionRequest' && specific.decision !== undefined) {
+      if (event === 'PermissionRequest' && specific.decision != null) {
         const decision = specific.decision;
         if (
           !isRecord(decision) ||
@@ -618,7 +626,7 @@ export function readHookAnswer(
       }
     }
     const decision = value.decision;
-    if (decision !== undefined) {
+    if (decision != null) {
       if (typeof decision !== 'string')
         throw new Error('decision must be text');
       if (event === 'PreToolUse' || event === 'PermissionRequest') {
@@ -699,12 +707,23 @@ interface CommandResult {
   exitCode: number | null;
   timedOut: boolean;
   error?: string;
+  /** The hook's process ended and something it started kept its output open: what was read may be cut. */
+  suspect?: boolean;
 }
+
+/** How long a hook's output is read after its own process ends. */
+const CLOSE_GRACE_MS = 10_000;
+/** The longest a timer can wait. */
+const MAX_TIMER_MS = 2_147_483_647;
 
 /** The program a hook starts and its arguments. */
 export interface HookLaunch {
   file: string;
   args: string[];
+  /** PowerShell runs a hook written for a shell because Git Bash was not found. */
+  fallback?: boolean;
+  /** cmd.exe takes its command line as written. */
+  verbatim?: boolean;
 }
 
 /** Git Bash on Windows: never the bash.exe in System32, which is WSL's. */
@@ -744,7 +763,7 @@ function powershell(env: NodeJS.ProcessEnv): string {
  * `${env:NAME}`; the other shells read `${NAME}` from the environment as it is.
  */
 export function hookLaunch(
-  hook: Pick<HookDefinition, 'command' | 'args' | 'shell'>,
+  hook: Pick<HookDefinition, 'command' | 'args' | 'shell' | 'legacy'>,
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
 ): HookLaunch {
@@ -758,12 +777,26 @@ export function hookLaunch(
   }
   if (platform !== 'win32')
     return { file: '/bin/sh', args: ['-c', hook.command] };
+  // A hook moved from the format before this one keeps the shell it was written for: cmd.exe
+  if (hook.legacy && !hook.shell) {
+    const line = PLACEHOLDERS.reduce(
+      (result, name) => result.replaceAll(`\${${name}}`, `%${name}%`),
+      hook.command,
+    );
+    return {
+      file: env.ComSpec ?? env.COMSPEC ?? 'cmd.exe',
+      args: ['/d', '/s', '/c', `"${line}"`],
+      verbatim: true,
+    };
+  }
   const bash = hook.shell === 'powershell' ? undefined : gitBash(env);
   if (bash) return { file: bash, args: ['-c', hook.command] };
-  const script = PLACEHOLDERS.reduce(
-    (result, name) => result.replaceAll(`\${${name}}`, `\${env:${name}}`),
-    hook.command,
-  );
+  // A program's exit code is the hook's: PowerShell would otherwise give 1 for any failure
+  const script =
+    PLACEHOLDERS.reduce(
+      (result, name) => result.replaceAll(`\${${name}}`, `\${env:${name}}`),
+      hook.command,
+    ) + '\nif ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }';
   return {
     file: powershell(env),
     args: [
@@ -772,6 +805,7 @@ export function hookLaunch(
       '-EncodedCommand',
       Buffer.from(script, 'utf16le').toString('base64'),
     ],
+    ...(hook.shell === 'powershell' ? {} : { fallback: true }),
   };
 }
 
@@ -784,6 +818,7 @@ function runHookCommand(
   env: NodeJS.ProcessEnv,
   /** A background hook: its process is kept so the session can end it. */
   track?: (child: ChildProcess, done: boolean) => void,
+  closeGraceMs = CLOSE_GRACE_MS,
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
     let stdout = '';
@@ -803,6 +838,7 @@ function runHookCommand(
         shell: false,
         detached: process.platform !== 'win32',
         windowsHide: true,
+        ...(launch.verbatim ? { windowsVerbatimArguments: true } : {}),
         stdio: ['pipe', 'pipe', 'pipe'],
       });
     } catch (error) {
@@ -849,16 +885,39 @@ function runHookCommand(
       escalation ??= setTimeout(() => kill(true), 500);
     };
     const timer =
-      timeoutMs > 0 ? setTimeout(() => stop(true), timeoutMs) : undefined;
+      timeoutMs > 0
+        ? setTimeout(() => stop(true), Math.min(timeoutMs, MAX_TIMER_MS))
+        : undefined;
+    let quiet: NodeJS.Timeout | undefined;
     const onAbort = () => stop(false);
     if (signal?.aborted) onAbort();
     else signal?.addEventListener('abort', onAbort, { once: true });
     const done = () => {
       if (timer) clearTimeout(timer);
       if (escalation) clearTimeout(escalation);
+      if (quiet) clearTimeout(quiet);
       signal?.removeEventListener('abort', onAbort);
       track?.(child, true);
     };
+    // Something the hook started in the background can hold its output open after it has ended: read a little
+    // longer, then stop waiting, and say the output may be cut
+    child.once('exit', (code) => {
+      quiet = setTimeout(() => {
+        done();
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        finish({
+          stdout: clip(stdout + decoders.out.end()),
+          stderr: clip(stderr + decoders.err.end()),
+          exitCode: code,
+          timedOut,
+          suspect: true,
+          error:
+            'stdio went quiet after the hook exited, refusing to honor the suspect capture',
+        });
+      }, closeGraceMs);
+      quiet.unref?.();
+    });
     child.once('error', (error) => {
       done();
       finish({
@@ -886,12 +945,21 @@ function runHookCommand(
   });
 }
 
-/** What one hook's run comes to. */
-function interpret(
+/** Events that judged a call, or the end of a turn, in the format before this one: a failure there stopped it. */
+const LEGACY_GATING = new Set<HookEvent>([
+  'PreToolUse',
+  'PermissionRequest',
+  'Stop',
+]);
+
+/** What one run of a hook comes to. Exported for tests of the rules no other system here can show. */
+export function interpretHookRun(
   hook: HookDefinition,
   event: HookEvent,
   result: CommandResult,
   aborted: boolean,
+  /** PowerShell stood in for a missing Git Bash. */
+  fallback = false,
 ): Omit<
   HookOutcome,
   'hook' | 'exitCode' | 'timedOut' | 'stdout' | 'stderr' | 'durationMs'
@@ -906,24 +974,41 @@ function interpret(
     stopped: false,
   };
   if (aborted && !result.timedOut) return { ...none, stopped: true };
+  const gate = event === 'PreToolUse' || event === 'PermissionRequest';
+  // Without Git Bash, a guard written for a shell runs in PowerShell: only 0 and 2 are its verdicts, and anything
+  // else blocks unless the hook says the call goes on
+  const strict = fallback && gate && hook.onFailure !== 'continue';
+  const legacy = hook.legacy === true && LEGACY_GATING.has(event);
   // A failure lets the action go ahead, unless the hook says it blocks on failure. Stop hooks and background hooks
   // cannot: Circle would only send the model back to work on a hook it cannot repair.
-  const failure = (cause: string) => {
+  const failure = (cause: string, suspect = false) => {
+    const why =
+      hook.onFailure === 'block'
+        ? 'onFailure is "block"'
+        : strict
+          ? "Git Bash wasn't found, so only exit code 0 or 2 counts as this hook's verdict"
+          : legacy
+            ? 'it was a gating hook in the format before this one'
+            : 'its output cannot be trusted';
     const blocks =
-      hook.onFailure === 'block' &&
       !hook.async &&
-      event !== 'Stop' &&
-      event !== 'SubagentStop';
+      ((hook.onFailure === 'block' &&
+        event !== 'Stop' &&
+        event !== 'SubagentStop') ||
+        strict ||
+        legacy ||
+        (suspect && gate));
     return {
       ...none,
       failed: true,
       cause,
       blocking: blocks,
       blockText: blocks
-        ? `hook ${hook.name} ${result.timedOut ? 'timed out' : 'failed'}; blocking because onFailure is "block": ${cause}`
+        ? `hook ${hook.name} ${result.timedOut ? 'timed out' : 'failed'}; blocking because ${why}: ${cause}`
         : '',
     };
   };
+  if (result.suspect) return failure(result.error ?? 'output was cut', true);
   if (result.timedOut)
     return failure(
       `timed out after ${Math.round((hook.timeout ?? defaultTimeoutMs(event) / 1000) * 10) / 10}s`,
@@ -941,6 +1026,13 @@ function interpret(
     };
   if (result.exitCode === 0) {
     if (reading.invalid !== undefined) return failure(reading.invalid);
+    // A gating hook of the format before this one that printed text and no JSON refused
+    if (legacy && reading.plain)
+      return {
+        ...none,
+        blocking: true,
+        blockText: 'hook output is not JSON',
+      };
     return {
       ...none,
       ...(reading.answer ? { answer: reading.answer } : {}),
@@ -952,7 +1044,9 @@ function interpret(
   if (
     reading.invalid === undefined &&
     reading.answer &&
-    hook.onFailure !== 'block'
+    hook.onFailure !== 'block' &&
+    !strict &&
+    !legacy
   )
     return { ...none, answer: reading.answer, legacy: reading.legacy };
   const why = firstLine(result.stderr);
@@ -1033,7 +1127,7 @@ export function combineOutcomes(
         });
     } else if (event === 'PermissionRequest') {
       // A blocking exit does not answer a permission request; a failure of a hook that blocks on failure denies it
-      if (outcome.blocking && outcome.failed)
+      if (outcome.blocking && (outcome.failed || outcome.hook.legacy))
         decided.push({
           decision: 'deny',
           reason: outcome.blockText,
@@ -1086,7 +1180,7 @@ export function combineOutcomes(
     }
     if (answer?.additionalContext && answer.permissionDecision !== 'defer')
       contexts.push(capText(answer.additionalContext));
-    if (outcome.plain && PLAIN_FOR_MODEL.has(event))
+    if (outcome.plain && plainForModel(event, hook))
       contexts.push(capText(outcome.plain));
     if (message) {
       messages.push(message);
@@ -1176,7 +1270,7 @@ export function combineOutcomes(
     const context =
       (outcome.answer?.permissionDecision !== 'defer' &&
         outcome.answer?.additionalContext) ||
-      (PLAIN_FOR_MODEL.has(event) ? outcome.plain : '');
+      (plainForModel(event, outcome.hook) ? outcome.plain : '');
     if (context)
       notices.push({
         kind: 'output',
@@ -1225,9 +1319,9 @@ function conditionMatches(
         : '';
     // What runs inside a substitution cannot be told: the hook runs
     if (/\$\(|`/.test(command)) return true;
-    const segments = commandSegments(command, platform);
-    if (!segments?.length) return true;
-    return segments.some((segment) =>
+    const read = commandSegments(command, platform);
+    if (!read?.segments.length || read.uncertain) return true;
+    return read.segments.some((segment) =>
       matchPattern(pattern, segment, platform === 'win32'),
     );
   }
@@ -1256,7 +1350,20 @@ export interface HookRunnerOptions {
   run?: typeof runHookCommand;
   /** Checks an installed pack's files before its hooks first run; a problem keeps them off. */
   verifyPack?: (directory: string) => Promise<string | undefined>;
+  /** How long a hook's output is read after its own process ends. Tests shorten it. */
+  closeGraceMs?: number;
 }
+
+/** The names the format before this one gave the events. */
+const OLD_NAMES: Partial<Record<HookEvent, string>> = {
+  PreToolUse: 'before_tool',
+  PostToolUse: 'after_tool',
+  Stop: 'before_stop',
+  SessionStart: 'session_start',
+  PermissionRequest: 'permission_request',
+  UserPromptSubmit: 'user_prompt',
+  SubagentStart: 'subagent_start',
+};
 
 export class HookRunner {
   /** Skills loaded in this session. Their hooks stay off until then. */
@@ -1267,6 +1374,9 @@ export class HookRunner {
   private packChecks = new Map<string, Promise<string | undefined>>();
   /** Hooks already told of for answering in the old format. */
   private toldLegacy = new Set<string>();
+  /** How many times each Stop hook of the format before this one has blocked, and those past their limit. */
+  private stopBlocks = new Map<string, number>();
+  private limited = new Set<string>();
   /** Background hooks still running, ended with the session. */
   private background = new Set<ChildProcess>();
   /** What background hooks said, for the next request of the conversation or subagent that started them. */
@@ -1300,10 +1410,11 @@ export class HookRunner {
   }
 
   /** Every configured hook, including a skill hook this session has not loaded. */
-  listing(): { hook: HookDefinition; active: boolean }[] {
+  listing(): { hook: HookDefinition; active: boolean; spent: boolean }[] {
     return this.loaded.hooks.map((hook) => ({
       hook,
       active: this.armedHook(hook),
+      spent: this.spent.has(hook.id),
     }));
   }
 
@@ -1384,18 +1495,54 @@ export class HookRunner {
     const packs = [
       ...new Set(chosen.filter((hook) => hook.pack).map((hook) => hook.pack!)),
     ];
+    const unchecked: HookOutcome[] = [];
     for (const pack of packs) {
       const problem = await this.checkPack(
         chosen.find((hook) => hook.pack === pack)!,
       );
       if (!problem) continue;
+      // A guard that blocks on failure blocks: a pack that does not check out has failed it
+      for (const hook of chosen.filter((item) => item.pack === pack))
+        if (
+          hook.onFailure === 'block' &&
+          !hook.async &&
+          request.event !== 'Stop' &&
+          request.event !== 'SubagentStop'
+        )
+          unchecked.push({
+            hook,
+            exitCode: null,
+            timedOut: false,
+            stdout: '',
+            stderr: '',
+            durationMs: 0,
+            failed: true,
+            cause: problem,
+            blocking: true,
+            blockText: `hook ${hook.name} failed; blocking because onFailure is "block": pack ${pack}: ${problem}`,
+            plain: '',
+            legacy: false,
+            stopped: false,
+          });
       chosen = chosen.filter((hook) => hook.pack !== pack);
       notices.push({ kind: 'failed', name: `pack ${pack}`, reason: problem });
     }
+    // A Stop hook of the format before this one stops blocking after its limit for the session
+    if (request.event === 'Stop' || request.event === 'SubagentStop')
+      chosen = chosen.filter((hook) => {
+        if (!hook.legacy) return true;
+        const limit = hook.loopLimit ?? 5;
+        if ((this.stopBlocks.get(hook.id) ?? 0) < limit) return true;
+        if (!this.limited.has(hook.id)) {
+          this.limited.add(hook.id);
+          notices.push({ kind: 'limit', name: hook.name });
+        }
+        return false;
+      });
     if (!chosen.length) {
       const batch = combineOutcomes(
         request.event,
-        [],
+        unchecked,
         request.toolInput,
         request.secrets ?? {},
         request.toolName,
@@ -1430,12 +1577,20 @@ export class HookRunner {
         };
       })());
     try {
-      const outcomes = await this.runChosen(
-        request,
-        chosen,
-        screenshot,
-        pathOptions,
-      );
+      const outcomes = [
+        ...unchecked,
+        ...(await this.runChosen(request, chosen, screenshot, pathOptions)),
+      ];
+      for (const outcome of outcomes)
+        if (
+          outcome.hook.legacy &&
+          (request.event === 'Stop' || request.event === 'SubagentStop') &&
+          (outcome.blocking || outcome.answer?.block)
+        )
+          this.stopBlocks.set(
+            outcome.hook.id,
+            (this.stopBlocks.get(outcome.hook.id) ?? 0) + 1,
+          );
       const batch = combineOutcomes(
         request.event,
         outcomes,
@@ -1535,18 +1690,20 @@ export class HookRunner {
         ...eventFields,
         ...(hook.skillDir ? { skill_dir: hook.skillDir } : {}),
         ...(file ? { files: [file] } : {}),
+        ...(hook.legacy ? this.legacyFields(hook, request, eventFields) : {}),
       });
       const env = this.environment(hook, request, secrets);
       const timeoutMs = hook.async
         ? 0
         : hook.timeout !== undefined
-          ? hook.timeout * 1000
+          ? Math.min(hook.timeout * 1000, MAX_TIMER_MS)
           : defaultTimeoutMs(request.event);
+      const launch = hookLaunch(hook, env, platform);
       const run = this.options.run ?? runHookCommand;
       let result: CommandResult;
       try {
         result = await run(
-          hookLaunch(hook, env, platform),
+          launch,
           request.cwd,
           stdin,
           timeoutMs,
@@ -1558,6 +1715,7 @@ export class HookRunner {
                 else this.background.add(child);
               }
             : undefined,
+          this.options.closeGraceMs,
         );
       } catch (error) {
         result = {
@@ -1575,11 +1733,12 @@ export class HookRunner {
         stdout: result.stdout,
         stderr: result.stderr,
         durationMs: Date.now() - started,
-        ...interpret(
+        ...interpretHookRun(
           hook,
           request.event,
           result,
           !hook.async && !!signal?.aborted,
+          launch.fallback === true,
         ),
       };
       this.log(request, outcome, secrets);
@@ -1609,6 +1768,26 @@ export class HookRunner {
     } finally {
       if (budgetTimer) clearTimeout(budgetTimer);
     }
+  }
+
+  /** The input fields a hook moved from the format before this one was written for. */
+  private legacyFields(
+    hook: HookDefinition,
+    request: HookRunRequest,
+    fields: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      event: OLD_NAMES[request.event] ?? request.event,
+      hook: hook.name,
+      source: hook.source === 'local' ? 'project' : hook.source,
+      source_label: hook.source === 'local' ? 'project' : hook.sourceLabel,
+      ...(request.event === 'PostToolUse'
+        ? { tool_output: fields.tool_response, tool_status: 'success' }
+        : {}),
+      ...(request.event === 'Stop' || request.event === 'SubagentStop'
+        ? { stop_attempt: (this.stopBlocks.get(hook.id) ?? 0) + 1 }
+        : {}),
+    };
   }
 
   private environment(

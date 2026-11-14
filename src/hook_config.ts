@@ -3,7 +3,7 @@
 // skill's SKILL.md frontmatter. Each event holds matcher groups, and each group the handlers that run when it matches.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { discoverSkills } from './skills.js';
 import { isRecord } from './settings.js';
@@ -113,6 +113,12 @@ export interface HookDefinition {
   skillData?: string;
   /** PostToolUse only: the hook also gets a PNG of the page the conversation's browser shows, as a file. */
   screenshot?: boolean;
+  /**
+   * Moved from the format before this one: the hook keeps the input fields it was written for, the shell it ran in
+   * (cmd.exe on Windows), its plain-text and failure meanings, and a Stop hook its limit of blocks (`loopLimit`).
+   */
+  legacy?: boolean;
+  loopLimit?: number;
 }
 
 export interface HookLoadError {
@@ -362,6 +368,15 @@ function parseHandler(
   for (const field of ['statusMessage', 'name'] as const)
     if (entry[field] !== undefined && typeof entry[field] !== 'string')
       return `${at}: ${field} must be text`;
+  if (entry.legacy !== undefined && typeof entry.legacy !== 'boolean')
+    return `${at}: legacy must be true or false`;
+  if (
+    entry.loopLimit !== undefined &&
+    (typeof entry.loopLimit !== 'number' ||
+      !Number.isInteger(entry.loopLimit) ||
+      entry.loopLimit < 1)
+  )
+    return `${at}: loopLimit must be a whole number from 1`;
   const shown = [command, ...(args ?? [])].join(' ');
   const named =
     typeof entry.name === 'string' && entry.name.trim()
@@ -384,6 +399,10 @@ function parseHandler(
       : {}),
     name: named.replace(/\s+/g, ' ').slice(0, 80) || 'hook',
     ...(entry.screenshot === true ? { screenshot: true } : {}),
+    ...(entry.legacy === true ? { legacy: true } : {}),
+    ...(typeof entry.loopLimit === 'number'
+      ? { loopLimit: Math.min(entry.loopLimit, 20) }
+      : {}),
   };
 }
 
@@ -551,9 +570,22 @@ export function loadHooks(options: HookLoadOptions): LoadedHooks {
       });
       continue;
     }
+    const directory = dirname(skill.path);
+    // The format before this one, which Circle moves only out of its own skill folders: elsewhere it is named
+    if (
+      isFile(join(directory, 'hooks.json')) &&
+      !isFile(join(directory, 'pack.json'))
+    )
+      errors.push({
+        file: join(directory, 'hooks.json'),
+        message: `skill ${skill.name} has hooks in the format before this one, which is not read: they belong in its SKILL.md frontmatter`,
+      });
     if (value === undefined) continue;
     const key = skill.name.toLowerCase();
-    const directory = dirname(skill.path);
+    // An installed pack's skill: its hooks are the pack's, checked with its files, with its data folder
+    const pack = isFile(join(directory, 'pack.json'))
+      ? basename(directory)
+      : undefined;
     take(
       value,
       {
@@ -562,6 +594,12 @@ export function loadHooks(options: HookLoadOptions): LoadedHooks {
         file: skill.path,
         skill: key,
         skillDir: directory,
+        ...(pack
+          ? {
+              pack,
+              skillData: join(options.home, SKILL_DATA_FOLDER, pack),
+            }
+          : {}),
       },
       skill.source_label.startsWith('Project'),
     );

@@ -2478,9 +2478,11 @@ function hooks(host: CommandHost): void {
   const width = noticeColumns();
   const line = (row: (typeof rows)[number], waiting: boolean): string => {
     const hook = row.hook;
-    const state = waiting
-      ? `waiting for /skill ${hook.skill ?? hook.name}`
-      : '';
+    const state = row.spent
+      ? 'ran once'
+      : waiting
+        ? `waiting for /skill ${hook.skill ?? hook.name}`
+        : '';
     const parts = [
       hook.name,
       hook.sourceLabel,
@@ -2494,8 +2496,8 @@ function hooks(host: CommandHost): void {
     ];
     return wrapHang(`  ${parts.join(' · ')}`, width, 2).join('\n');
   };
-  const running = rows.filter((row) => row.active);
-  const waiting = rows.filter((row) => !row.active);
+  const running = rows.filter((row) => row.active || row.spent);
+  const waiting = rows.filter((row) => !row.active && !row.spent);
   const lines: string[] = [];
   if (disabled) lines.push('hooks are off: disableAllHooks is set', '');
   if (untrusted) lines.push('project hooks need a trusted folder', '');

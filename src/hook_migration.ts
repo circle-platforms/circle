@@ -1,6 +1,8 @@
 // Hooks files in the format before this one become `hooks` in settings, once. A file of your own goes into your
-// settings.json, a trusted project's into its .circle/settings.json, a skill's of your own into its SKILL.md's
-// frontmatter. The old file stays beside, renamed `hooks.json.migrated`, and is not read again.
+// settings.json, a trusted project's into its .circle/settings.json, and a hooks.json beside a skill in Circle's own
+// skill folders into that skill's SKILL.md frontmatter. The old file stays beside, renamed `hooks.json.migrated`, and
+// is not read again. A moved hook is marked `legacy`, so it keeps the input fields, shell and meanings it was
+// written for until it is rewritten.
 import {
   existsSync,
   readFileSync,
@@ -9,7 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { stringify as yaml } from 'yaml';
+import { parse as parseYaml, stringify as yaml } from 'yaml';
 import { skillFrontmatterHooks } from './hook_config.js';
 import { isRecord, withPrivateJsonLock, writePrivateJson } from './settings.js';
 import { discoverSkills } from './skills.js';
@@ -23,7 +25,7 @@ const OLD_EVENTS: Record<string, string> = {
   user_prompt: 'UserPromptSubmit',
   subagent_start: 'SubagentStart',
 };
-/** Events that judged a call: a hook that failed there stopped it, so the migrated hook blocks on failure. */
+/** Events that judged a call: a hook that failed there stopped it, so the moved hook blocks on failure. */
 const GATING = new Set(['before_tool', 'permission_request']);
 /** Events with no tool, where `tools` and `paths` meant nothing. */
 const NO_TOOL = new Set([
@@ -43,6 +45,8 @@ export const PATH_TOOLS = [
   'grep',
   'vision',
 ];
+/** The skill folders that are Circle's own to change: an agent's or a pack's folder is not. */
+const OWN_SKILLS = new Set(['Circle', 'Project Circle']);
 
 function names(value: unknown): string[] | '*' {
   if (value === undefined || value === '*' || value === '') return '*';
@@ -93,10 +97,13 @@ export function convertOldHooks(value: unknown): {
       handler.timeout = Math.max(1, Math.ceil(ms / 1000));
       if (entry.screenshot === true) handler.screenshot = true;
       if (GATING.has(event)) handler.onFailure = 'block';
-      if (entry.loop_limit !== undefined)
-        notes.push(
-          `loop_limit of ${String(entry.name ?? entry.command)} was left out: Stop hooks send a turn back at most 8 times in a row`,
-        );
+      // It keeps what it was written for: its input fields, cmd.exe on Windows, its plain-text and failure meanings
+      handler.legacy = true;
+      if (event === 'before_stop')
+        handler.loopLimit =
+          typeof entry.loop_limit === 'number' && entry.loop_limit >= 1
+            ? Math.min(20, Math.floor(entry.loop_limit))
+            : 5;
       const tools = NO_TOOL.has(event)
         ? '*'
         : names(entry.tools ?? entry.matcher);
@@ -138,10 +145,6 @@ function mergeHooks(
   return { ...into, hooks: current };
 }
 
-function readOld(file: string): unknown {
-  return JSON.parse(readFileSync(file, 'utf8'));
-}
-
 /** The old file, renamed so it is kept and not read again. */
 function retire(file: string): string {
   let target = `${file}.migrated`;
@@ -158,94 +161,97 @@ function isFile(path: string): boolean {
   }
 }
 
-/** Moves one old hooks file into a settings file's `hooks`. */
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Moves one old hooks file into a settings file's `hooks`. It holds the settings file's lock and reads the old file
+ * again under it, so two Circles that start together move it once.
+ */
 function intoSettings(
   file: string,
   settings: string,
   shown: string,
   privateFile: boolean,
 ): string[] {
-  let old: unknown;
   try {
-    old = readOld(file);
+    return withPrivateJsonLock(settings, () => {
+      // Another Circle moved it meanwhile
+      if (!isFile(file)) return [];
+      const { hooks, notes } = convertOldHooks(
+        JSON.parse(readFileSync(file, 'utf8')),
+      );
+      let current: Record<string, unknown> = {};
+      if (isFile(settings)) {
+        const value = JSON.parse(readFileSync(settings, 'utf8')) as unknown;
+        if (!isRecord(value))
+          throw new Error(`${settings} is not a JSON object`);
+        current = value;
+      }
+      const merged = mergeHooks(current, hooks);
+      if (privateFile) writePrivateJson(settings, merged);
+      else writeFileSync(settings, `${JSON.stringify(merged, null, 2)}\n`);
+      const kept = retire(file);
+      return [
+        `${shown}: moved into ${settings} under hooks, in the current format, marked legacy; the old file is ${kept}`,
+        ...notes.map((note) => `${shown}: ${note}`),
+      ];
+    });
   } catch (error) {
     return [
-      `${shown}: hooks.json could not be read, so it was not moved into settings: ${error instanceof Error ? error.message : String(error)}`,
+      `${shown}: hooks.json could not be moved into settings, so its hooks do not run: ${message(error)}`,
     ];
   }
-  const { hooks, notes } = convertOldHooks(old);
-  const write = () => {
-    let current: Record<string, unknown> = {};
-    if (isFile(settings)) {
-      const value = JSON.parse(readFileSync(settings, 'utf8')) as unknown;
-      if (!isRecord(value)) throw new Error(`${settings} is not a JSON object`);
-      current = value;
-    }
-    const merged = mergeHooks(current, hooks);
-    if (privateFile) writePrivateJson(settings, merged);
-    else writeFileSync(settings, `${JSON.stringify(merged, null, 2)}\n`);
-  };
-  try {
-    if (privateFile) withPrivateJsonLock(settings, write);
-    else write();
-  } catch (error) {
-    return [
-      `${shown}: hooks.json could not be moved into settings: ${error instanceof Error ? error.message : String(error)}`,
-    ];
-  }
-  const kept = retire(file);
-  return [
-    `${shown}: its hooks were moved into ${settings.endsWith('settings.json') ? 'settings.json' : settings} under hooks, in the current format; the old file is ${kept.split(/[\\/]/).at(-1)}`,
-    ...notes.map((note) => `${shown}: ${note}`),
-  ];
 }
 
-/** Moves a skill's old hooks file into its SKILL.md's frontmatter. */
+/** Moves a skill's old hooks file into its SKILL.md's frontmatter, if the result still reads as YAML. */
 function intoSkill(file: string, skillPath: string, name: string): string[] {
-  let old: unknown;
-  let text: string;
   try {
-    old = readOld(file);
-    text = readFileSync(skillPath, 'utf8');
-  } catch (error) {
-    return [
-      `skill ${name}: hooks.json could not be read: ${error instanceof Error ? error.message : String(error)}`,
-    ];
-  }
-  try {
-    if (skillFrontmatterHooks(text) !== undefined)
+    const text = readFileSync(skillPath, 'utf8');
+    try {
+      if (skillFrontmatterHooks(text) !== undefined)
+        return [
+          `skill ${name}: its SKILL.md has hooks already, so its hooks.json was left as it is and is not read`,
+        ];
+    } catch {
+      /* Checked below, with the hooks added. */
+    }
+    const { hooks, notes } = convertOldHooks(
+      JSON.parse(readFileSync(file, 'utf8')),
+    );
+    const block = yaml({ hooks }).trimEnd();
+    const match = text.match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/);
+    const front = match ? `${match[1]}\n${block}` : block;
+    // A frontmatter that is not YAML would lose these hooks: it is left for you to fix, and the hooks stay where
+    // they are
+    try {
+      parseYaml(front);
+    } catch (error) {
       return [
-        `skill ${name}: its SKILL.md has hooks already, so hooks.json was left as it is and is not read`,
+        `skill ${name}: its SKILL.md frontmatter is not YAML (${message(error).split('\n')[0]}), so its hooks.json was not moved and does not run; quote the values with a colon in them and start Circle again`,
       ];
-  } catch {
-    return [
-      `skill ${name}: its SKILL.md frontmatter is not YAML, so hooks.json was left as it is and is not read`,
-    ];
-  }
-  const { hooks, notes } = convertOldHooks(old);
-  const block = yaml({ hooks }).trimEnd();
-  const match = text.match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/);
-  const next = match
-    ? `---\n${match[1]}\n${block}\n---\n${text.slice(match[0].length)}`
-    : `---\n${block}\n---\n${text}`;
-  try {
+    }
+    const next = match
+      ? `---\n${front}\n---\n${text.slice(match[0].length)}`
+      : `---\n${front}\n---\n${text}`;
     writeFileSync(skillPath, next);
+    const kept = retire(file);
+    return [
+      `skill ${name}: its hooks were moved into the SKILL.md frontmatter, in the current format, marked legacy; the old file is ${kept}`,
+      ...notes.map((note) => `skill ${name}: ${note}`),
+    ];
   } catch (error) {
     return [
-      `skill ${name}: SKILL.md could not be written: ${error instanceof Error ? error.message : String(error)}`,
+      `skill ${name}: hooks.json could not be moved, so its hooks do not run: ${message(error)}`,
     ];
   }
-  const kept = retire(file);
-  return [
-    `skill ${name}: its hooks were moved into the SKILL.md frontmatter, in the current format; the old file is ${kept.split(/[\\/]/).at(-1)}`,
-    ...notes.map((note) => `skill ${name}: ${note}`),
-  ];
 }
 
 /**
- * Moves every hooks file in the format before this one that is Circle's to move: yours, a trusted project's, and your
- * skills'. An installed pack is left as it is, since its files are checked against what was installed. Returns what
- * was done, for the conversation to say.
+ * Moves every hooks file in the format before this one that is Circle's to move: yours, a trusted project's, and
+ * those of skills in Circle's own folders. A pack, and a skill in another agent's folder, are left as they are and
+ * named when hooks load. Returns what was done, for the conversation to say. It never throws.
  */
 export function migrateHookFiles(options: {
   home: string;
@@ -254,41 +260,41 @@ export function migrateHookFiles(options: {
   userHome?: string;
 }): string[] {
   const notes: string[] = [];
-  const own = join(options.home, 'hooks.json');
-  if (isFile(own))
-    notes.push(
-      ...intoSettings(
-        own,
-        join(options.home, 'settings.json'),
-        'your hooks',
-        true,
-      ),
-    );
-  const project = join(options.workspace, '.circle', 'hooks.json');
-  if (options.trusted && isFile(project))
-    notes.push(
-      ...intoSettings(
-        project,
-        join(options.workspace, '.circle', 'settings.json'),
-        'the project hooks',
-        false,
-      ),
-    );
-  let skills: ReturnType<typeof discoverSkills> = [];
   try {
-    skills = discoverSkills(options.workspace, options.home, options.userHome);
-  } catch {
-    skills = [];
-  }
-  for (const skill of skills) {
-    if (skill.source_label === 'Personal pack') continue;
-    // A project's skills are the project's: they move once it is trusted
-    if (!options.trusted && skill.source_label.startsWith('Project')) continue;
-    const folder = dirname(skill.path);
-    // An installed pack: its files are checked, so it is the pack's to change
-    if (isFile(join(folder, 'pack.json'))) continue;
-    const file = join(folder, 'hooks.json');
-    if (isFile(file)) notes.push(...intoSkill(file, skill.path, skill.name));
+    const own = join(options.home, 'hooks.json');
+    if (isFile(own))
+      notes.push(
+        ...intoSettings(
+          own,
+          join(options.home, 'settings.json'),
+          'your hooks.json',
+          true,
+        ),
+      );
+    const project = join(options.workspace, '.circle', 'hooks.json');
+    if (options.trusted && isFile(project))
+      notes.push(
+        ...intoSettings(
+          project,
+          join(options.workspace, '.circle', 'settings.json'),
+          "the project's .circle/hooks.json",
+          false,
+        ),
+      );
+    for (const skill of discoverSkills(
+      options.workspace,
+      options.home,
+      options.userHome,
+    )) {
+      if (!OWN_SKILLS.has(skill.source_label)) continue;
+      if (!options.trusted && skill.source_label === 'Project Circle') continue;
+      const folder = dirname(skill.path);
+      if (isFile(join(folder, 'pack.json'))) continue;
+      const file = join(folder, 'hooks.json');
+      if (isFile(file)) notes.push(...intoSkill(file, skill.path, skill.name));
+    }
+  } catch (error) {
+    notes.push(`hooks files could not all be moved: ${message(error)}`);
   }
   return notes;
 }
