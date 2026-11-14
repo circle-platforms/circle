@@ -35,9 +35,9 @@ A background subagent already reaches the person while it runs: its approval car
 | The person | a running job of this conversation | yes | They can already answer its cards; typing to it is the same authority, less. |
 | A parent model | one of its own running subagents | yes | It started the job; this is the correction the box asks for. |
 | A subagent | its parent conversation | **not in this slice** | Its report already arrives at the end, and mid-run arrival would wake a conversation that may be idle. Decided again with the notice path below. |
-| A subagent | a sibling | no | A subagent cannot start another one, so it has no legitimate way to know a sibling id, and the ids are guessable. |
+| A subagent | a sibling | no | It has no legitimate way to know a sibling's job id, and the ids are guessable. |
 | Any model | a job of another conversation | no | Addresses are per conversation, as `list_jobs` already treats them. |
-| Any model | a subagent of its own | no | A child has no `task` tool; nothing to check, but the tool must not be added to a child for this. |
+| A subagent | a subagent of its own | no | The subagents it starts run in the foreground: it waits for each report, so there is no job of theirs to send to. |
 
 The authorization is the owner check, and it has to be checked before the message is queued: the same rule the box for approvals says in miniature - a repository or another conversation must not be able to widen what Circle does. While writing this note, one existing gap turned up: `stop_job` takes any `job_id` and calls `jobs.stop(id)` with no owner check, while `list_jobs` and `wait_jobs` both resolve one. A message tool that checked its owner would sit beside a call that does not; the slice should close that too, in the same PR, rather than leave the pair inconsistent.
 

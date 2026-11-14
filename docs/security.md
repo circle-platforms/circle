@@ -254,6 +254,7 @@ Circle makes two kinds of request of its own that have nothing to do with your m
 
 - There is no operating-system sandbox. An approved command runs with your full user rights and network access: it can read any file you can, use the network, and start background processes. To isolate commands, run Circle itself in a container or a virtual machine (see [Unattended runs](#unattended-runs)). A process that leaves its process group (`setsid`, a daemon) is not a [background job](background-jobs.md#what-is-not-tracked): Circle does not stop it.
 - A background subagent works while you do other things. Its approvals appear as cards of their own, named after its job; "allow for this session" there applies to its whole conversation.
+- A subagent definition can set [`permissionMode`](agents.md#permission-modes). While the conversation is in `manual` mode, `acceptEdits` lets that subagent change files in the workspace and run read-only commands without asking. No definition puts a subagent in `auto` mode.
 - **`!` snippets in custom commands run without asking.** See [Custom commands](custom-commands.md).
 - An MCP server or an extension runs with your rights, outside the approval of any single call: what it does when it starts, or in a tool you allowed for the session, is up to it.
 - A hook is a command and runs with your rights. Trusting a folder is the gate for the project's hooks; there is no second approval of each version of the file. Your own hooks run in every folder. See [Hooks](hooks.md).
