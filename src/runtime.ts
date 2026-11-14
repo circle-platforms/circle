@@ -1484,6 +1484,34 @@ export class AgentRuntime {
         this.scheduleToolRefresh();
       },
       openUrl: this.options.openUrl,
+      saveMcpServer: async (entry) => {
+        const name = String(entry.name);
+        // The entry keeps the id it had, so the desktop's list keeps its row
+        saveSettingsChange(this.options.home, (settings) => {
+          const before = settings.mcp_servers.find((row) => row.name === name);
+          settings.mcp_servers = [
+            ...settings.mcp_servers.filter((row) => row.name !== name),
+            {
+              ...(typeof before?.id === 'string' ? { id: before.id } : {}),
+              ...entry,
+            },
+          ];
+        });
+        await this.reloadMcpServer(name);
+        const row = this.mcp.status.find((item) => item.name === name);
+        return {
+          name,
+          state: row?.authorize
+            ? 'signing-in'
+            : row?.error
+              ? 'failed'
+              : 'connected',
+          tools: row?.tools.length ?? 0,
+          ...(row?.error && !row.authorize ? { error: row.error } : {}),
+          ...(row?.authorize ? { signIn: row.authorize } : {}),
+          ...(row?.authorize && row.code ? { code: row.code } : {}),
+        };
+      },
       settings: this.options.settings.extensions,
       reservedTools: new Set([...BUILTIN_TOOL_NAMES, ...reservedTools]),
       reservedCommands: new Set([

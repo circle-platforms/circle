@@ -140,6 +140,20 @@ export interface ExtensionServices {
   /** Called when an extension adds or removes a tool after it loaded. */
   onTools?: () => void;
   githubConnection?: GitHubConnectionBackend;
+  /** Saves an MCP server entry and connects that server alone again; without it saveMcpServer fails. */
+  saveMcpServer?: ExtensionHostOptions['saveMcpServer'];
+}
+/** Where an MCP server saved by an extension stands once Circle connected it again. */
+export interface McpServerState {
+  name: string;
+  /** Connected, with tools; waiting for a sign-in in the browser; or why it could not connect. */
+  state: 'connected' | 'signing-in' | 'failed';
+  tools: number;
+  error?: string;
+  /** The page to sign in on, while it waits for one. */
+  signIn?: string;
+  /** The code to type on that page, for a sign-in by code. */
+  code?: string;
 }
 const live = new WeakSet<ExtensionAPI>();
 const settled = (): void => undefined;
@@ -255,6 +269,26 @@ export class ExtensionAPI {
     this.services?.onStatus?.();
   }
   /** Open a web address in the browser: the system's, from the terminal or the application. */
+  /**
+   * Saves an MCP server entry in settings.json, replacing the entry of the same name, and connects that server alone
+   * again, as `/mcp reload <name>` does; the other servers are left as they are. What any extension may offer, as a
+   * plugin's `.mcp.json` or a Gemini extension's `mcpServers` does. Between turns, as from a command.
+   */
+  async saveMcpServer(entry: Record<string, unknown>): Promise<McpServerState> {
+    const save = this.services?.saveMcpServer;
+    if (!save)
+      throw new ExtensionError('this interface cannot save MCP servers');
+    if (
+      !isRecord(entry) ||
+      typeof entry.name !== 'string' ||
+      !entry.name.trim() ||
+      (typeof entry.url !== 'string' && typeof entry.command !== 'string')
+    )
+      throw new ExtensionError(
+        'an MCP server entry needs a name, and a url or a command',
+      );
+    return save(structuredClone(entry));
+  }
   async openUrl(url: string): Promise<void> {
     const open = this.services?.openUrl;
     if (!open) throw new ExtensionError('this interface cannot open links');
@@ -563,6 +597,8 @@ export interface ExtensionHostOptions {
   reservedCommands?: Set<string>;
   jobs?: JobRegistry;
   jobOwner?: (context: ToolContext) => JobOwner;
+  /** Writes an MCP server entry into settings.json, by its name, and connects that one server again (#548). */
+  saveMcpServer?: (entry: Record<string, unknown>) => Promise<McpServerState>;
 }
 /**
  * The entry Circle shipped for a bundled extension, not a link to something else. The
@@ -755,6 +791,7 @@ export class ExtensionHost {
           onStatus: this.options.onStatus,
           openUrl: this.options.openUrl,
           onTools: this.options.onTools,
+          saveMcpServer: this.options.saveMcpServer,
           signal: AbortSignal.any([
             this.controller.signal,
             scope.controller.signal,

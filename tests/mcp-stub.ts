@@ -51,6 +51,8 @@ export interface StubOptions {
   capabilities?: Record<string, unknown>;
   /** Answers a method the stub has no answer of its own for; undefined falls back to an empty result. */
   answer?: (request: StubRequest) => unknown;
+  /** Answers a GET of another path with JSON, such as a discovery document; undefined is a 405. */
+  get?: (path: string, origin: string) => unknown;
   /** An HTTP status to refuse a request with, such as 401, with this body. */
   refuse?: (
     request: StubRequest,
@@ -145,6 +147,18 @@ export async function mcpStub(
       response.writeHead(200, { 'Content-Type': 'text/event-stream' });
       response.flushHeaders();
       return;
+    }
+    if (request.method === 'GET' && options.get) {
+      const found = options.get(
+        request.path,
+        `http://${String(incoming.headers.host)}`,
+      );
+      if (found !== undefined) {
+        response
+          .writeHead(200, { 'Content-Type': 'application/json' })
+          .end(JSON.stringify(found));
+        return;
+      }
     }
     if (request.method !== 'POST' || !request.message) {
       response.writeHead(405).end();
