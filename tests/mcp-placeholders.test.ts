@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
-import { setTimeout as delay } from 'node:timers/promises';
 import { mcpPlaceholders } from '../src/mcp_placeholders.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { saveSecret } from '../src/secrets.js';
@@ -151,6 +150,8 @@ test('a run keeps what it read only while nothing it came from changed: a secret
       placeholders: { url: 'DOCS_URL', token: 'DOCS_TOKEN' },
     },
   };
+  // The clock is the test's: it stands still until the test moves it past the token's expiry
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   signIn(
     home,
     { access_token: 'short-lived', token_type: 'Bearer' },
@@ -170,7 +171,10 @@ test('a run keeps what it read only while nothing it came from changed: a secret
   assert.equal(runtime.runSecrets().DOCS_TOKEN, 'short-lived');
   saveSecret(home, 'MINE', 'synthetic-secret');
   assert.equal(runtime.runSecrets().MINE, 'synthetic-secret');
-  await delay(450);
+  // Up to its expiry the token is given; past it, not
+  t.mock.timers.tick(399);
+  assert.equal(runtime.runSecrets().DOCS_TOKEN, 'short-lived');
+  t.mock.timers.tick(2);
   assert.equal(runtime.runSecrets().DOCS_TOKEN, undefined);
   assert.equal(runtime.runSecrets().MINE, 'synthetic-secret');
 });
