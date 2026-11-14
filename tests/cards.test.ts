@@ -1075,3 +1075,30 @@ test('setup asks for the key of a new host instead of sending it the key saved f
   assert.equal(loadSettings(home).auth.model, 'fresh-model');
   assert.equal(loadCredentials(home).api_key, 'new-key');
 });
+
+test("a hook's lines on the approval card each wrap inside the box", (t) => {
+  const root = scratch(t);
+  const policy = defaultPolicy(root, root);
+  const call = {
+    id: 'w',
+    name: 'write_file',
+    args: { file_path: 'notes/a.txt', content: 'x' },
+    hook_reason: 'Keep notes in notes/.',
+  };
+  // Before, the policy's line and the hook's were one text with a newline inside a row of the box
+  const rows = dialogRows(
+    new ApprovalCard(
+      approvalRequest(call, policy.review('write_file', call.args), (path) =>
+        join(root, path),
+      ),
+    ).state(),
+    48,
+    40,
+  );
+  for (const row of rows) {
+    assert.equal(stringWidth(row), 48, row);
+    assert.ok(!row.includes('\n'), row);
+  }
+  const plain = rows.map((row) => stripAnsi(row).slice(1, -1).trim());
+  assert.ok(plain.includes('hook · Keep notes in notes/.'));
+});

@@ -58,6 +58,8 @@ export interface HookNotice {
   tool?: string;
   name?: string;
   reason?: string;
+  /** What the person reads in place of `reason`: the hook's `user_message`. It never reaches the model. */
+  message?: string;
   count?: number;
 }
 
@@ -77,6 +79,11 @@ export interface HookDefinition {
   file: string;
   /** Set when the hook ships with a skill. It runs only after that skill is loaded. */
   skill?: string;
+  /**
+   * The folder of that skill, which holds its `hooks.json` beside `SKILL.md`, symlinks resolved: the folder the
+   * model is told when the skill loads. The hook gets it as `CIRCLE_SKILL_DIR` and `skill_dir` (#540).
+   */
+  skillDir?: string;
   /**
    * after_tool only: the hook also gets a PNG of the page the conversation's browser shows, as a file, which never
    * reaches the model (#502). Off unless the hooks file says `"screenshot": true`.
@@ -134,6 +141,10 @@ export interface HookOutcome {
   stderr: string;
   decision: HookDecision | 'none';
   reason: string;
+  /** `user_message`: for the person, in place of the reason. Empty when the hook gave none. */
+  userMessage: string;
+  /** before_tool only: the input the call runs with instead (`updated_input`). Never set with a deny. */
+  updatedInput?: Record<string, unknown>;
   context: string;
   durationMs: number;
   failed: boolean;
@@ -142,6 +153,15 @@ export interface HookOutcome {
 export interface HookBatch {
   decision: HookDecision | 'none';
   reason: string;
+  /** The `user_message` of the hooks that decided, joined as their reasons are. */
+  userMessage: string;
+  /**
+   * before_tool: the input after every hook that rewrote it, in order, each given the one before. Unset when a
+   * hook denied, which voids every rewrite.
+   */
+  updatedInput?: Record<string, unknown>;
+  /** The hooks whose rewrite that is, in the order they ran. */
+  changedBy: string[];
   context: string;
   outcomes: HookOutcome[];
   notices: HookNotice[];
@@ -223,6 +243,7 @@ export const HOOK_DENIED_LINE = 'Hook denied this call:';
 export const HOOK_ASKED_LINE = 'Hook asked before this call:';
 export { HOOK_ALLOWED_LINE } from './hook_display.js';
 export const HOOK_OUTPUT_LINE = 'Hook output';
+export { HOOK_CHANGED_LINE } from './hook_display.js';
 
 export function hookDeniedMessage(reason: string): string {
   return `${HOOK_DENIED_LINE} ${reason}`;
@@ -567,7 +588,7 @@ function readHookFile(
         source,
         sourceLabel,
         file,
-        ...(skill ? { skill } : {}),
+        ...(skill ? { skill, skillDir: dirname(file) } : {}),
         ...(entry.screenshot === true ? { screenshot: true } : {}),
       });
     });
@@ -840,14 +861,29 @@ function interpretOutput(
   stderr: string,
   timedOut: boolean,
   spawnError?: string,
-): Pick<HookOutcome, 'decision' | 'reason' | 'context' | 'failed'> {
+): Pick<
+  HookOutcome,
+  'decision' | 'reason' | 'userMessage' | 'updatedInput' | 'context' | 'failed'
+> {
   const gating = GATING.has(event);
   // A gating failure denies. Anywhere else it is only a notice: the tool
   // result and the session keep going, and the error text is not fed back.
   const fail = (reason: string) =>
     gating
-      ? { decision: 'deny' as const, reason, context: '', failed: true }
-      : { decision: 'none' as const, reason, context: '', failed: true };
+      ? {
+          decision: 'deny' as const,
+          reason,
+          userMessage: '',
+          context: '',
+          failed: true,
+        }
+      : {
+          decision: 'none' as const,
+          reason,
+          userMessage: '',
+          context: '',
+          failed: true,
+        };
   if (timedOut) return fail('hook timed out');
   if (spawnError) return fail(spawnError);
   const { parsed, invalid, text } = hookStdout(stdout);
@@ -856,6 +892,8 @@ function interpretOutput(
     (item) => item === named,
   );
   const reason = textField(parsed?.reason) || stderr.trim().slice(0, 2000);
+  // What the person reads in place of the reason. The model never gets it.
+  const userMessage = textField(parsed?.user_message).slice(0, 2000);
   // Plain text is the hook's own message. A JSON object is not, unless it
   // named a reason: the raw object must not become the denial text.
   const message = reason || (parsed ? '' : text.slice(0, MAX_OUTPUT));
@@ -868,6 +906,7 @@ function interpretOutput(
     return {
       decision: 'deny',
       reason: message || 'hook denied',
+      userMessage,
       context: '',
       failed: false,
     };
@@ -879,26 +918,44 @@ function interpretOutput(
     return {
       decision: 'none',
       reason: '',
+      userMessage: '',
       context: text.slice(0, MAX_OUTPUT),
       failed: false,
     };
   }
+  // A rewrite is a before_tool answer: the whole input the call runs with instead. A deny voids it; anything but
+  // an object is no input, so the call does not run.
+  const rewrite = event === 'before_tool' ? parsed?.updated_input : undefined;
+  if (rewrite !== undefined && !isRecord(rewrite))
+    return fail('hook updated_input is not a JSON object');
+  const updatedInput =
+    rewrite && decision !== 'deny' ? { updatedInput: rewrite } : {};
   if (gating && decision) {
     if (event === 'before_stop' && decision === 'ask')
       return {
         decision: 'deny',
         reason: reason || context || 'hook blocked stop',
+        userMessage,
         context: '',
         failed: false,
       };
     return {
       decision,
       reason: reason || (decision === 'deny' ? 'hook denied' : ''),
+      userMessage,
+      ...updatedInput,
       context: '',
       failed: false,
     };
   }
-  return { decision: 'none', reason: '', context, failed: false };
+  return {
+    decision: 'none',
+    reason: '',
+    userMessage,
+    ...updatedInput,
+    context,
+    failed: false,
+  };
 }
 
 function clip(text: string): string {
@@ -914,7 +971,23 @@ interface CommandResult {
   error?: string;
 }
 
-function redactHookValue(
+/** JSON with every object's keys in order: two values that differ only in key order are the same input. */
+export function canonicalJson(value: unknown): string {
+  const sorted = (item: unknown): unknown =>
+    Array.isArray(item)
+      ? item.map(sorted)
+      : isRecord(item)
+        ? Object.fromEntries(
+            Object.keys(item)
+              .sort()
+              .map((key) => [key, sorted(item[key])]),
+          )
+        : item;
+  return JSON.stringify(sorted(value)) ?? '';
+}
+
+/** A value as a hook sees it: each saved secret's value written back as `%NAME%`. */
+export function redactHookValue(
   value: unknown,
   secrets: Record<string, string>,
 ): unknown {
@@ -943,6 +1016,23 @@ function hookEnvironment(secrets: Record<string, string>): NodeJS.ProcessEnv {
   );
 }
 
+/** The variable a skill's hook finds that skill's folder by. */
+export const SKILL_DIR_VARIABLE = 'CIRCLE_SKILL_DIR';
+
+/**
+ * The command as the system shell gets it. `cmd.exe` reads `%NAME%`, not `${NAME}`, so on Windows the
+ * `${CIRCLE_SKILL_DIR}` a hooks file writes for every system becomes `%CIRCLE_SKILL_DIR%`. Either way the shell
+ * takes the value from the environment: the folder's name never becomes part of the command's text.
+ */
+export function hookShellCommand(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return platform === 'win32'
+    ? command.replaceAll(`\${${SKILL_DIR_VARIABLE}}`, `%${SKILL_DIR_VARIABLE}%`)
+    : command;
+}
+
 function runHookCommand(
   command: string,
   cwd: string,
@@ -950,6 +1040,8 @@ function runHookCommand(
   timeoutMs: number,
   signal: AbortSignal | undefined,
   secrets: Record<string, string> = {},
+  /** Set for this hook only. An undefined value removes the variable. */
+  extraEnv: Record<string, string | undefined> = {},
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
     let stdout = '';
@@ -963,9 +1055,9 @@ function runHookCommand(
     };
     let child;
     try {
-      child = spawn(command, {
+      child = spawn(hookShellCommand(command), {
         cwd,
-        env: hookEnvironment(secrets),
+        env: { ...hookEnvironment(secrets), ...extraEnv },
         shell: true,
         detached: process.platform !== 'win32',
         windowsHide: true,
@@ -1058,27 +1150,16 @@ function noticeFor(
   outcome: HookOutcome,
   tool?: string,
 ): HookNotice | undefined {
+  const base = {
+    tool,
+    name: outcome.hook.name,
+    reason: outcome.reason,
+    ...(outcome.userMessage ? { message: outcome.userMessage } : {}),
+  };
   if (outcome.decision === 'deny' && outcome.hook.event !== 'before_stop')
-    return {
-      kind: 'denied',
-      tool,
-      name: outcome.hook.name,
-      reason: outcome.reason,
-    };
-  if (outcome.decision === 'ask')
-    return {
-      kind: 'asked',
-      tool,
-      name: outcome.hook.name,
-      reason: outcome.reason,
-    };
-  if (outcome.decision === 'allow')
-    return {
-      kind: 'allowed',
-      tool,
-      name: outcome.hook.name,
-      reason: outcome.reason,
-    };
+    return { kind: 'denied', ...base };
+  if (outcome.decision === 'ask') return { kind: 'asked', ...base };
+  if (outcome.decision === 'allow') return { kind: 'allowed', ...base };
   if (outcome.failed)
     return {
       kind: 'failed',
@@ -1089,8 +1170,7 @@ function noticeFor(
   if (outcome.context && outcome.hook.event !== 'before_tool')
     return {
       kind: 'output',
-      tool,
-      name: outcome.hook.name,
+      ...base,
       reason: outcome.context.split('\n')[0]?.slice(0, 200),
     };
   return undefined;
@@ -1099,35 +1179,23 @@ function noticeFor(
 function strictest(outcomes: HookOutcome[]): {
   decision: HookDecision | 'none';
   reason: string;
+  userMessage: string;
 } {
-  const denies = outcomes.filter((item) => item.decision === 'deny');
-  if (denies.length)
-    return {
-      decision: 'deny',
-      reason: denies
-        .map((item) => item.reason)
-        .filter(Boolean)
-        .join('\n'),
-    };
-  const asks = outcomes.filter((item) => item.decision === 'ask');
-  if (asks.length)
-    return {
-      decision: 'ask',
-      reason: asks
-        .map((item) => item.reason)
-        .filter(Boolean)
-        .join('\n'),
-    };
-  const allows = outcomes.filter((item) => item.decision === 'allow');
-  if (allows.length)
-    return {
-      decision: 'allow',
-      reason: allows
-        .map((item) => item.reason)
-        .filter(Boolean)
-        .join('\n'),
-    };
-  return { decision: 'none', reason: '' };
+  const joined = (decided: HookOutcome[], field: 'reason' | 'userMessage') =>
+    decided
+      .map((item) => item[field])
+      .filter(Boolean)
+      .join('\n');
+  for (const decision of ['deny', 'ask', 'allow'] as const) {
+    const decided = outcomes.filter((item) => item.decision === decision);
+    if (decided.length)
+      return {
+        decision,
+        reason: joined(decided, 'reason'),
+        userMessage: joined(decided, 'userMessage'),
+      };
+  }
+  return { decision: 'none', reason: '', userMessage: '' };
 }
 
 export class HookRunner {
@@ -1241,6 +1309,10 @@ export class HookRunner {
     const outcomes: HookOutcome[] = [];
     const notices: HookNotice[] = [];
     const secrets = request.secrets ?? {};
+    // A before_tool hook that rewrites the input hands the next hook its rewrite. Which hooks run was settled by
+    // the call as the model sent it.
+    let input = request.toolInput;
+    const changedBy: string[] = [];
     for (const hook of this.loaded.hooks) {
       if (request.onlyIds && !request.onlyIds.includes(hook.id)) continue;
       if (!this.armedHook(hook)) continue;
@@ -1286,11 +1358,12 @@ export class HookRunner {
         source: hook.source,
         source_label: hook.sourceLabel,
         tool_name: request.toolName,
-        tool_input: redactHookValue(request.toolInput, secrets),
+        tool_input: redactHookValue(input, secrets),
         paths: redactHookValue(canonicalPaths, secrets),
         tool_output: redactHookValue(request.toolOutput, secrets),
         tool_status: request.toolStatus,
         permission_reason: redactHookValue(request.permissionReason, secrets),
+        ...(hook.skillDir ? { skill_dir: hook.skillDir } : {}),
         ...(file ? { files: [file] } : {}),
         ...(request.event === 'before_stop'
           ? { stop_attempt: (this.blocks.get(hook.id) ?? 0) + 1 }
@@ -1306,6 +1379,8 @@ export class HookRunner {
           hook.timeoutMs,
           request.signal ?? new AbortController().signal,
           secrets,
+          // Only a skill's hook has its folder; no other hook inherits one from Circle's own environment
+          { [SKILL_DIR_VARIABLE]: hook.skillDir },
         );
       } catch (error) {
         command = {
@@ -1325,6 +1400,7 @@ export class HookRunner {
           stderr: command.stderr,
           decision: 'none',
           reason: 'hook stopped',
+          userMessage: '',
           context: '',
           durationMs: Date.now() - started,
           failed: false,
@@ -1349,6 +1425,15 @@ export class HookRunner {
         durationMs: Date.now() - started,
       };
       outcomes.push(outcome);
+      // Handing back the input it was given, in any key order, is no rewrite
+      if (
+        outcome.updatedInput &&
+        canonicalJson(outcome.updatedInput) !==
+          canonicalJson(redactHookValue(input, secrets))
+      ) {
+        input = outcome.updatedInput;
+        changedBy.push(hook.name);
+      }
       this.log(request, outcome, secrets);
       if (
         request.event === 'before_stop' &&
@@ -1368,7 +1453,20 @@ export class HookRunner {
       .map((item) => item.context)
       .filter(Boolean)
       .join('\n\n');
-    return { ...decision, context, outcomes, notices };
+    // A deny voids every rewrite: the call does not run in any form. Whether a rewrite changes what runs is the
+    // harness's to tell, once it has checked it.
+    const rewritten =
+      request.event === 'before_tool' &&
+      decision.decision !== 'deny' &&
+      changedBy.length > 0;
+    return {
+      ...decision,
+      ...(rewritten ? { updatedInput: input } : {}),
+      changedBy: rewritten ? changedBy : [],
+      context,
+      outcomes,
+      notices,
+    };
   }
 
   private log(

@@ -110,7 +110,7 @@ For a skill only you use, copy it into `~/.circle/skills/<name>/`.
 
 ## A skill can ship hooks
 
-`hooks.json` in the skill folder does not run just because the skill is installed. Those commands run only after this session loads the skill, with `/skill` or the `skill` tool, and only for that session. A project skill's hooks also wait until the folder is trusted and that file's bytes are approved. A skill without that file is unchanged. A skill's `hooks.json` supports per-platform commands the same way as any other hooks file. See [Hooks](hooks.md#a-skill-can-ship-hooks).
+`hooks.json` in the skill folder does not run just because the skill is installed. Those commands run only after this session loads the skill, with `/skill` or the `skill` tool, and only for that session. A project skill's hooks also wait until the folder is trusted and that file's bytes are approved. A skill without that file is unchanged. A skill's `hooks.json` supports per-platform commands the same way as any other hooks file. Its hooks run in the workspace and find the skill's own scripts through `CIRCLE_SKILL_DIR` (or `skill_dir` in their JSON), written as `node "${CIRCLE_SKILL_DIR}/scripts/log.mjs"`. See [Hooks](hooks.md#a-skill-can-ship-hooks).
 
 ## Local tools from an MCP server
 
@@ -119,5 +119,39 @@ An MCP server can publish client tools for a pack under its `/local-tools` contr
 - `skill_install` takes the name of the MCP server entry and the `<id>@<version>` and digest from that server's answer. It downloads the manifest and every file from the entry's `/local-tools` endpoint with the token that entry's connection sends: its `Authorization` header's (`Bearer ${secret:NAME}` or a literal `Bearer` value), or else the token its sign-in keeps, so an entry you signed in to needs no token saved for it. It verifies size and SHA-256 and installs into `~/.agents/skills/<pack>/`. That root is the universal Agent Skills folder, so other agents that read `~/.agents/skills` see the same install. An entry that is not signed in and has no header, or is turned off, is refused with what to do.
 - `skill_run` runs a script only under the installed pack's `tools/`, with the current Node. `%NAME%` placeholders expand at execution from the variables in settings and the secrets saved with `/secrets`; a pack's instructions name the ones it needs, so define those once. An MCP entry can also give its endpoint and its token under names of its `placeholders`, such as the Hub's `%HUB_URL%` and `%HUB_TOKEN%`, without either being saved (see [Secrets by name](security.md#secrets-by-name)). The output shows every secret value as its `%NAME%`, and tokens never appear in arguments, results, logs or Git.
 - `skill_list` shows what is installed and the digest each pack was installed from.
+
+### Typed tools a pack declares
+
+A pack can declare its scripts' parameters in a `tools.json` at its root, listed in `pack.json` like its other files, so the pack's digest covers it. When this session loads the pack's skill, each declared script becomes a tool of its own, named `<pack>_<name>`, from the next model request on. Before that, and for a script the pack does not declare, `skill_run` works as above.
+
+```json
+{
+  "version": 1,
+  "tools": [{
+    "name": "convert",
+    "description": "Convert a text file to PDF or HTML.",
+    "script": "tools/convert.mjs",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "in": { "type": "string" },
+        "format": { "enum": ["pdf", "html"] },
+        "title": { "type": "string" }
+      },
+      "required": ["in", "format"]
+    },
+    "args": ["--in", "{in}", "--format", "{format}", { "flag": "--title", "param": "title" }],
+    "env": { "HUB_TOKEN": "%HUB_TOKEN%" }
+  }]
+}
+```
+
+- **The input.** `input_schema` is a small part of JSON Schema: an object whose properties are strings, numbers, integers, booleans or lists of strings, with `enum`, `default`, limits and `required`. `$ref` and other keywords are refused. Circle checks a call against it before the script starts, and a call that does not fit gets the reason, such as a `format` that is not `pdf` or `html`. A property the schema does not name is refused.
+- **The arguments.** `args` is a template. A literal string stays as written, with plain variables' `%NAME%` filled in. `"{in}"` is the value of a required property; a list gives one argument per item. `{ "flag": "--title", "param": "title" }` is `--title <value>` when the call gives one, the flag alone for `true`, and nothing when it gives none or `false`. An optional property is only allowed in that form. `"stdin": "json"` also writes the whole input to standard input as JSON. A value that starts with `-` can look like an option to the script: put `"--"` before positional values in `args`, or limit the property with `pattern`.
+- **Values the model never sees.** `env` adds variables to the script's environment. `%NAME%` there takes a variable's or a secret's value when the script starts. A secret goes nowhere else: a literal in `args` never takes a secret's value, because a command line is visible to other processes. What the model writes is checked against the schema and runs as written, so `%NAME%` there stays as written, for variables and secrets alike. The script's output shows every secret value as its `%NAME%`. `PATH`, `HOME`, `TMPDIR` and `NODE_OPTIONS` cannot be set.
+- **Checks when the skill loads.** The pack must verify against its manifest, and `tools.json` must be valid: unique names, scripts under `tools/` that the pack lists, and a template that names only declared properties. Otherwise the pack offers no tool and the model is told why. A built-in tool, an MCP server's and an extension's keep their names: a pack's tool with the same name is not offered, also when the other tool arrives later.
+- **Approval.** A typed tool runs like `skill_run`: its card shows the input by name, the approval rules and hooks match its own name, and `tool_input` is the named input. Once a script has a typed tool in this session, `skill_run` refuses it and names the tool.
+
+The tools belong to the session that loaded the skill, like its hooks: switching, importing or starting another session leaves them out until the skill is loaded there. Loading the skill again tells the model again which tools it has. Loading it adds tools to the list, so the next request does not reuse the prompt cache of the requests before.
 
 Installing and running a pack executes the publisher's Node code; a server-side scan is not a sandbox. Read the pack before installing it, and treat what runs locally as a preview: the serving side's recomputation is the evidence. Packs and skills are supported on macOS and Linux only.

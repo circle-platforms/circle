@@ -103,7 +103,7 @@ Every matching hook for an event runs. Nothing stops the list early. For the thr
 
 | Event                | When                                                                   | What a decision does                                                                                                                                                                                                                                    |
 | -------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `before_tool`        | After the approval policy's hard refusal, and before the approval card | `deny` blocks the call. `ask` forces the card, including in auto. `allow` skips an ordinary card only.                                                                                                                                                  |
+| `before_tool`        | After the approval policy's hard refusal, and before the approval card | `deny` blocks the call. `ask` forces the card, including in auto. `allow` skips an ordinary card only. `updated_input` makes the call run in another form: see [Rewrite a call](#rewrite-a-call). |
 | `permission_request` | When a card would be shown, or a hook asked                            | Same as `before_tool`. It does not run when nothing would ask and no hook asked, and it does not run after a `before_tool` allow that already skipped an ordinary card. An allow here cannot take back an ask, and cannot skip a call that always asks. |
 | `after_tool`         | After a tool returns text                                              | Decisions are ignored. Exit 0 appends standard output to the tool result the model reads. A non-zero exit, a timeout, or a failure to start does not undo the tool: Circle logs it and shows a notice.                                                  |
 | `before_stop`        | When the model ends a turn with no tool call and no steering message   | `deny`, exit 2, or `ask` blocks the stop and sends the reason back. The turn continues, and the step still counts toward the turn's step limit.                                                                                                         |
@@ -123,6 +123,30 @@ A call that always asks, such as deleting files, still runs the hook. `allow` do
 A file tool still refuses a credential file by name when the tool runs. That check is inside the tool, so a `before_tool` hook does run, and an allow does not make the write succeed.
 
 `allowed_commands` still skips the card, unless a hook asked. A hook deny is already a block by then.
+
+## Rewrite a call
+
+A `before_tool` hook can let a call through in another form, rather than deny it and leave the model to try again. It answers with `updated_input`, the whole input the call runs with instead (not a patch: copy the fields you keep):
+
+```json
+{ "decision": "allow", "updated_input": { "command": "example-tool --name value" } }
+```
+
+- **With a decision.** With `allow` the rewrite runs without an ordinary card, as an allow does. With `ask` the card shows the rewrite. With no decision the approval mode and the rules decide as for any call. A `deny` from any hook voids every rewrite: the call does not run in any form.
+- **Checked again.** The rewrite goes through everything the model's call went through before the hooks: the tool's schema, variables, read-only mode and the hard refusals. Then the rules, `allowed_commands`, `permission_request`, the card, an answer you keep for the session, the tool and `after_tool` all take the rewrite. What runs is what was checked and approved. A rewrite the tool's schema refuses, or a hard refusal, stops the call, and the tool result names the hook: `Hook changed this call's input (name), and it cannot run: …`.
+- **Secrets.** The hook sees each saved secret as `%NAME%` and writes it back that way. Circle puts the value in. A part of the input that no hook changed keeps what the model sent, values included, also for a tool such as `write_file` that takes `%NAME%` as written. A rewrite that names a secret the call did not carry always shows the card, even after an allow and in auto.
+- **Facts.** Facts Circle works out for the card, such as who sees a screenshot, are worked out again. A rewrite cannot set them.
+- **Several hooks.** Hooks run in order, and each gets the rewrite of the one before as `tool_input`. The call runs with the last rewrite. Which hooks run in this round is settled by the call as the model sent it. Handing back the input as it came, in any key order, is no rewrite.
+- **Once more.** Every `before_tool` hook then sees the rewrite, matched by the rewrite's own paths, so a hook that guards `config/**` also sees a call rewritten into `config/`. A deny stops the call, and an ask shows the card. Only an allow given to the rewrite skips an ordinary card: an allow given to the call as the model sent it does not carry over. A hook that changes the rewrite again stops the call, so a rewrite must come back unchanged when its hook sees it. Such a hook runs twice for one call.
+- **What you see.** The approval card shows the call that will run, the rewrite. Nothing on screen marks it as rewritten, by the owner's decision (2026-11-14): the transcript's row shows the call as the model sent it, and its result without the lines below.
+- **What the model sees.** Its call stays as it sent it. The tool result starts with what changed, so its next call can be written that way, also when the rewrite was then denied. Only the model reads these lines:
+
+  ```text
+  Hook changed this call's input (canon):
+  command = "example-tool --name value"
+  ```
+
+Only `before_tool` reads `updated_input`. Other events ignore it. A value that is not a JSON object denies the call, with the reason `hook updated_input is not a JSON object`.
 
 ## What the command receives
 
@@ -148,6 +172,8 @@ Circle writes one JSON object to standard input:
 
 A hook with `"screenshot": true` also gets `"files": [{ "kind": "screenshot", "path": "…", "mime_type": "image/png", "sha256": "…", "size": 12345 }]`, when there is a page to capture (see below).
 
+A hook that ships with a skill also gets `"skill_dir": "/path/to/the/skill"`, the folder of its `SKILL.md`. See [A skill can ship hooks](#a-skill-can-ship-hooks).
+
 `tool_input` is the arguments after variables are filled in, with one exception: a saved secret's value is written back as `%NAME%` everywhere it appears in the arguments, the paths, the tool output, and the hook's environment. The hook runs as you, but it does not receive the secret. `paths` are canonical (symlinks resolved through `canonicalPath`). `tool_output` and `tool_status` are set for `after_tool`. `permission_reason` is set for `permission_request`. `stop_attempt` is set for `before_stop` and starts at 1.
 
 ### A screenshot for the hook
@@ -166,7 +192,7 @@ The command's standard output and standard error are kept up to 100,000 characte
 
 | Exit                                                                                 | Gating event (`before_tool`, `permission_request`, `before_stop`)                                                          | `after_tool` and `session_start`                                                                                |
 | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| 0 and a JSON object `{"decision":"allow"\|"deny"\|"ask","reason":"…","context":"…"}` | That decision. On `before_stop`, `ask` blocks like `deny`. Empty output, or a JSON object with no decision, is no opinion. | The decision is ignored. `context`, or `additional_context`, is fed back. Plain text is fed back too.           |
+| 0 and a JSON object `{"decision":"allow"\|"deny"\|"ask","reason":"…","context":"…","user_message":"…","updated_input":{…}}` | That decision. On `before_stop`, `ask` blocks like `deny`. Empty output, or a JSON object with no decision, is no opinion. | The decision is ignored. `context`, or `additional_context`, is fed back. Plain text is fed back too.           |
 | 0 and output that is not a JSON object                                               | Deny. The reason is `hook output is not JSON`.                                                                             | The text is context. The turn is not interrupted.                                                               |
 | 2                                                                                    | Deny. The reason is the JSON `reason`, otherwise standard error, otherwise standard output.                                | A notice only. The tool is not undone and the session is not blocked.                                           |
 | Any other exit, a timeout, or a failure to start                                     | Deny.                                                                                                                      | A notice only. The tool is not undone and the session is not blocked. The error text is not given to the model. |
@@ -174,6 +200,10 @@ The command's standard output and standard error are kept up to 100,000 characte
 Claude Code blocks a command hook only on exit 2. Any other exit is a non-blocking error, and exit 0 with plain text is not a decision. Circle is stricter on `before_tool`, `permission_request` and `before_stop`: any non-zero exit, a timeout, a failure to start, or output that is not a JSON object is a deny. Exit 2 is a deny here too, so a hook written to that convention still blocks in Circle: exit 0 with a JSON decision, or exit 2 to refuse. A hook that prints plain text and exits 0 on a gating event is a deny in Circle, where Claude Code would let the call through. On `after_tool` and `session_start` a non-zero exit does not interrupt the turn. Circle writes it to `hooks.log` and shows a notice. The transcript keeps the hook's error text. The model is told only `hook failed · name`, so it does not quote that text back. In the desktop's 简体中文 that notice is Chinese (`钩子失败`, and Circle's own words such as a timeout); the hook's own text stays as it wrote it. Exit 0 still feeds the output back, which is how a formatter reports what it did.
 
 A deny the model sees starts with `Hook denied this call:`. An ask that you then reject includes `A hook asked:`. After you approve a call a hook asked about, the tool result starts with `Hook asked before this call:`. A routine allow does not add `Hook allowed this call.` to the tool result; an older result with that prefix hides it only on display. `after_tool` context is appended as `Hook output (name):`.
+
+The model reads a reason once. Beside a deny it also gets a notice, but the notice only names the tool (`hook denied write_file`), because the reason is already in the tool result. The notice beside `after_tool` or `session_start` output only names the hook, because the output is in the tool result or the system prompt. An ask's notice keeps its reason, since not every way out of an ask puts it in the tool result. So does an allow's notice: a routine allow adds nothing to the tool result.
+
+`user_message` is optional and is for you, not the model. The notice and the approval card show it in place of the reason, so a hook can give the model a detailed instruction in `reason` and you a short line. Several hooks' messages are joined like their reasons. Without it, you see the reason, as before.
 
 ## Path globs
 
@@ -185,7 +215,7 @@ Matching is case-sensitive, except on Windows, where `\` and `/` are the same an
 
 ## What you see
 
-The terminal keeps hook notices in English whatever the system language; the hook's own reason, the command and the tool name stay as written. A routine allow notice is hidden by default. Set `show_hook_allow: true` to show it in the terminal and desktop. Denials, questions, failures and `after_tool` output notices remain visible. The welcome inventory names `.circle/hooks.json` when that file is present. The approval card adds `hook · <reason>` when a hook asked.
+The terminal keeps hook notices in English whatever the system language; the hook's own reason, the command and the tool name stay as written. A routine allow notice is hidden by default. Set `show_hook_allow: true` to show it in the terminal and desktop. Denials, questions, failures and `after_tool` output notices remain visible. The welcome inventory names `.circle/hooks.json` when that file is present. The approval card adds `hook · <reason>` when a hook asked, or `hook · <user_message>` when the hook wrote one.
 
 The desktop transcript uses the same notices. In 简体中文 the labels are fully Chinese, and the reason stays as the hook wrote it. Settings → hooks lists each hook's name, whether it came from you, the project or a skill (and which skill), the event, the tools when they are not `*`, and the command. A skill hook that this session has not loaded is listed as waiting and does not run. An untrusted project file is named there and is not run, and so is a project file that waits for approval.
 
@@ -200,5 +230,13 @@ Each run appends one JSON line to `hooks.log` in the data folder. The fields are
 A skill folder may contain `hooks.json` beside `SKILL.md`. Installing the skill does not run those commands. They run only after this session loads that skill, with `/skill` or with the model's `skill` tool, and they stop applying when you switch, import or start another session. A project skill's hooks still require the folder to be trusted, and approval of that file's bytes, the same way as `.circle/hooks.json`. Until then they are not loaded. Settings names the skill and, until it is loaded, that the hook is waiting.
 
 A `session_start` hook in the skill runs with the session when the skill was loaded first, and runs once when the skill is loaded later. The other events apply to tool calls after that moment.
+
+A skill's hook runs in the workspace, like any other hook, so a script the skill bundles is not found by a relative path. The hook gets the skill's folder, the one the model is told when the skill loads, symlinks resolved: as the environment variable `CIRCLE_SKILL_DIR`, and as `skill_dir` in its JSON. Write the variable with braces and in double quotes, so one command works on every system and in a folder whose name has a space:
+
+```json
+{ "hooks": { "after_tool": [{ "name": "log", "command": "node \"${CIRCLE_SKILL_DIR}/scripts/log.mjs\"" }] } }
+```
+
+`/bin/sh` reads `${CIRCLE_SKILL_DIR}` from the environment. On Windows Circle changes `${CIRCLE_SKILL_DIR}` in the command to `%CIRCLE_SKILL_DIR%` for `cmd.exe`, which reads it from the environment in turn, and Node takes the forward slashes. Either way the folder's name is not written into the command. Other hooks do not have the variable, even when Circle itself was started with one. Approval still covers only the bytes of `hooks.json`, wherever the skill is installed.
 
 This is optional. A skill with no `hooks.json` is unchanged, and Circle still does not run other scripts bundled in the skill.

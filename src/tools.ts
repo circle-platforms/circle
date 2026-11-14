@@ -89,6 +89,8 @@ export interface ToolHooks {
     secrets: () => Record<string, string>;
     variables: () => Record<string, string>;
     root?: string;
+    /** The typed tool offered for this script of a pack, when its skill is loaded and the pack declares it. */
+    typed?: (pack: string, script: string) => string | undefined;
   };
   /** Offer `screenshot`; tests give it their own runner. */
   screenshot?: Omit<ScreenshotOptions, 'app' | 'target'>;
@@ -602,6 +604,15 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         ['pack', 'script'],
       ),
       async (args) => {
+        // A script whose parameters the pack declares runs through its own tool, which checks them first
+        const typed = localSkills.typed?.(
+          string(args, 'pack'),
+          string(args, 'script'),
+        );
+        if (typed)
+          throw new Error(
+            `The pack declares this script's parameters: call ${typed}, which checks them before the script starts.`,
+          );
         try {
           return JSON.stringify(
             await runTool({
