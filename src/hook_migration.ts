@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 import { parse as parseYaml, stringify as yaml } from 'yaml';
 import { skillFrontmatterHooks } from './hook_config.js';
 import { isRecord, withPrivateJsonLock, writePrivateJson } from './settings.js';
-import { discoverSkills } from './skills.js';
+import { discoverSkills, splitFrontmatter } from './skills.js';
 
 const OLD_EVENTS: Record<string, string> = {
   before_tool: 'PreToolUse',
@@ -221,8 +221,9 @@ function intoSkill(file: string, skillPath: string, name: string): string[] {
       JSON.parse(readFileSync(file, 'utf8')),
     );
     const block = yaml({ hooks }).trimEnd();
-    const match = text.match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/);
-    const front = match ? `${match[1]}\n${block}` : block;
+    const found = splitFrontmatter(text);
+    const front =
+      found.block !== undefined ? `${found.block}\n${block}` : block;
     // A frontmatter that is not YAML would lose these hooks: it is left for you to fix, and the hooks stay where
     // they are
     try {
@@ -232,9 +233,10 @@ function intoSkill(file: string, skillPath: string, name: string): string[] {
         `skill ${name}: its SKILL.md frontmatter is not YAML (${message(error).split('\n')[0]}), so its hooks.json was not moved and does not run; quote the values with a colon in them and start Circle again`,
       ];
     }
-    const next = match
-      ? `---\n${front}\n---\n${text.slice(match[0].length)}`
-      : `---\n${front}\n---\n${text}`;
+    const next =
+      found.block !== undefined
+        ? `---\n${front}\n---\n${found.body}`
+        : `---\n${front}\n---\n${text}`;
     writeFileSync(skillPath, next);
     const kept = retire(file);
     return [

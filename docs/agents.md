@@ -6,7 +6,7 @@ nav_order: 12.4
 
 A subagent is a second Circle with its own context: `task` starts one, it works alone, and only its report comes back to your conversation. Three ship with Circle — `general-purpose`, and the read-only `explore` and `plan` — [extensions](extensions.md) register more, and **folders of markdown files define the rest**. This page is about those.
 
-Each built-in has a prompt of its own, followed by the conversation's system prompt: `general-purpose` works from a short prompt for general tasks (do what the task asks, report in the format it asks for), `explore` from one for read-only searching, and `plan` from one for research before a plan (how the code works now, and what a change would touch). `explore` and `plan` get the read-only tools and run in read-only mode. A built-in whose prompt file is missing is an error that names the file; it never borrows another agent's prompt.
+Each built-in has a prompt of its own, followed by the conversation's system prompt: `general-purpose` works from a short prompt for general tasks (do what the task asks, report in the format it asks for), `explore` from one for read-only searching, and `plan` from one for research before a plan (how the code works now, and what a change would touch). The built-in `explore` and `plan` get the read-only tools and run in read-only mode; a file that replaces one of them decides its own tools and mode, so give it `permissionMode: plan` if it should only read. A built-in whose prompt file is missing is an error that names the file; it never borrows another agent's prompt.
 
 ## A file per agent
 
@@ -28,12 +28,12 @@ the file and the line. Change nothing.
 |---|---|---|
 | `name` | no: the file name is used | how `task` calls it: letters, digits, `_` and `-`, up to 64 |
 | `description` | yes | the line the model reads to decide when to use the agent |
-| `tools` | no | the exact tool names it may use, on one line or as a YAML list; without the key it gets everything a subagent may have. An entry ending in `*` takes every tool whose name starts with what comes before it. What an entry says in parentheses is not read: `task(worker)` is `task` |
-| `disallowedTools` | no | tools it never gets, in the same form. They are taken out first, and `tools` is read from what is left, so a tool in both is not offered. `execute(git push *)` takes `execute` away entirely: to refuse only some commands, write an [approval rule](security.md) |
+| `tools` | no | the exact tool names it may use, on one line or as a YAML list; without the key it gets everything a subagent may have. An entry ending in `*` takes every tool whose name starts with what comes before it. `mcp__<server>`, `mcp__<server>__*` and `mcp__*` take an MCP server's tools, found by the server's name, and `mcp__<server>__<tool>` one of them. What an entry says in parentheses is not read: `task(worker)` is `task`. An entry that names no tool, or a server this session does not have, keeps the file from being offered |
+| `disallowedTools` | no | tools it never gets, in the same form and checked the same way: an entry that names no tool, such as another program's `Write`, keeps the file from being offered rather than withholding nothing. They are taken out first, and `tools` is read from what is left, so a tool in both is not offered. `execute(git push *)` takes `execute` away entirely: to refuse only some commands, write an [approval rule](security.md) |
 | `model` | no | an id on the same endpoint; without it the agent uses the model of the conversation, or of the subagent that started it |
 | `effort` | no | its thinking depth, one of `minimal`, `low`, `medium`, `high`, `xhigh` or `max`, sent with each of its requests; without it the agent follows the conversation's depth. `CIRCLE_REASONING_EFFORT` set for the run wins over it. `/agents <name>` shows the depth |
 | `permissionMode` | no | how its calls are decided: `default` (or `manual`), `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions` or `auto`. See [Permission modes](#permission-modes) |
-| `maxTurns` | no | how many model requests it may make. When they are spent it stops with what it has written, and `task` returns that under `Partial result:` |
+| `maxTurns` | no | how many model requests it may make, a whole number from 1. When they are spent it stops with what it has written, and `task` returns that under `Partial result:` |
 | `skills` | no | skills loaded into its conversation in full before its task, as if it had loaded them with `skill`, up to 32 names. One that is not installed is left out, and `/agents <name>` names it |
 | `mcpServers` | no | MCP servers it gets the tools of, by the names they are configured under, beside what `tools` lists. See [MCP servers](#mcp-servers) |
 | `hooks` | no | [hooks](hooks.md) that run only for this subagent, while it runs. See [Its own hooks](#its-own-hooks) |
@@ -42,7 +42,7 @@ the file and the line. Change nothing.
 
 A key with a value it does not take — a mode, a scope or a colour that is not one of its list, `maxTurns: 0`, `background: maybe` — means the file is not offered, and `/agents` says why. A key Circle does not know is ignored.
 
-Lists and nested keys are read as YAML. A frontmatter that is not YAML, such as a description with an unquoted `: ` in it, still loads when each key it uses fits on one line. One that needs YAML for a key (`hooks`, `mcpServers`, or a list under `tools`) is not offered, and `/agents` gives the YAML error.
+The frontmatter is the lines between a first line of `---` and the next line that starts with `---`, and it is read as YAML, with keys in any case: `Tools:` is `tools`. A frontmatter that is not YAML, such as a description with an unquoted `: ` in it, still loads when it sets only `name`, `description`, `model` and `effort`, read one line each. One that sets any other key is not offered, and `/agents` gives the YAML error, so a guard never goes missing quietly.
 
 ### Permission modes
 
@@ -57,7 +57,11 @@ While the conversation is in `manual` mode, `permissionMode` decides how the sub
 | `bypassPermissions` | as the conversation's: a definition cannot put a subagent in `auto` mode |
 | `auto` | as the conversation's: this is a mode in which a separate model decides each call, which Circle does not have |
 
-When the conversation is in `accept-edits` or `auto` mode, every subagent works in that mode, whatever its key says. When the conversation is read-only (`/plan`), so is every subagent, and `dontAsk` still holds. The conversation's mode is read again for every call, so a change reaches subagents that are already running. Rules you keep for the conversation, and its deny rules, apply to its subagents too. Hooks hear the mode as `permission_mode`: `default`, `acceptEdits`, `plan`, `dontAsk` or `bypassPermissions`.
+A subagent without `permissionMode` works in the conversation's mode, not in the mode of the subagent that started it: one started by a `dontAsk` or an `acceptEdits` subagent works in its own `permissionMode`, or else in the conversation's. Read-only is the exception, below. A definition that must not hand work to one that asks or writes, such as a `dontAsk` one, leaves `task` out of its `tools` or puts it in `disallowedTools`.
+
+A project's definition, one in a `<workspace>/…/agents` folder, cannot make Circle ask less: its `acceptEdits`, `bypassPermissions` or `auto` is not applied, the definition is offered without it, and `/agents` lists it under `Not applied:`. Its `default`, `plan` and `dontAsk` apply. This is the rule project approval rules follow too: a repository can tighten what Circle does, never loosen it.
+
+When the conversation is in `accept-edits` or `auto` mode, every subagent works in that mode, whatever its key says. When the conversation is read-only (`/plan`), so is every subagent, and `dontAsk` still holds. The conversation's mode is read again for every call, so a change reaches subagents that are already running. Rules you keep for the conversation, and its deny rules, apply to its subagents too. Hooks hear the mode as `permission_mode`: `default`, `acceptEdits`, `plan`, `dontAsk` or `bypassPermissions`. Its own calls' hooks, and the `SubagentStart` and `SubagentStop` hooks about it, hear the subagent's own mode.
 
 ### MCP servers
 
@@ -110,7 +114,7 @@ Read in this order, lowest first, so a later folder replaces an earlier one of t
 | `<workspace>/.claude/agents` | this project, from Claude Code |
 | `<workspace>/.circle/agents` | this project, Circle's own |
 
-An **extension** that registers the name wins over a file, and a file wins over a built-in: your `explore.md` replaces the shipped `explore`, and gets the tools its own keys name rather than the read-only set.
+An **extension** that registers the name wins over a file, and a file wins over a built-in: your `explore.md` replaces the shipped `explore`, and gets the tools and the mode its own keys give rather than the read-only set; set `permissionMode: plan` to keep it read-only.
 
 ### A pack can ship subagents
 
@@ -128,14 +132,14 @@ A subagent can start subagents of its own with `task`, up to three layers below 
 - Without a `model` of its own, a subagent runs on the model of the one that started it.
 - Every layer works for your conversation. Hooks get the conversation's `session_id` and the layer's own session as `agent_id`, with its type as `agent_type`; its commands get `CIRCLE_AGENT_ID`; its cards ask you, and what you allow for the session holds for the whole conversation; what it costs counts in the conversation's total. A card of one that works under a background subagent waits under that subagent's job.
 - Each is a session of its own under the one that started it, and what it starts in the background stops when it ends.
-- A read-only subagent (`explore`, `plan`, or one with `permissionMode: plan`) keeps the subagents it starts read-only.
-- `explore` and `plan` have no `task`. To keep a definition of yours from starting subagents, leave `task` out of its `tools` or put it in `disallowedTools`.
+- A read-only subagent (the built-in `explore` or `plan`, or one with `permissionMode: plan`) keeps the subagents it starts read-only. Its other modes are its own: a subagent it starts works in that subagent's own `permissionMode`, or the conversation's.
+- The built-in `explore` and `plan` have no `task`. A definition that must not delegate leaves `task` out of its `tools` or puts it in `disallowedTools`.
 
 At most 20 subagents run at once for one conversation, in the foreground or the background, at any depth (`CIRCLE_MAX_CONCURRENT_SUBAGENTS`). At the limit `task` fails with `Concurrent subagent limit reached` and tells the model not to retry; it works again once one of them has finished. There is no limit on how many a session starts over its life.
 
 ## Seeing them: `/agents`
 
-`/agents` lists what `task` can choose — the built-ins first, then the files and extensions — one line each. Under `Not offered:` it lists every definition that could not be used, with the reason, and under `Not supported yet:` the keys Circle reads and does not apply yet:
+`/agents` lists what `task` can choose — the built-ins first, then the files and extensions — one line each. Under `Not offered:` it lists every definition that could not be used, with the reason, under `Not supported yet:` the keys Circle reads and does not apply yet, and under `Not applied:` a value a rule keeps from applying, with why:
 
 ```
 Not offered:
@@ -144,6 +148,9 @@ Not offered:
 
 Not supported yet:
   keeper: memory user, color blue
+
+Not applied:
+  editor: permissionMode acceptEdits: a project's definition cannot loosen approvals
 ```
 
 `/agents <name>` shows one of them: the folder it came from, its model and depth, the tools it names, and each key above that it sets. Nothing is passed over in silence, because a file that did not load is otherwise impossible to find.

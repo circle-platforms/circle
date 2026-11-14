@@ -149,7 +149,7 @@ Circle writes one JSON object to standard input:
 ```
 
 - `session_id` is the conversation's session. In a subagent, at any depth, `agent_id` is the subagent's own session and `agent_type` its type.
-- `permission_mode` is `default` (manual, and a print, line or rpc run without `--yolo`), `acceptEdits`, `plan` (read-only) or `bypassPermissions` (auto). A subagent whose definition sets [`permissionMode: dontAsk`](agents.md#permission-modes) is `dontAsk`, and one in a mode of its own is told that mode.
+- `permission_mode` is `default` (manual, and a print, line or rpc run without `--yolo`), `acceptEdits`, `plan` (read-only) or `bypassPermissions` (auto). A subagent whose definition sets [`permissionMode: dontAsk`](agents.md#permission-modes) is `dontAsk`, and one in a mode of its own is told that mode, also in the `SubagentStart` and `SubagentStop` hooks about it.
 - Circle keeps sessions in a database, so there is no `transcript_path`. `Stop` and `SubagentStop` give the last answer as `last_assistant_message`.
 - `paths` is Circle's own: the paths the call names, canonical.
 

@@ -1,9 +1,10 @@
 Launch a subagent with an isolated context for a complex, multi-step task.
 
 Choose one with the required tools from the subagents listed below. The general-purpose
-agent has the main agent's tools, including registered extension tools; explore and
-plan are limited to read-only search and file inspection: explore to find things, plan
-to research how the code works before a plan is written.
+agent has the main agent's tools, including registered extension tools. The built-in
+explore and plan only read: explore finds things, plan researches how the code works
+before a plan is written. A definition that replaces one of them does what its own
+description says.
 
 Use description and subagent_type for each call. Include the needed context, the
 allowed work, and the expected result in description. Foreground calls wait for one

@@ -2254,6 +2254,12 @@ test('/agents shows the keys a definition sets, and the ones Circle does not app
       '',
     ].join('\n'),
   );
+  // A project's definition that would ask less than the conversation
+  mkdirSync(join(workspace, '.circle', 'agents'), { recursive: true });
+  writeFileSync(
+    join(workspace, '.circle', 'agents', 'editor.md'),
+    '---\nname: editor\ndescription: Edits.\npermissionMode: acceptEdits\n---\n\nEdit.\n',
+  );
   const { app } = await session(t, [], { home, workspace, userHome });
   await app.submit('/agents');
   const listed = app.state.notices.join('\n');
@@ -2261,6 +2267,15 @@ test('/agents shows the keys a definition sets, and the ones Circle does not app
   assert.match(
     listed,
     /Not supported yet:\n {2}keeper: memory user, color blue/,
+  );
+  assert.match(
+    listed,
+    /Not applied:\n {2}editor: permissionMode acceptEdits: a project's definition cannot loosen approvals/,
+  );
+  await app.submit('/agents editor');
+  assert.match(
+    app.state.notices.at(-1)!,
+    /not applied: permissionMode acceptEdits: a project's definition cannot loosen approvals/,
   );
   await app.submit('/agents keeper');
   const one = app.state.notices.at(-1)!;

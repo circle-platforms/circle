@@ -11,6 +11,8 @@ import {
   discoverSubagents,
   readSubagentFolder,
 } from '../src/subagent_files.js';
+import { parseFrontmatter, splitFrontmatter } from '../src/skills.js';
+import { skillFrontmatterHooks } from '../src/hook_config.js';
 import { defaultSettings } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import type { Message } from '../src/types.js';
@@ -409,7 +411,7 @@ const definition = (folder: string, name: string, keys: string): void => {
   );
 };
 
-test('the new keys are read as YAML or on one line, and a value a key does not take keeps the file from being offered', (t) => {
+test('the new keys are read from YAML, and a value a key does not take keeps the file from being offered', (t) => {
   const root = realpathSync(scratch(t));
   const folder = join(root, 'agents');
   definition(
@@ -445,10 +447,10 @@ test('the new keys are read as YAML or on one line, and a value a key does not t
       '',
     ].join('\n'),
   );
-  // A description with a colon is no YAML: keys on one line still read
+  // A description with a colon is no YAML: name, description, model and effort still read one line each
   writeFileSync(
     join(folder, 'plain.md'),
-    '---\nname: plain\ndescription: Checks: everything\ntools: read_file, grep\nmaxTurns: 2\n---\nPlain.\n',
+    '---\nname: plain\ndescription: Checks: everything\nmodel: other-model\neffort: high\n---\nPlain.\n',
   );
   for (const [name, keys] of [
     ['mode', 'permissionMode: sometimes\n'],
@@ -491,8 +493,10 @@ test('the new keys are read as YAML or on one line, and a value a key does not t
     ['project', 'worktree', 'red', true],
   );
   const plain = agents.find((item) => item.spec.name === 'plain')!;
-  assert.deepEqual(plain.tools, ['read_file', 'grep']);
-  assert.equal(plain.maxTurns, 2);
+  assert.deepEqual(
+    [plain.spec.description, plain.spec.model, plain.spec.effort],
+    ['Checks: everything', 'other-model', 'high'],
+  );
   assert.deepEqual(agents.map((item) => item.spec.name).sort(), [
     'full',
     'plain',
@@ -500,7 +504,7 @@ test('the new keys are read as YAML or on one line, and a value a key does not t
   const said = problems.join('\n');
   for (const reason of [
     /mode\.md: permissionMode 'sometimes' is not one of default, acceptEdits, auto, dontAsk, bypassPermissions, plan/,
-    /turns\.md: maxTurns must be a whole number above 0/,
+    /turns\.md: maxTurns must be a whole number from 1, not 0/,
     /colour\.md: color 'magenta' is not one of red, blue, green, yellow, purple, orange, pink, cyan/,
     /isolated\.md: isolation 'container' is not one of worktree/,
     /remembers\.md: memory 'everywhere' is not one of user, project, local/,
@@ -508,7 +512,7 @@ test('the new keys are read as YAML or on one line, and a value a key does not t
     /none\.md: tools lists no tool/,
     /inline\.md: mcpServers: playwright is defined inline, which Circle does not support yet/,
     /badhook\.md: hooks: .*http hooks are not supported in Circle yet/,
-    /notyaml\.md: hooks could not be read: the frontmatter is not YAML/,
+    /notyaml\.md: the frontmatter is not YAML \(.+\), so hooks cannot be read/,
   ])
     assert.match(said, reason);
 });
@@ -533,4 +537,77 @@ test("a pack's definition gets no hooks, MCP servers or permission mode of its o
   assert.equal(reviewer!.mcpServers, undefined);
   assert.equal(reviewer!.permissionMode, undefined);
   assert.equal(reviewer!.maxTurns, 3);
+});
+
+test('every reader finds the same frontmatter, keys in any case, and a guard that needs YAML is never dropped quietly', (t) => {
+  const root = realpathSync(scratch(t));
+  const folder = join(root, 'agents');
+  folders(folder);
+  const files: Record<string, string> = {
+    // A closing line that says more, or has a dash more, still closes it
+    'comment.md':
+      '---\nname: comment\ndescription: Reads.\ntools: read_file, grep\npermissionMode: plan\nhooks:\n  PreToolUse:\n    - hooks:\n        - type: command\n          command: check\n--- # end\nPrompt.\n',
+    'dashes.md':
+      '---\nname: dashes\ndescription: Reads.\ntools: read_file\ndisallowedTools: execute\n----\nPrompt.\n',
+    'cased.md':
+      '---\nName: cased\nDescription: Reads.\nTools: read_file, grep\nPermissionMode: dontAsk\nMaxTurns: 3\n---\nPrompt.\n',
+    'windows.md':
+      '---\r\nname: windows\r\ndescription: Reads.\r\ntools:\r\n  - read_file\r\n  - grep\r\npermissionMode: plan\r\n---\r\nPrompt.\r\n',
+    // Not YAML, with keys that need it: refused with the reason, whatever case they are in
+    'colon.md':
+      '---\nname: colon\ndescription: Reviewer: reads only\ndisallowedTools: [execute, write_file]\n---\nPrompt.\n',
+    'twice.md':
+      '---\nname: twice\ndescription: x\ntools: read_file\ntools: execute\n---\nPrompt.\n',
+    'twocases.md':
+      '---\nname: twocases\ndescription: x\ntools: read_file\nTools: execute\n---\nPrompt.\n',
+    'true.md':
+      '---\nname: true\ndescription: x\nmaxTurns: true\n---\nPrompt.\n',
+    'list.md': '---\nname: list\ndescription: x\nmaxTurns: [5]\n---\nPrompt.\n',
+    'hex.md':
+      '---\nname: hex\ndescription: x\nmaxTurns: "0x10"\n---\nPrompt.\n',
+    'quoted.md':
+      '---\nname: quoted\ndescription: x\nmaxTurns: "7"\n---\nPrompt.\n',
+  };
+  for (const [file, text] of Object.entries(files))
+    writeFileSync(join(folder, file), text);
+  const { agents, problems } = readSubagentFolder(folder, 'Circle');
+  const one = (name: string) => agents.find((item) => item.spec.name === name)!;
+  assert.deepEqual(one('comment').tools, ['read_file', 'grep']);
+  assert.equal(one('comment').permissionMode, 'plan');
+  assert.equal(one('comment').hooks?.length, 1);
+  assert.equal(one('comment').spec.system_prompt, 'Prompt.');
+  assert.deepEqual(one('dashes').disallowedTools, ['execute']);
+  assert.deepEqual(
+    [one('cased').tools, one('cased').permissionMode, one('cased').maxTurns],
+    [['read_file', 'grep'], 'dontAsk', 3],
+  );
+  assert.deepEqual(one('windows').tools, ['read_file', 'grep']);
+  assert.equal(one('windows').permissionMode, 'plan');
+  assert.equal(one('quoted').maxTurns, 7);
+  assert.deepEqual(agents.map((item) => item.spec.name).sort(), [
+    'cased',
+    'comment',
+    'dashes',
+    'quoted',
+    'windows',
+  ]);
+  const said = problems.join('\n');
+  for (const reason of [
+    /colon\.md: the frontmatter is not YAML \(.+\), so disallowedTools cannot be read/,
+    /twice\.md: the frontmatter is not YAML \(Map keys must be unique.*\), so tools cannot be read/,
+    /twocases\.md: Tools is written twice, in different cases/,
+    /true\.md: maxTurns must be a whole number from 1, not true/,
+    /list\.md: maxTurns must be a whole number from 1, not \[5\]/,
+    /hex\.md: maxTurns must be a whole number from 1, not "0x10"/,
+  ])
+    assert.match(said, reason);
+  // The plain reader, a skill's hooks and a hooks move find the same lines
+  const skill =
+    '---\nname: guarded\ndescription: x\nHooks:\n  PreToolUse:\n    - hooks:\n        - type: command\n          command: check\n--- # end\nBody.\n';
+  assert.deepEqual(parseFrontmatter(skill).meta.name, 'guarded');
+  assert.equal(parseFrontmatter(skill).body, 'Body.\n');
+  assert.deepEqual(Object.keys(skillFrontmatterHooks(skill) as object), [
+    'PreToolUse',
+  ]);
+  assert.equal(splitFrontmatter('no frontmatter\n').block, undefined);
 });

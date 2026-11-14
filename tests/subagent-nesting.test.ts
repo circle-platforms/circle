@@ -412,3 +412,45 @@ test("a subagent's card waits under the background job it works for, also the ca
     'the approved write ran',
   );
 });
+
+test("a subagent started under a background job is that job's work: every event it sends carries the job's id", async (t) => {
+  const paths = folders(t);
+  const model = modelByAsker({
+    go: [
+      reply('', [
+        task('bg', 'layer one', 'general-purpose', { background: true }),
+      ]),
+      reply('started'),
+    ],
+    'layer one': [reply('', [task('inner', 'layer two')]), reply('one done')],
+    'layer two': [
+      reply('', [{ id: 'ls', name: 'ls', args: { path: '.' } }]),
+      reply('two done'),
+    ],
+  });
+  const runtime = runtimeFor(t, paths, model);
+  const seen: { subagent: string; job: unknown }[] = [];
+  runtime.bus.subscribe((event) => {
+    if (event.tags.subagent)
+      seen.push({
+        subagent: String(event.tags.subagent),
+        job: event.tags.job_id,
+      });
+  });
+  await runtime.harness.run('go');
+  await until(() => runtime.jobs.list()[0]?.status === 'done');
+  const job = runtime.jobs.list()[0]!;
+  const [one] = runtime.store.children(runtime.session.id);
+  const [two] = runtime.store.children(one!.id);
+  const of = (id: string) => seen.filter((event) => event.subagent === id);
+  assert.ok(of(two!.id).length > 0, 'the nested subagent sent events');
+  // So the terminal counts its work in the job's row, not in the person's turn
+  assert.deepEqual(
+    [...new Set(of(two!.id).map((event) => event.job))],
+    [job.id],
+  );
+  assert.deepEqual(
+    [...new Set(of(one!.id).map((event) => event.job))],
+    [job.id],
+  );
+});

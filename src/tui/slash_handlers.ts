@@ -1281,6 +1281,7 @@ function agents(host: CommandHost, args: string): void {
           (item) => `  ${item} · not supported yet`,
         ),
         one.ignored ? `  ignored for a pack: ${one.ignored.join(', ')}` : '',
+        ...(one.notApplied ?? []).map((item) => `  not applied: ${item}`),
         one.path ? `  file: ${shortPath(one.path)}` : '',
       ]
         .filter(Boolean)
@@ -1289,6 +1290,7 @@ function agents(host: CommandHost, args: string): void {
     return;
   }
   const unsupported = list.filter((agent) => agent.unsupported?.length);
+  const held = list.filter((agent) => agent.notApplied?.length);
   host.notice(
     [
       'Subagents:',
@@ -1308,6 +1310,15 @@ function agents(host: CommandHost, args: string): void {
             'Not supported yet:',
             ...unsupported.map(
               (agent) => `  ${agent.name}: ${agent.unsupported!.join(', ')}`,
+            ),
+          ]
+        : []),
+      ...(held.length
+        ? [
+            '',
+            'Not applied:',
+            ...held.map(
+              (agent) => `  ${agent.name}: ${agent.notApplied!.join('; ')}`,
             ),
           ]
         : []),

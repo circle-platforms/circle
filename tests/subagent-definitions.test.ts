@@ -463,10 +463,12 @@ test('the built-in plan researches read-only from a prompt of its own', async (t
     /not available: write_file/,
   );
   assert.ok(!existsSync(join(paths.workspace, 'plan-notes.md')));
-  assert.match(
-    runtime.harness.tools.find((tool) => tool.name === 'task')!.description,
-    /- plan: Read-only research before a plan/,
-  );
+  const description = runtime.harness.tools.find(
+    (tool) => tool.name === 'task',
+  )!.description;
+  assert.match(description, /- plan: Read-only research before a plan/);
+  // Only the built-ins are said to read only: a file can replace either
+  assert.match(description, /The built-in\s+explore and plan only read/);
 });
 
 test('memory, isolation and color are read and offered, and /agents says they are not supported yet', async (t) => {
@@ -494,4 +496,239 @@ test('memory, isolation and color are read and offered, and /agents says they ar
       ?.memory,
     'project',
   );
+});
+
+test('an entry in disallowedTools that names no tool keeps the definition from being offered, as one in tools does', async (t) => {
+  const paths = folders(t);
+  // Another program's tool names, in the folder Circle reads for it: they withhold nothing in Circle
+  agent(
+    join(paths.userHome, '.claude', 'agents'),
+    'no-writes',
+    'disallowedTools: Write, Edit\n',
+  );
+  const model = modelByAsker({
+    go: [
+      reply('', [task('a', 'no writes please', 'no-writes')]),
+      reply('done'),
+    ],
+  });
+  const runtime = runtimeFor(t, paths, model);
+  await runtime.harness.run('go');
+  assert.match(
+    resultIn(runtime, runtime.session.id, 'a'),
+    /unknown subagent type/,
+  );
+  assert.ok(
+    !model.requests.some((request) => askedBy(request, 'no writes please')),
+  );
+  const { agents, problems } = runtime.inspectSubagents();
+  assert.ok(!agents.some((item) => item.name === 'no-writes'));
+  assert.ok(
+    problems.some((line) =>
+      line.startsWith(
+        'no-writes withholds tools that do not exist: Write, Edit · not offered',
+      ),
+    ),
+  );
+});
+
+test("the mcp__ forms find a server's tools by the server's name, whatever its tools are called", async (t) => {
+  const paths = folders(t);
+  const stub = await mcpStub(t, {
+    tools: [
+      { name: 'echo', inputSchema: { type: 'object', properties: {} } },
+      { name: 'ping', inputSchema: { type: 'object', properties: {} } },
+    ],
+  });
+  const settings = defaultSettings();
+  settings.mcp_servers = [
+    { name: 'stub', url: stub.url, transport: 'streamable_http' },
+  ];
+  const agents = join(paths.home, 'agents');
+  agent(agents, 'local-only', 'disallowedTools: mcp__stub\n');
+  agent(agents, 'no-mcp', 'disallowedTools: mcp__*\n');
+  agent(agents, 'no-echo', 'disallowedTools: mcp__stub__echo\n');
+  agent(agents, 'only-stub', 'tools: read_file, mcp__stub__*\n');
+  agent(agents, 'ghost', 'disallowedTools: mcp__nowhere\n');
+  const model = modelByAsker({
+    go: [
+      reply('', [
+        task('a', 'local only', 'local-only'),
+        task('b', 'no mcp', 'no-mcp'),
+        task('c', 'no echo', 'no-echo'),
+        task('d', 'only stub', 'only-stub'),
+      ]),
+      reply('done'),
+    ],
+    'local only': [reply('ok')],
+    'no mcp': [reply('ok')],
+    'no echo': [reply('ok')],
+    'only stub': [reply('ok')],
+  });
+  const runtime = runtimeFor(t, paths, model, { settings });
+  await runtime.initialize();
+  await runtime.harness.run('go');
+  const stubTools = (key: string) =>
+    toolsOf(model, key).filter((name) => name.startsWith('stub_'));
+  assert.deepEqual(stubTools('local only'), []);
+  assert.deepEqual(stubTools('no mcp'), []);
+  assert.deepEqual(stubTools('no echo'), ['stub_ping']);
+  assert.ok(toolsOf(model, 'local only').includes('read_file'));
+  assert.deepEqual(toolsOf(model, 'only stub'), [
+    'read_file',
+    'stub_echo',
+    'stub_ping',
+  ]);
+  assert.ok(
+    runtime
+      .inspectSubagents()
+      .problems.some((line) =>
+        line.startsWith(
+          'ghost withholds tools that do not exist: mcp__nowhere',
+        ),
+      ),
+  );
+});
+
+test('a frontmatter whose closing line says more still gives the subagent its keys, written in any case', async (t) => {
+  const paths = folders(t);
+  writeFileSync(
+    join(paths.home, 'agents', 'reader.md'),
+    '---\nname: reader\ndescription: Reads.\nTools: read_file, grep\nPermissionMode: plan\n--- # end of frontmatter\nYou read.\n',
+  );
+  const model = modelByAsker({
+    go: [reply('', [task('r', 'read it', 'reader')]), reply('done')],
+    'read it': [reply('read')],
+  });
+  const runtime = runtimeFor(t, paths, model);
+  await runtime.harness.run('go');
+  const first = model.requests.find((request) => askedBy(request, 'read it'))!;
+  assert.deepEqual(
+    first.tools.map((tool) => tool.name),
+    ['read_file', 'grep'],
+  );
+  assert.match(first.system, /^You read\./);
+  assert.match(first.system, /Read-only mode: inspect and plan/);
+});
+
+test("a project's definition cannot make Circle ask less: its acceptEdits is not applied and /agents says why, while yours applies", async (t) => {
+  const paths = folders(t);
+  const project = join(paths.workspace, '.circle', 'agents');
+  agent(project, 'editor', 'permissionMode: acceptEdits\n');
+  agent(project, 'quiet', 'permissionMode: dontAsk\n');
+  agent(join(paths.home, 'agents'), 'mine', 'permissionMode: acceptEdits\n');
+  const asked: string[] = [];
+  const model = modelByAsker({
+    go: [
+      reply('', [
+        task('e', 'edit here', 'editor'),
+        task('q', 'stay quiet', 'quiet'),
+        task('m', 'mine edits', 'mine'),
+      ]),
+      reply('done'),
+    ],
+    'edit here': [reply('', [write('w1', 'edit.md')]), reply('edited')],
+    'stay quiet': [reply('', [write('w2', 'quiet.md')]), reply('quiet')],
+    'mine edits': [reply('', [write('w3', 'mine.md')]), reply('mine')],
+  });
+  const runtime = runtimeFor(t, paths, model, {
+    approve: async () => {
+      asked.push('card');
+      return 'approve';
+    },
+  });
+  await runtime.harness.run('go');
+  const at = (file: string) => existsSync(join(paths.workspace, file));
+  // The project's acceptEdits did not apply: its edit asked, as the conversation's manual mode does
+  assert.deepEqual(asked, ['card']);
+  assert.ok(at('edit.md') && at('mine.md'));
+  // Its dontAsk, which only tightens, did
+  assert.ok(!at('quiet.md'));
+  const listed = runtime.inspectSubagents().agents;
+  const editor = listed.find((item) => item.name === 'editor')!;
+  assert.equal(editor.permissionMode, undefined);
+  assert.deepEqual(editor.notApplied, [
+    "permissionMode acceptEdits: a project's definition cannot loosen approvals",
+  ]);
+  assert.equal(
+    listed.find((item) => item.name === 'quiet')?.permissionMode,
+    'dontAsk',
+  );
+});
+
+test('SubagentStart and SubagentStop hooks hear the subagent’s own mode', async (t) => {
+  const paths = folders(t);
+  const heard = hookScript(
+    paths.root,
+    'modes',
+    `[input.hook_event_name, input.agent_type, input.permission_mode]`,
+  );
+  writeFileSync(
+    join(paths.home, 'settings.json'),
+    JSON.stringify({
+      hooks: {
+        SubagentStart: [{ hooks: [{ type: 'command', command: heard }] }],
+        SubagentStop: [{ hooks: [{ type: 'command', command: heard }] }],
+      },
+    }),
+  );
+  const agents = join(paths.home, 'agents');
+  agent(agents, 'quiet', 'permissionMode: dontAsk\n');
+  agent(agents, 'planner', 'permissionMode: plan\n');
+  agent(agents, 'plain', '');
+  const model = modelByAsker({
+    go: [
+      reply('', [
+        task('q', 'be quiet', 'quiet'),
+        task('p', 'plan it', 'planner'),
+        task('n', 'just do it', 'plain'),
+      ]),
+      reply('done'),
+    ],
+    'be quiet': [reply('ok')],
+    'plan it': [reply('ok')],
+    'just do it': [reply('ok')],
+  });
+  const runtime = runtimeFor(t, paths, model);
+  await runtime.harness.run('go');
+  const sorted = (rows: string[][]) => rows.map((row) => row.join(' ')).sort();
+  assert.deepEqual(
+    sorted(lines(paths.root, 'modes')),
+    sorted([
+      ['SubagentStart', 'quiet', 'dontAsk'],
+      ['SubagentStart', 'planner', 'plan'],
+      ['SubagentStart', 'plain', 'default'],
+      ['SubagentStop', 'quiet', 'dontAsk'],
+      ['SubagentStop', 'planner', 'plan'],
+      ['SubagentStop', 'plain', 'default'],
+    ]),
+  );
+});
+
+test('a subagent started by a dontAsk subagent works in its own mode, or the conversation’s', async (t) => {
+  const paths = folders(t);
+  agent(join(paths.home, 'agents'), 'quiet', 'permissionMode: dontAsk\n');
+  const asked: string[] = [];
+  const model = modelByAsker({
+    go: [reply('', [task('q', 'stay quiet', 'quiet')]), reply('done')],
+    'stay quiet': [
+      reply('', [
+        write('w0', 'own.md'),
+        task('n', 'nested write', 'general-purpose'),
+      ]),
+      reply('quiet done'),
+    ],
+    'nested write': [reply('', [write('w1', 'nested.md')]), reply('nested')],
+  });
+  const runtime = runtimeFor(t, paths, model, {
+    approve: async () => {
+      asked.push('card');
+      return 'approve';
+    },
+  });
+  await runtime.harness.run('go');
+  // Its own write does not ask and does not run; the subagent it started asks, as the conversation does
+  assert.ok(!existsSync(join(paths.workspace, 'own.md')));
+  assert.ok(existsSync(join(paths.workspace, 'nested.md')));
+  assert.deepEqual(asked, ['card']);
 });

@@ -84,7 +84,7 @@ import {
   SESSION_MEMORY_BYTES,
   type SessionMemory,
 } from './knowledge/session-memory.js';
-import { McpManager } from './mcp_loader.js';
+import { McpManager, mcpToolName } from './mcp_loader.js';
 import { ExtensionHost, type SubagentSpec } from './extensions.js';
 import {
   discoverSubagents,
@@ -151,7 +151,6 @@ import {
   loadHooks,
   type ConfiguredHook,
   type HookDefinition,
-  hookPermissionMode,
   stopHookCap,
   type HookLoadError,
 } from './hooks.js';
@@ -353,17 +352,6 @@ export function maxConcurrentSubagents(
 ): number {
   return countFrom(env.CIRCLE_MAX_CONCURRENT_SUBAGENTS, 20);
 }
-/** Whether a `disallowedTools` entry takes a tool: its name, a prefix before `*`, or an MCP server's whole name. */
-function toolDenied(entries: readonly string[], name: string): boolean {
-  return entries.some((entry) =>
-    entry.endsWith('*')
-      ? name.startsWith(entry.slice(0, -1))
-      : name === entry ||
-        (entry.startsWith('mcp__') &&
-          !entry.slice(5).includes('__') &&
-          name.startsWith(`${entry}__`)),
-  );
-}
 /**
  * The approval a subagent works under. The conversation's `accept-edits` and `auto` hold for it whatever its
  * definition says; under `manual` its `permissionMode` decides, except that `bypassPermissions` and `auto` (a mode
@@ -416,6 +404,8 @@ export interface SubagentListing {
   unsupported?: string[];
   /** Keys a pack's definition has that are not read for a pack. */
   ignored?: string[];
+  /** Values it sets that are not applied, each with why. */
+  notApplied?: string[];
 }
 /** One subagent a person, a pack or an extension defined, as `task` runs it. */
 interface CustomSubagent {
@@ -424,6 +414,8 @@ interface CustomSubagent {
   tools?: Tool[];
   /** The tools of the MCP servers its definition names. */
   serverTools?: Tool[];
+  /** Whether its `disallowedTools` take a tool, by the tool's name. */
+  withholds?: (name: string) => boolean;
   source: string;
   path?: string;
   /** What its file says beyond the spec; absent for an extension's. */
@@ -888,15 +880,19 @@ export class AgentRuntime {
       },
       progress: (event) => {
         const owner = this.childJobOwners.get(event.sessionId);
+        // The background job a subagent works under, its own or one above it
+        const job =
+          this.childHarnesses.get(event.sessionId)?.job() ??
+          (owner?.parent && owner.parent !== event.sessionId
+            ? owner.parent
+            : undefined);
         this.bus.emit('compaction', {
           payload: { ...event },
           ...(event.sessionId !== this.session.id
             ? {
                 tags: {
                   subagent: event.sessionId,
-                  ...(owner?.parent && owner.parent !== event.sessionId
-                    ? { job_id: owner.parent }
-                    : {}),
+                  ...(job ? { job_id: job } : {}),
                 },
                 parent_run_id: owner?.sessionId ?? this.session.id,
               }
@@ -1396,19 +1392,21 @@ export class AgentRuntime {
           backgroundLog?.(
             String((event.payload.message as Message)?.content || ''),
           );
+        // A subagent that works under a background job, its own or one above it, is that job's work
+        const jobId = jobOf();
         this.bus.emit(event.kind, {
           payload: event.payload,
           usage: event.usage,
           tags: {
             subagent: session.id,
             name,
-            ...(backgroundJob ? { job_id: backgroundJob.id } : {}),
+            ...(jobId ? { job_id: jobId } : {}),
           },
           parent_run_id: context.sessionId,
         });
       });
       const builtinReadOnly = !custom && READ_ONLY_BUILTINS.has(name);
-      const denied = file?.disallowedTools ?? [];
+      const withholds = custom?.withholds ?? (() => false);
       const serverTools = custom?.serverTools ?? [];
       // The tools this subagent may have: now, and those a skill it loads adds later
       const allows = (tool: Tool): boolean =>
@@ -1419,7 +1417,7 @@ export class AgentRuntime {
         (!custom?.tools ||
           custom.tools.some((item) => item.name === tool.name) ||
           serverTools.some((item) => item.name === tool.name)) &&
-        !toolDenied(denied, tool.name);
+        !withholds(tool.name);
       const pool = custom?.tools
         ? [
             ...custom.tools,
@@ -1833,19 +1831,48 @@ export class AgentRuntime {
     const tools: Tool[] = [];
     const missing: string[] = [];
     for (const entry of entries) {
-      const found = entry.endsWith('*')
-        ? this.allTools.filter((tool) =>
-            tool.name.startsWith(entry.slice(0, -1)),
-          )
-        : this.allTools.filter((tool) => tool.name === entry);
-      if (!found.length && !entry.endsWith('*')) missing.push(entry);
-      for (const tool of found) if (!tools.includes(tool)) tools.push(tool);
+      const found = this.toolsNamed(entry);
+      if (!found) missing.push(entry);
+      else
+        for (const tool of found) if (!tools.includes(tool)) tools.push(tool);
     }
     return { tools, missing };
   }
   /**
-   * One definition as `task` runs it, or why it is not offered: a tool it names that does not exist, or an MCP
-   * server this session does not have.
+   * The tools one `tools` or `disallowedTools` entry names, or undefined when it names none that exists: a tool by its
+   * name, the tools whose names start with what comes before a `*`, and an MCP server's tools as `mcp__<server>`,
+   * `mcp__<server>__*` and `mcp__*`, or one of them as `mcp__<server>__<tool>`. A server is found by its name, so
+   * these hold however its tools are named.
+   */
+  private toolsNamed(entry: string): Tool[] | undefined {
+    const named = (names: string[]) =>
+      this.allTools.filter((tool) => names.includes(tool.name));
+    if (entry === 'mcp__*')
+      return named(this.mcp.status.flatMap((server) => server.tools));
+    if (entry.startsWith('mcp__')) {
+      const rest = entry.slice(5);
+      // The longest server name the entry starts with: a name may hold `__`
+      const server = this.mcp.status
+        .filter(
+          (item) => rest === item.name || rest.startsWith(`${item.name}__`),
+        )
+        .sort((a, b) => b.name.length - a.name.length)[0];
+      if (server) {
+        const tool = rest.slice(server.name.length + 2);
+        if (!tool || tool === '*') return named(server.tools);
+        const found = named([mcpToolName(server.name, tool)]);
+        if (found.length) return found;
+      }
+    } else if (entry.endsWith('*'))
+      return this.allTools.filter((tool) =>
+        tool.name.startsWith(entry.slice(0, -1)),
+      );
+    const exact = this.allTools.filter((tool) => tool.name === entry);
+    return exact.length ? exact : undefined;
+  }
+  /**
+   * One definition as `task` runs it, or why it is not offered: a tool it names or withholds that does not exist, or
+   * an MCP server this session does not have.
    */
   private fileSubagent(
     agent: SubagentFileInfo,
@@ -1854,6 +1881,12 @@ export class AgentRuntime {
     const listed = agent.tools ? this.listedTools(agent.tools) : undefined;
     if (listed?.missing.length)
       return `${shown} names tools that do not exist: ${listed.missing.join(', ')} · not offered`;
+    // An entry that withholds nothing is a guard that is not there: it keeps the definition out, as one in `tools` does
+    const withheld = agent.disallowedTools
+      ? this.listedTools(agent.disallowedTools)
+      : undefined;
+    if (withheld?.missing.length)
+      return `${shown} withholds tools that do not exist: ${withheld.missing.join(', ')} · not offered`;
     const servers = agent.mcpServers ?? [];
     const unknown = servers.filter(
       (name) => !this.mcp.status.some((server) => server.name === name),
@@ -1867,6 +1900,11 @@ export class AgentRuntime {
           (name) => this.allTools.find((tool) => tool.name === name) ?? [],
         ),
       );
+    const names = new Set(withheld?.tools.map((tool) => tool.name));
+    // A pattern also takes a tool that comes later, such as a pack's
+    const prefixes = (agent.disallowedTools ?? [])
+      .filter((entry) => entry.endsWith('*') && !entry.startsWith('mcp__'))
+      .map((entry) => entry.slice(0, -1));
     return {
       spec: agent.spec,
       source: agent.source_label,
@@ -1874,6 +1912,13 @@ export class AgentRuntime {
       file: agent,
       ...(listed ? { tools: listed.tools } : {}),
       ...(serverTools.length ? { serverTools } : {}),
+      ...(withheld
+        ? {
+            withholds: (name: string) =>
+              names.has(name) ||
+              prefixes.some((prefix) => name.startsWith(prefix)),
+          }
+        : {}),
     };
   }
   /**
@@ -1988,6 +2033,7 @@ export class AgentRuntime {
             }
           : {}),
         ...(file?.ignored?.length ? { ignored: file.ignored } : {}),
+        ...(file?.notApplied?.length ? { notApplied: file.notApplied } : {}),
       });
     }
     return { agents: [...byName.values()], problems };
@@ -2859,7 +2905,8 @@ export class AgentRuntime {
   ): Promise<void> {
     const runner = this.hookRunner;
     if (!runner?.has('SubagentStart')) return;
-    const mode = hookPermissionMode(this.policy.mode(this.session.id));
+    // The subagent's own mode, as its calls are decided in
+    const mode = child.hookMode();
     const batch = await runner.run({
       event: 'SubagentStart',
       sessionId: agent.sessionId,
@@ -2889,7 +2936,8 @@ export class AgentRuntime {
   ): Promise<string | undefined> {
     const runner = this.hookRunner;
     if (!runner?.has('SubagentStop', extra)) return undefined;
-    const mode = hookPermissionMode(this.policy.mode(this.session.id));
+    // The subagent's own mode, as its calls are decided in
+    const mode = child.hookMode();
     const batch = await runner.run({
       event: 'SubagentStop',
       sessionId: agent.sessionId,

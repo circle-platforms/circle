@@ -5,7 +5,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { discoverSkills } from './skills.js';
+import { discoverSkills, splitFrontmatter } from './skills.js';
 import { isRecord } from './settings.js';
 import { SKILL_DATA_FOLDER } from './local_skills.js';
 
@@ -436,10 +436,13 @@ function isFile(path: string): boolean {
  * the rest of the frontmatter keeps its plain `key: value` reading.
  */
 export function skillFrontmatterHooks(text: string): unknown {
-  const match = text.match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/);
-  if (!match || !/^hooks\s*:/m.test(match[1]!)) return undefined;
-  const value = parseYaml(match[1]!) as unknown;
-  return isRecord(value) ? value.hooks : undefined;
+  const { block } = splitFrontmatter(text);
+  if (block === undefined || !/^hooks\s*:/im.test(block)) return undefined;
+  const value = parseYaml(block) as unknown;
+  if (!isRecord(value)) return undefined;
+  // A key in any case, as the plain reading takes it
+  const key = Object.keys(value).find((name) => name.toLowerCase() === 'hooks');
+  return key === undefined ? undefined : value[key];
 }
 
 export interface HookLoadOptions {

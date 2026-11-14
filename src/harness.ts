@@ -1656,8 +1656,8 @@ export class Harness {
       signal,
     );
   }
-  /** The permission mode hooks are told: the session's, or plan while it is read-only. */
-  private hookMode(): string | undefined {
+  /** The permission mode hooks are told: this harness's own, or plan while it is read-only. */
+  hookMode(): string | undefined {
     return hookPermissionMode(
       this.approvalMode(),
       this.readOnly,

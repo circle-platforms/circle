@@ -11,7 +11,7 @@ import { parse as parseYaml } from 'yaml';
 import { EFFORT_LEVELS } from './effort.js';
 import { parseHooks, type HookDefinition } from './hook_config.js';
 import { isRecord } from './settings.js';
-import { parseFrontmatter } from './skills.js';
+import { parseFrontmatter, splitFrontmatter } from './skills.js';
 import type { SubagentSpec } from './extensions.js';
 
 /** The values `permissionMode` takes; `manual` is read as `default`. */
@@ -67,6 +67,8 @@ export interface SubagentFileInfo {
   color?: (typeof AGENT_COLORS)[number];
   /** Keys a pack's definition has that are not read for a pack. */
   ignored?: string[];
+  /** Values read and not applied, each with why: a project's definition cannot loosen approvals. */
+  notApplied?: string[];
   path: string;
   source_label: string;
 }
@@ -151,26 +153,7 @@ function toolName(entry: string): string {
   return entry.replace(/\(.*\)$/s, '').trim();
 }
 
-/** The frontmatter read as YAML, its keys exactly as written; the reason when it is not YAML. */
-function yamlFields(text: string): {
-  fields?: Record<string, unknown>;
-  error?: string;
-} {
-  const match = text.match(/^---\s*\n([\s\S]*?)\n---\s*(?:\n|$)/);
-  if (!match) return { fields: {} };
-  try {
-    const value = parseYaml(match[1]!) as unknown;
-    return { fields: isRecord(value) ? value : {} };
-  } catch (error) {
-    return {
-      error: (error instanceof Error ? error.message : String(error)).split(
-        '\n',
-      )[0],
-    };
-  }
-}
-
-/** The keys this version reads beyond name, description, model and effort. */
+/** The keys this version reads beyond name, description, model and effort. They are read from YAML only. */
 const KEYS = [
   'tools',
   'disallowedTools',
@@ -185,37 +168,73 @@ const KEYS = [
   'color',
 ] as const;
 type Key = (typeof KEYS)[number];
-/** Keys whose value needs YAML: a list under them or a nested map. */
-const NESTED = new Set<Key>(['mcpServers', 'hooks']);
+/** Modes that would let a subagent ask less than the conversation: a project's definition cannot set them. */
+const LOOSENING = new Set<SubagentPermissionMode>([
+  'acceptEdits',
+  'bypassPermissions',
+  'auto',
+]);
+
+/** A value that is text: a string, or a number or a word YAML read as one. Undefined when there is none. */
+function textOf(value: unknown, key: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean')
+    return String(value);
+  throw new Error(`${key} must be text`);
+}
+
+/**
+ * A definition's frontmatter: every key as YAML gives it, by its name in lower case. When it is not YAML, its one-line
+ * keys and the reason. A key written twice in different cases is a reason too.
+ */
+function readFrontmatter(
+  text: string,
+):
+  | { fields: Map<string, unknown> }
+  | { plain: Record<string, string>; error?: string } {
+  const { block } = splitFrontmatter(text);
+  if (block === undefined) return { plain: {} };
+  let value: unknown;
+  try {
+    value = parseYaml(block) as unknown;
+  } catch (error) {
+    return {
+      plain: parseFrontmatter(text).meta,
+      error: (error instanceof Error ? error.message : String(error))
+        .split('\n')[0]!
+        .replace(/:$/, ''),
+    };
+  }
+  const fields = new Map<string, unknown>();
+  if (value === null || value === undefined) return { fields };
+  if (!isRecord(value))
+    return {
+      plain: parseFrontmatter(text).meta,
+      error: 'it is not a list of keys',
+    };
+  for (const [key, item] of Object.entries(value)) {
+    const lower = key.toLowerCase();
+    if (fields.has(lower))
+      throw new Error(`${key} is written twice, in different cases`);
+    fields.set(lower, item);
+  }
+  return { fields };
+}
 
 /**
  * The fields of one definition beyond its name, description, prompt, model and effort, checked. A value a key does
  * not take is a reason, and the file is not offered.
  */
 function readFields(
-  text: string,
-  meta: Record<string, string>,
+  fields: Map<string, unknown>,
   name: string,
   path: string,
   pack: boolean,
+  project: boolean,
 ): Omit<SubagentFileInfo, 'spec' | 'path' | 'source_label'> | string {
-  const yaml = yamlFields(text);
-  const written = (key: Key): boolean =>
-    yaml.fields
-      ? Object.hasOwn(yaml.fields, key)
-      : Object.hasOwn(meta, key.toLowerCase());
-  // A value as YAML gives it, else as the simple reading does: a frontmatter that is not YAML keeps working when
-  // every key it uses fits on its own line
-  const value = (key: Key): unknown => {
-    if (yaml.fields) return yaml.fields[key];
-    const plain = meta[key.toLowerCase()];
-    if (plain === undefined) return undefined;
-    if (NESTED.has(key) || !plain.trim())
-      throw new Error(
-        `${key} could not be read: the frontmatter is not YAML (${yaml.error})`,
-      );
-    return plain;
-  };
+  const written = (key: Key): boolean => fields.has(key.toLowerCase());
+  const value = (key: Key): unknown => fields.get(key.toLowerCase());
   const found: Omit<SubagentFileInfo, 'spec' | 'path' | 'source_label'> = {};
   const given = (raw: unknown): boolean =>
     raw !== undefined && raw !== null && raw !== '';
@@ -226,7 +245,7 @@ function readFields(
   ): { value?: T; error?: string } => {
     const raw = value(key);
     if (!given(raw)) return {};
-    const text = String(raw).trim();
+    const text = textOf(raw, key)!.trim();
     return (allowed as readonly string[]).includes(text)
       ? { value: text as T }
       : { error: `${key} '${text}' is not one of ${allowed.join(', ')}` };
@@ -246,18 +265,28 @@ function readFields(
     if (!pack) {
       const mode = value('permissionMode');
       if (given(mode)) {
-        const text = String(mode).trim();
+        const text = textOf(mode, 'permissionMode')!.trim();
         const read = text === 'manual' ? 'default' : text;
         if (!(PERMISSION_MODES as readonly string[]).includes(read))
           return `permissionMode '${text}' is not one of ${PERMISSION_MODES.join(', ')}`;
-        found.permissionMode = read as SubagentPermissionMode;
+        // A repository can make Circle ask more, never less
+        if (project && LOOSENING.has(read as SubagentPermissionMode))
+          found.notApplied = [
+            `permissionMode ${text}: a project's definition cannot loosen approvals`,
+          ];
+        else found.permissionMode = read as SubagentPermissionMode;
       }
     }
     const turns = value('maxTurns');
     if (given(turns)) {
-      const count = typeof turns === 'number' ? turns : Number(turns);
+      const count =
+        typeof turns === 'number'
+          ? turns
+          : typeof turns === 'string' && /^\d+$/.test(turns.trim())
+            ? Number(turns)
+            : NaN;
       if (!Number.isInteger(count) || count < 1)
-        return `maxTurns must be a whole number above 0, not '${String(turns)}'`;
+        return `maxTurns must be a whole number from 1, not ${JSON.stringify(turns)}`;
       found.maxTurns = count;
     }
     const skills = value('skills');
@@ -319,7 +348,7 @@ function readFields(
     if (given(background)) {
       if (background === true || background === 'true') found.background = true;
       else if (background !== false && background !== 'false')
-        return `background must be true or false, not '${String(background)}'`;
+        return `background must be true or false, not ${JSON.stringify(background)}`;
     }
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
@@ -349,9 +378,49 @@ export function readSubagentFolder(
       problems.push(`${path}: cannot be read (${String(error)})`);
       continue;
     }
-    const { meta, body } = parseFrontmatter(text);
+    let read: ReturnType<typeof readFrontmatter>;
+    let basics: Partial<
+      Record<'name' | 'description' | 'model' | 'effort', string>
+    >;
+    try {
+      read = readFrontmatter(text);
+      if ('fields' in read) {
+        const fields = read.fields;
+        basics = Object.fromEntries(
+          (['name', 'description', 'model', 'effort'] as const).flatMap(
+            (key) => {
+              const value = textOf(fields.get(key), key);
+              return value === undefined ? [] : [[key, value]];
+            },
+          ),
+        );
+      } else {
+        // A frontmatter that is not YAML keeps its one-line keys, unless it holds one that needs YAML: a guard is
+        // never dropped quietly
+        const plain = read.plain;
+        const needs = KEYS.filter((key) =>
+          Object.hasOwn(plain, key.toLowerCase()),
+        );
+        if (read.error !== undefined && needs.length)
+          throw new Error(
+            `the frontmatter is not YAML (${read.error}), so ${needs.join(', ')} cannot be read`,
+          );
+        basics = {
+          name: plain.name,
+          description: plain.description,
+          model: plain.model,
+          effort: plain.effort,
+        };
+      }
+    } catch (error) {
+      problems.push(
+        `${path}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      continue;
+    }
+    const body = splitFrontmatter(text).body;
     const stem = file.replace(/\.md$/i, '');
-    const claimed = (meta.name || stem).trim();
+    const claimed = (basics.name || stem).trim();
     if (!NAME.test(claimed)) {
       problems.push(
         `${path}: '${claimed}' is not a name (letters, digits, _ and -, up to 64)`,
@@ -362,7 +431,7 @@ export function readSubagentFolder(
       problems.push(`${path}: two files in ${root} claim '${claimed}'`);
       continue;
     }
-    const description = (meta.description || '').trim();
+    const description = (basics.description || '').trim();
     if (!description) {
       problems.push(`${path}: no description`);
       continue;
@@ -373,7 +442,7 @@ export function readSubagentFolder(
       continue;
     }
     // A depth of its own; a word that is not one does not load
-    const effort = meta.effort?.trim();
+    const effort = basics.effort?.trim();
     if (effort && !(EFFORT_LEVELS as readonly string[]).includes(effort)) {
       problems.push(
         `${path}: effort '${effort}' is not one of ${EFFORT_LEVELS.join(', ')}`,
@@ -381,7 +450,13 @@ export function readSubagentFolder(
       continue;
     }
     const real = existsSync(path) ? realpathSync(path) : path;
-    const fields = readFields(text, meta, claimed, real, pack);
+    const fields = readFields(
+      'fields' in read ? read.fields : new Map(),
+      claimed,
+      real,
+      pack,
+      label.startsWith('Project'),
+    );
     if (typeof fields === 'string') {
       problems.push(`${path}: ${fields}`);
       continue;
@@ -392,7 +467,7 @@ export function readSubagentFolder(
         name: claimed,
         description: description.slice(0, 1024),
         system_prompt: prompt,
-        ...(meta.model?.trim() ? { model: meta.model.trim() } : {}),
+        ...(basics.model?.trim() ? { model: basics.model.trim() } : {}),
         ...(effort ? { effort } : {}),
       },
       ...fields,
