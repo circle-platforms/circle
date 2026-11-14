@@ -270,8 +270,8 @@ export class ExtensionAPI {
   }
   /**
    * Saves an MCP server entry in settings.json, replacing the entry of the same name, and connects that server alone
-   * again, as `/mcp reload <name>` does; the other servers are left as they are. What any extension may offer, as a
-   * plugin's `.mcp.json` or a Gemini extension's `mcpServers` does. Between turns, as from a command.
+   * again, as `/mcp reload <name>` does; the other servers are left as they are. Any extension may offer one. Between
+   * turns, as from a command.
    */
   async saveMcpServer(entry: Record<string, unknown>): Promise<McpServerState> {
     const save = this.services?.saveMcpServer;

@@ -114,7 +114,7 @@ export function readSubagentFolder(
       problems.push(`${path}: no prompt after the --- lines`);
       continue;
     }
-    // A depth of its own, as Claude Code's `effort`; a word that is not one does not load
+    // A depth of its own; a word that is not one does not load
     const effort = meta.effort?.trim();
     if (effort && !(EFFORT_LEVELS as readonly string[]).includes(effort)) {
       problems.push(
