@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
@@ -7,7 +7,10 @@ import {
   BUILTIN_SUBAGENT_PROMPTS,
   builtinSubagentPrompt,
 } from '../src/runtime.js';
-import { discoverSubagents } from '../src/subagent_files.js';
+import {
+  discoverSubagents,
+  readSubagentFolder,
+} from '../src/subagent_files.js';
 import { defaultSettings } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import type { Message } from '../src/types.js';
@@ -390,4 +393,139 @@ test("an extension's subagent can carry an effort too, and one that is no depth 
     runtime.inspectSubagents().agents.some((agent) => agent.name === 'odd'),
     false,
   );
+});
+
+/** One definition with these keys between its name, description and prompt. */
+const definition = (folder: string, name: string, keys: string): void => {
+  folders(folder);
+  writeFileSync(
+    join(folder, `${name}.md`),
+    `---\nname: ${name}\ndescription: The ${name} agent.\n${keys}---\nYou are ${name}.\n`,
+  );
+};
+
+test('the new keys are read as YAML or on one line, and a value a key does not take keeps the file from being offered', (t) => {
+  const root = realpathSync(scratch(t));
+  const folder = join(root, 'agents');
+  definition(
+    folder,
+    'full',
+    [
+      'tools:',
+      '  - read_file',
+      '  - task(worker, researcher)',
+      '  - mcp__github__*',
+      'disallowedTools: execute(git push *), write_file',
+      'permissionMode: manual',
+      'maxTurns: 4',
+      'skills: [conventions, errors, conventions]',
+      'mcpServers:',
+      '  - github',
+      'hooks:',
+      '  PreToolUse:',
+      '    - matcher: execute',
+      '      hooks:',
+      '        - type: command',
+      '          command: check',
+      '  Stop:',
+      '    - matcher: ignored',
+      '      hooks:',
+      '        - type: command',
+      '          command: done',
+      '          once: true',
+      'memory: project',
+      'isolation: worktree',
+      'color: red',
+      'background: true',
+      '',
+    ].join('\n'),
+  );
+  // A description with a colon is no YAML: keys on one line still read
+  writeFileSync(
+    join(folder, 'plain.md'),
+    '---\nname: plain\ndescription: Checks: everything\ntools: read_file, grep\nmaxTurns: 2\n---\nPlain.\n',
+  );
+  for (const [name, keys] of [
+    ['mode', 'permissionMode: sometimes\n'],
+    ['turns', 'maxTurns: 0\n'],
+    ['colour', 'color: magenta\n'],
+    ['isolated', 'isolation: container\n'],
+    ['remembers', 'memory: everywhere\n'],
+    ['later', 'background: maybe\n'],
+    ['none', 'tools: []\n'],
+    [
+      'inline',
+      'mcpServers:\n  - playwright:\n      type: stdio\n      command: npx\n',
+    ],
+    ['badhook', 'hooks:\n  PreToolUse:\n    - hooks:\n        - type: http\n'],
+  ] as const)
+    definition(folder, name, keys);
+  writeFileSync(
+    join(folder, 'notyaml.md'),
+    '---\nname: notyaml\ndescription: Hooks: under a line that is no YAML\nhooks:\n  Stop:\n    - hooks:\n        - type: command\n          command: x\n---\nNo.\n',
+  );
+  const { agents, problems } = readSubagentFolder(folder, 'Circle');
+  const full = agents.find((item) => item.spec.name === 'full')!;
+  assert.deepEqual(full.tools, ['read_file', 'task', 'mcp__github__*']);
+  assert.deepEqual(full.disallowedTools, ['execute', 'write_file']);
+  assert.equal(full.permissionMode, 'default');
+  assert.equal(full.maxTurns, 4);
+  assert.deepEqual(full.skills, ['conventions', 'errors']);
+  assert.deepEqual(full.mcpServers, ['github']);
+  // A subagent's Stop is its SubagentStop, matching every type; `once` is a skill's alone
+  assert.deepEqual(
+    full.hooks!.map((hook) => [hook.event, hook.matcher.kind, hook.once]),
+    [
+      ['PreToolUse', 'names', false],
+      ['SubagentStop', 'all', false],
+    ],
+  );
+  assert.equal(full.hooks![0]!.sourceLabel, 'agent:full');
+  assert.deepEqual(
+    [full.memory, full.isolation, full.color, full.background],
+    ['project', 'worktree', 'red', true],
+  );
+  const plain = agents.find((item) => item.spec.name === 'plain')!;
+  assert.deepEqual(plain.tools, ['read_file', 'grep']);
+  assert.equal(plain.maxTurns, 2);
+  assert.deepEqual(agents.map((item) => item.spec.name).sort(), [
+    'full',
+    'plain',
+  ]);
+  const said = problems.join('\n');
+  for (const reason of [
+    /mode\.md: permissionMode 'sometimes' is not one of default, acceptEdits, auto, dontAsk, bypassPermissions, plan/,
+    /turns\.md: maxTurns must be a whole number above 0/,
+    /colour\.md: color 'magenta' is not one of red, blue, green, yellow, purple, orange, pink, cyan/,
+    /isolated\.md: isolation 'container' is not one of worktree/,
+    /remembers\.md: memory 'everywhere' is not one of user, project, local/,
+    /later\.md: background must be true or false/,
+    /none\.md: tools lists no tool/,
+    /inline\.md: mcpServers: playwright is defined inline, which Circle does not support yet/,
+    /badhook\.md: hooks: .*http hooks are not supported in Circle yet/,
+    /notyaml\.md: hooks could not be read: the frontmatter is not YAML/,
+  ])
+    assert.match(said, reason);
+});
+
+test("a pack's definition gets no hooks, MCP servers or permission mode of its own, and says it ignored them", (t) => {
+  const root = realpathSync(scratch(t));
+  const folder = join(root, 'agents');
+  definition(
+    folder,
+    'reviewer',
+    'permissionMode: acceptEdits\nmcpServers: [github]\nhooks:\n  Stop:\n    - hooks:\n        - type: command\n          command: x\nmaxTurns: 3\n',
+  );
+  const { agents, problems } = readSubagentFolder(folder, 'Pack kit', true);
+  assert.deepEqual(problems, []);
+  const [reviewer] = agents;
+  assert.deepEqual(reviewer!.ignored, [
+    'hooks',
+    'mcpServers',
+    'permissionMode',
+  ]);
+  assert.equal(reviewer!.hooks, undefined);
+  assert.equal(reviewer!.mcpServers, undefined);
+  assert.equal(reviewer!.permissionMode, undefined);
+  assert.equal(reviewer!.maxTurns, 3);
 });
