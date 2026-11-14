@@ -38,6 +38,7 @@ import {
   NO_MATCHER,
   TOOL_EVENTS,
   matcherMatches,
+  type ConfiguredHook,
   type HookDefinition,
   type HookEvent,
   type LoadedHooks,
@@ -51,6 +52,7 @@ export {
   parseCondition,
   parseHooks,
   skillFrontmatterHooks,
+  type ConfiguredHook,
   type HookDefinition,
   type HookEvent,
   type HookLoadError,
@@ -303,8 +305,10 @@ const PLACEHOLDERS = [
 export function hookPermissionMode(
   mode: string | undefined,
   readOnly = false,
+  dontAsk = false,
 ): string | undefined {
   if (readOnly || mode === 'plan') return 'plan';
+  if (dontAsk) return 'dontAsk';
   if (mode === 'manual') return 'default';
   if (mode === 'accept-edits') return 'acceptEdits';
   if (mode === 'auto') return 'bypassPermissions';
@@ -374,6 +378,8 @@ export interface HookRunRequest {
   secrets?: Record<string, string>;
   /** Run only these hook ids. Used when a skill is loaded after the session started. */
   onlyIds?: string[];
+  /** The hooks of the subagent this request is for, from its definition: they run beside the configured ones. */
+  extra?: HookDefinition[];
   /** A PNG of the page the conversation's browser shows, taken once, when a hook that runs asks for one. */
   screenshot?: (signal: AbortSignal) => Promise<Buffer | undefined>;
   signal?: AbortSignal;
@@ -1333,10 +1339,12 @@ function conditionMatches(
   return true;
 }
 
-/** The same handler from several settings files runs once. A pack's or a skill's copy stays its own. */
+/** The same handler from several settings files runs once. A pack's, a skill's or a subagent's copy stays its own. */
 function dedupeKey(hook: HookDefinition): string {
   const what = JSON.stringify([hook.command, hook.args ?? null, hook.shell]);
-  return hook.source === 'pack' || hook.source === 'skill'
+  return hook.source === 'pack' ||
+    hook.source === 'skill' ||
+    hook.source === 'agent'
     ? `${hook.sourceLabel}:${what}`
     : `settings:${what}`;
 }
@@ -1404,18 +1412,27 @@ export class HookRunner {
     return this.loaded.hooks.filter((hook) => this.armedHook(hook));
   }
 
-  /** Whether any hook of the event can run now. */
-  has(event: HookEvent): boolean {
-    return this.active().some((hook) => hook.event === event);
+  /** Whether any hook of the event can run now, counting a subagent's own hooks when they are given. */
+  has(event: HookEvent, extra?: HookDefinition[]): boolean {
+    return (
+      this.active().some((hook) => hook.event === event) ||
+      (!this.loaded.disabled &&
+        (extra ?? []).some((hook) => hook.event === event))
+    );
   }
 
-  /** Every configured hook, including a skill hook this session has not loaded. */
-  listing(): { hook: HookDefinition; active: boolean; spent: boolean }[] {
-    return this.loaded.hooks.map((hook) => ({
-      hook,
-      active: this.armedHook(hook),
-      spent: this.spent.has(hook.id),
-    }));
+  /**
+   * Every configured hook, including a skill hook this session has not loaded. A subagent's own hooks are not
+   * configuration and are never listed.
+   */
+  listing(): { hook: ConfiguredHook; active: boolean; spent: boolean }[] {
+    return this.loaded.hooks
+      .filter((hook): hook is ConfiguredHook => hook.source !== 'agent')
+      .map((hook) => ({
+        hook,
+        active: this.armedHook(hook),
+        spent: this.spent.has(hook.id),
+      }));
   }
 
   /** Arm one skill's hooks for this session. The first call returns those hooks; loading it again does not. */
@@ -1476,7 +1493,9 @@ export class HookRunner {
       ? request.toolName
       : request.matchValue;
     const seen = new Set<string>();
-    let chosen = this.loaded.hooks.filter((hook) => {
+    // `disableAllHooks` turns a subagent's own hooks off too
+    const extra = this.loaded.disabled ? [] : (request.extra ?? []);
+    let chosen = [...this.loaded.hooks, ...extra].filter((hook) => {
       if (request.onlyIds && !request.onlyIds.includes(hook.id)) return false;
       if (!this.armedHook(hook) || hook.event !== request.event) return false;
       if (

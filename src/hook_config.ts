@@ -61,7 +61,11 @@ export const TOOL_EVENTS = new Set<HookEvent>([
 /** Events without a matcher: every group runs, whatever its matcher says. */
 export const NO_MATCHER = new Set<HookEvent>(['UserPromptSubmit', 'Stop']);
 
-export type HookSource = 'user' | 'project' | 'local' | 'pack' | 'skill';
+/** Where the configuration writes hooks: your settings, the project's, its local file, a pack and a skill. */
+export type ConfiguredHookSource =
+  'user' | 'project' | 'local' | 'pack' | 'skill';
+/** And a subagent definition, whose hooks run only for that subagent, while it runs. */
+export type HookSource = ConfiguredHookSource | 'agent';
 
 export type HookMatcher =
   | { kind: 'all' }
@@ -99,7 +103,7 @@ export interface HookDefinition {
   /** What notices and lists call it: its `name`, else its command. */
   name: string;
   source: HookSource;
-  /** `user`, `project`, `local`, `pack:<name>` or `skill:<name>`. */
+  /** `user`, `project`, `local`, `pack:<name>`, `skill:<name>` or `agent:<name>`. */
   sourceLabel: string;
   /** The file it was read from. */
   file: string;
@@ -120,6 +124,9 @@ export interface HookDefinition {
   legacy?: boolean;
   loopLimit?: number;
 }
+
+/** A hook the configuration defines: what `/hooks` and the settings list. */
+export type ConfiguredHook = HookDefinition & { source: ConfiguredHookSource };
 
 export interface HookLoadError {
   file: string;

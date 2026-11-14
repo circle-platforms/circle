@@ -147,6 +147,7 @@ import {
   combineOutcomes,
   HookRunner,
   loadHooks,
+  type ConfiguredHook,
   type HookDefinition,
   hookPermissionMode,
   stopHookCap,
@@ -488,7 +489,7 @@ export class AgentRuntime {
   }
   /** Configured hooks and whether this session will run them. */
   hookListing(): {
-    hook: HookDefinition;
+    hook: ConfiguredHook;
     active: boolean;
     spent: boolean;
   }[] {
@@ -2254,7 +2255,7 @@ export class AgentRuntime {
   }
   /** Configured hooks, including skill hooks this session has not loaded. */
   listHooks(): {
-    hooks: { hook: HookDefinition; active: boolean; spent: boolean }[];
+    hooks: { hook: ConfiguredHook; active: boolean; spent: boolean }[];
     untrusted: boolean;
     disabled: boolean;
     errors: HookLoadError[];

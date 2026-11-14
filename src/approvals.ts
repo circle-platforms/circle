@@ -1258,11 +1258,13 @@ export class ApprovalPolicy {
     if (execution.git && !gitQueryStartsOnlyGit(this.workspace)) return;
     return execution;
   }
+  /** `mode` decides in place of the thread's own: a subagent's permission mode. */
   needsApproval(
     tool: string,
     args: Record<string, unknown>,
     thread: string,
     allowYolo = true,
+    mode: ApprovalMode = this.mode(thread),
   ): boolean {
     const found = this.review(tool, args);
     if (found.verdict === 'DENY') return false;
@@ -1281,7 +1283,6 @@ export class ApprovalPolicy {
       ].includes(tool)
     )
       return true;
-    const mode = this.mode(thread);
     if (allowYolo && mode === 'auto') return false;
     if (found.verdict === 'ASK_FORCED') return true;
     // A rule that allows this call answers for it: the person's own file, or what

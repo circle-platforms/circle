@@ -16,7 +16,7 @@ import type {
 } from './types.js';
 import { emptyUsage, addUsage } from './types.js';
 import { EventBus } from './events.js';
-import { ApprovalPolicy, wildcard } from './approvals.js';
+import { ApprovalPolicy, wildcard, type ApprovalMode } from './approvals.js';
 import { CheckpointStore, type Session } from './checkpoint_store.js';
 import { attachPrompt } from './mentions.js';
 import { prepareToolCall, RecoverableToolError } from './tool_call_compat.js';
@@ -134,6 +134,17 @@ export interface HarnessOptions {
    * depth applies, as for the conversation.
    */
   effort?: string;
+  /** A subagent's hooks from its definition: they run for its own calls and its stop, beside the configured ones. */
+  agentHooks?: HookDefinition[];
+  /** A subagent's approval mode, read for each call. Unset, the session's mode decides. */
+  approvalMode?: () => ApprovalMode;
+  /** True while a call that would ask is refused instead (a subagent's `dontAsk`). */
+  dontAsk?: () => boolean;
+  /**
+   * A subagent's limit on model requests over its life. Once they are spent, a run ends with what it has, and
+   * `stoppedAtTurnLimit` says so.
+   */
+  maxTurns?: number;
   /** Trusted host lookup, never model-supplied execution metadata or authority. */
   commandExecution?: {
     epoch: string;
@@ -396,8 +407,23 @@ export class Harness {
   get messages(): Message[] {
     return this.options.store.messages(this.sessionId);
   }
-  private get readOnly(): boolean {
+  /** Read-only now: its own plan mode, or the one it follows. */
+  get readOnly(): boolean {
     return this.planMode || this.options.parentPlanMode?.() === true;
+  }
+  /** Model requests made so far, counted against `maxTurns`. */
+  private turnsTaken = 0;
+  private turnLimitHit = false;
+  /** The last run ended because `maxTurns` was spent, not with an answer of the model's own. */
+  get stoppedAtTurnLimit(): boolean {
+    return this.turnLimitHit;
+  }
+  /** The approval mode this harness's calls are decided in. */
+  private approvalMode(): ApprovalMode {
+    return (
+      this.options.approvalMode?.() ??
+      this.options.policy.mode(this.options.approvalSessionId ?? this.sessionId)
+    );
   }
   private inputIds(mode: 'steer' | 'followUp'): string[] {
     return mode === 'steer' ? this.steeringIds : this.followUpIds;
@@ -839,6 +865,7 @@ export class Harness {
     if (this.options.inspect)
       throw new Error(occupiedSessionMessage(this.sessionId));
     if (this.active) throw new Error('a turn is already running');
+    this.turnLimitHit = false;
     if (prompt !== undefined && display !== undefined && display !== prompt)
       this.shown.set(prompt, { display });
     if (attachments?.length) {
@@ -1205,6 +1232,27 @@ export class Harness {
     try {
       for (let step = 0; step < (this.options.maxSteps ?? 9999); step++) {
         signal.throwIfAborted();
+        // A subagent whose turns are spent ends here with what it has written: the run is cut short, not failed
+        if (
+          this.options.maxTurns !== undefined &&
+          this.turnsTaken >= this.options.maxTurns
+        ) {
+          this.turnLimitHit = true;
+          answer = String(
+            this.messages.findLast(
+              (message) =>
+                message.role === 'assistant' &&
+                String(message.content ?? '').trim(),
+            )?.content ?? '',
+          );
+          this.bus.emit('run_end', {
+            payload: { answer },
+            usage: { ...usage },
+            elapsed_ms: Date.now() - start,
+          });
+          this.flushTitle();
+          return { answer, usage };
+        }
         // The step starts here: a steerNow while the messages before are read stops it
         const stepControl = new AbortController();
         this.step = stepControl;
@@ -1296,6 +1344,7 @@ export class Harness {
           let response: ModelResponse;
           try {
             response = await this.model.complete(request);
+            this.turnsTaken++;
           } catch (error) {
             // The model's endpoint refused the request as too long, before any of an
             // answer came: the context it has is smaller than the one Circle measured.
@@ -1610,10 +1659,9 @@ export class Harness {
   /** The permission mode hooks are told: the session's, or plan while it is read-only. */
   private hookMode(): string | undefined {
     return hookPermissionMode(
-      this.options.policy.mode(
-        this.options.approvalSessionId ?? this.sessionId,
-      ),
+      this.approvalMode(),
       this.readOnly,
+      this.options.dontAsk?.() === true,
     );
   }
   /** Who and where, for every hook this conversation runs. */
@@ -1623,6 +1671,7 @@ export class Harness {
     cwd: string;
     permissionMode?: string;
     secrets: Record<string, string>;
+    extra?: HookDefinition[];
   } {
     const mode = this.hookMode();
     return {
@@ -1630,6 +1679,7 @@ export class Harness {
       cwd: this.options.session.workspace,
       ...(mode ? { permissionMode: mode } : {}),
       secrets: this.hookSecrets(),
+      ...(this.options.agentHooks ? { extra: this.options.agentHooks } : {}),
     };
   }
   /**
@@ -1808,7 +1858,8 @@ export class Harness {
     signal: AbortSignal,
     fields?: Record<string, unknown>,
   ): Promise<HookBatch | undefined> {
-    if (!this.options.hooks?.has(event)) return undefined;
+    if (!this.options.hooks?.has(event, this.options.agentHooks))
+      return undefined;
     const batch = await this.options.hooks.run({
       event,
       ...this.hookBase(),
@@ -2144,6 +2195,8 @@ export class Harness {
             call.name,
             resolved,
             this.options.approvalSessionId ?? this.sessionId,
+            true,
+            this.approvalMode(),
           ) ||
             (this.options.headless && found.verdict === 'ASK_FORCED')));
       if (!hookAllow && (hookAsk || wouldAsk)) {
@@ -2177,6 +2230,11 @@ export class Harness {
               'allowed this call in another form, which Circle does not apply here, so the card asks you',
           });
         if (!granted || alwaysAsk) {
+          // A subagent that does not ask refuses what would: only a rule, a setting or a hook lets a call through
+          if (this.options.dontAsk?.())
+            throw new Error(
+              'not run: this subagent does not ask (permissionMode dontAsk), and no rule allows this call',
+            );
           this.bus.emit('tool_waiting', {
             payload: {
               ...call,
@@ -2220,9 +2278,7 @@ export class Harness {
       this.bus.emit('tool_start', { payload: { ...call } });
       const args = resolved;
       const readOnlyCommand =
-        this.options.policy.mode(
-          this.options.approvalSessionId ?? this.sessionId,
-        ) === 'accept-edits'
+        this.approvalMode() === 'accept-edits'
           ? this.options.policy.readOnlyCommand(call.name, resolved)?.command
           : undefined;
       const context: ToolContext = {
@@ -2291,7 +2347,10 @@ export class Harness {
         : await guardedTool.run(args, context);
       if (typeof output !== 'string') throw new Error('tool must return text');
       signal.throwIfAborted();
-      const after = this.options.hooks?.has('PostToolUse')
+      const after = this.options.hooks?.has(
+        'PostToolUse',
+        this.options.agentHooks,
+      )
         ? await this.options.hooks.run({
             event: 'PostToolUse',
             ...this.hookBase(),
@@ -2322,7 +2381,7 @@ export class Harness {
       if (
         ranAt !== undefined &&
         !signal.aborted &&
-        this.options.hooks?.has('PostToolUseFailure')
+        this.options.hooks?.has('PostToolUseFailure', this.options.agentHooks)
       ) {
         const failed = await this.options.hooks.run({
           event: 'PostToolUseFailure',
