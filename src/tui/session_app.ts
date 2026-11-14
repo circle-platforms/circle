@@ -3566,6 +3566,18 @@ export class SessionApp {
       followJobs: (list, rows) => {
         owner.jobsList = { list, rows };
       },
+      openAgent: (id) =>
+        this.inView(owner, () => {
+          if (!owner.runtime?.store.get(id)) return false;
+          // Pages are exclusive: an agent's page leaves the job and terminal pages
+          owner.state.jobDetail = undefined;
+          owner.state.terminalDetail = undefined;
+          owner.state.terminalAttached = false;
+          owner.agents.open(id);
+          owner.state.scroll = 0;
+          this.repaint();
+          return true;
+        }),
       terminals: () =>
         owner.runtime ? this.terminals.get(owner.runtime) : undefined,
       followTerminals: (list, rows) => {

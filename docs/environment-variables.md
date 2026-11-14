@@ -51,6 +51,14 @@ This also applies to `websearch`'s native provider request and DuckDuckGo fallba
 | `CIRCLE_MAX_SUBAGENT_SPAWN_DEPTH` | How many layers of [subagents](agents.md#subagents-of-a-subagent) run below the conversation: a subagent in the last layer is not offered `task`. `1` turns nesting off. | `3`     |
 | `CIRCLE_MAX_CONCURRENT_SUBAGENTS` | How many subagents run at once for one conversation, in the foreground and the background, at any depth. Past it `task` fails with `Concurrent subagent limit reached`.  | `20`    |
 
+## Workflows
+
+| Variable | Effect | Default |
+| --- | --- | --- |
+| `CIRCLE_WORKFLOW_MAX_CONCURRENT_AGENTS` | How many agents of one [workflow](workflows.md) run at once, from 1 to 256; the others wait their turn. | `16`, or two fewer than the processors when that is less (at least `1`) |
+| `CIRCLE_MAX_STRUCTURED_OUTPUT_RETRIES` | How many tries a workflow agent with a `schema` has to return a value that fits it. | `5` |
+| `CIRCLE_ASYNC_AGENT_STALL_TIMEOUT_MS` | How long a workflow agent's model may send nothing, while a request is out, before the agent starts over; `stallMs` on an `agent()` call wins over it. | `600000` |
+
 ## Model requests
 
 | Variable                                | Effect                                                                                                                                                                                                                                                                                                                                                                                      | Default                                                     |

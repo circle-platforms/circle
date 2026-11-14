@@ -632,6 +632,34 @@ export const BUILTIN_TOOL_INFO = [
     kind: 'agent / job',
   },
   {
+    name: 'workflow',
+    get description() {
+      return t(
+        'Run a workflow: a script that starts subagents and decides what runs next',
+      );
+    },
+    get detail() {
+      return t(
+        'Run a workflow: a JavaScript script that starts subagents and decides itself what runs next. It runs in the background as a job, after you approve it, and its result comes as a notice. Arguments: `name`, `script`, `script_path`, `args`, `resume_from_run_id`. See Workflows.',
+      );
+    },
+    kind: 'agent / job',
+  },
+  {
+    name: 'structured_output',
+    get description() {
+      return t(
+        "Return a workflow agent's result in the shape its script asked for",
+      );
+    },
+    get detail() {
+      return t(
+        "Return a workflow agent's result in the shape its script asked for. Only an agent whose script gave a schema has it; a call that does not fit is refused with the reason.",
+      );
+    },
+    kind: 'agent / job',
+  },
+  {
     name: 'editor_status',
     get description() {
       return t('What your editor reports');

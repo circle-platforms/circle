@@ -134,6 +134,9 @@ remembered for that model instance like a rejected signature.
 | Module            | What it does                                                                                                                        |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `jobs.ts`         | Background jobs: commands and subagents, their output and `scratch/` folders, their notices to the model, and stopping them.         |
+| `workflows.ts`    | A workflow run: each `agent()` as a subagent through the runtime's `task` path, at most so many at once, stall restarts, the journal in `workflow_runs/<run>/` and the replay of an earlier run's journal on a relaunch. |
+| `workflow_script.ts` | A workflow script: `meta` read as a plain literal, imports refused, and the body run in a worker thread inside a `node:vm` context with the `agent`/`parallel`/`pipeline`/`phase`/`log` API, values passed as JSON. |
+| `workflow_files.ts` | Saved workflows: `.circle/workflows/`, the data folder's `workflows/`, and each installed pack's `workflows/` as `<pack>:<name>`. |
 | `watch.ts`        | `api.Watch`, which an extension tool returns to wait for something slow.                                                            |
 | `schedule.ts`     | Scheduled tasks: the store under `schedules/`, the clocks (`every`, `cron`, `once`), the run records and the per-schedule run lock. |
 | `scheduler.ts`    | Firing them: one headless `circle -p` in a child process per run, the tick loop, the daemon file.                                   |

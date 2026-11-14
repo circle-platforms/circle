@@ -265,6 +265,8 @@ See [Background jobs](background-jobs.md).
 |---|---|
 | `skill` | Load the full instructions of a [skill](skills.md) by name. |
 | `task` | Run a subagent (`general-purpose`, `explore`, `plan`, or one a file or an extension defines) and return its answer. Arguments: `description`, `subagent_type`, `background`. With `background: true` the subagent runs as a [background job](background-jobs.md#background-subagents) and its report comes as a notice. A subagent has `task` too, without `background`, up to three layers below the conversation. See [Subagents](agents.md). |
+| `workflow` | Run a [workflow](workflows.md): a JavaScript script that starts subagents and decides itself what runs next. Arguments: `name` (a saved workflow), `script` or `script_path`, `args`, `resume_from_run_id`. It asks before every run in `manual` and `accept-edits` mode and before the first in `auto` mode, then runs as a background job; its result comes as a notice. Subagents do not have it. |
+| `structured_output` | Return a workflow agent's result in the shape its script asked for: only an agent whose `agent()` call gave a `schema` has it, and the schema is its arguments. A call that does not fit is refused with the reason. |
 | `compact_conversation` | Summarize older messages now. See [Compaction](sessions.md#compaction). |
 
 ## Limiting the tools

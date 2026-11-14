@@ -49,7 +49,7 @@ export function toolTint(name: string): string {
   const p = palette();
   if (READ_TOOLS.has(name)) return p.read_bg;
   if (WRITE_TOOLS.has(name)) return p.write_bg;
-  if (name === 'task') return p.agent_bg;
+  if (name === 'task' || name === 'workflow') return p.agent_bg;
   if (name === 'question') return p.think_bg;
   return '';
 }

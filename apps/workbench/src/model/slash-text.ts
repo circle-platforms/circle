@@ -18,6 +18,7 @@ const SLASH_TEXT: Record<string, () => string> = {
   bridge: () => t('Editor bridge on localhost: /bridge [start|stop|token]'),
   memory: () => t('What Circle remembers: /memory [add <note>|remove N]'),
   jobs: () => t('Background jobs: open one, or stop it'),
+  workflows: () => t('Workflow runs: their phases and agents, or stop one'),
   new: () => t('Start a new session'),
   resume: () => t('Choose a session to open: /resume [n|id]'),
   continue: () => t('Resume the previous session'),

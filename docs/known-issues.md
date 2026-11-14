@@ -95,6 +95,18 @@ These are gaps to know about before you trust Circle with a repository or a mach
 - **A background subagent keeps the agent it started with.** After `/reload`, `/models` or a change of extensions it still uses the old tools and model until it ends; `/plan` reaches it.
 - **The output a dev server prints may not show on its row**: many programs keep their output in a buffer when it does not go to a terminal (`python3 -u` and `PYTHONUNBUFFERED=1` help for Python).
 
+## Workflows
+
+- **A workflow script is kept apart, not sandboxed.** It runs in a worker thread inside a `node:vm` context without Node's objects, with 256 MB of memory and 5 seconds for each stretch that does not wait for an agent. `node:vm` is not a security boundary: a flaw in Node or V8 could let a script out of its context into the worker, which has Node's APIs. Read a saved or a pack's workflow before you allow it. See [How far the script is kept apart](workflows.md#how-far-the-script-is-kept-apart).
+- **Nothing refuses a call that goes outside a declared order** ([#558](https://github.com/circle-platforms/circle/issues/558)'s second request). A workflow sets its own order, so the model in the conversation takes no part in it, and the model's own calls are not checked against any workflow.
+- **No workflow starts in read-only mode** (`/plan`): the `workflow` tool counts as a change, and read-only mode refuses it.
+- **`workflow()` inside a script and `isolation: 'worktree'` on an `agent()` call fail.** Run the other workflow on its own; agents that change files in parallel work in the same workspace, so give them files that do not overlap.
+- **`/workflows` cannot pause a run, restart one running agent or save a run's script.** Stop the run and relaunch it with `resume_from_run_id`; copy `/workflow_runs/<run>/script.js` into `.circle/workflows/` or the data folder's `workflows/` to keep it.
+- **A saved workflow is no slash command.** Ask the model to run it by name. There is also no setting that turns workflows off, no size guideline and no bundled workflow.
+- **The desktop application shows a run as a background job only**: its row and its output, which holds the progress lines. `/workflows` there opens the background jobs card; the phases and agents are in the terminal's `/workflows`.
+- **A run's folders in the data folder are not removed** (`projects/<folder>-<id>/workflow_runs/`). Delete old ones by hand.
+- **`budget` has no target.** Circle has no token target for a turn: `budget.total` is `null`, `budget.remaining()` is `Infinity`, and `budget.spent()` counts this run's agents' output tokens, as of the last result the script received.
+
 ## Device terminals
 
 - **No serial port, no file transfer.** Only SSH and Telnet over the network are in this version; a physical serial console has to be reached through a console server's network port. There is no SFTP, scp or Zmodem: what the device does is typed at its prompt, never pushed as a file.

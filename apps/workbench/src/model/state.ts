@@ -99,6 +99,7 @@ export const COMMAND_UI: Record<string, string> = {
   extensions: 'extensions',
   approvals: 'approvals',
   jobs: 'jobs',
+  workflows: 'jobs',
   terminals: 'terminal',
   new: 'sessions',
   resume: 'sessions',
@@ -909,6 +910,8 @@ export class PreviewRuntime implements RuntimePort {
       };
     }
     if (name === 'jobs') return { panel: 'jobs', selection: args };
+    // A workflow run is a background job: its progress is its job's
+    if (name === 'workflows') return { panel: 'jobs' };
     if (name === 'terminals') return { panel: 'terminal', selection: args };
     if (
       ['reload', 'init'].includes(name) ||

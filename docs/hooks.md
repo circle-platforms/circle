@@ -162,7 +162,7 @@ The fields of each event:
 | `PostToolUse` | Those of `PreToolUse`, `tool_response` (the text the model would read) and `duration_ms` |
 | `PostToolUseFailure` | Those of `PreToolUse`, `error`, `is_interrupt` and `duration_ms` |
 | `UserPromptSubmit` | `prompt`, the message as you wrote it |
-| `Stop` | `stop_hook_active` (true once a Stop hook has sent this turn back to work, whatever the model did since), `last_assistant_message`, `background_tasks` (the jobs still running) and `session_crons` (always empty) |
+| `Stop` | `stop_hook_active` (true once a Stop hook has sent this turn back to work, whatever the model did since), `last_assistant_message`, `background_tasks` (the jobs still running: `type` is `shell`, `subagent`, or `workflow` with the workflow's `name`) and `session_crons` (always empty) |
 | `SubagentStart` | `agent_id`, `agent_type`, and Circle's `description`, the task the model wrote |
 | `SubagentStop` | `agent_id`, `agent_type`, `stop_hook_active`, `last_assistant_message` |
 | `SessionStart` | `source`, `model` |

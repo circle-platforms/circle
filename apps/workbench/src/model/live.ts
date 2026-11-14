@@ -1523,6 +1523,8 @@ export class LiveRuntime implements RuntimePort {
       return { notice: t('Circle integrations reloaded') };
     }
     if (name === 'jobs') return { panel: 'jobs', selection: args };
+    // A workflow run is a background job: its progress is its job's
+    if (name === 'workflows') return { panel: 'jobs' };
     if (name === 'terminals') return { panel: 'terminal', selection: args };
     // The bridge is Circle's own listener in the terminal: the window has no
     // editor of that kind to open or close.
