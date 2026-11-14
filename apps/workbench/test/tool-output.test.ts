@@ -65,6 +65,19 @@ test('routine allow is filtered only for display, with other hook lines translat
       shownToolOutput('Hook output (lint):\nformatted'),
       '钩子输出（lint）：\nformatted',
     );
+    // A rewrite's line: the words translate, the hook's names and the arguments stay
+    assert.equal(
+      shownToolOutput(
+        'Hook changed this call\'s input (one, two):\nfile_path = "b.txt"\n\nwrote b.txt',
+      ),
+      '钩子改写了此次调用的输入（one, two）：\nfile_path = "b.txt"\n\nwrote b.txt',
+    );
+    assert.equal(
+      shownToolOutput(
+        "Hook changed this call's input (canon), and it cannot run: sudo is not allowed",
+      ),
+      '钩子改写了此次调用的输入（canon），改写后无法运行： sudo is not allowed',
+    );
   } finally {
     setLanguage('en');
   }

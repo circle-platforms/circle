@@ -283,3 +283,88 @@ test('routine allow is hidden once in the desktop and can be shown by the user s
   assert.equal(f.controller.snapshot().settings.showHookAllow, undefined);
   assert.equal(allowed().length, 0);
 });
+
+test('the desktop card of a call a hook rewrote shows the rewrite, the hook and the words it wrote for you', async (t) => {
+  const f = await setup(t, [
+    {
+      message: {
+        id: 'write',
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'write',
+            name: 'write_file',
+            args: { file_path: 'a.txt', content: 'payload' },
+          },
+        ],
+      },
+    },
+    reply('done'),
+  ]);
+  const script = join(f.workspace, 'rewrite.mjs');
+  await writeFile(
+    script,
+    `import { readFileSync } from 'node:fs';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+process.stdout.write(JSON.stringify({
+  decision: 'ask',
+  reason: 'Notes go in notes/.',
+  user_message: 'moved to notes/',
+  updated_input: { ...input.tool_input, file_path: 'notes/a.txt' },
+}));
+`,
+  );
+  await writeFile(
+    f.file,
+    JSON.stringify({
+      hooks: {
+        before_tool: [
+          {
+            name: 'notes',
+            command: `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`,
+            tools: 'write_file',
+          },
+        ],
+      },
+    }),
+  );
+  for (const change of loadHooks({
+    workspace: f.workspace,
+    home: f.home,
+    trusted: true,
+    userHome: f.home,
+  }).projectChanged)
+    approveHookFile(f.home, change);
+  assert.equal((await f.call('reload')).ok, true);
+  assert.equal((await f.call('prompt', { text: 'write' })).ok, true);
+  const card = () =>
+    f.controller
+      .snapshot()
+      .interactions.find(
+        (row) => row.kind === 'approval' && row.status === 'pending',
+      );
+  await wait(() => Boolean(card()), 'the card for the rewritten call');
+  const shown = card()!;
+  assert.deepEqual(shown.input, {
+    file_path: 'notes/a.txt',
+    content: 'payload',
+  });
+  assert.equal(shown.hookReason, 'moved to notes/');
+  assert.deepEqual(shown.hookChanged, {
+    hooks: ['notes'],
+    original: { file_path: 'a.txt', content: 'payload' },
+    changed: ['file_path'],
+  });
+  await f.call('answer', {
+    id: shown.id,
+    revision: shown.revision,
+    answer: 'reject',
+  });
+  await wait(
+    () => f.model.requests.length === 2,
+    'the tool result reaches the model',
+  );
+  assert.equal(existsSync(join(f.workspace, 'notes', 'a.txt')), false);
+  assert.equal(existsSync(join(f.workspace, 'a.txt')), false);
+});

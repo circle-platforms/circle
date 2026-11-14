@@ -368,6 +368,24 @@ export function fileChange(
   return [row(summary), ...cut(rows, maxRows)];
 }
 /** Everything an approval card shows for `call`, from what the policy said about it. */
+/**
+ * A call before_tool hooks rewrote: the card shows the rewrite, and says who made it and what each changed argument
+ * was as the model sent it.
+ */
+function rewriteLines(call: ToolCall): string[] {
+  const rewrite = call.hook_changed;
+  if (!rewrite) return [];
+  return [
+    `rewritten by hook · ${rewrite.hooks.join(', ')}`,
+    ...rewrite.changed.map((key) => {
+      const was = JSON.stringify(rewrite.original[key]);
+      return was === undefined
+        ? `was · ${key} unset`
+        : `was · ${key} = ${was.length > 200 ? `${was.slice(0, 200)}…` : was}`;
+    }),
+  ];
+}
+
 export function approvalRequest(
   call: ToolCall,
   review: Review,
@@ -394,6 +412,7 @@ export function approvalRequest(
       call.hook_message || call.hook_reason
         ? `hook · ${call.hook_message || call.hook_reason}`
         : '',
+      ...rewriteLines(call),
     ]
       .filter(Boolean)
       .join('\n'),

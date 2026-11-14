@@ -31,6 +31,7 @@ import {
   formatChord,
 } from '../model/shortcuts';
 import { DiffBlock } from '../components/DiffBlock';
+import { HookRewrite } from '../components/HookRewrite';
 import { BrowserApproval, HookChanges, requestReason } from './InlineRequest';
 import { approvalHeading } from '../model/reasons.ts';
 import { hasToolInput } from '../model/browser';
@@ -1683,6 +1684,7 @@ export function InteractionDialog({
               {t('hook')} · {item.hookReason}
             </p>
           )}
+          {item.hookChanged && <HookRewrite rewrite={item.hookChanged} />}
           {item.tool?.startsWith('browser_') ? (
             <BrowserApproval input={item.input} />
           ) : item.command ? (

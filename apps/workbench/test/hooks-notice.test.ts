@@ -14,6 +14,10 @@ test('a hook notice in zh-CN is Chinese and keeps the hook reason and tool name'
       reason: 'no writes',
     });
     assert.equal(denied, '钩子拒绝了 write_file · no writes');
+    assert.equal(
+      formatHookNotice({ kind: 'rewrote', tool: 'write_file', name: 'canon' }),
+      '钩子改写了 write_file · canon',
+    );
     // The words a hook wrote for the person (`user_message`) go in place of the reason the model reads
     assert.equal(
       formatHookNotice({

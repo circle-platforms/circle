@@ -370,6 +370,15 @@ export interface Interaction {
   /** A hook asked for this approval. The reason is the hook's own words. */
   hookReason?: string;
   /**
+   * before_tool hooks rewrote the call: `input` is the rewrite. Which hooks, the arguments as the model sent them
+   * and the names of those that differ.
+   */
+  hookChanged?: {
+    hooks: string[];
+    original: Record<string, unknown>;
+    changed: string[];
+  };
+  /**
    * A project hooks file waiting for approval (`hooks`): each hook in the version
    * that was read, against the one approved last. `target` is the file.
    */

@@ -48,6 +48,7 @@ export interface HookNotice {
     | 'denied'
     | 'asked'
     | 'allowed'
+    | 'rewrote'
     | 'output'
     | 'blocked'
     | 'limit'
@@ -143,6 +144,8 @@ export interface HookOutcome {
   reason: string;
   /** `user_message`: for the person, in place of the reason. Empty when the hook gave none. */
   userMessage: string;
+  /** before_tool only: the input the call runs with instead (`updated_input`). Never set with a deny. */
+  updatedInput?: Record<string, unknown>;
   context: string;
   durationMs: number;
   failed: boolean;
@@ -153,6 +156,13 @@ export interface HookBatch {
   reason: string;
   /** The `user_message` of the hooks that decided, joined as their reasons are. */
   userMessage: string;
+  /**
+   * before_tool: the input after every hook that rewrote it, in order, each given the one before. Unset when a
+   * hook denied, which voids every rewrite.
+   */
+  updatedInput?: Record<string, unknown>;
+  /** The hooks whose rewrite that is, in the order they ran. */
+  changedBy: string[];
   context: string;
   outcomes: HookOutcome[];
   notices: HookNotice[];
@@ -212,6 +222,8 @@ export function hookNoticeText(notice: HookNotice): string {
       return `hook asked ${notice.tool ?? 'tool'}${tail}`;
     case 'allowed':
       return `hook allowed ${notice.tool ?? 'tool'}${tail}`;
+    case 'rewrote':
+      return `hook rewrote ${notice.tool ?? 'tool'}${notice.name ? ` · ${notice.name}` : ''}`;
     case 'output':
       return `hook ${notice.name ?? 'hook'}${tail}`;
     case 'blocked':
@@ -234,6 +246,8 @@ export const HOOK_DENIED_LINE = 'Hook denied this call:';
 export const HOOK_ASKED_LINE = 'Hook asked before this call:';
 export { HOOK_ALLOWED_LINE } from './hook_display.js';
 export const HOOK_OUTPUT_LINE = 'Hook output';
+/** Starts the tool result of a call a before_tool hook rewrote: `… (name): key = value`. */
+export const HOOK_CHANGED_LINE = "Hook changed this call's input";
 
 export function hookDeniedMessage(reason: string): string {
   return `${HOOK_DENIED_LINE} ${reason}`;
@@ -853,7 +867,7 @@ function interpretOutput(
   spawnError?: string,
 ): Pick<
   HookOutcome,
-  'decision' | 'reason' | 'userMessage' | 'context' | 'failed'
+  'decision' | 'reason' | 'userMessage' | 'updatedInput' | 'context' | 'failed'
 > {
   const gating = GATING.has(event);
   // A gating failure denies. Anywhere else it is only a notice: the tool
@@ -913,6 +927,13 @@ function interpretOutput(
       failed: false,
     };
   }
+  // A rewrite is a before_tool answer: the whole input the call runs with instead. A deny voids it; anything but
+  // an object is no input, so the call does not run.
+  const rewrite = event === 'before_tool' ? parsed?.updated_input : undefined;
+  if (rewrite !== undefined && !isRecord(rewrite))
+    return fail('hook updated_input is not a JSON object');
+  const updatedInput =
+    rewrite && decision !== 'deny' ? { updatedInput: rewrite } : {};
   if (gating && decision) {
     if (event === 'before_stop' && decision === 'ask')
       return {
@@ -926,11 +947,19 @@ function interpretOutput(
       decision,
       reason: reason || (decision === 'deny' ? 'hook denied' : ''),
       userMessage,
+      ...updatedInput,
       context: '',
       failed: false,
     };
   }
-  return { decision: 'none', reason: '', userMessage, context, failed: false };
+  return {
+    decision: 'none',
+    reason: '',
+    userMessage,
+    ...updatedInput,
+    context,
+    failed: false,
+  };
 }
 
 function clip(text: string): string {
@@ -946,7 +975,8 @@ interface CommandResult {
   error?: string;
 }
 
-function redactHookValue(
+/** A value as a hook sees it: each saved secret's value written back as `%NAME%`. */
+export function redactHookValue(
   value: unknown,
   secrets: Record<string, string>,
 ): unknown {
@@ -1268,6 +1298,10 @@ export class HookRunner {
     const outcomes: HookOutcome[] = [];
     const notices: HookNotice[] = [];
     const secrets = request.secrets ?? {};
+    // A before_tool hook that rewrites the input hands the next hook its rewrite. Which hooks run was settled by
+    // the call as the model sent it.
+    let input = request.toolInput;
+    const changedBy: string[] = [];
     for (const hook of this.loaded.hooks) {
       if (request.onlyIds && !request.onlyIds.includes(hook.id)) continue;
       if (!this.armedHook(hook)) continue;
@@ -1313,7 +1347,7 @@ export class HookRunner {
         source: hook.source,
         source_label: hook.sourceLabel,
         tool_name: request.toolName,
-        tool_input: redactHookValue(request.toolInput, secrets),
+        tool_input: redactHookValue(input, secrets),
         paths: redactHookValue(canonicalPaths, secrets),
         tool_output: redactHookValue(request.toolOutput, secrets),
         tool_status: request.toolStatus,
@@ -1380,6 +1414,15 @@ export class HookRunner {
         durationMs: Date.now() - started,
       };
       outcomes.push(outcome);
+      // Handing back the input it was given is no rewrite
+      if (
+        outcome.updatedInput &&
+        JSON.stringify(outcome.updatedInput) !==
+          JSON.stringify(redactHookValue(input, secrets))
+      ) {
+        input = outcome.updatedInput;
+        changedBy.push(hook.name);
+      }
       this.log(request, outcome, secrets);
       if (
         request.event === 'before_stop' &&
@@ -1399,7 +1442,22 @@ export class HookRunner {
       .map((item) => item.context)
       .filter(Boolean)
       .join('\n\n');
-    return { ...decision, context, outcomes, notices };
+    // A deny voids every rewrite: the call does not run in any form
+    const rewritten =
+      request.event === 'before_tool' &&
+      decision.decision !== 'deny' &&
+      changedBy.length > 0;
+    if (rewritten)
+      for (const name of changedBy)
+        notices.push({ kind: 'rewrote', tool: request.toolName, name });
+    return {
+      ...decision,
+      ...(rewritten ? { updatedInput: input } : {}),
+      changedBy: rewritten ? changedBy : [],
+      context,
+      outcomes,
+      notices,
+    };
   }
 
   private log(

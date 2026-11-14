@@ -143,6 +143,18 @@ export function shownToolOutput(text: string): string {
     .replaceAll('Hook session_start output:', t('Hook session_start output:'))
     .replace(/Hook output \(([^)]+)\):/g, (_match, name: string) =>
       t('Hook output ({name}):', { name }),
+    )
+    .replace(
+      /Hook changed this call's input \(([^)]+)\), and it cannot run:/g,
+      (_match, name: string) =>
+        t("Hook changed this call's input ({name}), and it cannot run:", {
+          name,
+        }),
+    )
+    .replace(
+      /Hook changed this call's input \(([^)]+)\):/g,
+      (_match, name: string) =>
+        t("Hook changed this call's input ({name}):", { name }),
     );
 }
 interface ToolMessageProps {

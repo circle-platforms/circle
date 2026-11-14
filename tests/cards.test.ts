@@ -1075,3 +1075,30 @@ test('setup asks for the key of a new host instead of sending it the key saved f
   assert.equal(loadSettings(home).auth.model, 'fresh-model');
   assert.equal(loadCredentials(home).api_key, 'new-key');
 });
+
+test('the card of a call a hook rewrote names the hook and what each changed argument was', (t) => {
+  const root = scratch(t);
+  const policy = defaultPolicy(root, root);
+  const call = {
+    id: 'w',
+    name: 'write_file',
+    args: { file_path: 'b.txt', content: 'x' },
+    hook_changed: {
+      hooks: ['canon'],
+      original: { file_path: 'a.txt', content: 'x', mode: 'append' },
+      changed: ['file_path', 'mode'],
+    },
+  };
+  const request = approvalRequest(
+    call,
+    policy.review('write_file', call.args),
+    (path) => join(root, path),
+  );
+  assert.deepEqual((request.policy ?? '').split('\n').slice(-3), [
+    'rewritten by hook · canon',
+    'was · file_path = "a.txt"',
+    'was · mode = "append"',
+  ]);
+  // The body is the rewrite: what runs
+  assert.match(request.body, /b\.txt/);
+});

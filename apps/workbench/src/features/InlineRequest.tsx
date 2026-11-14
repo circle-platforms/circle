@@ -8,6 +8,7 @@ import {
 import { useRuntime } from '../app/context';
 import { Button, PathLink } from '../components/common';
 import { DataBlock } from '../components/ui';
+import { HookRewrite } from '../components/HookRewrite';
 import { DiffBlock } from '../components/DiffBlock';
 import type { Interaction } from '../model/types';
 import { t } from '../i18n';
@@ -414,6 +415,7 @@ export function InlineRequest({
         </div>
       )}
       {failure}
+      {item.hookChanged && <HookRewrite rewrite={item.hookChanged} />}
       {knowledge ? (
         change && (
           <div className="knowledge-change-preview">

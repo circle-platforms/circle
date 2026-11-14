@@ -103,7 +103,7 @@ Every matching hook for an event runs. Nothing stops the list early. For the thr
 
 | Event                | When                                                                   | What a decision does                                                                                                                                                                                                                                    |
 | -------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `before_tool`        | After the approval policy's hard refusal, and before the approval card | `deny` blocks the call. `ask` forces the card, including in auto. `allow` skips an ordinary card only.                                                                                                                                                  |
+| `before_tool`        | After the approval policy's hard refusal, and before the approval card | `deny` blocks the call. `ask` forces the card, including in auto. `allow` skips an ordinary card only. `updated_input` makes the call run in another form: see [Rewrite a call](#rewrite-a-call). |
 | `permission_request` | When a card would be shown, or a hook asked                            | Same as `before_tool`. It does not run when nothing would ask and no hook asked, and it does not run after a `before_tool` allow that already skipped an ordinary card. An allow here cannot take back an ask, and cannot skip a call that always asks. |
 | `after_tool`         | After a tool returns text                                              | Decisions are ignored. Exit 0 appends standard output to the tool result the model reads. A non-zero exit, a timeout, or a failure to start does not undo the tool: Circle logs it and shows a notice.                                                  |
 | `before_stop`        | When the model ends a turn with no tool call and no steering message   | `deny`, exit 2, or `ask` blocks the stop and sends the reason back. The turn continues, and the step still counts toward the turn's step limit.                                                                                                         |
@@ -123,6 +123,29 @@ A call that always asks, such as deleting files, still runs the hook. `allow` do
 A file tool still refuses a credential file by name when the tool runs. That check is inside the tool, so a `before_tool` hook does run, and an allow does not make the write succeed.
 
 `allowed_commands` still skips the card, unless a hook asked. A hook deny is already a block by then.
+
+## Rewrite a call
+
+A `before_tool` hook can let a call through in another form, rather than deny it and leave the model to try again. It answers with `updated_input`, the whole input the call runs with instead (not a patch: copy the fields you keep):
+
+```json
+{ "decision": "allow", "updated_input": { "command": "example-tool --name value" } }
+```
+
+- **With a decision.** With `allow` the rewrite runs without an ordinary card, as an allow does. With `ask` the card shows the rewrite. With no decision the approval mode and the rules decide as for any call. A `deny` from any hook voids every rewrite: the call does not run in any form.
+- **Checked again.** The rewrite goes through everything the model's call went through before the hooks: the tool's schema, variables, read-only mode and the hard refusals. Then the rules, `allowed_commands`, `permission_request`, the card, an answer you keep for the session, the tool and `after_tool` all take the rewrite. What runs is what was checked and approved. A rewrite the tool's schema refuses, or a hard refusal, stops the call, and the tool result names the hook: `Hook changed this call's input (name), and it cannot run: …`.
+- **Secrets.** The hook sees each saved secret as `%NAME%` and writes it back that way. Circle puts the value in. A rewrite that names a secret the call did not carry always shows the card, even after an allow and in auto.
+- **Facts.** Facts Circle works out for the card, such as who sees a screenshot, are worked out again. A rewrite cannot set them.
+- **Several hooks.** Hooks run in order, and each gets the rewrite of the one before as `tool_input`. The call runs with the last rewrite. Which hooks run is settled by the call as the model sent it. Handing back the input as it came is no rewrite.
+- **What you see.** The transcript shows `hook rewrote <tool> · <name>` for each hook that rewrote the call. The approval card shows the rewrite, `rewritten by hook · <names>` and, for each argument that changed, what it `was` as the model sent it. In the desktop that part is folded.
+- **What the model sees.** Its call stays as it sent it. The tool result starts with what changed, so its next call can be written that way:
+
+  ```text
+  Hook changed this call's input (canon):
+  command = "example-tool --name value"
+  ```
+
+Only `before_tool` reads `updated_input`. Other events ignore it. A value that is not a JSON object denies the call, with the reason `hook updated_input is not a JSON object`.
 
 ## What the command receives
 
@@ -168,7 +191,7 @@ The command's standard output and standard error are kept up to 100,000 characte
 
 | Exit                                                                                 | Gating event (`before_tool`, `permission_request`, `before_stop`)                                                          | `after_tool` and `session_start`                                                                                |
 | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| 0 and a JSON object `{"decision":"allow"\|"deny"\|"ask","reason":"…","context":"…","user_message":"…"}` | That decision. On `before_stop`, `ask` blocks like `deny`. Empty output, or a JSON object with no decision, is no opinion. | The decision is ignored. `context`, or `additional_context`, is fed back. Plain text is fed back too.           |
+| 0 and a JSON object `{"decision":"allow"\|"deny"\|"ask","reason":"…","context":"…","user_message":"…","updated_input":{…}}` | That decision. On `before_stop`, `ask` blocks like `deny`. Empty output, or a JSON object with no decision, is no opinion. | The decision is ignored. `context`, or `additional_context`, is fed back. Plain text is fed back too.           |
 | 0 and output that is not a JSON object                                               | Deny. The reason is `hook output is not JSON`.                                                                             | The text is context. The turn is not interrupted.                                                               |
 | 2                                                                                    | Deny. The reason is the JSON `reason`, otherwise standard error, otherwise standard output.                                | A notice only. The tool is not undone and the session is not blocked.                                           |
 | Any other exit, a timeout, or a failure to start                                     | Deny.                                                                                                                      | A notice only. The tool is not undone and the session is not blocked. The error text is not given to the model. |

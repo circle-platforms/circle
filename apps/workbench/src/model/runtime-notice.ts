@@ -28,6 +28,11 @@ export function formatHookNotice(notice: HookNotice): string {
       return (
         t('hook allowed {tool}', { tool: notice.tool ?? t('tool') }) + tail
       );
+    case 'rewrote':
+      return (
+        t('hook rewrote {tool}', { tool: notice.tool ?? t('tool') }) +
+        (notice.name ? ` · ${notice.name}` : '')
+      );
     case 'output':
       return t('hook {name}', { name: notice.name ?? t('hook') }) + tail;
     case 'blocked':
