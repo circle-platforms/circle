@@ -273,7 +273,7 @@ See [Background jobs](background-jobs.md).
 
 ## Calls the model gets wrong
 
-A call to one of the tools that do not ask, with its name in the wrong case or with `-`, `_` or spaces in another place (`Read_File`, `readfile`), goes to the tool it clearly means; a tool that changes something must be named exactly. Argument names are matched the same way, and a JSON string given where a list or an object belongs is read as one. Then the arguments are checked against the tool's schema: a call that does not fit gets an error the model can correct, and nothing runs.
+A call to one of the tools that do not ask, with its name in the wrong case or with `-`, `_` or spaces in another place (`Read_File`, `readfile`), goes to the tool it clearly means; a tool that changes something must be named exactly. Argument names are matched the same way, and a JSON string given where a list or an object belongs is read as one. Then the arguments are checked against the tool's schema: a call that does not fit gets an error the model can correct, and nothing runs. The error names the tool and what does not fit. For a string that does not match the `pattern` in its schema, the error gives that schema's `description` and up to three of its string `examples` in place of the expression, which it gives only when the schema has neither. A description or an example is cut at 300 characters and an expression at 120, and the error says it was cut.
 
 ## Display
 
