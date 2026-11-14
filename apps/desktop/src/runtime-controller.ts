@@ -4533,6 +4533,8 @@ export class RuntimeController {
         signal,
         origin,
       );
+      // Closed: nothing was answered, as the terminal says of a card it closes, and the rest are not asked
+      if (answer === 'cancelled') return JSON.stringify(null);
       try {
         const value = JSON.parse(answer);
         answers.push([
@@ -4540,7 +4542,7 @@ export class RuntimeController {
           ...(value.comment ? [value.comment] : []),
         ]);
       } catch {
-        answers.push(answer === 'cancelled' ? '' : answer);
+        answers.push(answer);
       }
     }
     return JSON.stringify(answers);

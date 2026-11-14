@@ -7602,3 +7602,68 @@ test('the desktop signs in with ChatGPT, saves no key, runs a turn on the plan a
   for (const shown of [replies, updates, controller.snapshot()])
     assert.doesNotMatch(JSON.stringify(shown), /access-\d|refresh-\d/);
 });
+
+test("closing the desktop's question about a project's .mcp.json decides nothing, and its servers wait on", async (t) => {
+  const root = realpathSync.native(
+    await mkdtemp(join(tmpdir(), 'circle-core-desktop-')),
+  );
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(home);
+  await mkdir(workspace);
+  await writeFile(
+    join(workspace, '.mcp.json'),
+    JSON.stringify({
+      mcpServers: { shared: { type: 'http', url: 'http://127.0.0.1:9/mcp' } },
+    }),
+  );
+  saveSettings(trustFolder(defaultSettings(), workspace), home);
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model: new ScriptedModel([]),
+    emit: () => {},
+  });
+  t.after(async () => {
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  await controller.initialize();
+  await wait(
+    () =>
+      controller
+        .snapshot()
+        .interactions.some(
+          (row) => row.kind === 'question' && row.status === 'pending',
+        ),
+    'the question about .mcp.json',
+  );
+  const card = controller
+    .snapshot()
+    .interactions.find(
+      (row) => row.kind === 'question' && row.status === 'pending',
+    )!;
+  assert.match(card.title ?? '', /\.mcp\.json adds MCP servers/);
+  const cancelled = await controller.dispatch({
+    id: randomUUID(),
+    name: 'answer',
+    payload: { id: card.id, revision: card.revision, cancel: true },
+    sessionId: card.sessionId,
+  });
+  assert.equal(cancelled.ok, true, cancelled.error);
+  const runtime = (
+    controller as unknown as { runtime(workspace: string): AgentRuntime }
+  ).runtime(workspace);
+  await wait(
+    () =>
+      (runtime as unknown as { askingForServers?: Promise<void> })
+        .askingForServers === undefined,
+    'the answer read',
+  );
+  assert.equal(loadSettings(home).projects[workspace], undefined);
+  assert.equal(
+    runtime.mcp.status.find((row) => row.name === 'shared')?.approval,
+    'pending',
+  );
+});

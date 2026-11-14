@@ -28,7 +28,7 @@ const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** A server's or a tool's name as a tool name takes it: other characters than letters, digits, `_` and `-` are `_`. */
-const namePart = (value: string): string =>
+export const namePart = (value: string): string =>
   value.replace(/[^A-Za-z0-9_-]+/g, '_') || '_';
 // Model APIs take tool names of letters, digits, `_` and `-`, at most 64 characters. A tool is offered as
 // `mcp__<server>__<tool>`, with every other character turned into `_`, so the request goes through and a permission
@@ -115,9 +115,12 @@ export function mcpType(config: McpServerConfig): McpType | undefined {
     : undefined;
 }
 
-/** `${env:NAME}` and `${secret:NAME}` of the format before this one, as the `${NAME}` it reads now. */
+/**
+ * `${env:NAME}` of the format before this one as the `${NAME}` that reads the environment now. `${secret:NAME}` stays:
+ * it still reads the saved secret alone.
+ */
 const oldReferences = (text: string): string =>
-  text.replace(/\$\{(?:env|secret):([A-Za-z_][A-Za-z0-9_]*)\}/g, '${$1}');
+  text.replace(/\$\{env:([A-Za-z_][A-Za-z0-9_]*)\}/g, '${$1}');
 
 /**
  * The servers of an `mcp_servers` list, the format before this one, in the current format, and what changed on the
@@ -160,14 +163,8 @@ export function convertOldMcpServers(list: unknown): {
       entry.url = String(item.url);
       if (record(item.headers)) {
         const headers: Record<string, string> = {};
-        for (const [key, value] of Object.entries(item.headers)) {
-          const text = String(value);
-          if (/\$\{secret:/.test(text))
-            notes.push(
-              `${name}: header ${key} names its secret as \${NAME} now, read from the environment first and then from your saved secrets`,
-            );
-          headers[key] = oldReferences(text);
-        }
+        for (const [key, value] of Object.entries(item.headers))
+          headers[key] = oldReferences(String(value));
         entry.headers = headers;
       }
     } else {
@@ -252,8 +249,11 @@ export function migrateMcpServersFile(
   ];
 }
 
-/** A `${VAR}` or `${VAR:-default}` reference in an entry's value. */
-const REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g;
+/**
+ * A `${VAR}` or `${VAR:-default}` reference in an entry's value, or Circle's `${secret:NAME}`, which names a saved
+ * secret alone.
+ */
+const REFERENCE = /\$\{(secret:)?([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g;
 
 /** Where a reference's value came from. */
 export interface ReferenceValue {
@@ -294,41 +294,125 @@ export const WITHHELD_VARIABLES = new Set([
  */
 export function expandReferences(
   text: string,
-  lookup: (name: string) => ReferenceValue | undefined,
+  lookup: (name: string, only?: 'secret') => ReferenceValue | undefined,
   withheld: (name: string) => boolean = () => false,
 ): Expanded {
   const missing: string[] = [];
   const used: Expanded['used'] = [];
   const out = text.replace(
     REFERENCE,
-    (whole, name: string, fallback: string | undefined) => {
-      if (withheld(name)) return '';
-      const found = lookup(name);
+    (
+      whole,
+      secret: string | undefined,
+      name: string,
+      fallback: string | undefined,
+    ) => {
+      // A saved secret named as one is yours to send, whatever its name; only a variable taken from the environment
+      // can be withheld
+      if (!secret && withheld(name)) return '';
+      const found = lookup(name, secret ? 'secret' : undefined);
       if (found) {
         used.push({ name, ...found });
         return found.value;
       }
       if (fallback !== undefined) return fallback;
-      missing.push(name);
+      missing.push(secret ? `secret:${name}` : name);
       return whole;
     },
   );
   return { text: out, missing, used };
+}
+/** The references a value names, as written: `NAME` for `${NAME}`, `secret:NAME` for `${secret:NAME}`. */
+export function referencesIn(text: string): string[] {
+  return [...text.matchAll(REFERENCE)].map((match) =>
+    match[1] ? `secret:${match[2]}` : match[2]!,
+  );
 }
 
 /** The lookup `expandReferences` takes: the environment first, then the saved secrets. */
 export function environmentThenSecrets(
   env: NodeJS.ProcessEnv,
   secrets: Record<string, string>,
-): (name: string) => ReferenceValue | undefined {
-  return (name) => {
-    const fromEnv = Object.hasOwn(env, name) ? env[name] : undefined;
+): (name: string, only?: 'secret') => ReferenceValue | undefined {
+  return (name, only) => {
+    const fromEnv =
+      only !== 'secret' && Object.hasOwn(env, name) ? env[name] : undefined;
     if (typeof fromEnv === 'string') return { value: fromEnv, from: 'env' };
     const saved = Object.hasOwn(secrets, name) ? secrets[name] : undefined;
     return typeof saved === 'string'
       ? { value: saved, from: 'secret' }
       : undefined;
   };
+}
+
+/**
+ * What servers of a project's `.mcp.json` would run or send, as the file writes it, for the person who decides
+ * whether the project may use them: each one's command and arguments or address, its `env`, the headers it sends and
+ * its `headersHelper` command, references and all; then where each reference would be filled in from. Never a value of
+ * the environment or of a secret.
+ */
+export function mcpjsonServersText(
+  entries: McpEntry[],
+  env: NodeJS.ProcessEnv,
+  secrets: Record<string, string>,
+): string {
+  const lines: string[] = [];
+  // Each reference as written, and whether it goes to a server reached over the network (its url and headers)
+  const references = new Map<string, boolean>();
+  const note = (text: string, remote: boolean) => {
+    for (const reference of referencesIn(text))
+      references.set(reference, references.get(reference) === true || remote);
+  };
+  const pairs = (value: unknown, join: string): string[] =>
+    record(value)
+      ? Object.entries(value).map(
+          ([key, item]) => `${key}${join}${String(item)}`,
+        )
+      : [];
+  for (const { name, config } of entries) {
+    const type = mcpType(config) ?? String(config.type);
+    if (typeof config.command === 'string') {
+      const line = [
+        config.command,
+        ...(Array.isArray(config.args) ? config.args.map(String) : []),
+      ].join(' ');
+      lines.push(`· ${name} (${type}) runs: ${line}`);
+      note(line, false);
+    } else if (typeof config.url === 'string') {
+      lines.push(`· ${name} (${type}) reaches: ${config.url}`);
+      note(config.url, true);
+    } else lines.push(`· ${name} (${type})`);
+    const env = pairs(config.env, '=');
+    if (env.length) {
+      lines.push(`  env: ${env.join(', ')}`);
+      for (const item of env) note(item, false);
+    }
+    const headers = pairs(config.headers, ': ');
+    if (headers.length) {
+      lines.push(`  headers it is sent: ${headers.join(', ')}`);
+      for (const item of headers) note(item, true);
+    }
+    if (typeof config.headersHelper === 'string')
+      lines.push(
+        `  headersHelper, a command run in a shell each time it connects: ${config.headersHelper}`,
+      );
+  }
+  const where = [...references].map(([reference, remote]) => {
+    const secret = reference.startsWith('secret:');
+    const name = secret ? reference.slice('secret:'.length) : reference;
+    const shown = `\${${reference}}`;
+    if (!secret && remote && WITHHELD_VARIABLES.has(name))
+      return `${shown} is never sent from your environment: it reads as empty`;
+    if (!secret && typeof env[name] === 'string' && Object.hasOwn(env, name))
+      return `${shown} from your environment`;
+    if (Object.hasOwn(secrets, name)) return `${shown} from your saved secrets`;
+    return `${shown} is not set and stays as written, or takes its default`;
+  });
+  if (where.length)
+    lines.push(
+      `Filled in when it connects: ${where.join('; ')}. Their values are sent to that server or given to its program.`,
+    );
+  return lines.join('\n');
 }
 
 /** The key a project is filed under in settings.json's `projects`. */

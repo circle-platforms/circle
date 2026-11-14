@@ -30,7 +30,10 @@ import {
   setPersonalPackEnabled,
 } from '../../../src/knowledge/packs.js';
 import { forgetAuthorization } from '../../../src/mcp_auth.js';
-import { buildMcpConnections } from '../../../src/mcp_loader.js';
+import {
+  buildMcpConnections,
+  connectionAddress,
+} from '../../../src/mcp_loader.js';
 import { secretLookingName } from '../../../src/sandbox.js';
 import { readFileBytes } from '../../../src/file_access.js';
 import {
@@ -159,8 +162,11 @@ export class DesktopKnowledge {
           needles.push(value);
           if (/^Bearer /i.test(value)) needles.push(value.slice(7));
         }
-      if (c.url) {
-        const kept = keptFor(runtime.options.home, new URL(c.url).href);
+      // At the address its connection reaches, references filled in; one that is no address once filled in has no
+      // sign-in kept, and does not stop the page
+      const address = connectionAddress(c, loadSecrets(runtime.options.home));
+      if (address) {
+        const kept = keptFor(runtime.options.home, address);
         for (const value of [
           kept.tokens?.access_token,
           kept.tokens?.refresh_token,
@@ -1359,7 +1365,11 @@ export class DesktopKnowledge {
         )
           return fail('knowledge-configured-credential');
         await runtime.knowledge.close();
-        forgetAuthorization(runtime.options.home, new URL(configured.url).href);
+        const address = connectionAddress(
+          configured,
+          loadSecrets(runtime.options.home),
+        );
+        if (address) forgetAuthorization(runtime.options.home, address);
         await runtime.reloadIntegrations();
         return { saved: true };
       }

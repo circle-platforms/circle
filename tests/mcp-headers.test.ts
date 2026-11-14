@@ -90,6 +90,24 @@ test('header values fill in the environment, then saved secrets, a default, and 
     ),
     { Authorization: 'Bearer ' },
   );
+  // ${secret:NAME} reads the saved secret alone, as it always did: not the environment, and also a name Circle
+  // withholds from the environment, since it is a secret you saved yourself
+  assert.deepEqual(
+    resolveHeaders(
+      {
+        A: '${secret:BOTH}',
+        B: 'Bearer ${secret:OPENAI_API_KEY}',
+        C: '${secret:ONLY_IN_ENV}',
+      },
+      { BOTH: 'from-env', OPENAI_API_KEY: 'model-key', ONLY_IN_ENV: 'env' },
+      { BOTH: 'from-secret', OPENAI_API_KEY: 'saved-key' },
+    ),
+    {
+      A: 'from-secret',
+      B: 'Bearer saved-key',
+      C: '${secret:ONLY_IN_ENV}',
+    },
+  );
   assert.throws(
     () => resolveHeaders({ 'Bad Name': 'x' }, {}),
     /invalid header name/,

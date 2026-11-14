@@ -92,7 +92,9 @@ import {
   type McpStatus,
 } from './mcp_loader.js';
 import {
+  mcpjsonServersText,
   mcpServersForRun,
+  mcpServersOf,
   recordMcpjsonChoice,
   type McpEntry,
 } from './mcp_config.js';
@@ -973,6 +975,7 @@ export class AgentRuntime {
       },
     );
     this.policy.declareAlwaysAsk((tool) => this.mcp.asksPerson(tool));
+    this.policy.declareMcpTools((tool) => this.mcp.mcpTool(tool));
     this.lsp = new LspManager(this.sandbox);
     this.context = new ContextManager(this.store, this.sandbox.offloadRoot!, {
       readOnly: () => this.viewOnly,
@@ -2846,16 +2849,12 @@ export class AgentRuntime {
       this.integrationsReady = (async () => {
         const base = this.coreTools;
         const servers = this.mcpServers();
-        // Rules written with the MCP tool names of the format before this one name the current ones, once
+        // Your rules written with the MCP tool names of the format before this one name the current ones, once, for
+        // the servers of your own only: never one a project's .mcp.json brings
         this.mcp.notes.push(
           ...migrateMcpRuleNames({
             home: this.options.home,
-            workspace: this.options.workspace,
-            trusted: servers.trusted,
-            servers: [
-              ...servers.entries.map((entry) => entry.name),
-              ...servers.waiting.map((row) => row.name),
-            ],
+            servers: this.ownMcpServerNames(),
             reserved: new Set(base.map((tool) => tool.name)),
           }),
         );
@@ -3609,6 +3608,23 @@ export class AgentRuntime {
       trusted,
     };
   }
+  /** The names of the servers of your own, in your settings.json: for every project, and for each project alone. */
+  private ownMcpServerNames(): string[] {
+    let saved: CircleSettings;
+    try {
+      saved = loadSettings(this.options.home);
+    } catch {
+      return [];
+    }
+    return [
+      ...new Set([
+        ...Object.keys(saved.mcpServers),
+        ...Object.values(saved.projects).flatMap((project) =>
+          Object.keys(mcpServersOf(project.mcpServers)),
+        ),
+      ]),
+    ];
+  }
   /** Whether a server of the project's `.mcp.json` asks for the person's approval before it connects. */
   private get mcpInteractive(): boolean {
     return Boolean(this.options.question) && !this.options.headless;
@@ -3623,27 +3639,17 @@ export class AgentRuntime {
     if (this.askingForServers && !again) return;
     const signal = this.integrationLifetime.signal;
     const asked = (async () => {
-      const lines = pending.map(
-        (entry) =>
-          `· ${entry.name}: ${connectionText({
-            command:
-              typeof entry.config.command === 'string'
-                ? entry.config.command
-                : undefined,
-            args: Array.isArray(entry.config.args)
-              ? entry.config.args.map(String)
-              : undefined,
-            url:
-              typeof entry.config.url === 'string'
-                ? entry.config.url
-                : undefined,
-          })}`,
+      // All a server would run or send, as the file writes it, and where its references would be filled in from
+      const described = mcpjsonServersText(
+        pending,
+        process.env,
+        loadSecrets(this.options.home),
       );
       const reply = await this.options.question!(
         {
           questions: [
             {
-              question: `This project's .mcp.json adds MCP servers. A server you approve is started or reached with your rights, and its tools are offered to the model:\n${lines.join('\n')}\nWhich may this project use?`,
+              question: `This project's .mcp.json adds MCP servers. A server you approve is started or reached with your rights, and its tools are offered to the model. As the file writes them:\n${described}\nWhich may this project use?`,
               header: '.mcp.json',
               options: pending.map((entry) => ({
                 label: entry.name,
@@ -3667,13 +3673,12 @@ export class AgentRuntime {
         : isRecord(answers) && Array.isArray(answers.answers)
           ? answers.answers
           : undefined;
-      // Closed without an answer: nothing is decided, and /mcp reconnect asks again
-      if (!values) return;
-      const first = values[0];
+      // Closed, or left without an answer: nothing is decided, and /mcp reconnect asks again. Choosing none is an
+      // answer, an empty list.
+      const first = values?.[0];
+      if (first === undefined || first === null || first === '') return;
       const chosen = new Set(
-        (Array.isArray(first) ? first : first === undefined ? [] : [first]).map(
-          String,
-        ),
+        (Array.isArray(first) ? first : [first]).map(String),
       );
       const approved = pending
         .filter((entry) => chosen.has(entry.name))

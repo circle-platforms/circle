@@ -751,3 +751,55 @@ test('a library beyond the capability cache limit mints only the returned page a
   assert.equal(detail.text, 'synthetic entry 0000');
   assert.notEqual(first.rows[0].token, next.rows[0].token);
 });
+
+test('a server whose address names a variable is checked for leaks at that address, and one whose address cannot be read does not break the page', async (t) => {
+  const w = await world(t);
+  process.env.CIRCLE_TEST_KNOWLEDGE_HOST = 'http://127.0.0.1:7420';
+  t.after(() => {
+    delete process.env.CIRCLE_TEST_KNOWLEDGE_HOST;
+  });
+  const { writePrivateJson } = await import('../../../src/settings.ts');
+  writePrivateJson(join(w.home, 'mcp-auth.json'), {
+    servers: {
+      'http://127.0.0.1:7420/mcp': {
+        tokens: {
+          access_token: 'kept-synthetic-access-token',
+          token_type: 'Bearer',
+        },
+        grant_id: 'grant-1',
+      },
+    },
+  });
+  const runtime = (
+    w.controller as unknown as {
+      runtime(workspace: string): {
+        options: { settings: { mcpServers: Record<string, unknown> } };
+      };
+    }
+  ).runtime(w.workspace);
+  runtime.options.settings.mcpServers = {
+    hub: { type: 'http', url: '${CIRCLE_TEST_KNOWLEDGE_HOST}/mcp' },
+    broken: { type: 'http', url: '${CIRCLE_TEST_UNSET_HOST}/mcp' },
+  };
+  memory(w, 'a source returned kept-synthetic-access-token');
+  const rows = async () =>
+    (await w.call({ op: 'list', section: 'memory' })).rows;
+  const leaking = (await rows())[0];
+  await assert.rejects(
+    w.call({ op: 'detail', id: leaking.id, token: leaking.token }),
+    (error) => {
+      assert.equal(String(error), 'Error: knowledge-credential-rejected');
+      return true;
+    },
+  );
+  memory(w, 'plain synthetic words');
+  const plain = (await rows()).find(
+    (row: { id: string }) => row.id !== leaking.id,
+  );
+  const detail = await w.call({
+    op: 'detail',
+    id: plain.id,
+    token: plain.token,
+  });
+  assert.match(JSON.stringify(detail), /plain synthetic words/);
+});

@@ -197,3 +197,60 @@ test('a run that cannot go on after its turn keeps the call where it was made', 
   assert.equal(result('slow'), 'the slow answer');
   assert.equal(runtime.jobs.list().length, 0);
 });
+
+test('the notice of a call that went on in the background gives its whole result, or the path of the file it is kept in when it is too large', async (t) => {
+  const rows = Array.from({ length: 100 }, (_, i) => `row ${i + 1}`).join('\n');
+  const big = 'y'.repeat(60_000);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const { runtime, replies, result, model } = await setup(t, {
+    tools: [
+      { name: 'rows', inputSchema: schema },
+      { name: 'big', inputSchema: schema },
+    ],
+    call: async (request) => {
+      await gate;
+      return {
+        content: [
+          {
+            type: 'text',
+            text: request.message?.params?.name === 'rows' ? rows : big,
+          },
+        ],
+      };
+    },
+  });
+  runtime.mcp.autoBackgroundMs = 1;
+  replies.push(
+    assistant('', [
+      { id: 'rows', name: 'mcp__files__rows', args: {} },
+      { id: 'big', name: 'mcp__files__big', args: {} },
+    ]),
+    assistant('waiting'),
+  );
+  await runtime.harness.run('start both');
+  const jobs = ['rows', 'big'].map(
+    (id) => /background job (j\d+)/.exec(result(id))![1]!,
+  );
+  release();
+  await until(() =>
+    jobs.every((id) => runtime.jobs.get(id)!.status !== 'running'),
+  );
+  replies.push(assistant('read them'));
+  await runtime.harness.run('anything new?');
+  const told = model.requests
+    .at(-1)!
+    .messages.map((message) => message.content)
+    .join('\n');
+  for (let i = 1; i <= 100; i++)
+    assert.ok(
+      told.includes(`row ${i}\n`) || told.includes(`row ${i}`),
+      `row ${i}`,
+    );
+  assert.match(told, /row 1\nrow 2\n/);
+  assert.match(
+    told,
+    /The result of mcp__files__big is too large to give here \(60000 characters, about \d+ tokens\), so it was kept in full in \/large_tool_results\/[0-9a-f]+\.txt/,
+  );
+  assert.ok(!told.includes(big));
+});

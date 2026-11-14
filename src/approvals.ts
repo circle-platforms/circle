@@ -29,6 +29,7 @@ import {
   ruleSources,
   ruleWhere,
   sessionSource,
+  type McpToolOwner,
   type RuleDecision,
   type RuleEffect,
   type RuleSource,
@@ -990,6 +991,9 @@ export class ApprovalPolicy {
   // Tools whose every call a person approves, as an MCP tool its server marks so: no rule covers one, and every mode
   // asks
   private alwaysAsks: (tool: string) => boolean = () => false;
+  // The server and tool an MCP tool's calls go to, which rules for a server are matched by
+  private mcpTools: (tool: string) => McpToolOwner | undefined = () =>
+    undefined;
   /**
    * Set by a runtime whose file tools treat another checkout of the workspace's repository
    * as the workspace (the desktop's): a change there is a change in the workspace.
@@ -1051,7 +1055,14 @@ export class ApprovalPolicy {
         ? ruleSources(this.home, this.workspace)
         : this.ruleLayers(thread);
     const match = this.ruleMatch(tool, args, found);
-    return decideRule(effect, match.name, match.words, match.patterns, sources);
+    return decideRule(
+      effect,
+      match.name,
+      match.words,
+      match.patterns,
+      sources,
+      this.mcpTools(match.name),
+    );
   }
 
   // The allow read of needsApproval(): the person's file and this conversation.
@@ -1068,6 +1079,7 @@ export class ApprovalPolicy {
       match.words,
       match.patterns,
       this.ruleLayers(thread),
+      this.mcpTools(match.name),
     );
   }
 
@@ -1084,6 +1096,7 @@ export class ApprovalPolicy {
       match.words,
       match.patterns,
       ruleSources(this.home, this.workspace),
+      this.mcpTools(match.name),
     );
   }
   // The ask read of review(): the files only, as a deny is. A card never keeps an ask.
@@ -1099,6 +1112,7 @@ export class ApprovalPolicy {
       match.words,
       match.patterns,
       ruleSources(this.home, this.workspace),
+      this.mcpTools(match.name),
     );
   }
   /** Why a rule refuses, in the words the model and the card see. */
@@ -1119,6 +1133,10 @@ export class ApprovalPolicy {
   /** Which tools always ask a person, as their MCP server says; read for every call. */
   declareAlwaysAsk(asks: (tool: string) => boolean): void {
     this.alwaysAsks = asks;
+  }
+  /** Which server and tool an MCP tool's calls go to, as the MCP manager knows them; read for every call. */
+  declareMcpTools(lookup: (tool: string) => McpToolOwner | undefined): void {
+    this.mcpTools = lookup;
   }
   setAllowedCommands(patterns: readonly string[]): void {
     this.allowed = patterns;

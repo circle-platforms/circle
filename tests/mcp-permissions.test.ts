@@ -15,6 +15,7 @@ import { mcpToolName } from '../src/mcp_loader.js';
 import { AgentRuntime } from '../src/runtime.js';
 import {
   defaultSettings,
+  loadSettings,
   loadSettingsFromDict,
   saveSettings,
   trustFolder,
@@ -390,7 +391,7 @@ test('a delete of the workspace asks in auto mode and over allowed_commands, and
   assert.match(headless.results()[0]!, /not run/);
 });
 
-test('rules written with the MCP tool names before mcp__ are rewritten once, a copy kept, and allow the same calls', async (t) => {
+test('your own rules that name a server of yours by the tool names before mcp__ are rewritten once: an allow renamed, a deny kept and added, a copy kept', async (t) => {
   const rules = [
     {
       tool: 'files-server_list_files',
@@ -398,25 +399,191 @@ test('rules written with the MCP tool names before mcp__ are rewritten once, a c
       effect: 'allow',
       label: 'kept',
     },
+    { tool: 'files-server_remove_file', pattern: '*', effect: 'deny' },
     { tool: 'execute', pattern: 'ls *', effect: 'allow', label: 'ls' },
   ];
-  const { home, runtime, replies, asked, ran } = await setup(t, { rules });
-  const saved = JSON.parse(readFileSync(join(home, 'approvals.json'), 'utf8'));
-  assert.deepEqual(
-    saved.rules.map((rule: { tool: string }) => rule.tool),
-    ['mcp__files-server__list_files', 'execute'],
-  );
+  const { home, workspace, runtime, replies, asked, ran, results } =
+    await setup(t, { rules });
+  const saved = () =>
+    JSON.parse(readFileSync(join(home, 'approvals.json'), 'utf8')).rules.map(
+      (rule: { tool: string; effect: string }) => [rule.tool, rule.effect],
+    );
+  // A deny keeps applying to whatever it named, and names the server's tool too
+  assert.deepEqual(saved(), [
+    ['mcp__files-server__list_files', 'allow'],
+    ['files-server_remove_file', 'deny'],
+    ['mcp__files-server__remove_file', 'deny'],
+    ['execute', 'allow'],
+  ]);
   assert.deepEqual(
     JSON.parse(
       readFileSync(join(home, 'approvals.json.mcp-names.migrated'), 'utf8'),
     ).rules,
     rules,
   );
-  assert.match(runtime.mcp.describe(), /1 rule now name MCP tools as mcp__/);
-  replies.push(calling('list_files'), assistant('done'));
-  await runtime.harness.run('list');
+  assert.match(runtime.mcp.describe(), /2 rules now name MCP tools/);
+  replies.push(calling('list_files', 'remove_file'), assistant('done'));
+  await runtime.harness.run('list and remove');
   assert.equal(asked.length, 0);
   assert.deepEqual(ran(), ['list_files']);
+  assert.match(results()[1]!, /mcp__files-server__remove_file "\*" is denied/);
+  // Once: a rule written afterwards with an old name is left as it is
+  const later = [
+    ...JSON.parse(readFileSync(join(home, 'approvals.json'), 'utf8')).rules,
+    { tool: 'files-server_save_note', pattern: '*', effect: 'allow' },
+  ];
+  writeFileSync(join(home, 'approvals.json'), JSON.stringify({ rules: later }));
+  const again = new AgentRuntime({
+    home,
+    workspace,
+    settings: loadSettings(home),
+    model: new ScriptedModel([]),
+  });
+  cleanup(t, () => again.close());
+  await again.initialize();
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(home, 'approvals.json'), 'utf8')).rules,
+    later,
+  );
+});
+
+test("a server of a project's .mcp.json renames none of your rules, and your deny for another tool of that name keeps applying", async (t) => {
+  const root = realpathSync.native(scratch(t));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  mkdirSync(home);
+  mkdirSync(workspace);
+  const rules = [{ tool: 'github_publish', pattern: '*', effect: 'deny' }];
+  writeFileSync(join(home, 'approvals.json'), JSON.stringify({ rules }));
+  writeFileSync(
+    join(workspace, '.mcp.json'),
+    JSON.stringify({
+      mcpServers: { github: { type: 'http', url: 'http://127.0.0.1:9/mcp' } },
+    }),
+  );
+  const settings = trustFolder(defaultSettings(), workspace);
+  saveSettings(settings, home);
+  const runtime = new AgentRuntime({
+    home,
+    workspace,
+    settings,
+    model: new ScriptedModel([]),
+    // The person never answers the question about .mcp.json
+    question: () => new Promise(() => {}),
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.initialize();
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(home, 'approvals.json'), 'utf8')).rules,
+    rules,
+  );
+  assert.equal(runtime.policy.review('github_publish', {}).verdict, 'DENY');
+});
+
+test("a project's deny written with a tool's name before mcp__ still denies the server's tool, and the project's file is left as it is", async (t) => {
+  const root = realpathSync.native(scratch(t));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  mkdirSync(home);
+  mkdirSync(join(workspace, '.circle'), { recursive: true });
+  const project = {
+    rules: [
+      { tool: 'files-server_remove_file', pattern: '*', effect: 'deny' },
+      // A project cannot allow: an old name changes nothing there either
+      { tool: 'files-server_save_note', pattern: '*', effect: 'allow' },
+    ],
+  };
+  writeFileSync(
+    join(workspace, '.circle', 'approvals.json'),
+    JSON.stringify(project),
+  );
+  const stub = await mcpStub(t, { tools: TOOLS });
+  const settings = trustFolder(defaultSettings(), workspace);
+  settings.mcpServers = { 'files-server': { type: 'http', url: stub.url } };
+  saveSettings(settings, home);
+  const runtime = new AgentRuntime({
+    home,
+    workspace,
+    settings,
+    model: new ScriptedModel([
+      calling('remove_file', 'save_note'),
+      assistant('done'),
+    ]),
+    approve: async () => 'reject',
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.initialize();
+  runtime.policy.setYolo(runtime.session.id, true);
+  await runtime.harness.run('remove');
+  assert.deepEqual(
+    stub.calls().map((call) => String(call.message?.params?.name)),
+    ['save_note'],
+  );
+  const results = runtime.harness.messages
+    .filter((message) => message.role === 'tool')
+    .map((message) => message.content);
+  assert.match(
+    results[0]!,
+    /refused by the project's rule: files-server_remove_file "\*" is denied/,
+  );
+  assert.deepEqual(
+    JSON.parse(
+      readFileSync(join(workspace, '.circle', 'approvals.json'), 'utf8'),
+    ),
+    project,
+  );
+});
+
+test("an allow for one server covers that server's tools only, not those of a server whose name starts with it; a deny reads the name more widely", async (t) => {
+  const root = realpathSync.native(scratch(t));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  mkdirSync(home);
+  mkdirSync(workspace);
+  writeFileSync(
+    join(home, 'approvals.json'),
+    JSON.stringify({
+      rules: [
+        { tool: 'mcp__github', effect: 'allow' },
+        { tool: 'mcp__docs__*', effect: 'allow' },
+        { tool: 'mcp__reports__v2__*', effect: 'allow' },
+        { tool: 'mcp__audit', effect: 'deny' },
+      ],
+    }),
+  );
+  const named = async (tool: string) =>
+    (await mcpStub(t, { tools: [{ name: tool, inputSchema: object }] })).url;
+  const settings = trustFolder(defaultSettings(), workspace);
+  settings.mcpServers = {
+    github: { type: 'http', url: await named('create_issue') },
+    github__evil: { type: 'http', url: await named('run') },
+    docs: { type: 'http', url: await named('read') },
+    docs__x: { type: 'http', url: await named('delete_all') },
+    reports__v2: { type: 'http', url: await named('export') },
+    audit__log: { type: 'http', url: await named('append') },
+  };
+  saveSettings(settings, home);
+  const runtime = new AgentRuntime({
+    home,
+    workspace,
+    settings,
+    model: new ScriptedModel([]),
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.initialize();
+  const asks = (tool: string) =>
+    runtime.policy.needsApproval(tool, {}, runtime.session.id);
+  assert.equal(asks('mcp__github__create_issue'), false);
+  assert.equal(asks('mcp__github__evil__run'), true);
+  assert.equal(asks('mcp__docs__read'), false);
+  assert.equal(asks('mcp__docs__x__delete_all'), true);
+  // A server whose name has __ in it is named whole by mcp__<server>__*
+  assert.equal(asks('mcp__reports__v2__export'), false);
+  // A deny for mcp__audit covers the tools of audit__log too
+  assert.equal(
+    runtime.policy.review('mcp__audit__log__append', {}).verdict,
+    'DENY',
+  );
 });
 
 test('default_mode takes the documented names of the modes', () => {

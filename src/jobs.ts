@@ -6,6 +6,7 @@ import {
   openSync,
   closeSync,
   statSync,
+  readFileSync,
   readSync,
   writeFileSync,
   readdirSync,
@@ -254,13 +255,17 @@ export function jobNotice(job: Job): string {
     }
   let output = 'Output is unavailable.';
   try {
+    // A tool call's result is given whole: the call kept one too large for the model in a file and gave its path
     output =
-      redact(outputTail(job.outputPath, job.kind === 'watch' ? 4096 : 32768)) ||
-      '(empty)';
+      redact(
+        job.kind === 'call'
+          ? plainJobOutput(readFileSync(job.outputPath, 'utf8')).trimEnd()
+          : outputTail(job.outputPath, job.kind === 'watch' ? 4096 : 32768),
+      ) || '(empty)';
   } catch {
     /* Preserve the notice even if an external process removed its output. */
   }
-  return `${jobLine(job)}\nLast output:\n${output}`;
+  return `${jobLine(job)}\n${job.kind === 'call' ? 'Result' : 'Last output'}:\n${output}`;
 }
 /** The folder in a project's data folder for what commands write for the model, one per run. */
 export const SCRATCH_FOLDER = 'scratch';

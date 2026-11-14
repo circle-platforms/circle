@@ -88,7 +88,8 @@ test('an mcp_servers list moves into mcpServers once, the file as it was kept be
     docs: {
       type: 'http',
       url: stub.url,
-      headers: { Authorization: 'Bearer ${DOCS_TOKEN}' },
+      // The saved secret it named, and nothing else, as before
+      headers: { Authorization: 'Bearer ${secret:DOCS_TOKEN}' },
       placeholders: { url: 'DOCS_URL' },
     },
     'by-id': {
@@ -152,7 +153,7 @@ test('converting the old list keeps the later of two servers of one name and the
       name: 'h',
       url: 'https://x.test',
       transport: 'sse',
-      headers: { A: '${env:X}' },
+      headers: { A: '${env:X}', B: 'Bearer ${secret:S}' },
     },
   ]);
   assert.deepEqual(servers, {
@@ -162,7 +163,11 @@ test('converting the old list keeps the later of two servers of one name and the
       enabled: false,
       max_file_bytes: 16,
     },
-    h: { type: 'sse', url: 'https://x.test', headers: { A: '${X}' } },
+    h: {
+      type: 'sse',
+      url: 'https://x.test',
+      headers: { A: '${X}', B: 'Bearer ${secret:S}' },
+    },
   });
   assert.match(notes.join('\n'), /two servers were named twin/);
   // What a server says of its tools no longer decides whether a call asks
@@ -321,7 +326,10 @@ test(".mcp.json servers wait for the person's approval in a session that can ask
   );
   await until(() => asked.length === 1);
   const question = (asked[0]!.questions as Record<string, unknown>[])[0]!;
-  assert.match(String(question.question), /approved: .*\/mcp/);
+  assert.match(
+    String(question.question),
+    /· approved \(http\) reaches: http:\/\/.*\/mcp/,
+  );
   assert.equal(question.multiple, true);
   answer(JSON.stringify([['approved']]));
   await until(() =>
@@ -464,5 +472,115 @@ test('saving a server for an extension writes it under its name in mcpServers', 
   });
   assert.ok(
     runtime.harness.tools.some((tool) => tool.name === 'mcp__docs__echo'),
+  );
+});
+
+test("the question about a project's .mcp.json shows all that runs or is sent, and says where each reference is filled in from", async (t) => {
+  const { home, workspace } = folders(t);
+  writeFileSync(
+    join(workspace, '.mcp.json'),
+    JSON.stringify({
+      mcpServers: {
+        tools: {
+          command: 'npx',
+          args: ['-y', 'pkg@1', '--root', '${PROJECT_ROOT:-.}'],
+          env: { API_KEY: '${TOOLS_KEY}', MODE: 'prod' },
+        },
+        remote: {
+          type: 'http',
+          url: 'https://${CIRCLE_TEST_REMOTE_HOST}/mcp',
+          headers: {
+            Authorization: 'Bearer ${REMOTE_TOKEN}',
+            'X-Key': '${OPENAI_API_KEY}',
+          },
+          headersHelper: '/opt/bin/get-headers.sh --team lab',
+        },
+      },
+    }),
+  );
+  process.env.CIRCLE_TEST_REMOTE_HOST = 'mcp.example.test';
+  cleanup(t, () => {
+    delete process.env.CIRCLE_TEST_REMOTE_HOST;
+  });
+  saveSecret(home, 'REMOTE_TOKEN', 'remote-token-value');
+  const settings = trustFolder(defaultSettings(), workspace);
+  saveSettings(settings, home);
+  const asked: string[] = [];
+  const runtime = new AgentRuntime({
+    home,
+    workspace,
+    settings,
+    model: new ScriptedModel([]),
+    question: async (args) => {
+      asked.push(
+        String((args.questions as { question: string }[])[0]!.question),
+      );
+      return 'null';
+    },
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.initialize();
+  await until(() => asked.length === 1);
+  const text = asked[0]!;
+  for (const shown of [
+    'npx -y pkg@1 --root ${PROJECT_ROOT:-.}',
+    'API_KEY=${TOOLS_KEY}',
+    'MODE=prod',
+    'https://${CIRCLE_TEST_REMOTE_HOST}/mcp',
+    'Authorization: Bearer ${REMOTE_TOKEN}',
+    'X-Key: ${OPENAI_API_KEY}',
+    '/opt/bin/get-headers.sh --team lab',
+  ])
+    assert.ok(text.includes(shown), `${shown} in:\n${text}`);
+  assert.match(text, /\$\{CIRCLE_TEST_REMOTE_HOST\} from your environment/);
+  assert.match(text, /\$\{REMOTE_TOKEN\} from your saved secrets/);
+  assert.match(text, /\$\{TOOLS_KEY\} is not set/);
+  assert.match(text, /\$\{OPENAI_API_KEY\} is never sent/);
+  // Never a value
+  assert.ok(!text.includes('remote-token-value'));
+  assert.ok(!text.includes('mcp.example.test'));
+});
+
+test('.mcp.json servers wait on when the question is closed or left empty, and only a choice of none declines them', async (t) => {
+  const { home, workspace } = folders(t);
+  writeFileSync(
+    join(workspace, '.mcp.json'),
+    JSON.stringify({
+      mcpServers: { shared: { type: 'http', url: 'http://127.0.0.1:9/mcp' } },
+    }),
+  );
+  const settings = trustFolder(defaultSettings(), workspace);
+  saveSettings(settings, home);
+  // Closed as the desktop closes a card, closed as the terminal does, then answered with nothing chosen
+  const replies = [JSON.stringify(['']), 'null', JSON.stringify([[]])];
+  let asked = 0;
+  const runtime = new AgentRuntime({
+    home,
+    workspace,
+    settings,
+    model: new ScriptedModel([]),
+    question: async () => {
+      asked++;
+      return replies.shift()!;
+    },
+  });
+  cleanup(t, () => runtime.close());
+  const settled = () =>
+    (runtime as unknown as { askingForServers?: Promise<void> })
+      .askingForServers === undefined;
+  await runtime.initialize();
+  for (const round of [1, 2]) {
+    await until(() => asked === round && settled());
+    assert.equal(loadSettings(home).projects[workspace], undefined);
+    assert.equal(
+      runtime.mcp.status.find((row) => row.name === 'shared')!.approval,
+      'pending',
+    );
+    await runtime.reloadMcpServer('shared');
+  }
+  await until(() => asked === 3 && settled());
+  assert.deepEqual(
+    loadSettings(home).projects[workspace]!.disabledMcpjsonServers,
+    ['shared'],
   );
 });

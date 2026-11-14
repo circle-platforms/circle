@@ -2,6 +2,7 @@ import { watch, existsSync, type FSWatcher } from 'node:fs';
 import {
   backgroundMcpConnection,
   buildMcpConnections,
+  connectionAddress,
   McpManager,
   type McpBearerConnection,
 } from '../mcp_loader.js';
@@ -147,12 +148,11 @@ export class KnowledgeConnection {
         (c) => !!c.url && ['http', 'sse'].includes(c.transport),
       )
       .flatMap((c) => {
-        try {
-          return [{ name: c.name, origin: new URL(c.url!).origin }];
-        } catch {
-          // An address that is a reference to fill in is not offered
-          return [];
-        }
+        // At the address its connection reaches; one that is no address once filled in is not offered
+        const address = connectionAddress(c, this.secrets());
+        return address
+          ? [{ name: c.name, origin: new URL(address).origin }]
+          : [];
       });
   }
   /** What selecting a connection means, from local records: no request is sent before the person selects it. */

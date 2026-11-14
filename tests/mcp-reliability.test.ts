@@ -280,3 +280,50 @@ test('/mcp reconnect all connects again the servers that failed, and leaves the 
   );
   assert.equal(starts(up), before);
 });
+
+test('a session the server forgot while it ran a task is not sent again: the model is told the tool may have run', async (t) => {
+  let polls = 0;
+  const task = (status: string) => ({
+    taskId: 'task-1',
+    status,
+    ttl: null,
+    createdAt: '2026-11-14T00:00:00Z',
+    lastUpdatedAt: '2026-11-14T00:00:00Z',
+    pollInterval: 1,
+  });
+  const stub: McpStub = await mcpStub(t, {
+    sessions: true,
+    tools: [
+      {
+        name: 'deploy',
+        inputSchema: schema,
+        execution: { taskSupport: 'optional' },
+      },
+    ],
+    capabilities: { tasks: { cancel: {}, requests: { tools: { call: {} } } } },
+    call: (request) =>
+      request.message!.params!.task
+        ? ({ task: task('working') } as never)
+        : { content: [{ type: 'text', text: 'ran' }] },
+    answer: (request) => {
+      if (request.message?.method === 'tasks/result')
+        return { content: [{ type: 'text', text: 'deployed' }] };
+      if (request.message?.method !== 'tasks/get') return undefined;
+      // The session is lost while the task is under way, as when the server restarts
+      if (++polls === 1) stub.dropSessions();
+      return task(polls >= 3 ? 'completed' : 'working');
+    },
+  });
+  const { manager: mcp } = manager(t);
+  await mcp.load({ ci: { type: 'http', url: stub.url } });
+  await assert.rejects(
+    mcp.tools[0]!.run({}, context()),
+    /the server lost the session while task task-1 was running: the tool may have run, so check whether it did before calling it again/,
+  );
+  // The call that made the task was sent once, and nothing was sent again
+  assert.equal(
+    stub.calls().filter((request) => request.message?.params?.task).length,
+    1,
+  );
+  assert.equal(starts(stub), 1);
+});

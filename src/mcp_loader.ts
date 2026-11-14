@@ -524,6 +524,28 @@ function fillHeaders(
   }
   return { headers: resolved, filled, missing };
 }
+/**
+ * The address a server reached over the network is connected at: its `url` with its references filled in, as a
+ * connection fills them in. Nothing for a program, or for an address that is not one once filled in.
+ */
+export function connectionAddress(
+  connection: McpConnection,
+  secrets: Record<string, string> = {},
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  if (!connection.url) return undefined;
+  try {
+    return new URL(
+      expandReferences(
+        connection.url,
+        environmentThenSecrets(env, secrets),
+        (variable) => WITHHELD_VARIABLES.has(variable),
+      ).text,
+    ).href;
+  } catch {
+    return undefined;
+  }
+}
 /** What a connection is started or reached with: its references filled in. */
 interface Resolved extends Filled {
   command?: string;
@@ -868,6 +890,9 @@ export const REQUIRES_USER_INTERACTION = 'circle/requiresUserInteraction';
 interface ToolMarks {
   readOnly: boolean;
   asksPerson: boolean;
+  /** The server it belongs to and its own name there. */
+  server: string;
+  tool: string;
 }
 type ToolResult = CallToolResult;
 /** The errors a request's chain of causes carries, outermost first. */
@@ -928,6 +953,11 @@ class Lost extends McpError {
     super(ErrorCode.ConnectionClosed, message);
   }
 }
+/**
+ * The server forgot the session while a task it made for the call ran: the tool may have run, whatever the server
+ * says of it, so the call is not sent again on a new session.
+ */
+class TaskSessionLost extends Error {}
 /**
  * The connection ended after the request was sent, so it may have reached the server (#555): the MCP library closed
  * the connection under the call (it has no transport since), the call's answer was lost, or the socket was cut. A
@@ -1517,7 +1547,8 @@ export class McpManager {
                     ? await this.callAsTask(target, params, options, report)
                     : await callServerTool(target, params, options);
                 } catch (error) {
-                  if (own.signal.aborted) throw error;
+                  if (own.signal.aborted || error instanceof TaskSessionLost)
+                    throw error;
                   const said =
                     error instanceof Error ? error.message : String(error);
                   if (notSent(error)) {
@@ -2138,6 +2169,8 @@ export class McpManager {
         said.set(name, {
           readOnly: hints.readOnly,
           asksPerson: hints.asksPerson,
+          server: connection.name,
+          tool: spec.name,
         });
         registered.push(
           this.serverTool(
@@ -2269,6 +2302,11 @@ export class McpManager {
           return await request();
         } catch (error) {
           if (signal.aborted) throw error;
+          // A 404 here answers tasks/get or tasks/result, not the call: the call made the task, so it may have run
+          if (sessionGone(error, client))
+            throw new TaskSessionLost(
+              `the server lost the session while task ${taskId} was running: the tool may have run, so check whether it did before calling it again`,
+            );
           if (notSent(error) && tries < this.retryWaitsMs.length) {
             await this.wait(this.retryWaitsMs[tries]!, signal);
             continue;
@@ -2558,7 +2596,8 @@ export class McpManager {
             signal.addEventListener('abort', stop, { once: true });
             if (signal.aborted) stop();
             progress = log;
-            return running;
+            // The notice gives the result as the model would have read it here: whole, or kept in a file
+            return running.then((text) => this.limited(tool, text, attached));
           },
         );
       } catch {
@@ -2887,6 +2926,11 @@ export class McpManager {
   asksPerson(tool: string): boolean {
     return this.hinted.get(tool)?.asksPerson === true;
   }
+  /** The server a tool, by its name here, belongs to, and its own name there: what rules for a server go by. */
+  mcpTool(tool: string): { server: string; tool: string } | undefined {
+    const marks = this.hinted.get(tool);
+    return marks ? { server: marks.server, tool: marks.tool } : undefined;
+  }
   async close(): Promise<void> {
     // A sign-in under way stops waiting; the manager can load again afterwards
     this.lifetime.abort();
@@ -2929,10 +2973,12 @@ export function backgroundMcpConnection(
     )?.[1];
     if (credential !== undefined) {
       // A reference to nothing set stays as written: it is no token
-      const unset = /\$\{([A-Za-z_][A-Za-z0-9_]*)/.exec(credential)?.[1];
+      const unset = /\$\{((?:secret:)?([A-Za-z_][A-Za-z0-9_]*))/.exec(
+        credential,
+      );
       if (unset)
         throw new Error(
-          `the Authorization header names \${${unset}}, which is not set; save it with /secrets ${unset}`,
+          `the Authorization header names \${${unset[1]}}, which is not set; save it with /secrets ${unset[2]}`,
         );
       const match = /^Bearer ([^\s]+)$/i.exec(credential);
       if (!match) throw new McpLoginRequired();
