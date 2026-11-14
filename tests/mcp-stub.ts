@@ -47,6 +47,10 @@ export interface StubOptions {
    * GET, so `notify` reaches it. `tools` is read again at each tools/list: change it, then notify.
    */
   listChanged?: boolean;
+  /** More server capabilities to declare, such as `resources` or `tasks`. */
+  capabilities?: Record<string, unknown>;
+  /** Answers a method the stub has no answer of its own for; undefined falls back to an empty result. */
+  answer?: (request: StubRequest) => unknown;
   /** An HTTP status to refuse a request with, such as 401, with this body. */
   refuse?: (
     request: StubRequest,
@@ -79,6 +83,7 @@ export async function mcpStub(
         protocolVersion: message.params?.protocolVersion,
         capabilities: {
           tools: options.listChanged ? { listChanged: true } : {},
+          ...options.capabilities,
         },
         serverInfo: { name: options.name ?? 'files-server', version: '1' },
         ...(instructions === undefined ? {} : { instructions }),
@@ -102,7 +107,7 @@ export async function mcpStub(
               { type: 'text', text: `ran ${String(message.params?.name)}` },
             ],
           };
-    return {};
+    return (await options.answer?.(request)) ?? {};
   };
   const server = createServer(async (incoming, response) => {
     let body = '';

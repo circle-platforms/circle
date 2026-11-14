@@ -1826,6 +1826,10 @@ export class AgentRuntime {
     const integrations = [
       ...tools,
       ...this.mcp.tools,
+      // Reading what the servers publish, while one does: a name a server's own tool has stays the server's
+      ...this.mcp.resourceTools.filter(
+        (tool) => !this.mcp.tools.some((have) => have.name === tool.name),
+      ),
       ...this.extensions.tools(),
     ];
     // A pack's tool whose name another tool took is left out, not a clash

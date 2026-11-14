@@ -502,10 +502,36 @@ function transportFor(
   });
 }
 /** A tool result as the model reads it: its text, and the pictures and PDFs it carries. */
+/** Image and PDF content a model is given as an attachment rather than as text. */
+const ATTACHED_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'application/pdf',
+];
+/**
+ * A resource link as the model reads it (#553): what it is and where, and how to read it, since the link is not
+ * the content and need not be in the server's list.
+ */
+function resourceLinkText(
+  block: Record<string, unknown>,
+  server: string,
+): string {
+  const uri = String(block.uri);
+  const label = String(block.title || block.name || uri);
+  const mime = typeof block.mimeType === 'string' ? ` (${block.mimeType})` : '';
+  const about =
+    typeof block.description === 'string' && block.description.trim()
+      ? `: ${block.description.trim()}`
+      : '';
+  return `Resource link: ${label} <${uri}>${mime}${about}. Its content is not here; read_mcp_resource with server ${JSON.stringify(server)} and this uri reads it.`;
+}
 function resultText(
   result: ToolResult,
   tool: string,
   context: ToolContext,
+  server: string,
 ): { text: string; attachments: MediaAttachment[] } {
   const content = Array.isArray(result.content) ? result.content : [];
   const attachments: MediaAttachment[] = [];
@@ -513,6 +539,15 @@ function resultText(
     .map((block) => {
       if (!isRecord(block)) return JSON.stringify(block);
       if (block.type === 'text') return String(block.text || '');
+      if (block.type === 'resource_link' && typeof block.uri === 'string')
+        return resourceLinkText(block, server);
+      // A resource the result carries whole, as text: its words, under where it is from
+      const embedded: Record<string, unknown> | undefined =
+        block.type === 'resource' && isRecord(block.resource)
+          ? block.resource
+          : undefined;
+      if (embedded && typeof embedded.text === 'string')
+        return `Resource <${String(embedded.uri)}>${typeof embedded.mimeType === 'string' ? ` (${embedded.mimeType})` : ''}:\n${embedded.text}`;
       const resource: Record<string, unknown> | undefined =
         block.type === 'resource' && isRecord(block.resource)
           ? block.resource
@@ -523,13 +558,7 @@ function resultText(
         context.emitAttachments &&
         typeof data === 'string' &&
         typeof mime === 'string' &&
-        [
-          'image/png',
-          'image/jpeg',
-          'image/gif',
-          'image/webp',
-          'application/pdf',
-        ].includes(mime)
+        ATTACHED_TYPES.includes(mime)
       ) {
         const filename = `${tool}-${attachments.length + 1}.${mime.split('/')[1]}`;
         attachments.push(
@@ -696,6 +725,119 @@ export class McpManager {
   tools: Tool[] = [];
   status: McpStatus[] = [];
   private servers: Connected[] = [];
+  /**
+   * Tools to read what servers publish as resources (#553): a tool result's `resource_link` points at one, and a
+   * link need not be in the server's list. Offered while a connected server declares `resources`.
+   */
+  get resourceTools(): Tool[] {
+    const readable = this.servers.filter(
+      (server) =>
+        server.open && server.client.getServerCapabilities()?.resources,
+    );
+    if (!readable.length) return [];
+    const names = readable.map((server) => server.name);
+    const find = (name: unknown): Connected => {
+      const server = this.servers.find(
+        (item) =>
+          item.name === name &&
+          item.open &&
+          item.client.getServerCapabilities()?.resources,
+      );
+      if (!server)
+        throw new Error(
+          `no connected server ${JSON.stringify(name)} publishes resources; these do: ${names.join(', ')}`,
+        );
+      return server;
+    };
+    const server = {
+      type: 'string',
+      enum: names,
+      description: 'The MCP server that publishes it',
+    };
+    return [
+      {
+        name: 'read_mcp_resource',
+        description:
+          "Read a resource an MCP server publishes, by its URI: what a tool result's resource link points at, or a URI list_mcp_resources gives.",
+        parameters: {
+          type: 'object',
+          properties: {
+            server,
+            uri: { type: 'string', description: 'The resource URI' },
+          },
+          required: ['server', 'uri'],
+          additionalProperties: false,
+        },
+        effect: 'read',
+        run: async (args, context) => {
+          const { client, name } = find(args.server);
+          const { contents } = await client.readResource(
+            { uri: String(args.uri) },
+            { signal: context.signal, timeout: NO_LIMIT },
+          );
+          const attachments: MediaAttachment[] = [];
+          const parts = contents.map((item) => {
+            const mime = item.mimeType ? ` (${item.mimeType})` : '';
+            if ('text' in item && typeof item.text === 'string')
+              return `Resource <${item.uri}>${mime}:\n${item.text}`;
+            const blob = 'blob' in item ? item.blob : undefined;
+            if (
+              context.emitAttachments &&
+              typeof blob === 'string' &&
+              item.mimeType &&
+              ATTACHED_TYPES.includes(item.mimeType)
+            ) {
+              const filename = `${name}-resource-${attachments.length + 1}.${item.mimeType.split('/')[1]}`;
+              attachments.push(
+                attachmentFromBase64(
+                  blob,
+                  item.mimeType as MediaAttachment['mime_type'],
+                  filename,
+                ),
+              );
+              return `Attachment: ${filename}${mime} from <${item.uri}>`;
+            }
+            return `Resource <${item.uri}>${mime}: binary content of ${typeof blob === 'string' ? Math.floor((blob.length * 3) / 4) : 0} bytes, not shown`;
+          });
+          if (attachments.length) context.emitAttachments!(attachments);
+          return parts.join('\n\n') || `<${String(args.uri)}> has no content`;
+        },
+      },
+      {
+        name: 'list_mcp_resources',
+        description:
+          'List the resources MCP servers publish: their names and URIs, for read_mcp_resource. A link a tool result gives need not be in the list.',
+        parameters: {
+          type: 'object',
+          properties: { server },
+          additionalProperties: false,
+        },
+        effect: 'read',
+        run: async (args, context) => {
+          const from =
+            args.server === undefined ? readable : [find(args.server)];
+          const lines: string[] = [];
+          for (const { client, name } of from) {
+            let cursor: string | undefined;
+            // At most ten pages from a server: enough to see what it has, and never a loop
+            for (let page = 0; page < 10; page++) {
+              const listed = await client.listResources(
+                cursor ? { cursor } : {},
+                { signal: context.signal, timeout: NO_LIMIT },
+              );
+              for (const item of listed.resources)
+                lines.push(
+                  `${name} · ${item.title || item.name} <${item.uri}>${item.mimeType ? ` (${item.mimeType})` : ''}`,
+                );
+              cursor = listed.nextCursor;
+              if (!cursor) break;
+            }
+          }
+          return lines.join('\n') || 'no resources listed';
+        },
+      },
+    ];
+  }
   // What each tool's server says of it, when trusted with it: destructive or read-only
   private hinted = new Map<string, ToolHint>();
   private results = new SentResults();
@@ -839,7 +981,12 @@ export class McpManager {
         if (key && !result.isError)
           this.results.set(key, connection.name, result);
       }
-      const { text, attachments } = resultText(result, spec.name, context);
+      const { text, attachments } = resultText(
+        result,
+        spec.name,
+        context,
+        connection.name,
+      );
       const header = [
         ...(cached ? [CACHED_RESULT] : []),
         ...sent.map(

@@ -84,6 +84,25 @@ A tool call has no time limit, so a tool that waits for a login or a long job ca
 
 The model reads a tool's text. A result with no text gives its structured content as JSON instead, and so does an error with no text. Circle never throws a result away because its structured content does not match the output schema the server listed for the tool when Circle connected, as happens when a server adds a field after an upgrade. Such a result arrives whole: its text, then the line `structured result, as the server sent it: it does not match the output schema the server listed for this tool when Circle connected`, then the structured content. That is all Circle says of it; whether the result is right is the server's to say. An error's structured content is not checked at all, and a schema Circle cannot compile is not used. The tools are not listed again for such a result: a server lists them again by saying its tools changed (above), and `/mcp reload` lists them again.
 
+
+### What the model reads of a result
+
+| A block of the result | What the model gets |
+|---|---|
+| `text` | its text |
+| `image` as PNG, JPEG, GIF or WebP | an attachment, named in the text as `Attachment: <file> (<type>)` |
+| `resource` with text | `Resource <uri> (<type>):` and its text |
+| `resource` with a PNG, JPEG, GIF or WebP image or a PDF | an attachment, as an image |
+| `resource_link` | a line naming it, its URI and type, and that `read_mcp_resource` reads it: the link is not the content |
+| anything else, such as `audio` | the block as JSON |
+
+While a connected server declares `resources`, the model also has two tools of Circle's for them:
+
+- `read_mcp_resource` takes the server and a URI. It reads text as text, images and PDFs as attachments, and other binary content as its size. A long result is kept in a file, as any tool's is.
+- `list_mcp_resources` lists what one server or every such server publishes, ten pages at most from each. A link a tool returns need not be in that list, as the MCP specification says, so reading one does not ask for it to be listed first.
+
+Both are reads. A server's own tool of the same name keeps the name.
+
 ## Files a tool takes
 
 A tool can take a file as an argument: a top-level property of its input that is a JSON Schema string with `"contentEncoding": "base64"` (with or without `contentMediaType`). Circle shows the model that tool with the same schema, except that the property's description says it takes a local file path, and its `pattern`, `format`, `minLength` and `maxLength`, which describe the encoded text, are left out. The model gives a path. Circle reads the file and sends its bytes, base64-encoded, as that argument.
