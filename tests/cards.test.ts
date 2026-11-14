@@ -1101,4 +1101,27 @@ test('the card of a call a hook rewrote names the hook and what each changed arg
   ]);
   // The body is the rewrite: what runs
   assert.match(request.body, /b\.txt/);
+  // Each line the policy and the hooks add wraps on its own inside the box, as a hook's ask did not before
+  const rows = dialogRows(
+    new ApprovalCard(
+      approvalRequest(
+        { ...call, hook_reason: 'Keep notes in notes/.' },
+        policy.review('write_file', call.args),
+        (path) => join(root, path),
+      ),
+    ).state(),
+    48,
+    40,
+  );
+  for (const row of rows) {
+    assert.equal(stringWidth(row), 48, row);
+    assert.ok(!row.includes('\n'), row);
+  }
+  const plain = rows.map((row) => stripAnsi(row).slice(1, -1).trim());
+  for (const line of [
+    'hook · Keep notes in notes/.',
+    'rewritten by hook · canon',
+    'was · file_path = "a.txt"',
+  ])
+    assert.ok(plain.includes(line), line);
 });

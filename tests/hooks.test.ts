@@ -1545,6 +1545,53 @@ test('every before_tool hook judges the rewrite: a path guard sees it, an earlie
   assert.throws(() => readFileSync(join(dirs.workspace, 'a.txt')));
 });
 
+test('a hook that asks about its rewrite in both rounds asks once', async (t) => {
+  const dirs = layout(t);
+  writeJson(join(dirs.home, 'hooks.json'), {
+    hooks: {
+      before_tool: [
+        {
+          name: 'notes',
+          command: answering(
+            dirs.root,
+            'notes',
+            "answer = { decision: 'ask', reason: 'Notes go in notes/.', user_message: 'moved to notes/', updated_input: { ...input.tool_input, file_path: 'notes/a.txt' } };",
+          ),
+        },
+      ],
+    },
+  });
+  const cards: ToolCall[] = [];
+  const run = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    replies: [
+      assistant('', [
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'a.txt', content: 'x' },
+        },
+      ]),
+      assistant('done'),
+    ],
+    approve: (call) => {
+      cards.push(call);
+      return 'reject';
+    },
+  });
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0]?.hook_reason, 'Notes go in notes/.');
+  assert.equal(cards[0]?.hook_message, 'moved to notes/');
+  assert.equal(
+    run.harness.messages.filter((message) => message.hook?.kind === 'asked')
+      .length,
+    1,
+  );
+});
+
 test('a rewrite keeps the secret values of what no hook changed, and a new key order is no rewrite', async (t) => {
   const dirs = layout(t);
   const hooksFile = join(dirs.home, 'hooks.json');

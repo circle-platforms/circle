@@ -1572,6 +1572,8 @@ export class Harness {
     paths: string[],
     signal: AbortSignal,
     permissionReason?: string,
+    /** Notices the hooks already gave about this call: the same again, on its rewrite, is not repeated. */
+    already: readonly HookNotice[] = [],
   ): Promise<HookBatch | undefined> {
     if (!this.options.hooks) return undefined;
     const batch = await this.options.hooks.run({
@@ -1586,8 +1588,10 @@ export class Harness {
       signal,
     });
     // Every deny's reason is in the tool result (`Hook denied this call:`). An ask's is not on every path.
+    const told = new Set(already.map((notice) => JSON.stringify(notice)));
     for (const notice of batch.notices)
-      this.queueHook(notice, notice.kind === 'denied');
+      if (!told.has(JSON.stringify(notice)))
+        this.queueHook(notice, notice.kind === 'denied');
     return batch;
   }
   private hookSecrets(): Record<string, string> {
@@ -1832,6 +1836,8 @@ export class Harness {
             checked.resolved,
             checked.paths,
             signal,
+            undefined,
+            before.notices,
           );
           if (again?.decision === 'deny')
             throw new Error(hookDeniedMessage(again.reason || 'hook denied'));
@@ -1843,18 +1849,17 @@ export class Harness {
             const asked = [before, again].filter(
               (batch) => batch.decision === 'ask',
             );
+            // A hook that asked in both rounds asked once
+            const once = (field: 'reason' | 'userMessage') =>
+              [...new Set(asked.flatMap((batch) => batch[field].split('\n')))]
+                .filter(Boolean)
+                .join('\n');
             before = asked.length
               ? {
                   ...again,
                   decision: 'ask',
-                  reason: asked
-                    .map((batch) => batch.reason)
-                    .filter(Boolean)
-                    .join('\n'),
-                  userMessage: asked
-                    .map((batch) => batch.userMessage)
-                    .filter(Boolean)
-                    .join('\n'),
+                  reason: once('reason'),
+                  userMessage: once('userMessage'),
                 }
               : again;
           }

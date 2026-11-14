@@ -380,7 +380,7 @@ function rewriteLines(call: ToolCall): string[] {
       const was = JSON.stringify(rewrite.original[key]);
       return was === undefined
         ? `was · ${key} unset`
-        : `was · ${key} = ${was.length > 200 ? `${was.slice(0, 200)}…` : was}`;
+        : `was · ${key} = ${was.length > 800 ? `${was.slice(0, 800)}…` : was}`;
     }),
   ];
 }
