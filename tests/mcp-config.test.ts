@@ -106,7 +106,7 @@ test('an mcp_servers list moves into mcpServers once, the file as it was kept be
     before,
   );
   // The same server connects with the same tools, its token from the saved secret
-  assert.ok(runtime.mcp.tools.some((tool) => tool.name === 'docs_echo'));
+  assert.ok(runtime.mcp.tools.some((tool) => tool.name === 'mcp__docs__echo'));
   assert.equal(
     stub.requests[0]!.headers.authorization,
     'Bearer docs-token-1f9a',
@@ -161,11 +161,12 @@ test('converting the old list keeps the later of two servers of one name and the
       command: 'second',
       enabled: false,
       max_file_bytes: 16,
-      trust_annotations: false,
     },
     h: { type: 'sse', url: 'https://x.test', headers: { A: '${X}' } },
   });
   assert.match(notes.join('\n'), /two servers were named twin/);
+  // What a server says of its tools no longer decides whether a call asks
+  assert.match(notes.join('\n'), /twin: trust_annotations was left out/);
 });
 
 test('references fill in from the environment, then saved secrets, then the default; an empty variable is set', () => {
@@ -213,7 +214,7 @@ test('a program server gets its command, args and env filled in and the project 
   assert.equal(manager.status[0]?.error, '', manager.describe());
   const output = JSON.parse(
     await manager.tools
-      .find((tool) => tool.name === 'fixture_environment')!
+      .find((tool) => tool.name === 'mcp__fixture__environment')!
       .run({}, { signal: new AbortController().signal, sessionId: 'one' }),
   );
   // The server had the secret's value; what it says back names the secret
@@ -324,7 +325,7 @@ test(".mcp.json servers wait for the person's approval in a session that can ask
   assert.equal(question.multiple, true);
   answer(JSON.stringify([['approved']]));
   await until(() =>
-    runtime.harness.tools.some((tool) => tool.name === 'approved_echo'),
+    runtime.harness.tools.some((tool) => tool.name === 'mcp__approved__echo'),
   );
   assert.equal(two.requests.length, 0);
   assert.match(
@@ -346,8 +347,12 @@ test(".mcp.json servers wait for the person's approval in a session that can ask
   });
   cleanup(t, () => again.close());
   await again.initialize();
-  assert.ok(again.mcp.tools.some((tool) => tool.name === 'approved_echo'));
-  assert.ok(!again.mcp.tools.some((tool) => tool.name === 'refused_echo'));
+  assert.ok(
+    again.mcp.tools.some((tool) => tool.name === 'mcp__approved__echo'),
+  );
+  assert.ok(
+    !again.mcp.tools.some((tool) => tool.name === 'mcp__refused__echo'),
+  );
 });
 
 test('a run that cannot ask connects the .mcp.json servers not declined', async (t) => {
@@ -368,7 +373,9 @@ test('a run that cannot ask connects the .mcp.json servers not declined', async 
   });
   cleanup(t, () => runtime.close());
   await runtime.initialize();
-  assert.ok(runtime.mcp.tools.some((tool) => tool.name === 'shared_echo'));
+  assert.ok(
+    runtime.mcp.tools.some((tool) => tool.name === 'mcp__shared__echo'),
+  );
 });
 
 test('a headersHelper runs at connect in the folder it belongs to, and its headers go over the entry’s own', async (t) => {
@@ -455,5 +462,7 @@ test('saving a server for an extension writes it under its name in mcpServers', 
   assert.deepEqual(loadSettings(home).mcpServers, {
     docs: { type: 'http', url: stub.url },
   });
-  assert.ok(runtime.harness.tools.some((tool) => tool.name === 'docs_echo'));
+  assert.ok(
+    runtime.harness.tools.some((tool) => tool.name === 'mcp__docs__echo'),
+  );
 });

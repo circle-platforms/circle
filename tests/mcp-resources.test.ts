@@ -76,7 +76,7 @@ test("a tool's resource link reads as what it is, and the model reads what it po
   const settings = defaultSettings();
   settings.mcpServers = { 'http-server': { url: stub.url, type: 'http' } };
   const model = new ScriptedModel([
-    call('http-server_export_report'),
+    call('mcp__http-server__export_report'),
     call('read_mcp_resource', {
       server: 'http-server',
       uri: 'example://reports/1',
@@ -132,23 +132,24 @@ test('a server that declares no resources offers no resource tools', async (t) =
   assert.deepEqual(manager.resourceTools, []);
 });
 
-test("the resource tools ask, as the server's tools do, while a server that offers resources is not trusted with what it says of its tools", async (t) => {
+test('the resource tools are reads that ask no one, whatever the server says of its own tools', async (t) => {
   const stub = await mcpStub(t, {
     tools: [{ name: 'echo', inputSchema: { type: 'object', properties: {} } }],
     capabilities: { resources: {} },
   });
-  const effects = async (entry: Record<string, unknown>) => {
-    const manager = new McpManager(scratch(t));
-    cleanup(t, () => manager.close());
-    await manager.load({ docs: { url: stub.url, type: 'http', ...entry } });
-    return manager.resourceTools.map((tool) => [tool.name, tool.effect]);
-  };
-  assert.deepEqual(await effects({}), [
-    ['read_mcp_resource', 'read'],
-    ['list_mcp_resources', 'read'],
-  ]);
-  assert.deepEqual(await effects({ trust_annotations: false }), [
-    ['read_mcp_resource', 'unknown'],
-    ['list_mcp_resources', 'unknown'],
-  ]);
+  const manager = new McpManager(scratch(t));
+  cleanup(t, () => manager.close());
+  await manager.load({ docs: { url: stub.url, type: 'http' } });
+  assert.deepEqual(
+    manager.resourceTools.map((tool) => [tool.name, tool.effect]),
+    [
+      ['read_mcp_resource', 'read'],
+      ['list_mcp_resources', 'read'],
+    ],
+  );
+  // A tool of the server's own asks, as every MCP tool does unless a rule allows it
+  assert.deepEqual(
+    manager.tools.map((tool) => [tool.name, tool.effect]),
+    [['mcp__docs__echo', 'unknown']],
+  );
 });

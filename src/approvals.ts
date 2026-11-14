@@ -5,11 +5,13 @@ import {
   type ReadOnlyExecution,
 } from './read_only_command.js';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
 import {
   basename,
   dirname,
   isAbsolute,
   join,
+  parse,
   relative,
   resolve,
   sep,
@@ -42,6 +44,11 @@ export interface Review {
   warn_delete: boolean;
   prefix: string[];
   covered_by: string[];
+  /**
+   * Asks in every mode, auto included, and nothing answers for the person: no rule, setting or hook's allow. A run
+   * that cannot show a card does not run it. An ask rule, a tool its MCP server marks so, a delete of a critical path.
+   */
+  always: boolean;
 }
 const review = (
   verdict: Verdict,
@@ -56,6 +63,7 @@ const review = (
   warn_delete: false,
   prefix: [],
   covered_by: [],
+  always: false,
   ...extra,
 });
 // The names live in src/file_patterns.ts, where a module with no Node.js import
@@ -539,6 +547,133 @@ export function classifyCommand(
       })
     : review('ASK', 'runs a shell command');
 }
+/** Names under the root a variable left empty would most likely leave a delete with. */
+const TOP_LEVEL = new Set(
+  'bin boot dev etc home lib lib64 media mnt opt proc root run sbin srv sys tmp usr var Users Applications Library System Volumes private'.split(
+    ' ',
+  ),
+);
+/**
+ * Whether deleting a path is deleting what no mode deletes without asking: the root of a file system, a folder right
+ * under it, your home folder, or the workspace or a folder that holds it.
+ */
+export function criticalPath(
+  target: string,
+  workspace: string,
+  home: string = homedir(),
+): boolean {
+  const resolved = resolve(workspace, target);
+  const { root } = parse(resolved);
+  if (resolved === root || dirname(resolved) === root) return true;
+  const real = (path: string): string => {
+    try {
+      return canonicalPath(path);
+    } catch {
+      return resolve(path);
+    }
+  };
+  const path = real(resolved);
+  if (path === real(home)) return true;
+  const rel = relative(path, real(workspace));
+  return rel === '' || (!isAbsolute(rel) && rel.split(sep)[0] !== '..');
+}
+/**
+ * The first word a removal (`rm`, `rmdir`, and the Windows ones) in a command deletes that is a critical path, or a
+ * target that cannot be checked before the command runs: one made by a command substitution, a variable that left
+ * empty names the root or a folder under it, or a glob right under a critical path such as `~/*` or `*`. Commands in
+ * `sh -c` and in `$(…)` are looked into.
+ */
+export function criticalRemoval(
+  command: string,
+  workspace: string,
+  home: string = homedir(),
+  platform: string = process.platform,
+  depth = 0,
+): string | undefined {
+  if (depth > 3) return undefined;
+  // A substitution in backquotes is read as the one in $(…) is
+  const tokens = commandTokens(
+    command.replace(/`([^`]*)`/g, '$($1)'),
+    platform,
+  );
+  if (!tokens) return undefined;
+  const critical = (word: string): boolean => {
+    // A command substitution follows (the words split there): what comes before it is what is left when it prints
+    // nothing, and a target that is only one cannot be checked
+    if (word.endsWith('$')) {
+      const before = word.slice(0, -1);
+      return before === '' || critical(before);
+    }
+    if (/\$\(|`/.test(word)) return true;
+    const path = word
+      .replace(/^~(?=$|[\\/])/, home)
+      .replace(/^\$\{?HOME\}?(?=$|[\\/])/, home);
+    if (path.includes('$')) {
+      // What is left when the variables are empty
+      const rest = path.replace(
+        /\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|\$[0-9@*#?]/g,
+        '',
+      );
+      const names = rest.split(/[\\/]+/).filter(Boolean);
+      return (
+        names.length === 0 ||
+        (names.length === 1 && (names[0] === '*' || TOP_LEVEL.has(names[0]!)))
+      );
+    }
+    // A glob right under a folder reaches everything in it
+    const folder =
+      path === '*' ? '.' : path.replace(/[\\/]\*[\\/]?$/, '') || '/';
+    return criticalPath(folder, workspace, home);
+  };
+  for (const raw of segments(tokens)) {
+    const words = unwrap(raw, platform);
+    const head = program(words[0] ?? '', platform);
+    const args = words.slice(1);
+    const codeAt = args.findIndex((word) => /^-[^-]*c/.test(word));
+    if (
+      ['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish'].includes(head) &&
+      codeAt >= 0 &&
+      args[codeAt + 1]
+    ) {
+      const nested = criticalRemoval(
+        args[codeAt + 1]!,
+        workspace,
+        home,
+        platform,
+        depth + 1,
+      );
+      if (nested) return nested;
+    }
+    if (
+      !['rm', 'rmdir', 'rd', 'del', 'erase', 'remove-item', 'ri'].includes(head)
+    )
+      continue;
+    let options = true;
+    for (const word of args) {
+      if (options && word === '--') {
+        options = false;
+        continue;
+      }
+      if (
+        options &&
+        (/^-/.test(word) || (platform === 'win32' && /^\/[a-z]+$/i.test(word)))
+      )
+        continue;
+      if (critical(word)) return word;
+    }
+  }
+  for (const match of command.matchAll(/\$\(([^()]*)\)/g)) {
+    const nested = criticalRemoval(
+      match[1]!,
+      workspace,
+      home,
+      platform,
+      depth + 1,
+    );
+    if (nested) return nested;
+  }
+  return undefined;
+}
 export function commandPrefix(
   command: string,
   platform: string = process.platform,
@@ -850,17 +985,11 @@ const ruleToolFor = (tool: string, args: Record<string, unknown>): string =>
   terminalTabWrite(tool, args)?.command !== undefined
     ? 'execute'
     : ruleTool(tool);
-/**
- * What a tool's server says of it: `destructive`, it can delete or overwrite data;
- * `read-only`, it only reads.
- */
-export type ToolHint = 'destructive' | 'read-only';
 export class ApprovalPolicy {
   private modes = new Map<string, ApprovalMode>();
-  // What tools say of themselves, such as an MCP tool its server marks destructive (every
-  // call asks, and no "allow for this session" covers one) or read-only (it asks only when a
-  // call sends the server a local file or a secret, and the card says so)
-  private hints: (tool: string) => ToolHint | undefined = () => undefined;
+  // Tools whose every call a person approves, as an MCP tool its server marks so: no rule covers one, and every mode
+  // asks
+  private alwaysAsks: (tool: string) => boolean = () => false;
   /**
    * Set by a runtime whose file tools treat another checkout of the workspace's repository
    * as the workspace (the desktop's): a change there is a change in the workspace.
@@ -957,6 +1086,21 @@ export class ApprovalPolicy {
       ruleSources(this.home, this.workspace),
     );
   }
+  // The ask read of review(): the files only, as a deny is. A card never keeps an ask.
+  private askDecision(
+    tool: string,
+    args: Record<string, unknown>,
+    found: Review,
+  ): RuleDecision | undefined {
+    const match = this.ruleMatch(tool, args, found);
+    return decideRule(
+      'ask',
+      match.name,
+      match.words,
+      match.patterns,
+      ruleSources(this.home, this.workspace),
+    );
+  }
   /** Why a rule refuses, in the words the model and the card see. */
   static deniedBy(decision: RuleDecision): string {
     return (
@@ -972,9 +1116,9 @@ export class ApprovalPolicy {
   get allowedCommands(): readonly string[] {
     return this.allowed;
   }
-  /** What tools say of themselves; read for every call. */
-  declareHints(hints: (tool: string) => ToolHint | undefined): void {
-    this.hints = hints;
+  /** Which tools always ask a person, as their MCP server says; read for every call. */
+  declareAlwaysAsk(asks: (tool: string) => boolean): void {
+    this.alwaysAsks = asks;
   }
   setAllowedCommands(patterns: readonly string[]): void {
     this.allowed = patterns;
@@ -1026,6 +1170,22 @@ export class ApprovalPolicy {
     if (found.verdict !== 'DENY') {
       const denied = this.denyDecision(tool, args, found);
       if (denied) return review('DENY', ApprovalPolicy.deniedBy(denied));
+      // A rule that asks makes the card show every time, in every mode: no allow, setting or hook answers for it
+      const asked = this.askDecision(tool, args, found);
+      if (asked)
+        return {
+          ...found,
+          verdict: 'ASK_FORCED',
+          always: true,
+          reason:
+            'asked by ' +
+            ruleWhere(asked.layer) +
+            ': ' +
+            asked.rule.tool +
+            ' ' +
+            JSON.stringify(asked.rule.pattern) +
+            ' always asks',
+        };
     }
     return found;
   }
@@ -1063,19 +1223,13 @@ export class ApprovalPolicy {
           : { covered_by: ['*'] },
       );
     }
-    const hint = this.hints(tool);
-    if (hint === 'destructive')
+    // Its server marks it so: every call asks a person, in every mode
+    if (this.alwaysAsks(tool))
       return review(
         'ASK_FORCED',
-        'its MCP server says it can delete or overwrite data',
-        { warn_delete: true },
-      );
-    // The harness asks for such a tool only when a call sends it a local file or a secret
-    if (hint === 'read-only')
-      return review(
-        'ASK',
-        'its MCP server says it only reads; the call sends it a local file or a secret',
-        { pattern: '*', scope: `every ${tool} call` },
+        'its MCP server asks that a person approve every call',
+        // Rules are matched as for any tool's call, so a deny or an ask still names it
+        { always: true, pattern: '*', scope: `every ${tool} call` },
       );
     const tab = terminalTabWrite(tool, args);
     if (tab) {
@@ -1108,6 +1262,15 @@ export class ApprovalPolicy {
     if (tool === 'execute') {
       let command = String(args.command || '');
       const found = classifyCommand(command, this.credentialFiles);
+      if (found.verdict === 'DENY') return found;
+      // A delete of the root, your home or the workspace asks in every mode, auto included
+      const target = criticalRemoval(command, this.workspace);
+      if (target !== undefined)
+        return review(
+          'ASK_FORCED',
+          `deletes a critical path: ${JSON.stringify(target)}`,
+          { warn_delete: true, always: true },
+        );
       if (found.verdict !== 'ASK' || found.pattern === 'read-only')
         return found;
       command = stripLeadingCd(command, this.workspace);
@@ -1122,6 +1285,21 @@ export class ApprovalPolicy {
           (_, index) => 'prefix:' + JSON.stringify(words.slice(0, index + 1)),
         ),
       };
+    }
+    if (tool === 'delete') {
+      const path = String(args.file_path || args.path || '');
+      if (
+        path &&
+        criticalPath(
+          this.resolvePath ? this.resolvePath(path) : path,
+          this.workspace,
+        )
+      )
+        return review(
+          'ASK_FORCED',
+          `deletes a critical path: ${JSON.stringify(path)}`,
+          { warn_delete: true, always: true },
+        );
     }
     if (
       tool === 'delete' ||
@@ -1285,6 +1463,8 @@ export class ApprovalPolicy {
   ): boolean {
     const found = this.review(tool, args);
     if (found.verdict === 'DENY') return false;
+    // An ask rule, a tool that asks a person every time, a critical delete: every mode asks
+    if (found.always) return true;
     const tab = terminalTabWrite(tool, args);
     if (tab?.firstUse || tab?.uncertain) return true;
     if (tab && tab.command === undefined) return false;

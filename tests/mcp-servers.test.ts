@@ -36,7 +36,7 @@ test('an MCP server named with a dot and a space starts, and the model gets and 
   const model = new ScriptedModel([
     {
       message: assistant('', [
-        { id: 'env', name: 'lab_tools_v2_environment', args: {} },
+        { id: 'env', name: 'mcp__lab_tools_v2__environment', args: {} },
       ]),
     },
     { message: assistant('done') },
@@ -55,9 +55,9 @@ test('an MCP server named with a dot and a space starts, and the model gets and 
   await runtime.harness.run('look');
   const offered = model.requests[0]!.tools.map((tool) => tool.name);
   for (const name of [
-    'lab_tools_v2_environment',
-    'lab_tools_v2_login_wait',
-    'lab_tools_v2_write_receipt',
+    'mcp__lab_tools_v2__environment',
+    'mcp__lab_tools_v2__login_wait',
+    'mcp__lab_tools_v2__write_receipt',
   ])
     assert.ok(offered.includes(name), `${name} in ${offered.join(', ')}`);
   assert.ok(offered.every((name) => /^[A-Za-z0-9_-]{1,64}$/.test(name)));
@@ -67,14 +67,14 @@ test('an MCP server named with a dot and a space starts, and the model gets and 
   assert.match(result.content, /"pid":\d+/);
 });
 
-test('MCP tool names stay <server>_<tool> when valid and stay distinct when shortened', () => {
+test('MCP tool names are mcp__<server>__<tool> when valid and stay distinct when shortened', () => {
   assert.equal(
     mcpToolName('memory', 'create_entities'),
-    'memory_create_entities',
+    'mcp__memory__create_entities',
   );
   assert.equal(
     mcpToolName('lab tools.v2', 'login.wait'),
-    'lab_tools_v2_login_wait',
+    'mcp__lab_tools_v2__login_wait',
   );
   const long = 'x'.repeat(70);
   const one = mcpToolName(long, 'a');
@@ -94,16 +94,21 @@ test('two MCP servers whose names become one prefix are reported, the earlier ke
     ...server('a b'),
   });
   const output = await manager.tools
-    .find((tool) => tool.name === 'twin_environment')!
+    .find((tool) => tool.name === 'mcp__twin__environment')!
     .run({}, { signal: new AbortController().signal, sessionId: 'one' });
   assert.equal(JSON.parse(output).supplied, 'only');
   assert.equal(manager.status.find((entry) => entry.name === 'a.b')!.error, '');
   assert.match(
     manager.status.find((entry) => entry.name === 'a b')!.error,
-    /tool 'a_b_\w+' already exists/,
+    /tool 'mcp__a_b__\w+' already exists/,
   );
-  assert.ok(manager.tools.some((tool) => tool.name === 'a_b_environment'));
-  assert.match(manager.describe(), /failed: tool 'a_b_\w+' already exists/);
+  assert.ok(
+    manager.tools.some((tool) => tool.name === 'mcp__a_b__environment'),
+  );
+  assert.match(
+    manager.describe(),
+    /failed: tool 'mcp__a_b__\w+' already exists/,
+  );
 });
 
 // Starts the fixture's login.wait, lets `seconds` pass on a mocked clock, and says whether
@@ -118,7 +123,7 @@ async function waitThrough(
   const started = release + '.started';
   let ended = false;
   const call = manager.tools
-    .find((tool) => tool.name === 'fixture_login_wait')!
+    .find((tool) => tool.name === 'mcp__fixture__login_wait')!
     .run(
       { path: release, started },
       { signal: new AbortController().signal, sessionId: 'one' },
@@ -190,7 +195,7 @@ test('disabled MCP cannot register or write after reload, a new session, or rest
       message: assistant('', [
         {
           id: crypto.randomUUID(),
-          name: 'fixture_write_receipt',
+          name: 'mcp__fixture__write_receipt',
           args: { path: receipt },
         },
       ]),
@@ -208,7 +213,9 @@ test('disabled MCP cannot register or write after reload, a new session, or rest
   runtime.policy.setYolo(runtime.session.id, true);
   await runtime.initialize();
   assert.ok(
-    runtime.mcp.tools.some((tool) => tool.name === 'fixture_write_receipt'),
+    runtime.mcp.tools.some(
+      (tool) => tool.name === 'mcp__fixture__write_receipt',
+    ),
   );
   settings.mcpServers = {
     fixture: { ...server('fixture').fixture, enabled: false },

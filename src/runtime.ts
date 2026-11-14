@@ -96,6 +96,7 @@ import {
   recordMcpjsonChoice,
   type McpEntry,
 } from './mcp_config.js';
+import { migrateMcpRuleNames } from './approval_rules.js';
 import { ExtensionHost, type SubagentSpec } from './extensions.js';
 import {
   discoverSubagents,
@@ -952,7 +953,7 @@ export class AgentRuntime {
           });
       },
     );
-    this.policy.declareHints((tool) => this.mcp.hint(tool));
+    this.policy.declareAlwaysAsk((tool) => this.mcp.asksPerson(tool));
     this.lsp = new LspManager(this.sandbox);
     this.context = new ContextManager(this.store, this.sandbox.offloadRoot!, {
       readOnly: () => this.viewOnly,
@@ -2826,6 +2827,19 @@ export class AgentRuntime {
       this.integrationsReady = (async () => {
         const base = this.coreTools;
         const servers = this.mcpServers();
+        // Rules written with the MCP tool names of the format before this one name the current ones, once
+        this.mcp.notes.push(
+          ...migrateMcpRuleNames({
+            home: this.options.home,
+            workspace: this.options.workspace,
+            trusted: servers.trusted,
+            servers: [
+              ...servers.entries.map((entry) => entry.name),
+              ...servers.waiting.map((row) => row.name),
+            ],
+            reserved: new Set(base.map((tool) => tool.name)),
+          }),
+        );
         await this.mcp.load(
           servers.entries,
           new Set(base.map((tool) => tool.name)),

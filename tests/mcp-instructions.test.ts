@@ -140,7 +140,9 @@ test('a server that goes away leaves the system prompt, and a reconnect reads it
     },
   };
   const model = new ScriptedModel([
-    reply('', [{ id: 'pid', name: 'stdio-server_environment', args: {} }]),
+    reply('', [
+      { id: 'pid', name: 'mcp__stdio-server__environment', args: {} },
+    ]),
     reply('connected'),
     reply('gone'),
     reply('back'),
@@ -149,6 +151,13 @@ test('a server that goes away leaves the system prompt, and a reconnect reads it
   // A reload reads the settings again from the data folder
   mkdirSync(home);
   saveSettings(settings, home);
+  // An MCP tool asks unless a rule allows it: this server's are
+  writeFileSync(
+    join(home, 'approvals.json'),
+    JSON.stringify({
+      rules: [{ tool: 'mcp__stdio-server__*', effect: 'allow' }],
+    }),
+  );
   const runtime = new AgentRuntime({
     home,
     workspace,

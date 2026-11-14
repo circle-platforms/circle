@@ -44,15 +44,15 @@ test('one MCP server connects again and lists its tools again, and the others ar
   const starts = (stub: typeof one) =>
     stub.requests.filter((request) => request.message?.method === 'initialize')
       .length;
-  assert.ok(names().includes('one_old'));
+  assert.ok(names().includes('mcp__one__old'));
   const otherBefore = starts(other);
 
   // The server changed its tools and does not say so: connecting it alone again finds them
   served.tools = [{ name: 'new', inputSchema: schema }];
   await runtime.reloadMcpServer('one');
-  assert.ok(names().includes('one_new'));
-  assert.ok(!names().includes('one_old'));
-  assert.ok(names().includes('other_echo'));
+  assert.ok(names().includes('mcp__one__new'));
+  assert.ok(!names().includes('mcp__one__old'));
+  assert.ok(names().includes('mcp__other__echo'));
   assert.equal(
     starts(other),
     otherBefore,
@@ -100,9 +100,9 @@ test('a server is connected again under its name in mcpServers, not taken away',
     docs: { type: 'http', url: stub.url },
   });
   const names = () => runtime.harness.tools.map((tool) => tool.name);
-  assert.ok(names().includes('docs_echo'));
+  assert.ok(names().includes('mcp__docs__echo'));
   await runtime.reloadMcpServer('docs');
-  assert.ok(names().includes('docs_echo'));
+  assert.ok(names().includes('mcp__docs__echo'));
   assert.equal(
     stub.requests.filter((request) => request.message?.method === 'initialize')
       .length,

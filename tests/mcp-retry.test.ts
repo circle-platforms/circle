@@ -24,7 +24,7 @@ async function connected(
 }
 const run = (manager: McpManager, name: string) =>
   manager.tools
-    .find((tool) => tool.name === `files_${name}`)!
+    .find((tool) => tool.name === `mcp__files__${name}`)!
     .run({}, { sessionId: 'one', signal: new AbortController().signal });
 const calls = (stub: McpStub, name: string) =>
   stub.calls().filter((request) => request.message?.params?.name === name)
@@ -94,16 +94,6 @@ test('a call cut off after it reached the server is sent again, once, only for a
     /the connection to files ended after the call was sent: the request may have reached the server, so Circle did not send it again/,
   );
   assert.equal(calls(stub, 'write'), 1);
-});
-
-test('a read-only call cut off is not sent again when the server is not trusted with its annotations', async (t) => {
-  const stub = await mcpStub(t, { tools, drop: firstOfEach() });
-  const manager = await connected(t, stub, { trust_annotations: false });
-  await assert.rejects(
-    run(manager, 'look'),
-    /the request may have reached the server/,
-  );
-  assert.equal(calls(stub, 'look'), 1);
 });
 
 test(
@@ -177,7 +167,7 @@ test("a connection made again during a call carries none of that call's trace or
   const manager = await connected(t, stub);
   await serverOf(manager).client.close();
   await manager.tools
-    .find((tool) => tool.name === 'files_write')!
+    .find((tool) => tool.name === 'mcp__files__write')!
     .run(
       {},
       {

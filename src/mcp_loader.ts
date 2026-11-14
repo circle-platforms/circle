@@ -28,7 +28,6 @@ import type {
   FetchLike,
   Transport,
 } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { ToolHint } from './approvals.js';
 import type {
   Tool,
   ToolContext,
@@ -69,6 +68,7 @@ import { replaceLongest } from './secrets.js';
 import {
   environmentThenSecrets,
   expandReferences,
+  mcpToolName,
   mcpType,
   WITHHELD_VARIABLES,
   type McpEntry,
@@ -104,11 +104,6 @@ export interface McpConnection {
    * as written: never sent, and their values never filled in.
    */
   notSent?: string[];
-  /**
-   * False: the server's tool annotations are not read, and every tool asks as an unknown one
-   * does. Default true.
-   */
-  trustAnnotations?: boolean;
   /** The largest file a file parameter of the server's tools takes, in bytes. */
   maxFileBytes?: number;
   /** The most a tool call may take, in milliseconds, from the entry's `timeout`. */
@@ -274,21 +269,7 @@ export function serverInstructions(
   }
   return `${text.slice(0, end).trimEnd()}\n[cut by Circle: the server's instructions are longer than 8 KiB]`;
 }
-// Model APIs take tool names of letters, digits, `_` and `-`, at most 64 characters. A tool
-// is offered as `<server>_<tool>` for any server name, with every other character turned
-// into `_`, so the request goes through. A name that would be longer is
-// shortened and given a hash of the original, so two long names stay apart.
-export function mcpToolName(server: string, tool: string): string {
-  const part = (value: string): string =>
-    value.replace(/[^A-Za-z0-9_-]+/g, '_') || '_';
-  const name = `${part(server)}_${part(tool)}`;
-  if (name.length <= 64) return name;
-  const hash = createHash('sha256')
-    .update(`${server}\0${tool}`)
-    .digest('hex')
-    .slice(0, 8);
-  return `${name.slice(0, 55)}_${hash}`;
-}
+export { mcpToolName };
 export interface McpConnections {
   connections: McpConnection[];
   // Entries that are not started, with the reason (`/mcp` lists them)
@@ -403,9 +384,6 @@ export function buildMcpConnections(
         connection.trusted = scope === 'user' || options.trusted === true;
       }
     }
-    // Only true or no value trusts what the server says of its tools
-    if (item.trust_annotations !== undefined && item.trust_annotations !== true)
-      connection.trustAnnotations = false;
     // Below a second the entry's limit is not read, as the documented format has it
     if (typeof item.timeout === 'number' && item.timeout >= 1000)
       connection.timeout = item.timeout;
@@ -799,23 +777,31 @@ function resultText(
 // The longest a timer can wait; the MCP SDK stops a request after 60 seconds unless told.
 const NO_LIMIT = 2_147_483_647;
 /**
- * What a tool's annotations make of it, when its server is trusted with them: read-only
- * (`readOnlyHint`) runs as Circle's own reads do; destructive (`destructiveHint`) asks every
- * time. A tool that says both is destructive. Anything else is unknown, as without them.
- * Idempotent (`idempotentHint`): a call that sends files may get an earlier result again,
- * while no call that may change what the server holds has reached it since.
+ * What a tool's annotations and `_meta` say of it. None of it decides whether a call asks: permission rules and the
+ * person's mode do. Read-only (`readOnlyHint`, and not also `destructiveHint`): its calls may run side by side, and one
+ * cut off after it was sent goes once more. Idempotent (`idempotentHint`): the same, the latter only; and a call that
+ * sends files may get an earlier result again while no call that may change what the server holds has reached it.
+ * `circle/requiresUserInteraction: true` in its `_meta`: every call asks a person, in every mode.
  */
-function toolHints(
-  annotations: unknown,
-  trusted: boolean,
-): { readOnly: boolean; destructive: boolean; idempotent: boolean } {
-  const hints = trusted && isRecord(annotations) ? annotations : {};
-  const destructive = hints.destructiveHint === true;
+function toolHints(spec: { annotations?: unknown; _meta?: unknown }): {
+  readOnly: boolean;
+  idempotent: boolean;
+  asksPerson: boolean;
+} {
+  const hints = isRecord(spec.annotations) ? spec.annotations : {};
   return {
-    readOnly: hints.readOnlyHint === true && !destructive,
-    destructive,
+    readOnly: hints.readOnlyHint === true && hints.destructiveHint !== true,
     idempotent: hints.idempotentHint === true,
+    asksPerson:
+      isRecord(spec._meta) && spec._meta[REQUIRES_USER_INTERACTION] === true,
   };
+}
+/** The `_meta` key a server marks a tool with whose every call a person approves. */
+export const REQUIRES_USER_INTERACTION = 'circle/requiresUserInteraction';
+/** What a tool's server says of it that Circle acts on. */
+interface ToolMarks {
+  readOnly: boolean;
+  asksPerson: boolean;
 }
 type ToolResult = CallToolResult;
 /** The errors a request's chain of causes carries, outermost first. */
@@ -1060,13 +1046,8 @@ export class McpManager {
     );
     if (!readable.length) return [];
     const names = readable.map((server) => server.name);
-    // A read, as a read-only tool of theirs is, while every such server is trusted with what it says of its tools;
-    // otherwise these ask as that server's tools do
-    const effect: Effect = readable.every(
-      (server) => server.connection.trustAnnotations !== false,
-    )
-      ? 'read'
-      : 'unknown';
+    // Reading what a server publishes asks no one, as Circle's own reads do
+    const effect: Effect = 'read';
     const find = (name: unknown): Connected => {
       const server = this.servers.find(
         (item) =>
@@ -1169,8 +1150,8 @@ export class McpManager {
       },
     ];
   }
-  // What each tool's server says of it, when trusted with it: destructive or read-only
-  private hinted = new Map<string, ToolHint>();
+  // What each tool's server says of it: read-only, or that every call asks a person
+  private hinted = new Map<string, ToolMarks>();
   private results = new SentResults();
   // For file parameters when the runtime gives no reader: the workspace, as the terminal reads
   private files?: Sandbox;
@@ -1238,7 +1219,7 @@ export class McpManager {
     client: Client,
     spec: ServerTool,
     name: string,
-    hints: { readOnly: boolean; idempotent: boolean },
+    hints: { readOnly: boolean; idempotent: boolean; asksPerson: boolean },
     filled: Map<string, string>,
     validator: AjvJsonSchemaValidator,
   ): Tool {
@@ -1500,18 +1481,12 @@ export class McpManager {
       name,
       description: hide(spec.description || name),
       parameters: modelSchema(spec.inputSchema, files),
-      effect: hints.readOnly ? 'read' : 'unknown',
-      // What the server says of its tool covers what the tool does there, not what a call
-      // sends it: a local file's bytes or a secret's value leave this machine with the call
-      ...(hints.readOnly
-        ? {
-            callEffect: (args, secrets) =>
-              secrets.length ||
-              files.some((parameter) => args[parameter] !== undefined)
-                ? 'unknown'
-                : 'read',
-          }
-        : {}),
+      // Circle cannot see what a server's tool does: a call asks unless a rule allows it, in plan mode too, whatever
+      // the server says of it
+      effect: 'unknown',
+      planAsks: true,
+      ...(hints.readOnly ? { parallel: true } : {}),
+      ...(hints.asksPerson ? { personApproval: true } : {}),
       ...(files.length
         ? {
             paths: named,
@@ -1536,7 +1511,7 @@ export class McpManager {
     const connected: Connected[] = [];
     const tools: Tool[] = [];
     const status: McpStatus[] = [];
-    const hinted = new Map<string, ToolHint>();
+    const hinted = new Map<string, ToolMarks>();
     try {
       const { connections, skipped } = buildMcpConnections(servers, {
         trusted: options.trusted,
@@ -1597,7 +1572,7 @@ export class McpManager {
     state: McpStatus;
     server?: Connected;
     tools: Tool[];
-    said: Map<string, ToolHint>;
+    said: Map<string, ToolMarks>;
   }> {
     const headerNames = Object.keys(connection.headers ?? {});
     const state: McpStatus = {
@@ -1900,9 +1875,9 @@ export class McpManager {
     filled: Map<string, string>,
     taken: (name: string) => boolean,
     signal: AbortSignal,
-  ): Promise<{ registered: Tool[]; said: Map<string, ToolHint> }> {
+  ): Promise<{ registered: Tool[]; said: Map<string, ToolMarks> }> {
     const registered: Tool[] = [];
-    const said = new Map<string, ToolHint>();
+    const said = new Map<string, ToolMarks>();
     const validator = new AjvJsonSchemaValidator();
     let cursor: string | undefined;
     const cursors = new Set<string>();
@@ -1916,12 +1891,11 @@ export class McpManager {
         const name = mcpToolName(connection.name, spec.name);
         if (taken(name) || registered.some((tool) => tool.name === name))
           throw new Error(`tool '${name}' already exists`);
-        const hints = toolHints(
-          spec.annotations,
-          connection.trustAnnotations !== false,
-        );
-        if (hints.destructive) said.set(name, 'destructive');
-        else if (hints.readOnly) said.set(name, 'read-only');
+        const hints = toolHints(spec);
+        said.set(name, {
+          readOnly: hints.readOnly,
+          asksPerson: hints.asksPerson,
+        });
         registered.push(
           this.serverTool(
             connection,
@@ -2314,7 +2288,10 @@ export class McpManager {
     signal: AbortSignal,
   ): Promise<unknown> {
     const server = this.servers.find((s) => s.name === serverName && s.open);
-    if (!server || this.hint(mcpToolName(serverName, toolName)) !== 'read-only')
+    if (
+      !server ||
+      this.hint(mcpToolName(serverName, toolName))?.readOnly !== true
+    )
       throw new Error('read-only MCP tool unavailable');
     const response = await callServerTool(
       server.client,
@@ -2426,9 +2403,13 @@ export class McpManager {
         : []),
     ].join('\n');
   }
-  /** What the server of a tool, by its name here, says of it, when trusted with it. */
-  hint(tool: string): ToolHint | undefined {
+  /** What the server of a tool, by its name here, says of it. */
+  hint(tool: string): ToolMarks | undefined {
     return this.hinted.get(tool);
+  }
+  /** Whether every call of a tool, by its name here, asks a person: its server marks it so. */
+  asksPerson(tool: string): boolean {
+    return this.hinted.get(tool)?.asksPerson === true;
   }
   async close(): Promise<void> {
     // A sign-in under way stops waiting; the manager can load again afterwards

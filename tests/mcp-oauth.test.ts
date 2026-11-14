@@ -251,7 +251,7 @@ test('a server that asks for a sign-in is signed in through the browser, and the
   assert.equal(manager.status[0]!.authorize, undefined);
   assert.deepEqual(
     manager.tools.map((tool) => tool.name),
-    ['remote_echo'],
+    ['mcp__remote__echo'],
   );
   assert.equal(await manager.tools[0]!.run({}, context), 'signed-in answer');
 
@@ -478,7 +478,7 @@ test('a server whose authorization server offers the device code shows a code, a
   assert.equal(manager.status[0]!.error, '');
   assert.equal(manager.status[0]!.code, undefined);
   assert.equal(manager.status[0]!.authorize, undefined);
-  assert.deepEqual(manager.status[0]!.tools, ['remote_echo']);
+  assert.deepEqual(manager.status[0]!.tools, ['mcp__remote__echo']);
   const polls = server.exchanges.filter(
     (form) => form.get('grant_type') === DEVICE_CODE_GRANT,
   );
@@ -515,7 +515,7 @@ test('a server that gives no device code is signed in through the browser instea
   assert.equal(opened.length, 1);
   assert.match(opened[0]!, /\/authorize\?/);
   assert.equal(manager.status[0]!.error, '');
-  assert.deepEqual(manager.status[0]!.tools, ['remote_echo']);
+  assert.deepEqual(manager.status[0]!.tools, ['mcp__remote__echo']);
 });
 
 test('a device sign-in refused on the page says so and leaves no code shown', async (t) => {

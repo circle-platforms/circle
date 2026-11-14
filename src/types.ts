@@ -122,6 +122,13 @@ export interface Tool {
   approval?: boolean;
   /** Person confirmation is mandatory, including auto mode and hook allows. */
   personApproval?: boolean;
+  /** Its calls may run side by side with the other calls of a reply that may: a task, or a tool that only reads. */
+  parallel?: boolean;
+  /**
+   * Read-only and plan mode do not refuse its calls: they ask, as in manual mode, unless a rule allows them. An MCP
+   * server's tools, whose effects Circle cannot see.
+   */
+  planAsks?: boolean;
   /** Remove rejected sensitive proposals before durable history/events; must not publish data. */
   privacy?: (call: ToolCall) => ToolCall;
   /** False keeps the tool from subagents: it belongs to the conversation the user sees. */

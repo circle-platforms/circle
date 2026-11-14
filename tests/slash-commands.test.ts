@@ -2440,6 +2440,6 @@ test('/hub names the switch while the hub extension is off, and once on connects
     { url: endpoint, placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' } },
   );
   assert.ok(
-    on.runtime.harness.tools.some((tool) => tool.name === 'Hub_search'),
+    on.runtime.harness.tools.some((tool) => tool.name === 'mcp__Hub__search'),
   );
 });

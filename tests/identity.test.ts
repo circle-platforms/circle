@@ -71,7 +71,7 @@ test("a subagent's calls carry the conversation's session everywhere, with its o
   const both = () =>
     reply('', [
       { id: crypto.randomUUID(), name: 'execute', args: { command } },
-      { id: crypto.randomUUID(), name: 'http-server_echo', args: {} },
+      { id: crypto.randomUUID(), name: 'mcp__http-server__echo', args: {} },
     ]);
   const model = new ScriptedModel([
     // The conversation: a command and a server call, then a subagent that does the same

@@ -222,7 +222,7 @@ test("in a conversation the server's question goes to the question panel, and it
     userHome: join(root, 'user'),
     settings,
     model: new ScriptedModel([
-      reply([{ id: 'call-1', name: 'shop_order', args: {} }]),
+      reply([{ id: 'call-1', name: 'mcp__shop__order', args: {} }]),
       reply([], 'done'),
     ]),
     question: async (args) => {

@@ -133,9 +133,9 @@ test('every request to an HTTP or SSE server carries the session of that moment,
   };
   const calls = () =>
     reply('', [
-      { id: crypto.randomUUID(), name: 'http-server_echo', args: {} },
-      { id: crypto.randomUUID(), name: 'sse-server_echo', args: {} },
-      { id: crypto.randomUUID(), name: 'http-server_echo', args: {} },
+      { id: crypto.randomUUID(), name: 'mcp__http-server__echo', args: {} },
+      { id: crypto.randomUUID(), name: 'mcp__sse-server__echo', args: {} },
+      { id: crypto.randomUUID(), name: 'mcp__http-server__echo', args: {} },
     ]);
   const runtime = new AgentRuntime({
     home: join(root, 'home'),

@@ -265,7 +265,7 @@ test('MCP image and embedded PDF results become attachments without base64 in te
   });
   const attachments: MediaAttachment[] = [];
   const text = await manager.tools
-    .find((tool) => tool.name === 'fixture_media')!
+    .find((tool) => tool.name === 'mcp__fixture__media')!
     .run(
       {},
       {

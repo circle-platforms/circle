@@ -60,7 +60,7 @@ const reply = (
 });
 const upload = (id: string, args: Record<string, unknown>) => ({
   id,
-  name: 'files-server_upload',
+  name: 'mcp__files-server__upload',
   args,
 });
 const sha256 = (bytes: Buffer) =>
@@ -229,7 +229,7 @@ test("the model gives a path, the server gets the file's bytes, and the card, th
   await runtime.harness.run('store the report');
   // The model was shown a path parameter
   const offered = model.requests[0]!.tools.find(
-    (tool) => tool.name === 'files-server_upload',
+    (tool) => tool.name === 'mcp__files-server__upload',
   )!;
   assert.match(
     (offered.parameters as typeof SCHEMA).properties.file.description,
@@ -381,7 +381,7 @@ test('an echoed file is shown by its label even when a hidden header value is in
   assert.equal(manager.status[0]!.error, '', manager.describe());
   const context = { sessionId: 'one', signal: new AbortController().signal };
   const tool = (name: string) =>
-    manager.tools.find((item) => item.name === `files-server_${name}`)!;
+    manager.tools.find((item) => item.name === `mcp__files-server__${name}`)!;
   const label = (path: string, bytes: Buffer) =>
     `${path} (${bytes.length} bytes, sha256 ${sha256(bytes)})`;
   assert.equal(

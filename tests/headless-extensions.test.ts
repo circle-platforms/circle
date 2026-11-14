@@ -27,7 +27,7 @@ const TSX = pathToFileURL(
 const CLI = join(process.cwd(), 'src', 'cli.ts');
 const RUN_TOKEN = 'run-token-5c1e77';
 // The MCP server's tool as the model is offered it, and the extension's own tool.
-const SERVER_TOOL = 'files-server_list_docs';
+const SERVER_TOOL = 'mcp__files-server__list_docs';
 const EXTENSION_TOOL = 'notes_count';
 
 type Listen = (handler: Parameters<typeof createServer>[1]) => Promise<string>;
@@ -165,6 +165,13 @@ async function fixture(t: Parameters<typeof scratch>[0]): Promise<Fixture> {
   };
   saveSettings(settings, home);
   saveCredentials({ api_key: 'model-key' }, home);
+  // A run that cannot ask runs what a rule of yours allows: this server's tools
+  writeFileSync(
+    join(home, 'approvals.json'),
+    JSON.stringify({
+      rules: [{ tool: 'mcp__files-server__*', effect: 'allow' }],
+    }),
+  );
   // An extension of your own, which loads unless it is turned off.
   const extension = join(home, 'extensions', 'notes');
   mkdirSync(extension, { recursive: true });

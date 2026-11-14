@@ -65,7 +65,7 @@ test("a server's progress notices show on the call's row while it runs, and the 
     userHome: join(root, 'user'),
     settings,
     model: new ScriptedModel([
-      reply('', [{ id: 'call-1', name: 'files_index', args: {} }]),
+      reply('', [{ id: 'call-1', name: 'mcp__files__index', args: {} }]),
       reply('done'),
     ]),
   });
@@ -104,7 +104,7 @@ test("a server's progress notices show on the call's row while it runs, and the 
 });
 
 test("a running call's row shows its progress after its text, cut to fit, and not once it has a result", () => {
-  const call = { id: 'c', name: 'files_index', args: { path: 'src' } };
+  const call = { id: 'c', name: 'mcp__files__index', args: { path: 'src' } };
   const running = stripAnsi(
     toolRow(call, undefined, {
       width: 60,
@@ -112,7 +112,7 @@ test("a running call's row shows its progress after its text, cut to fit, and no
       progress: '2/3 · indexing the whole workspace slowly',
     }),
   );
-  assert.match(running, /files_index\(.*\) {2}2\/3 · indexing/);
+  assert.match(running, /mcp__files__index\(.*\) {2}2\/3 · indexing/);
   assert.ok(running.trimEnd().endsWith('…'), running);
   assert.equal(running.length, 60);
   const done = stripAnsi(

@@ -3220,7 +3220,7 @@ test('a server whose tools could not be listed again shows as connected, with th
   runtime.mcp.status.splice(0, runtime.mcp.status.length, {
     name: 'fixture',
     connection: 'unused-fixture',
-    tools: ['fixture_kept'],
+    tools: ['mcp__fixture__kept'],
     error: TOOLS_NOT_LISTED_AGAIN,
   });
   const row = () =>

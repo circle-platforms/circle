@@ -14,6 +14,8 @@ export interface StubTool {
   inputSchema?: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
   annotations?: Record<string, unknown>;
+  /** What the server says of it besides, such as `circle/requiresUserInteraction`. */
+  _meta?: Record<string, unknown>;
   /** How it may be run, such as `{ taskSupport: 'required' }`. */
   execution?: Record<string, unknown>;
 }

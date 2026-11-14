@@ -58,7 +58,7 @@ test('MCP stdio uses explicit server environment, preserves text errors, and clo
   assert.equal(manager.status[0]?.error, '');
   const context = { signal: new AbortController().signal, sessionId: 'one' };
   const output = await manager.tools
-    .find((tool) => tool.name === 'fixture_environment')!
+    .find((tool) => tool.name === 'mcp__fixture__environment')!
     .run({}, context);
   const observed = JSON.parse(output) as {
     pid: number;
@@ -70,7 +70,7 @@ test('MCP stdio uses explicit server environment, preserves text errors, and clo
   assert.equal(manager.tools[0]!.effect, 'unknown');
   await assert.rejects(
     manager.tools
-      .find((tool) => tool.name === 'fixture_failure')!
+      .find((tool) => tool.name === 'mcp__fixture__failure')!
       .run({}, context),
     /fixture error/,
   );
@@ -90,7 +90,7 @@ test('MCP cancellation sends a real notification that stops a delayed side effec
   const controller = new AbortController();
   const path = join(root, 'should-not-exist');
   const call = manager.tools
-    .find((tool) => tool.name === 'fixture_write_receipt')!
+    .find((tool) => tool.name === 'mcp__fixture__write_receipt')!
     .run({ path, delay: 500 }, { signal: controller.signal, sessionId: 'one' });
   const result = assert.rejects(call, /cancel|Interrupted|abort/i);
   await delay(50);
@@ -112,7 +112,9 @@ test('runtime gates an actual MCP tool in plan mode and later executes the same 
     },
   };
   const call = (id: string) =>
-    assistant('', [{ id, name: 'fixture_write_receipt', args: { path } }]);
+    assistant('', [
+      { id, name: 'mcp__fixture__write_receipt', args: { path } },
+    ]);
   const model = new ScriptedModel([
     { message: call('blocked') },
     { message: assistant('planned') },
@@ -130,11 +132,12 @@ test('runtime gates an actual MCP tool in plan mode and later executes the same 
   runtime.harness.planMode = true;
   await runtime.harness.run('plan');
   assert.equal(existsSync(path), false);
+  // Plan mode asks before an MCP tool runs, also over auto; here no card can be shown, so it does not run
   assert.match(
     runtime.harness.messages.find(
       (message) => message.tool_call_id === 'blocked',
     )!.content,
-    /read-only/,
+    /not run/,
   );
   runtime.harness.planMode = false;
   await runtime.harness.run('implement');

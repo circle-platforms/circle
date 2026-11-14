@@ -3,7 +3,7 @@
 // again for it. A result that matches reads as it always did. A local stub server stands in for the Hub.
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
-import { mkdirSync, realpathSync } from 'node:fs';
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { McpManager, UNDECLARED_STRUCTURE } from '../src/mcp_loader.js';
 import { AgentRuntime } from '../src/runtime.js';
@@ -148,7 +148,7 @@ test("every page's tools are checked against their own listed schema, and the ho
   });
   assert.deepEqual(
     mcp.tools.map((item) => item.name),
-    ['hub_get_nodes', 'hub_start_run'],
+    ['mcp__hub__get_nodes', 'mcp__hub__start_run'],
   );
   for (const item of mcp.tools)
     assert.match(
@@ -178,13 +178,20 @@ test('the model reads the whole result in its next request, and no error', async
   });
   const settings = defaultSettings();
   settings.mcpServers = { hub: { url: stub.url, type: 'http' } };
+  // An MCP tool asks unless a rule allows it: this one does
+  writeFileSync(
+    join(home, 'approvals.json'),
+    JSON.stringify({
+      rules: [{ tool: 'mcp__hub__start_run', effect: 'allow' }],
+    }),
+  );
   const replies: Partial<ModelResponse>[] = [
     {
       message: {
         id: 'call',
         role: 'assistant',
         content: '',
-        tool_calls: [{ id: 'start', name: 'hub_start_run', args: {} }],
+        tool_calls: [{ id: 'start', name: 'mcp__hub__start_run', args: {} }],
       },
     },
     { message: { id: 'done', role: 'assistant', content: 'done' } },

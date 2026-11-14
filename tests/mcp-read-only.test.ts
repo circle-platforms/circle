@@ -7,7 +7,6 @@ import { AgentRuntime } from '../src/runtime.js';
 import { saveSecret } from '../src/secrets.js';
 import { defaultSettings } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
-import { approvalRequest } from '../src/tui/approval_preview.js';
 import type { Message, ModelResponse, ToolCall } from '../src/types.js';
 import { scratch, cleanup } from './helpers.js';
 import { mcpStub, type StubTool } from './mcp-stub.js';
@@ -80,7 +79,7 @@ async function setup(t: TestContext, hooks?: unknown) {
   const call = async (tool: string, args: Record<string, unknown>) => {
     const id = `call-${++count}`;
     replies.push(
-      assistant('', [{ id, name: `files-server_${tool}`, args }]),
+      assistant('', [{ id, name: `mcp__files-server__${tool}`, args }]),
       assistant('done'),
     );
     await runtime.harness.run(`call ${tool}`);
@@ -94,28 +93,14 @@ async function setup(t: TestContext, hooks?: unknown) {
   return { root, workspace, stub, runtime, asked, answers, call, received };
 }
 
-test('a tool its server marks read-only asks before a call sends a local file or a secret, and runs without a card otherwise', async (t) => {
-  const { runtime, asked, answers, call, received } = await setup(t);
-  // Neither a file nor a secret: no card, as before
-  assert.match(
-    (await call('read_document', { question: 'any?' })).content,
-    /ran read_document/,
-  );
-  assert.match((await call('lookup', { q: 'plain' })).content, /ran lookup/);
-  assert.equal(asked.length, 0);
-  // A file: the card, and nothing is sent when the person says no
+test('a tool its server marks read-only asks as every MCP tool does: the card shows the file it sends and a secret by name, and nothing goes before it is answered', async (t) => {
+  const { asked, answers, call, received } = await setup(t);
+  // Read-only or not, a call asks unless a rule allows it
   const refused = await call('read_document', { document: 'notes.txt' });
   assert.match(refused.content, /rejected/);
   assert.equal(asked.length, 1);
   assert.match(String(asked[0]!.args.document), /^notes\.txt \(13 bytes/);
-  const card = approvalRequest(
-    asked[0]!,
-    runtime.policy.review(asked[0]!.name, asked[0]!.args),
-  );
-  assert.equal(
-    card.policy,
-    'its MCP server says it only reads; the call sends it a local file or a secret',
-  );
+  assert.deepEqual(received(), []);
   // A secret's value: the card shows its name, and the value goes only once allowed
   answers.push('approve');
   assert.match(
@@ -124,33 +109,24 @@ test('a tool its server marks read-only asks before a call sends a local file or
   );
   assert.equal(asked.length, 2);
   assert.equal(asked[1]!.args.q, 'key %FILES_TOKEN%');
-  assert.deepEqual(received(), [
-    { question: 'any?' },
-    { q: 'plain' },
-    { q: `key ${TOKEN}` },
-  ]);
-  // "Allow for this session" covers the tool's later calls that send
+  assert.deepEqual(received(), [{ q: `key ${TOKEN}` }]);
+  // "Allow for this session" covers the tool's later calls
   answers.push('always');
   await call('read_document', { document: 'notes.txt' });
   await call('read_document', { document: 'notes.txt', question: 'again' });
   assert.equal(asked.length, 3);
-  assert.equal(received().length, 5);
+  assert.equal(received().length, 3);
 });
 
-test('read-only mode refuses a call of a read-only tool that sends a local file or a secret, before anything is read or sent', async (t) => {
-  const { runtime, asked, call, received } = await setup(t);
+test('plan mode asks before an MCP tool runs, a read-only one too, and sends nothing until it is answered', async (t) => {
+  const { runtime, asked, answers, call, received } = await setup(t);
   runtime.harness.planMode = true;
-  for (const [tool, args] of [
-    ['read_document', { document: 'notes.txt' }],
-    ['lookup', { q: '%FILES_TOKEN%' }],
-  ] as const) {
-    const result = await call(tool, args);
-    assert.equal(result.status, 'error');
-    assert.match(result.content, /read-only mode: this tool cannot run/);
-  }
-  // A call that sends neither still runs there
+  const refused = await call('lookup', { q: 'plain' });
+  assert.match(refused.content, /rejected/);
+  assert.deepEqual(received(), []);
+  answers.push('approve');
   assert.match((await call('lookup', { q: 'plain' })).content, /ran lookup/);
-  assert.equal(asked.length, 0);
+  assert.equal(asked.length, 2);
   assert.deepEqual(received(), [{ q: 'plain' }]);
 });
 
@@ -168,7 +144,7 @@ test("hook path globs see the path an MCP tool's file parameter names, whatever 
         {
           name: 'no secrets',
           command: `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`,
-          tools: 'files-server_read_document',
+          tools: 'mcp__files-server__read_document',
           paths: ['**/*secret*'],
         },
       ],

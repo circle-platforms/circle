@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -25,7 +25,6 @@ test("a running MCP call's row carries the server's latest progress until its re
   let answer: (() => void) | undefined;
   const answered = new Promise<void>((resolve) => (answer = resolve));
   const stub = await mcpStub(t, {
-    // Read-only, so it runs without a card
     tools: [
       {
         name: 'index',
@@ -53,13 +52,18 @@ test("a running MCP call's row carries the server's latest progress until its re
   const settings = trustFolder(defaultSettings(), workspace);
   settings.mcpServers = { files: { url: stub.url, type: 'http' } };
   saveSettings(settings, home);
+  // An MCP tool asks unless a rule allows it: this server's run without a card
+  await writeFile(
+    join(home, 'approvals.json'),
+    JSON.stringify({ rules: [{ tool: 'mcp__files__*', effect: 'allow' }] }),
+  );
   const model = new ScriptedModel([
     {
       message: {
         id: randomUUID(),
         role: 'assistant',
         content: '',
-        tool_calls: [{ id: 'call-1', name: 'files_index', args: {} }],
+        tool_calls: [{ id: 'call-1', name: 'mcp__files__index', args: {} }],
       },
     },
     { message: { id: randomUUID(), role: 'assistant', content: 'done' } },

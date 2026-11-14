@@ -290,8 +290,8 @@ test('a saved secret reaches the server in a header, and what the model reads, t
   const model = new ScriptedModel([
     {
       message: assistant('', [
-        { id: 'who', name: 'files-server_whoami', args: {} },
-        { id: 'no', name: 'files-server_refuse', args: {} },
+        { id: 'who', name: 'mcp__files-server__whoami', args: {} },
+        { id: 'no', name: 'mcp__files-server__refuse', args: {} },
       ]),
     },
     { message: assistant('done') },

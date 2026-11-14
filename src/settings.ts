@@ -144,10 +144,18 @@ const MODE_NAMES: readonly (SessionMode | '')[] = [
   'plan',
   'auto',
 ];
+// The documented names of the modes Circle has: manual is `default`, accept-edits `acceptEdits`, auto
+// `bypassPermissions`
+const MODE_ALIASES: Record<string, SessionMode> = {
+  default: 'manual',
+  acceptedits: 'accept-edits',
+  bypasspermissions: 'auto',
+};
 const modeName = (value: unknown): SessionMode | '' => {
   const name = String(value || '')
     .trim()
     .toLowerCase();
+  if (Object.hasOwn(MODE_ALIASES, name)) return MODE_ALIASES[name]!;
   return (MODE_NAMES as readonly string[]).includes(name)
     ? (name as SessionMode)
     : '';

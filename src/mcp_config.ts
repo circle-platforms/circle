@@ -4,6 +4,7 @@
 // `projects["<folder>"].mcpServers` there; a project shares servers in `.mcp.json` at its root, and in an interactive
 // session each of those connects once you approved it. The entries of `mcp_servers`, the list format before this one,
 // are moved into `mcpServers` once (settings.ts), with a copy of the file kept.
+import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, readFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { normalizeWorkspace } from './paths.js';
@@ -25,6 +26,67 @@ export type McpType = (typeof MCP_TYPES)[number];
 
 const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** A server's or a tool's name as a tool name takes it: other characters than letters, digits, `_` and `-` are `_`. */
+const namePart = (value: string): string =>
+  value.replace(/[^A-Za-z0-9_-]+/g, '_') || '_';
+// Model APIs take tool names of letters, digits, `_` and `-`, at most 64 characters. A tool is offered as
+// `mcp__<server>__<tool>`, with every other character turned into `_`, so the request goes through and a permission
+// rule names it as other clients write it. A name that would be longer is shortened and given a hash of the original,
+// so two long names stay apart.
+export function mcpToolName(server: string, tool: string): string {
+  const name = `mcp__${namePart(server)}__${namePart(tool)}`;
+  if (name.length <= 64) return name;
+  const hash = createHash('sha256')
+    .update(`${server}\0${tool}`)
+    .digest('hex')
+    .slice(0, 8);
+  return `${name.slice(0, 55)}_${hash}`;
+}
+/**
+ * A tool's name under a prefix of its own, `<prefix>_<tool>`, as an installed pack's typed tools are named, and as MCP
+ * tools were before they were named `mcp__<server>__<tool>` (rules written then name them so).
+ */
+export function prefixedToolName(prefix: string, tool: string): string {
+  const name = `${namePart(prefix)}_${namePart(tool)}`;
+  if (name.length <= 64) return name;
+  const hash = createHash('sha256')
+    .update(`${prefix}\0${tool}`)
+    .digest('hex')
+    .slice(0, 8);
+  return `${name.slice(0, 55)}_${hash}`;
+}
+/** The prefix every tool of a server is offered under. */
+export function mcpToolPrefix(server: string): string {
+  return `mcp__${namePart(server)}__`;
+}
+/**
+ * The current name of a tool a rule names as the format before this one did (`<server>_<tool>`), for one of the
+ * servers configured now: the longest server name it starts with. Nothing for a name of Circle's own, one already in
+ * the current form, or one shortened with a hash, which cannot be read back.
+ */
+export function currentMcpRuleTool(
+  tool: string,
+  servers: string[],
+  reserved: Set<string>,
+): string | undefined {
+  if (tool.startsWith('mcp__') || tool === '*' || reserved.has(tool))
+    return undefined;
+  if (tool.length === 64 && /_[0-9a-f]{8}$/.test(tool)) return undefined;
+  let best: { prefix: string; server: string } | undefined;
+  for (const server of servers) {
+    const prefix = `${namePart(server)}_`;
+    if (
+      tool.startsWith(prefix) &&
+      tool.length > prefix.length &&
+      (!best || prefix.length > best.prefix.length)
+    )
+      best = { prefix, server };
+  }
+  return best
+    ? mcpToolName(best.server, tool.slice(best.prefix.length))
+    : undefined;
+}
 
 /** The servers of an `mcpServers` object: each one's own entry, by name. */
 export function mcpServersOf(value: unknown): Record<string, McpServerConfig> {
@@ -61,7 +123,8 @@ const oldReferences = (text: string): string =>
  * The servers of an `mcp_servers` list, the format before this one, in the current format, and what changed on the
  * way. An entry is named by its `name`, else its `id`, else `mcp<place>`; of two with one name the later one is kept,
  * as it was the one connected. `transport` becomes `type`: `streamable_http` is `http`, `websocket` is `ws`, and any
- * other or none `sse`, as it was read. The fields only Circle has (`enabled`, `max_file_bytes`, `placeholders`) stay.
+ * other or none `sse`, as it was read. The fields only Circle has (`enabled`, `max_file_bytes`, `placeholders`) stay;
+ * `trust_annotations`, which no longer means anything, does not.
  */
 export function convertOldMcpServers(list: unknown): {
   servers: Record<string, McpServerConfig>;
@@ -111,13 +174,12 @@ export function convertOldMcpServers(list: unknown): {
       notes.push(`${name} has neither a command nor a url and was left out`);
       return;
     }
-    for (const key of [
-      'enabled',
-      'max_file_bytes',
-      'placeholders',
-      'trust_annotations',
-    ])
+    for (const key of ['enabled', 'max_file_bytes', 'placeholders'])
       if (item[key] !== undefined) entry[key] = structuredClone(item[key]);
+    if (item.trust_annotations !== undefined)
+      notes.push(
+        `${name}: trust_annotations was left out: what a server says of its tools no longer decides whether a call asks; permission rules and your mode do`,
+      );
     if (Object.hasOwn(servers, name))
       notes.push(
         `two servers were named ${name}; the later one was kept, as it was the one connected`,
