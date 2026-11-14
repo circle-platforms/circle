@@ -53,6 +53,12 @@ export interface StubOptions {
   answer?: (request: StubRequest) => unknown;
   /** Answers a GET of another path with JSON, such as a discovery document; undefined is a 405. */
   get?: (path: string, origin: string) => unknown;
+  /** Closes each connection after its answer, so a client opens a new one for each request. */
+  connectionClose?: boolean;
+  /** Cuts the connection once a request arrived, before any answer. */
+  drop?: (request: StubRequest) => boolean;
+  /** Answers a request with an event stream that ends without the answer. */
+  endStream?: (request: StubRequest) => boolean;
   /** An HTTP status to refuse a request with, such as 401, with this body. */
   refuse?: (
     request: StubRequest,
@@ -69,6 +75,10 @@ export interface McpStub {
   calls(): StubRequest[];
   /** Sends a notification on every stream a client holds open. */
   notify(method: string): void;
+  /** Stops listening, so a connection is refused, until `resume`. */
+  pause(): Promise<void>;
+  /** Listens again, on the same port. */
+  resume(): Promise<void>;
 }
 export async function mcpStub(
   t: TestContext,
@@ -127,6 +137,11 @@ export async function mcpStub(
         /* Not JSON-RPC: kept as it came. */
       }
     requests.push(request);
+    if (options.connectionClose) response.setHeader('Connection', 'close');
+    if (options.drop?.(request)) {
+      incoming.socket.destroy();
+      return;
+    }
     const refused = options.refuse?.(request);
     if (refused) {
       response.writeHead(refused.status).end(refused.body);
@@ -168,6 +183,10 @@ export async function mcpStub(
       response.writeHead(202).end();
       return;
     }
+    if (options.endStream?.(request)) {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' }).end();
+      return;
+    }
     const reply = JSON.stringify({
       jsonrpc: '2.0',
       id: request.message.id,
@@ -197,5 +216,18 @@ export async function mcpStub(
       for (const open of [...pushed, ...(stream ? [stream] : [])])
         open.write(event);
     },
+    pause: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      }),
+    resume: () =>
+      new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(address.port, '127.0.0.1', () => {
+          server.off('error', reject);
+          resolve();
+        });
+      }),
   };
 }

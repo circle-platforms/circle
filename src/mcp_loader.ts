@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -8,7 +9,9 @@ import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/webso
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import {
   CallToolResultSchema,
+  ErrorCode,
   ListToolsResultSchema,
+  McpError,
   ToolListChangedNotificationSchema,
   type CallToolResult,
   type Implementation,
@@ -414,13 +417,15 @@ function hiddenError(error: unknown, hide: (text: string) => string): unknown {
   const message = hide(error.message);
   return message === error.message ? error : new Error(message);
 }
-/** The tool call a request is made for, while the call is under way. */
 /** The call under way: its trace, and who it runs for (#551), as its requests carry them. */
-const toolCalls = new AsyncLocalStorage<{
+interface CallStore {
   traceparent: string;
   sessionId?: string;
   agentId?: string;
-}>();
+  /** Ends the attempt under way: the stream its answer was to come on ended without it (#555). */
+  lost?: (error: McpError) => void;
+}
+const toolCalls = new AsyncLocalStorage<CallStore>();
 /**
  * A W3C trace context for one tool call: version 00, a new random trace id and parent id
  * (never all zeros), sampled.
@@ -454,8 +459,105 @@ function requestFetch(sessionId?: () => string | undefined): FetchLike {
     if (session) headers.set('Circle-Session-Id', session);
     if (call?.agentId) headers.set('Circle-Agent-Id', call.agentId);
     if (call) headers.set('traceparent', call.traceparent);
-    return fetch(url, { ...init, headers });
+    const sent = fetch(url, { ...init, headers });
+    // The attempt of the moment: a stream of an earlier attempt that ends late does not end this one
+    const lost = call?.lost;
+    const id = lost ? callId(init) : undefined;
+    if (!lost || id === undefined) return sent;
+    return sent.then((response) => watchAnswer(response, id, lost));
   };
+}
+/** The id of the tools/call a POST sends, if it sends one. */
+function callId(init: RequestInit | undefined): string | number | undefined {
+  if (init?.method?.toUpperCase() !== 'POST' || typeof init.body !== 'string')
+    return undefined;
+  try {
+    const message: unknown = JSON.parse(init.body);
+    return isRecord(message) &&
+      message.method === 'tools/call' &&
+      (typeof message.id === 'number' || typeof message.id === 'string')
+      ? message.id
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+/**
+ * A call answered over an event stream: the MCP library waits for the answer for as long as the call may take, even
+ * after the stream ended without it (#555). A copy of the stream is read here; when it ends without the answer and
+ * without an event id the library could resume it by, the call is told its answer is lost. A stream with an event id
+ * is the library's to resume, as the 2025-11-25 revision has it.
+ */
+function watchAnswer(
+  response: Response,
+  id: string | number,
+  lost: (error: McpError) => void,
+): Response {
+  const type = response.headers.get('content-type') ?? '';
+  if (!response.ok || !response.body || !/^text\/event-stream\b/i.test(type))
+    return response;
+  const [mine, theirs] = response.body.tee();
+  void answerIn(mine, id).then((outcome) => {
+    if (outcome === 'lost')
+      lost(
+        new McpError(
+          ErrorCode.ConnectionClosed,
+          'the stream the answer was to come on ended without it',
+        ),
+      );
+  });
+  return new Response(theirs, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+/** Reads an event stream until the answer to request `id` passes in it, or the stream ends. */
+async function answerIn(
+  stream: ReadableStream<Uint8Array>,
+  id: string | number,
+): Promise<'answered' | 'resumable' | 'lost'> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let resumable = false;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // An event ends at an empty line
+      const events = buffer.split(/\r\n\r\n|\n\n|\r\r/);
+      buffer = events.pop() ?? '';
+      for (const event of events) {
+        const data: string[] = [];
+        for (const line of event.split(/\r\n|\n|\r/)) {
+          const colon = line.indexOf(':');
+          const field = colon < 0 ? line : line.slice(0, colon);
+          const text = colon < 0 ? '' : line.slice(colon + 1).replace(/^ /, '');
+          if (field === 'id' && text) resumable = true;
+          else if (field === 'data') data.push(text);
+        }
+        let message: unknown;
+        try {
+          message = data.length ? JSON.parse(data.join('\n')) : undefined;
+        } catch {
+          continue;
+        }
+        if (
+          isRecord(message) &&
+          message.id === id &&
+          ('result' in message || 'error' in message)
+        ) {
+          void reader.cancel().catch(() => {});
+          return 'answered';
+        }
+      }
+    }
+  } catch {
+    // The stream broke off
+  }
+  return resumable ? 'resumable' : 'lost';
 }
 function transportFor(
   connection: McpConnection,
@@ -597,6 +699,46 @@ function toolHints(
   };
 }
 type ToolResult = CallToolResult;
+/** The errors a request's chain of causes carries, outermost first. */
+function causes(error: unknown): { code?: unknown; message?: unknown }[] {
+  const chain: { code?: unknown; message?: unknown }[] = [];
+  for (
+    let cause = error;
+    isRecord(cause) || cause instanceof Error;
+    cause = (cause as { cause?: unknown }).cause
+  ) {
+    chain.push(cause as { code?: unknown; message?: unknown });
+    if (chain.length > 6) break;
+  }
+  return chain;
+}
+/** Failures before a request left this machine: nothing reached the server, so sending it again is safe (#555). */
+const NOT_SENT_CODES = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
+function notSent(error: unknown): boolean {
+  return causes(error).some(
+    (cause) => typeof cause.code === 'string' && NOT_SENT_CODES.has(cause.code),
+  );
+}
+/** The connection ended after the request was sent, so it may have reached the server (#555). */
+function droppedAfterSending(error: unknown): boolean {
+  return causes(error).some(
+    (cause) =>
+      (cause instanceof McpError &&
+        cause.code === ErrorCode.ConnectionClosed) ||
+      cause.code === 'UND_ERR_SOCKET' ||
+      cause.code === 'ECONNRESET' ||
+      /\b(terminated|other side closed|socket hang up|SSE stream disconnected)\b/i.test(
+        String(cause.message ?? ''),
+      ),
+  );
+}
 /**
  * Calls a server's tool and gives its result as the server sent it. The SDK's `callTool` checks a result against the
  * output schema it kept from the last listing of the tools and throws the result away when it does not match, as when
@@ -862,6 +1004,36 @@ export class McpManager {
     readonly callTimeout?: number,
     private readonly services: McpServices = {},
   ) {}
+  /** The waits before sending a call again that surely did not leave this machine (#555). */
+  retryWaitsMs: readonly number[] = [500, 1000, 2000];
+  /** How such a wait is made. */
+  wait = (ms: number, signal: AbortSignal): Promise<void> =>
+    delay(ms, undefined, { signal });
+  /**
+   * The client a call of this server goes out on: its connection now, since a turn keeps the tools it started with
+   * when the server is connected again. A connection that ended by itself, as when the server's program exited, is
+   * connected again first: nothing was sent on it (#555).
+   */
+  private async sender(
+    connection: McpConnection,
+    listed: Client,
+    signal: AbortSignal,
+  ): Promise<Client> {
+    const live = this.servers.find((item) => item.name === connection.name);
+    if (live?.open) return live.client;
+    if (!live) {
+      const state = this.status.find((item) => item.name === connection.name);
+      throw new Error(
+        `${connection.name} is not connected${state?.error ? `: ${state.error}` : ''}; /mcp reload ${connection.name} connects it again`,
+      );
+    }
+    const fresh = await abortable(this.connectedAgain(live.connection), signal);
+    if (fresh) return fresh;
+    const state = this.status.find((item) => item.name === connection.name);
+    throw new Error(
+      `the connection to ${connection.name} ended and connecting it again failed${state?.error ? `: ${state.error}` : ''}`,
+    );
+  }
   private readFile(
     path: string,
     context: ToolContext,
@@ -945,36 +1117,81 @@ export class McpManager {
         if (!hints.readOnly) this.results.forget(connection.name);
         try {
           // A new trace for each call, on the requests made for it
-          result = await toolCalls.run(
-            {
-              traceparent: traceparent(),
-              ...(context.identity ?? {}),
-            },
-            async () => {
-              // The SDK sends the cancellation from a listener on the signal, which runs
-              // where the abort came from, such as a key press: a signal of this call's own,
-              // aborted from within the call, keeps the trace on that request too
-              const own = new AbortController();
-              const forward = AsyncLocalStorage.bind(() =>
-                own.abort(context.signal.reason),
-              );
-              context.signal.addEventListener('abort', forward, { once: true });
-              if (context.signal.aborted) forward();
-              try {
-                return await callServerTool(
-                  client,
-                  { name: spec.name, arguments: sending },
-                  {
-                    signal: own.signal,
-                    timeout: this.callTimeout ?? NO_LIMIT,
-                    maxTotalTimeout: this.callTimeout,
-                  },
-                );
-              } finally {
-                context.signal.removeEventListener('abort', forward);
+          const store: CallStore = {
+            traceparent: traceparent(),
+            ...(context.identity ?? {}),
+          };
+          result = await toolCalls.run(store, async () => {
+            // The SDK sends the cancellation from a listener on the signal, which runs
+            // where the abort came from, such as a key press: a signal of this call's own,
+            // aborted from within the call, keeps the trace on that request too
+            const own = new AbortController();
+            const forward = AsyncLocalStorage.bind(() =>
+              own.abort(context.signal.reason),
+            );
+            context.signal.addEventListener('abort', forward, { once: true });
+            if (context.signal.aborted) forward();
+            try {
+              // A transport failure (#555). A request that surely never left this machine is sent again, a few
+              // times. One that may have reached the server is sent again only for a tool its trusted server says
+              // is read-only or idempotent, once, after connecting the server again; any other says it may have.
+              let target = await this.sender(connection, client, own.signal);
+              let resent = false;
+              for (let tries = 0; ; tries++) {
+                const attempt = new AbortController();
+                const stop = (): void => attempt.abort(own.signal.reason);
+                own.signal.addEventListener('abort', stop, { once: true });
+                if (own.signal.aborted) stop();
+                // The stream its answer was to come on ended without it, and nothing resumes it
+                store.lost = (error) => attempt.abort(error);
+                try {
+                  return await callServerTool(
+                    target,
+                    { name: spec.name, arguments: sending },
+                    {
+                      signal: attempt.signal,
+                      timeout: this.callTimeout ?? NO_LIMIT,
+                      maxTotalTimeout: this.callTimeout,
+                    },
+                  );
+                } catch (error) {
+                  if (own.signal.aborted) throw error;
+                  const said =
+                    error instanceof Error ? error.message : String(error);
+                  if (notSent(error)) {
+                    if (tries < this.retryWaitsMs.length) {
+                      await this.wait(this.retryWaitsMs[tries]!, own.signal);
+                      continue;
+                    }
+                    throw new Error(
+                      `${said} · ${connection.name} could not be reached in ${tries + 1} tries: the request was not sent`,
+                      { cause: error },
+                    );
+                  }
+                  if (!droppedAfterSending(error)) throw error;
+                  const fresh =
+                    !resent && (hints.readOnly || hints.idempotent)
+                      ? await abortable(
+                          this.connectedAgain(connection),
+                          own.signal,
+                        )
+                      : undefined;
+                  if (!fresh)
+                    throw new Error(
+                      `${said} · the connection to ${connection.name} ended after the call was sent: the request may have reached the server, so Circle did not send it again`,
+                      { cause: error },
+                    );
+                  resent = true;
+                  target = fresh;
+                } finally {
+                  own.signal.removeEventListener('abort', stop);
+                  store.lost = undefined;
+                }
               }
-            },
-          );
+            } finally {
+              context.signal.removeEventListener('abort', forward);
+            }
+          });
         } catch (error) {
           throw hiddenError(error, shown);
         }
@@ -1221,7 +1438,8 @@ export class McpManager {
       client.onclose = () => {
         if (!server.open) return;
         server.open = false;
-        state.error = 'the connection ended; reload to connect again';
+        state.error =
+          'the connection ended; the next call connects it again, and so does /mcp reload';
         this.results.forget(connection.name);
         this.services.onChange?.();
       };
@@ -1501,7 +1719,19 @@ export class McpManager {
     this.results.forget(server.name);
     this.services.onChange?.();
   }
-  /** After a sign-in: the server connected again with its tokens; its status, connection and tools replace the old. */
+  /** Connects a server again for a call to be sent on, and gives its new client, or nothing if it is not back. */
+  private async connectedAgain(
+    connection: McpConnection,
+  ): Promise<Client | undefined> {
+    try {
+      await this.connectAgain(connection, this.lifetime.signal);
+    } catch {
+      return undefined;
+    }
+    return this.servers.find(
+      (server) => server.name === connection.name && server.open,
+    )?.client;
+  }
   /**
    * One server again, from its entry as the settings have it now: connected again and its tools listed again, while
    * the other servers, and the programs started for them, stay as they are (#559). Without an entry the server is
@@ -1533,6 +1763,10 @@ export class McpManager {
     await McpManager.disconnect(replaced);
     this.services.onChange?.();
   }
+  /**
+   * A server connected again, after a sign-in with its tokens, for a reload of it alone or for a call (#555): its
+   * status, connection and tools replace the old.
+   */
   private async connectAgain(
     connection: McpConnection,
     lifetime: AbortSignal,
