@@ -283,49 +283,154 @@ test('/mcp reconnect all connects again the servers that failed, and leaves the 
   assert.equal(starts(up), before);
 });
 
-test('a session the server forgot while it ran a task is not sent again: the model is told the tool may have run', async (t) => {
+// A server on the 2026-07-28 revision that answers `deploy` with task-1 (the tasks extension). Read-only and
+// idempotent, so a call cut after it was sent would be sent once more: one whose task was made never is.
+const TASKS = 'io.modelcontextprotocol/tasks';
+const task = (state: Record<string, unknown>) => ({
+  taskId: 'task-1',
+  createdAt: '2026-11-14T00:00:00Z',
+  lastUpdatedAt: '2026-11-14T00:00:00Z',
+  ttlMs: null,
+  ...state,
+});
+async function tasking(
+  t: TestContext,
+  options: Pick<StubOptions, 'refuse' | 'drop'> & {
+    /** What tasks/get answers, by the poll it is; working unless said. */
+    get?: (poll: number) => Record<string, unknown> | undefined;
+  },
+) {
   let polls = 0;
-  const task = (status: string) => ({
-    taskId: 'task-1',
-    status,
-    ttl: null,
-    createdAt: '2026-11-14T00:00:00Z',
-    lastUpdatedAt: '2026-11-14T00:00:00Z',
-    pollInterval: 1,
-  });
   const stub: McpStub = await mcpStub(t, {
-    sessions: true,
+    modern: true,
     tools: [
       {
         name: 'deploy',
         inputSchema: schema,
-        execution: { taskSupport: 'optional' },
+        annotations: { readOnlyHint: true, idempotentHint: true },
       },
     ],
-    capabilities: { tasks: { cancel: {}, requests: { tools: { call: {} } } } },
-    call: (request) =>
-      request.message!.params!.task
-        ? ({ task: task('working') } as never)
-        : { content: [{ type: 'text', text: 'ran' }] },
+    capabilities: { extensions: { [TASKS]: {} } },
+    call: () => ({ resultType: 'task', ...task({ status: 'working' }) }),
     answer: (request) => {
-      if (request.message?.method === 'tasks/result')
-        return { content: [{ type: 'text', text: 'deployed' }] };
-      if (request.message?.method !== 'tasks/get') return undefined;
-      // The session is lost while the task is under way, as when the server restarts
-      if (++polls === 1) stub.dropSessions();
-      return task(polls >= 3 ? 'completed' : 'working');
+      const method = request.message!.method;
+      if (method === 'tasks/update' || method === 'tasks/cancel') return {};
+      if (method !== 'tasks/get') return undefined;
+      return task(options.get?.(++polls) ?? { status: 'working' });
     },
+    ...(options.refuse ? { refuse: options.refuse } : {}),
+    ...(options.drop ? { drop: options.drop } : {}),
   });
-  const { manager: mcp } = manager(t);
-  await mcp.load({ ci: { type: 'http', url: stub.url } });
+  // Tasks are taken in an interactive session
+  const made = manager(t, {
+    interactive: true,
+    ask: async () => JSON.stringify(['yes', 'send']),
+  });
+  await made.manager.load({ ci: { type: 'http', url: stub.url } });
+  const sent = (method: string) =>
+    stub.requests.filter((request) => request.message?.method === method)
+      .length;
+  return { stub, ...made, sent };
+}
+
+test('a session the server forgot while it ran a task is not sent again: the model is told the tool may have run', async (t) => {
+  // The session is lost while the task is under way, as when the server restarts: its status request is refused
+  let gets = 0;
+  const {
+    stub,
+    manager: mcp,
+    sent,
+  } = await tasking(t, {
+    refuse: (request) =>
+      request.message?.method === 'tasks/get' && ++gets >= 2
+        ? { status: 404, body: 'Session not found' }
+        : undefined,
+  });
   await assert.rejects(
     mcp.tools[0]!.run({}, context()),
     /the server lost the session while task task-1 was running: the tool may have run, so check whether it did before calling it again/,
   );
-  // The call that made the task was sent once, and nothing was sent again
-  assert.equal(
-    stub.calls().filter((request) => request.message?.params?.task).length,
-    1,
-  );
+  // The call that made the task was sent once, and nothing was sent again; the server was not connected again
+  assert.equal(sent('tools/call'), 1);
+  assert.equal(sent('tasks/get'), 2);
   assert.equal(starts(stub), 1);
+});
+
+test("a session the server forgot when Circle answers a task's question is not sent again either", async (t) => {
+  const question = {
+    method: 'elicitation/create',
+    params: {
+      mode: 'form',
+      message: 'Go on?',
+      requestedSchema: {
+        type: 'object',
+        properties: { yes: { type: 'boolean', title: 'Yes' } },
+        required: ['yes'],
+      },
+    },
+  };
+  const { manager: mcp, sent } = await tasking(t, {
+    get: () => ({
+      status: 'input_required',
+      inputRequests: { go: question },
+    }),
+    refuse: (request) =>
+      request.message?.method === 'tasks/update'
+        ? { status: 404, body: 'Session not found' }
+        : undefined,
+  });
+  await assert.rejects(
+    mcp.tools[0]!.run({}, context()),
+    /the server lost the session while task task-1 was running: the tool may have run/,
+  );
+  assert.equal(sent('tasks/update'), 1);
+  assert.equal(sent('tools/call'), 1);
+
+  // Answers whose connection is cut every time are tried again, then the task is cancelled; the call stays sent once
+  const cut = await tasking(t, {
+    get: () => ({
+      status: 'input_required',
+      inputRequests: { go: question },
+    }),
+    drop: (request) => request.message?.method === 'tasks/update',
+  });
+  await assert.rejects(
+    cut.manager.tools[0]!.run({}, context()),
+    /the answers to task task-1 of ci could not be sent .*; Circle asked the server to cancel the task/,
+  );
+  assert.equal(cut.sent('tasks/update'), 4);
+  await until(() => cut.sent('tasks/cancel') === 1);
+  assert.equal(cut.sent('tools/call'), 1);
+});
+
+test('a connection cut while a task runs asks again how it stands; one that cannot be made again ends the call, which is not sent again', async (t) => {
+  // The first status request's socket is cut: the task is asked about again, and the call gets its result
+  let gets = 0;
+  const cut = await tasking(t, {
+    drop: (request) => request.message?.method === 'tasks/get' && ++gets === 1,
+    get: () => ({
+      status: 'completed',
+      result: { content: [{ type: 'text', text: 'deployed' }] },
+    }),
+  });
+  assert.equal(
+    String(await cut.manager.tools[0]!.run({}, context())),
+    'deployed',
+  );
+  assert.equal(cut.sent('tasks/get'), 2);
+  assert.equal(cut.sent('tools/call'), 1);
+
+  // The connection ends while Circle waits to ask again, and the server cannot be reached to make it again
+  const gone = await tasking(t, {});
+  let waited = 0;
+  gone.manager.wait = async () => {
+    if (++waited !== 2) return;
+    await gone.stub.pause();
+    await serverOf(gone.manager).client.close();
+  };
+  await assert.rejects(
+    gone.manager.tools[0]!.run({}, context()),
+    /the connection to ci ended while task task-1 was running: the tool may have run, so check whether it did before calling it again/,
+  );
+  assert.equal(gone.sent('tools/call'), 1);
 });

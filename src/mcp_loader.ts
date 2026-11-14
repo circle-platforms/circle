@@ -1,9 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
+  CLIENT_CAPABILITIES_META_KEY,
   Client,
   ProtocolError,
+  ProtocolErrorCode,
   SdkError,
   SdkErrorCode,
   SdkHttpError,
@@ -12,9 +14,11 @@ import {
   StreamableHTTPClientTransport,
   UnauthorizedError,
   type CallToolResult,
+  type ConnectOptions,
   type ElicitResult,
   type FetchLike,
   type Implementation,
+  type JSONRPCResponse,
   type JsonSchemaType,
   type McpSubscription,
   type PriorDiscovery,
@@ -26,9 +30,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/client/validators/ajv';
 import {
   CallToolResultSchema,
-  CancelTaskResultSchema,
-  CreateTaskResultSchema,
-  GetTaskResultSchema,
+  JSONObjectSchema,
   ListResourcesResultSchema,
   ListToolsResultSchema,
 } from '@modelcontextprotocol/core';
@@ -970,17 +972,31 @@ function passing(error: unknown): boolean {
   const status = httpStatus(error);
   return notSent(error) || (status !== undefined && status >= 500);
 }
+/** A server's answer that it does not know a task (an invalid `taskId`, -32602). */
+function unknownTask(error: unknown): boolean {
+  return (
+    error instanceof ProtocolError &&
+    error.code === ProtocolErrorCode.InvalidParams
+  );
+}
+/** A request that got no answer in its time. */
+function timedOut(error: unknown): boolean {
+  return causes(error).some(
+    (cause) =>
+      cause instanceof SdkError && cause.code === SdkErrorCode.RequestTimeout,
+  );
+}
 /** A call that reached the server and whose answer cannot come: its answer's stream ended, or its task was lost. */
 class Lost extends SdkError {
   constructor(message: string) {
     super(SdkErrorCode.ConnectionClosed, message);
   }
 }
-/**
- * The server forgot the session while a task it made for the call ran: the tool may have run, whatever the server
- * says of it, so the call is not sent again on a new session.
- */
-class TaskSessionLost extends Error {}
+/** What the model reads when the server lost the session, or the connection ended, while a task of the call ran. */
+const taskLost = (lost: string, taskId: string): string =>
+  `${lost} while task ${taskId} was running: the tool may have run, so check whether it did before calling it again`;
+/** The session or the connection a task of the call ran on was lost: the call is not sent again. */
+class TaskLost extends Error {}
 /**
  * The connection ended after the request was sent, so it may have reached the server (#555): the MCP library closed
  * the connection under the call, the call's answer was lost, or the socket was cut. A server's own error is none of
@@ -1050,26 +1066,149 @@ function taskText(task: { status: string; statusMessage?: string }): string {
   const status = `task ${task.status.replace(/_/g, ' ')}`;
   return task.statusMessage ? `${status} · ${task.statusMessage}` : status;
 }
-/**
- * How a tool is called (#554). A tool that says it may or must run as a task (`execution.taskSupport`, the
- * 2025-11-25 revision) goes as one when its server says it runs tool calls as tasks; one that must, on a server that
- * does not, is not sent, since the server would refuse it.
- */
-function callMode(spec: unknown, client: Client): 'call' | 'task' | 'refused' {
-  const execution = isRecord(spec) ? spec.execution : undefined;
-  const support = isRecord(execution) ? execution.taskSupport : undefined;
-  const capabilities = client.getServerCapabilities() as
-    { tasks?: { requests?: { tools?: { call?: unknown } } } } | undefined;
-  const served = isRecord(capabilities?.tasks?.requests?.tools?.call);
-  if (support === 'required') return served ? 'task' : 'refused';
-  return support === 'optional' && served ? 'task' : 'call';
-}
-const TASK_ENDS = new Set([
+/** The tasks extension of the 2026-07-28 revision, as client and server declare it. */
+export const TASKS_EXTENSION = 'io.modelcontextprotocol/tasks';
+/** What Circle takes, as it declares it: a server's questions by a form and by a page to open. */
+const CAPABILITIES = { elicitation: { form: {}, url: {} } };
+/** The `_meta` of a request that declares the tasks extension too: a call that may get a task, and tasks/* requests. */
+const TASKS_META = {
+  [CLIENT_CAPABILITIES_META_KEY]: {
+    ...CAPABILITIES,
+    extensions: { [TASKS_EXTENSION]: {} },
+  },
+};
+/** How far apart Circle asks how a task stands when its server says nothing, and the least and most apart it asks. */
+export const TASK_POLL_MS = 2000;
+export const TASK_POLL_MIN_MS = 250;
+export const TASK_POLL_MAX_MS = 30_000;
+/** The most questions of one task Circle answers; any after them are left. */
+export const MAX_TASK_INPUTS = 16;
+const TASK_STATUSES = new Set([
+  'working',
+  'input_required',
   'completed',
   'failed',
   'cancelled',
-  'input_required',
 ]);
+/** A task as a server gives it, in answer to a call or to `tasks/get`. */
+interface TaskState {
+  taskId: string;
+  status: string;
+  statusMessage?: string;
+  pollIntervalMs?: number;
+  result?: unknown;
+  error?: unknown;
+  inputRequests?: unknown;
+}
+/** A task as a server gave it, checked: a task id of at most 128 printable characters and a status. */
+function taskState(raw: unknown, server: string, tool: string): TaskState {
+  if (
+    !isRecord(raw) ||
+    typeof raw.taskId !== 'string' ||
+    !/^[\x21-\x7e]{1,128}$/.test(raw.taskId) ||
+    typeof raw.status !== 'string'
+  )
+    throw new Error(
+      `MCP server "${server}" returned a malformed task handle for tool "${tool}"`,
+    );
+  return {
+    taskId: raw.taskId,
+    status: raw.status,
+    ...(typeof raw.statusMessage === 'string'
+      ? { statusMessage: raw.statusMessage }
+      : {}),
+    ...(typeof raw.pollIntervalMs === 'number' &&
+    Number.isFinite(raw.pollIntervalMs)
+      ? { pollIntervalMs: raw.pollIntervalMs }
+      : {}),
+    result: raw.result,
+    error: raw.error,
+    inputRequests: raw.inputRequests,
+  };
+}
+/** The `_meta` key of the result Circle's client puts in place of a task a server answered a call with. */
+const TASK_ANSWER = 'circle/task-answer';
+/**
+ * The MCP client, which hands Circle a task a server answered a call with (the 2026-07-28 tasks extension): the library
+ * takes such an answer for one it cannot read, so the client notes which calls declared the extension as they go out,
+ * keeps a task answered to one of them, and gives the library a result in its place that names it.
+ */
+class CircleClient extends Client {
+  // The ids of the calls sent declaring the extension, until each is answered
+  private readonly mayBeTasks = new Set<string | number>();
+  // The tasks servers answered them with, by the name the result in their place carries
+  private readonly tasks = new Map<string, Record<string, unknown>>();
+  override async connect(
+    transport: Transport,
+    options?: ConnectOptions,
+  ): Promise<void> {
+    const send = transport.send.bind(transport);
+    transport.send = (message, sendOptions) => {
+      if (
+        'method' in message &&
+        message.method === 'tools/call' &&
+        'id' in message &&
+        declaresTasks(message.params)
+      )
+        this.mayBeTasks.add(message.id);
+      return send(message, sendOptions);
+    };
+    return super.connect(transport, options);
+  }
+  protected override _onresponse(response: JSONRPCResponse): void {
+    if (
+      response.id !== undefined &&
+      this.mayBeTasks.delete(response.id) &&
+      'result' in response &&
+      isRecord(response.result) &&
+      response.result.resultType === 'task'
+    ) {
+      const name = randomUUID();
+      this.tasks.set(name, response.result);
+      super._onresponse({
+        ...response,
+        result: {
+          resultType: 'complete',
+          content: [],
+          _meta: { [TASK_ANSWER]: name },
+        },
+      });
+      return;
+    }
+    super._onresponse(response);
+  }
+  /** The task a call's result stands in for, once; nothing for any other result. */
+  takeTask(result: ToolResult): Record<string, unknown> | undefined {
+    const name = isRecord(result._meta) ? result._meta[TASK_ANSWER] : undefined;
+    if (typeof name !== 'string') return undefined;
+    const task = this.tasks.get(name);
+    this.tasks.delete(name);
+    return task;
+  }
+}
+/** Whether a request's params declare the tasks extension. */
+function declaresTasks(params: unknown): boolean {
+  const meta = isRecord(params) ? params._meta : undefined;
+  const capabilities = isRecord(meta)
+    ? meta[CLIENT_CAPABILITIES_META_KEY]
+    : undefined;
+  const extensions = isRecord(capabilities)
+    ? capabilities.extensions
+    : undefined;
+  return isRecord(extensions) && isRecord(extensions[TASKS_EXTENSION]);
+}
+/**
+ * A tool the 2025-11-25 revision has run only as a task of that revision (`execution.taskSupport: "required"`), which
+ * Circle does not run: on a connection of that revision such a call is not sent, since the server would refuse it.
+ */
+function onlyAnOldTask(spec: unknown, client: Client): boolean {
+  const execution = isRecord(spec) ? spec.execution : undefined;
+  return (
+    isRecord(execution) &&
+    execution.taskSupport === 'required' &&
+    client.getProtocolEra() !== 'modern'
+  );
+}
 /**
  * Whether a structured result matches the output schema a tool was listed with, compiled when first needed: undefined
  * when the tool has no output schema or it cannot be compiled, since then nothing can be said either way.
@@ -1165,7 +1304,7 @@ export const NOT_SENT =
 /** A server Circle is connected to. */
 interface Connected {
   name: string;
-  client: Client;
+  client: CircleClient;
   connection: McpConnection;
   /** The address it was reached at, its references filled in. */
   url?: string;
@@ -1551,7 +1690,7 @@ export class McpManager {
   private async sender(
     connection: McpConnection,
     signal: AbortSignal,
-  ): Promise<Client> {
+  ): Promise<CircleClient> {
     const live = this.servers.find((item) => item.name === connection.name);
     if (live?.open) return live.client;
     if (!live) {
@@ -1689,6 +1828,10 @@ export class McpManager {
               let target = await this.sender(connection, own.signal);
               let resent = false;
               let renewed = false;
+              const started = this.now();
+              // Once the server made a task for the call, the call has reached it: whatever then fails, the session or
+              // the connection lost, or the task no longer known, the call is not sent again
+              let made = false;
               for (let tries = 0; ; tries++) {
                 const attempt = new AbortController();
                 const stop = (): void => attempt.abort(own.signal.reason);
@@ -1697,10 +1840,9 @@ export class McpManager {
                 // The stream its answer was to come on ended without it, and nothing resumes it
                 store.lost = (error) => attempt.abort(error);
                 try {
-                  const mode = callMode(spec, target);
-                  if (mode === 'refused')
+                  if (onlyAnOldTask(spec, target))
                     throw new Error(
-                      `${spec.name} runs only as a task, and ${connection.name} does not say it runs tool calls as tasks; nothing was sent`,
+                      `${spec.name} runs only as a task of the 2025-11-25 revision, which Circle does not run; nothing was sent`,
                     );
                   // The idle limit, which a progress notice starts again, and the most the call may take. The MCP
                   // library looks at the latter only when a notice comes, so the idle limit is never more than it.
@@ -1713,13 +1855,35 @@ export class McpManager {
                     // Asks the server for progress notices, shown on the call's row
                     onprogress: (notice) => report(progressText(notice)),
                   };
-                  const params = { name: spec.name, arguments: sending };
-                  return mode === 'task'
-                    ? await this.callAsTask(target, params, options, report)
-                    : await callServerTool(target, params, options, spec);
+                  // A call that may be answered with a task says so; the server decides whether it is
+                  const asTask = this.takesTasks(target, context);
+                  const answered = await callServerTool(
+                    target,
+                    {
+                      name: spec.name,
+                      arguments: sending,
+                      ...(asTask ? { _meta: TASKS_META } : {}),
+                    },
+                    options,
+                    spec,
+                  );
+                  const task = asTask ? target.takeTask(answered) : undefined;
+                  if (!task) return answered;
+                  made = true;
+                  return await this.followTask(
+                    connection,
+                    spec.name,
+                    task,
+                    {
+                      signal: attempt.signal,
+                      stopped: own.signal,
+                      deadline: started + total,
+                      idleMs: this.idleMs(connection),
+                    },
+                    report,
+                  );
                 } catch (error) {
-                  if (own.signal.aborted || error instanceof TaskSessionLost)
-                    throw error;
+                  if (own.signal.aborted || made) throw error;
                   const said =
                     error instanceof Error ? error.message : String(error);
                   if (notSent(error)) {
@@ -2017,7 +2181,7 @@ export class McpManager {
       ...(connection.notSent ? { notSent: connection.notSent } : {}),
     };
     // The platform is an extra member of clientInfo, a declaration a server may read or ignore.
-    const client = new Client(
+    const client = new CircleClient(
       {
         name: 'circle',
         version: VERSION,
@@ -2025,7 +2189,7 @@ export class McpManager {
       } as Implementation,
       // A server may ask the person for input in the middle of a call, with a form or by a page to open (#556). Circle
       // says it takes both; where no one can be asked a question is cancelled, unless a hook answers it.
-      { capabilities: { elicitation: { form: {}, url: {} } } },
+      { capabilities: CAPABILITIES },
     );
     client.setRequestHandler('elicitation/create', (request, context) =>
       this.elicit(
@@ -2540,106 +2704,237 @@ export class McpManager {
     this.services.onChange?.();
   }
   /**
-   * A tool call as a task (2025-11-25, #554): the server makes the task and answers at once; Circle asks how it stands
-   * as often as the server says to and shows it on the call's row, then reads the call's result. esc cancels the task.
-   * Once the task is made the call has reached the server, so a failure to follow it is never one that left nothing
-   * sent (#555).
+   * Whether a call may be answered with a task (the 2026-07-28 tasks extension): a call of the conversation itself, not
+   * a subagent's, in an interactive session, to a server on that revision that says it runs tasks.
    */
-  private async callAsTask(
-    client: Client,
-    params: { name: string; arguments: Record<string, unknown> },
-    options: RequestOptions,
+  private takesTasks(client: CircleClient, context: ToolContext): boolean {
+    const extensions = client.getServerCapabilities()?.extensions;
+    return Boolean(
+      this.services.interactive &&
+      !context.identity?.agentId &&
+      client.getProtocolEra() === 'modern' &&
+      isRecord(extensions?.[TASKS_EXTENSION]),
+    );
+  }
+  /**
+   * A call its server answered with a task (the 2026-07-28 tasks extension), followed until the task ends: Circle asks
+   * how it stands with `tasks/get` as far apart as the server says (`pollIntervalMs`, kept between 250 ms and 30
+   * seconds, and 2 seconds when it says nothing) and shows it on the call's row; answers the questions it asks
+   * (`input_required`) with `tasks/update`; and gives the call the task's result, or says why there is none. Stopping
+   * the call (esc, or stopping the job it went on as) sends `tasks/cancel`, and so do its time limits: the most the call
+   * may take from its start, and its idle limit, which each answer to `tasks/get` starts again. A status request that is
+   * not answered is made again while the limits allow. Once the server made the task, the call has reached it and is
+   * never sent again: a session the server lost (HTTP 404) or a connection that cannot be made again while the task
+   * runs, and a task the server no longer knows (-32602), end the call with what Circle can say of it.
+   */
+  private async followTask(
+    connection: McpConnection,
+    tool: string,
+    answer: Record<string, unknown>,
+    limits: {
+      signal: AbortSignal;
+      stopped: AbortSignal;
+      deadline: number;
+      idleMs: number;
+    },
     show: (text: string) => void,
   ): Promise<ToolResult> {
-    const signal = options.signal!;
-    const created = await client.request(
-      { method: 'tools/call', params: { ...params, task: {} } },
-      CreateTaskResultSchema,
-      options,
-    );
-    let task: {
-      taskId: string;
-      status: string;
-      statusMessage?: string;
-      pollInterval?: number;
-    } = created.task;
-    const taskId = task.taskId;
+    const server = connection.name;
+    const { signal } = limits;
+    let task = taskState(answer, server, tool);
+    const { taskId } = task;
+    let cancelling = false;
+    // Asks the server to cancel the task, once, on its connection of the moment; what it does then is the server's
     const cancel = (): void => {
-      void client
+      if (cancelling) return;
+      cancelling = true;
+      const live = this.servers.find(
+        (item) => item.name === server && item.open,
+      );
+      void live?.client
         .request(
-          { method: 'tasks/cancel', params: { taskId } },
-          CancelTaskResultSchema,
+          { method: 'tasks/cancel', params: { taskId, _meta: TASKS_META } },
+          JSONObjectSchema,
           { timeout: this.timeout },
         )
         .catch(() => {});
     };
-    signal.addEventListener('abort', cancel, { once: true });
-    const follow = async <T>(request: () => Promise<T>): Promise<T> => {
-      for (let tries = 0; ; tries++) {
-        try {
-          return await request();
-        } catch (error) {
-          if (signal.aborted) throw error;
-          // A 404 here answers tasks/get or tasks/result, not the call: the call made the task, so it may have run
-          if (sessionGone(error, client))
-            throw new TaskSessionLost(
-              `the server lost the session while task ${taskId} was running: the tool may have run, so check whether it did before calling it again`,
-            );
-          if (notSent(error) && tries < this.retryWaitsMs.length) {
-            await this.wait(this.retryWaitsMs[tries]!, signal);
-            continue;
-          }
-          if (notSent(error) || droppedAfterSending(error))
-            throw new Lost(
-              `the server made task ${taskId} for the call, and following it failed: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          throw error;
-        }
-      }
-    };
+    limits.stopped.addEventListener('abort', cancel, { once: true });
+    if (limits.stopped.aborted) cancel();
+    const answered = new Set<string>();
+    let heard = this.now();
     try {
       for (;;) {
         show(taskText(task));
-        if (TASK_ENDS.has(task.status)) break;
+        if (task.status === 'completed') {
+          const result = CallToolResultSchema.safeParse(task.result);
+          if (!result.success)
+            throw new Error(
+              `task ${taskId} of ${server} completed without a result Circle can read`,
+            );
+          return result.data as ToolResult;
+        }
+        if (task.status === 'failed')
+          throw new Error(
+            isRecord(task.error) && typeof task.error.message === 'string'
+              ? task.error.message
+              : (task.statusMessage ?? 'Task failed'),
+          );
+        if (task.status === 'cancelled')
+          throw new Error(
+            task.statusMessage ?? 'Task was cancelled by the server',
+          );
+        if (!TASK_STATUSES.has(task.status)) {
+          cancel();
+          throw new Error(
+            `task ${taskId} of ${server} has a status Circle does not know (${JSON.stringify(task.status)}); Circle asked the server to cancel it`,
+          );
+        }
+        if (task.status === 'input_required')
+          await this.answerTask(connection, task, answered, signal, cancel);
         const interval = Math.min(
-          Math.max(task.pollInterval ?? 1000, 50),
-          30_000,
+          Math.max(task.pollIntervalMs ?? TASK_POLL_MS, TASK_POLL_MIN_MS),
+          TASK_POLL_MAX_MS,
         );
-        await delay(interval, undefined, { signal });
-        task = await follow(() =>
-          client.request(
-            { method: 'tasks/get', params: { taskId } },
-            GetTaskResultSchema,
-            { signal, timeout: this.timeout },
-          ),
+        for (;;) {
+          await this.wait(interval, signal);
+          const left = Math.min(
+            limits.deadline - this.now(),
+            limits.idleMs - (this.now() - heard),
+          );
+          if (left <= 0) {
+            cancel();
+            throw new Error(
+              `task ${taskId} of ${server} ran past the call's time limit; Circle asked the server to cancel it`,
+            );
+          }
+          try {
+            const client = await this.taskClient(connection, taskId, signal);
+            task = taskState(
+              await client.request(
+                { method: 'tasks/get', params: { taskId, _meta: TASKS_META } },
+                JSONObjectSchema,
+                { signal, timeout: Math.min(left, this.timeout) },
+              ),
+              server,
+              tool,
+            );
+            heard = this.now();
+            break;
+          } catch (error) {
+            if (signal.aborted || error instanceof TaskLost) throw error;
+            if (unknownTask(error))
+              throw new Error(
+                `${server} no longer knows task ${taskId}: its outcome is unknown. Calling the tool again may do the work twice; find out from the server what was done first`,
+              );
+            if (httpStatus(error) === 404)
+              throw new TaskLost(
+                taskLost('the server lost the session', taskId),
+              );
+            // Not answered, as when the server or the way to it is busy: asked again while the limits allow
+            if (
+              !passing(error) &&
+              !droppedAfterSending(error) &&
+              !timedOut(error)
+            )
+              throw error;
+          }
+        }
+      }
+    } finally {
+      limits.stopped.removeEventListener('abort', cancel);
+    }
+  }
+  /**
+   * The client a task's requests go out on: the server's connection of the moment, connected again where it can be;
+   * else the task is lost to Circle.
+   */
+  private async taskClient(
+    connection: McpConnection,
+    taskId: string,
+    signal: AbortSignal,
+  ): Promise<CircleClient> {
+    try {
+      return await this.sender(connection, signal);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      throw new TaskLost(
+        taskLost(`the connection to ${connection.name} ended`, taskId),
+        { cause: error },
+      );
+    }
+  }
+  /**
+   * The questions a task asks (`inputRequests`), each answered once, as a server's question in a call is, and the answers
+   * sent with `tasks/update`, at most MAX_TASK_INPUTS of a task. A question other than `elicitation/create`, or answers
+   * that cannot be sent, have Circle ask the server to cancel the task, and the call fails.
+   */
+  private async answerTask(
+    connection: McpConnection,
+    task: TaskState,
+    answered: Set<string>,
+    signal: AbortSignal,
+    cancel: () => void,
+  ): Promise<void> {
+    const server = connection.name;
+    const requests = isRecord(task.inputRequests) ? task.inputRequests : {};
+    const responses: Record<string, ElicitResult> = {};
+    for (const [key, request] of Object.entries(requests)) {
+      if (answered.has(key)) continue;
+      if (answered.size >= MAX_TASK_INPUTS) break;
+      answered.add(key);
+      if (
+        !isRecord(request) ||
+        request.method !== 'elicitation/create' ||
+        !isRecord(request.params)
+      ) {
+        cancel();
+        throw new Error(
+          `task ${task.taskId} of ${server} asks for ${isRecord(request) && typeof request.method === 'string' ? request.method : 'what it does not name'}, which Circle does not answer; Circle asked the server to cancel the task`,
         );
       }
-      if (task.status === 'cancelled')
-        throw new Error(
-          `the server cancelled task ${taskId}${task.statusMessage ? `: ${task.statusMessage}` : ''}`,
-        );
-      // The call's result or error. A task that waits on input is asked for it while this waits.
+      responses[key] = await this.elicit(server, request.params, signal);
+    }
+    if (!Object.keys(responses).length) return;
+    for (let tries = 0; ; tries++) {
       try {
-        return await follow(() =>
-          client.request(
-            { method: 'tasks/result', params: { taskId } },
-            CallToolResultSchema,
-            {
-              signal,
-              timeout: options.timeout,
-              maxTotalTimeout: options.maxTotalTimeout,
+        const client = await this.taskClient(connection, task.taskId, signal);
+        await client.request(
+          {
+            method: 'tasks/update',
+            params: {
+              taskId: task.taskId,
+              inputResponses: responses,
+              _meta: TASKS_META,
             },
-          ),
+          },
+          JSONObjectSchema,
+          { signal, timeout: this.timeout },
         );
+        return;
       } catch (error) {
-        if (task.status !== 'failed' || signal.aborted) throw error;
+        if (signal.aborted || error instanceof TaskLost) throw error;
+        if (unknownTask(error))
+          throw new Error(
+            `${server} no longer knows task ${task.taskId}: its outcome is unknown. Calling the tool again may do the work twice; find out from the server what was done first`,
+          );
+        if (httpStatus(error) === 404)
+          throw new TaskLost(
+            taskLost('the server lost the session', task.taskId),
+          );
+        if (
+          (passing(error) || droppedAfterSending(error) || timedOut(error)) &&
+          tries < this.retryWaitsMs.length
+        ) {
+          await this.wait(this.retryWaitsMs[tries]!, signal);
+          continue;
+        }
+        cancel();
         throw new Error(
-          `task ${taskId} failed${task.statusMessage ? `: ${task.statusMessage}` : ''} (${error instanceof Error ? error.message : String(error)})`,
+          `the answers to task ${task.taskId} of ${server} could not be sent (${error instanceof Error ? error.message : String(error)}); Circle asked the server to cancel the task`,
           { cause: error },
         );
       }
-    } finally {
-      signal.removeEventListener('abort', cancel);
     }
   }
   /** The calls under way to each server: a question from a server is withdrawn once none of them is (#556). */
@@ -2789,7 +3084,7 @@ export class McpManager {
    */
   private async resendTarget(
     connection: McpConnection,
-  ): Promise<Client | undefined> {
+  ): Promise<CircleClient | undefined> {
     const live = this.servers.find((item) => item.name === connection.name);
     if (!live) return undefined;
     return live.open ? live.client : this.connectedAgain(live.connection);
@@ -2957,7 +3252,7 @@ export class McpManager {
     });
     this.reconnects.set(connection.name, reconnect);
   }
-  private reconnects = new Map<string, Promise<Client | undefined>>();
+  private reconnects = new Map<string, Promise<CircleClient | undefined>>();
   /**
    * Connects a server again for calls to be sent on, and gives its new client, or nothing if it is not back: once for
    * all the calls that need it at the same time. It runs outside the call that asked, since the connection outlives
@@ -2965,7 +3260,7 @@ export class McpManager {
    */
   private connectedAgain(
     connection: McpConnection,
-  ): Promise<Client | undefined> {
+  ): Promise<CircleClient | undefined> {
     const running = this.reconnects.get(connection.name);
     if (running) return running;
     const reconnect = toolCalls.exit(async () => {
