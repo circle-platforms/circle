@@ -186,7 +186,11 @@ test('a server that goes away leaves the system prompt, and a reconnect reads it
     );
     await new Promise((done) => setTimeout(done, 10));
   }
-  assert.match(runtime.mcp.status[0]!.error, /the connection ended/);
+  // Someone is there to start it again: it stays failed until /mcp reconnect or a reload
+  assert.match(
+    runtime.mcp.status[0]!.error,
+    /the program exited; \/mcp reconnect stdio-server starts it again/,
+  );
   assert.deepEqual(runtime.mcp.instructions(), []);
   await runtime.harness.run('are you still there?');
   assert.ok(!model.requests[2]!.system.includes('mcp_server_instructions'));

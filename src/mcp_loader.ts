@@ -3,8 +3,14 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import {
+  SSEClientTransport,
+  SseError,
+} from '@modelcontextprotocol/sdk/client/sse.js';
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPError,
+} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import {
@@ -174,7 +180,24 @@ export interface McpServices {
    * (#556). Without it such a request is cancelled.
    */
   ask?: (args: Record<string, unknown>, signal: AbortSignal) => Promise<string>;
+  /**
+   * Someone is there to reconnect a server: a program that exits is marked failed until `/mcp reconnect`, rather than
+   * started again by the next call.
+   */
+  interactive?: boolean;
 }
+/** A limit in milliseconds from the environment, or the default when it is not a number of 0 or more. */
+function envMs(name: string, fallback: number): number {
+  const raw = process.env[name];
+  const value = raw === undefined || raw.trim() === '' ? NaN : Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+/** The most a tool call may take unless its server's entry or CIRCLE_MCP_TOOL_TIMEOUT says otherwise: about 28 hours. */
+export const DEFAULT_CALL_TIMEOUT_MS = 100_000_000;
+/** How long a call to a server reached over the network may go without an answer or a progress notice. */
+export const REMOTE_IDLE_MS = 5 * 60_000;
+/** The same for a program started for a server. */
+export const STDIO_IDLE_MS = 30 * 60_000;
 /**
  * A tool's file parameters: its top-level properties that are base64 text
  * (`contentEncoding: "base64"`), which the model fills with a local file's path.
@@ -831,6 +854,31 @@ function notSent(error: unknown): boolean {
     (cause) => typeof cause.code === 'string' && NOT_SENT_CODES.has(cause.code),
   );
 }
+/** An HTTP status a request failed with, when it failed with one. */
+function httpStatus(error: unknown): number | undefined {
+  for (const cause of causes(error))
+    if (
+      (cause instanceof StreamableHTTPError || cause instanceof SseError) &&
+      typeof cause.code === 'number' &&
+      cause.code > 0
+    )
+      return cause.code;
+  return undefined;
+}
+/** A server reached over HTTP that no longer knows the session the request named. */
+function sessionGone(error: unknown, client: Client): boolean {
+  const transport = client.transport;
+  return (
+    httpStatus(error) === 404 &&
+    transport instanceof StreamableHTTPClientTransport &&
+    transport.sessionId !== undefined
+  );
+}
+/** A failure that may pass if the request is made again: nothing was sent, or the server answered 5xx. */
+function passing(error: unknown): boolean {
+  const status = httpStatus(error);
+  return notSent(error) || (status !== undefined && status >= 500);
+}
 /** A call that reached the server and whose answer cannot come: its answer's stream ended, or its task was lost. */
 class Lost extends McpError {
   constructor(message: string) {
@@ -1166,16 +1214,43 @@ export class McpManager {
     Connected,
     { wait?: NodeJS.Timeout; running?: Promise<void>; again?: boolean }
   >();
-  // `timeout` bounds connecting and listing tools. A tool call has no limit unless `callTimeout`
-  // is given: a tool may wait minutes (a login), and an interrupt cancels it.
+  // `timeout` bounds connecting a server, 30 seconds unless CIRCLE_MCP_TIMEOUT says otherwise. `callTimeout` is the
+  // most a tool call may take where its server's entry gives no `timeout`: about 28 hours unless
+  // CIRCLE_MCP_TOOL_TIMEOUT says otherwise. A call also ends when it goes without an answer or a progress notice for
+  // the idle limit (idleMs). An interrupt cancels a call at any time.
   constructor(
     readonly workspace: string,
-    readonly timeout = 30000,
+    readonly timeout = envMs('CIRCLE_MCP_TIMEOUT', 30_000),
     readonly callTimeout?: number,
     private readonly services: McpServices = {},
   ) {}
+  /**
+   * The idle limit of a call: five minutes for a server reached over the network and thirty for a program, unless
+   * CIRCLE_MCP_TOOL_IDLE_TIMEOUT says otherwise (0: none). A server's own `timeout` is the least it can be.
+   */
+  private idleMs(connection: McpConnection): number {
+    const fallback =
+      connection.transport === 'stdio' ? STDIO_IDLE_MS : REMOTE_IDLE_MS;
+    const idle = envMs('CIRCLE_MCP_TOOL_IDLE_TIMEOUT', fallback);
+    if (idle === 0) return NO_LIMIT;
+    return Math.max(idle, connection.timeout ?? 0);
+  }
+  /** The most one call of a server may take. */
+  private totalMs(connection: McpConnection): number {
+    return (
+      connection.timeout ??
+      this.callTimeout ??
+      envMs('CIRCLE_MCP_TOOL_TIMEOUT', DEFAULT_CALL_TIMEOUT_MS)
+    );
+  }
   /** The waits before sending a call again that surely did not leave this machine (#555). */
   retryWaitsMs: readonly number[] = [500, 1000, 2000];
+  /** The waits before connecting a server reached over the network again after its connection dropped: five tries. */
+  reconnectWaitsMs: readonly number[] = [1000, 2000, 4000, 8000, 16000];
+  /** The waits before trying a server's first connection again after an error that may pass: three more tries. */
+  connectWaitsMs: readonly number[] = [1000, 2000, 4000];
+  /** The waits before listing a server's tools again after an error that may pass: three more tries. */
+  listWaitsMs: readonly number[] = [250, 500, 1000];
   /** How such a wait is made. */
   wait = (ms: number, signal: AbortSignal): Promise<void> =>
     delay(ms, undefined, { signal });
@@ -1193,9 +1268,14 @@ export class McpManager {
     if (!live) {
       const state = this.status.find((item) => item.name === connection.name);
       throw new Error(
-        `${connection.name} is not connected${state?.error ? `: ${state.error}` : ''}; /mcp reload ${connection.name} connects it again`,
+        `${connection.name} is not connected${state?.error ? `: ${state.error}` : ''}; /mcp reconnect ${connection.name} connects it again`,
       );
     }
+    // Where someone can reconnect it, a program that exited stays failed until they do
+    if (this.services.interactive && live.connection.transport === 'stdio')
+      throw new Error(
+        `the program of ${connection.name} exited; /mcp reconnect ${connection.name} starts it again`,
+      );
     const fresh = await abortable(this.connectedAgain(live.connection), signal);
     if (fresh) return fresh;
     const state = this.status.find((item) => item.name === connection.name);
@@ -1319,6 +1399,7 @@ export class McpManager {
               // is read-only or idempotent, once, after connecting the server again; any other says it may have.
               let target = await this.sender(connection, own.signal);
               let resent = false;
+              let renewed = false;
               for (let tries = 0; ; tries++) {
                 const attempt = new AbortController();
                 const stop = (): void => attempt.abort(own.signal.reason);
@@ -1332,10 +1413,14 @@ export class McpManager {
                     throw new Error(
                       `${spec.name} runs only as a task, and ${connection.name} does not say it runs tool calls as tasks; nothing was sent`,
                     );
+                  // The idle limit, which a progress notice starts again, and the most the call may take. The MCP
+                  // library looks at the latter only when a notice comes, so the idle limit is never more than it.
+                  const total = this.totalMs(connection);
                   const options: RequestOptions = {
                     signal: attempt.signal,
-                    timeout: this.callTimeout ?? NO_LIMIT,
-                    maxTotalTimeout: this.callTimeout,
+                    timeout: Math.min(this.idleMs(connection), total),
+                    resetTimeoutOnProgress: true,
+                    maxTotalTimeout: total,
                     // Asks the server for progress notices, shown on the call's row
                     onprogress: (notice) => report(progressText(notice)),
                   };
@@ -1357,6 +1442,19 @@ export class McpManager {
                       { cause: error },
                     );
                   }
+                  // The server forgot the session (HTTP 404 to a request that named it): the request did not run, so it
+                  // goes once more on a new session
+                  if (!renewed && sessionGone(error, target)) {
+                    const fresh = await abortable(
+                      this.connectedAgain(connection),
+                      own.signal,
+                    );
+                    if (fresh) {
+                      renewed = true;
+                      target = fresh;
+                      continue;
+                    }
+                  }
                   if (!droppedAfterSending(error, target)) throw error;
                   const fresh =
                     !resent && (hints.readOnly || hints.idempotent)
@@ -1367,7 +1465,7 @@ export class McpManager {
                       : undefined;
                   if (!fresh)
                     throw new Error(
-                      `${said} · the connection to ${connection.name} ended after the call was sent: the request may have reached the server, so Circle did not send it again`,
+                      `${said} · the connection to ${connection.name} closed before the call was answered: the tool may have run, so Circle did not send it again; check whether it did before calling it again`,
                       { cause: error },
                     );
                   resent = true;
@@ -1521,7 +1619,7 @@ export class McpManager {
       signal?.throwIfAborted();
       const outcomes = await Promise.allSettled(
         connections.map((connection) =>
-          this.connectServer(connection, reserved, () => false, signal),
+          this.firstConnection(connection, reserved, signal),
         ),
       );
       // In the order they are configured: of two servers whose tools would have one name, the earlier keeps it
@@ -1560,6 +1658,37 @@ export class McpManager {
     }
   }
   /**
+   * A server's first connection. One reached over HTTP or SSE that fails in a way that may pass (a 5xx, a refused
+   * connection, a connect timeout) is tried again after each of the connect waits; a program, a ws server, a sign-in
+   * and any other failure are not.
+   */
+  private async firstConnection(
+    connection: McpConnection,
+    reserved: Set<string>,
+    signal?: AbortSignal,
+  ): ReturnType<McpManager['connectServer']> {
+    for (let tries = 0; ; tries++) {
+      const outcome = await this.connectServer(
+        connection,
+        reserved,
+        () => false,
+        signal,
+      );
+      if (
+        outcome.server ||
+        outcome.state.authorize ||
+        (connection.transport !== 'http' && connection.transport !== 'sse') ||
+        tries >= this.connectWaitsMs.length ||
+        !passing(outcome.failure)
+      )
+        return outcome;
+      await this.wait(
+        this.connectWaitsMs[tries]!,
+        signal ?? this.lifetime.signal,
+      );
+    }
+  }
+  /**
    * One server: connected, with its tools, or why not. A server reached by URL that asks for a sign-in gets one in the
    * browser, which ends without holding up the others.
    */
@@ -1573,6 +1702,8 @@ export class McpManager {
     server?: Connected;
     tools: Tool[];
     said: Map<string, ToolMarks>;
+    /** Why it did not connect, when it did not. */
+    failure?: unknown;
   }> {
     const headerNames = Object.keys(connection.headers ?? {});
     const state: McpStatus = {
@@ -1652,9 +1783,15 @@ export class McpManager {
       client.onclose = () => {
         if (!server.open) return;
         server.open = false;
-        state.error =
-          'the connection ended; the next call connects it again, and so does /mcp reload';
         this.results.forget(connection.name);
+        if (connection.transport !== 'stdio') {
+          // A server reached over the network that dropped is connected again, a few times, in the background
+          state.error = 'the connection ended; reconnecting';
+          this.reconnectDropped(connection);
+        } else
+          state.error = this.services.interactive
+            ? `the program exited; /mcp reconnect ${connection.name} starts it again`
+            : 'the program exited; the next call starts it again';
         this.services.onChange?.();
       };
       // A server that says its tools can change is listed again when it says they did: the next turn has the new
@@ -1679,7 +1816,7 @@ export class McpManager {
       await client.close().catch(() => {});
       await transport?.close().catch(() => {});
       if (signal?.aborted) throw signal.reason;
-      return { state, tools: [], said: new Map() };
+      return { state, tools: [], said: new Map(), failure: error };
     } finally {
       combined.removeEventListener('abort', stop);
     }
@@ -1882,10 +2019,15 @@ export class McpManager {
     let cursor: string | undefined;
     const cursors = new Set<string>();
     do {
-      const listed = await client.request(
-        { method: 'tools/list', params: cursor ? { cursor } : undefined },
-        ListToolsResultSchema,
-        { signal, timeout: this.timeout },
+      const listed = await this.passingRetry(
+        () =>
+          client.request(
+            { method: 'tools/list', params: cursor ? { cursor } : undefined },
+            ListToolsResultSchema,
+            { signal, timeout: this.timeout },
+          ),
+        this.listWaitsMs,
+        signal,
       );
       for (const spec of listed.tools) {
         const name = mcpToolName(connection.name, spec.name);
@@ -2163,6 +2305,61 @@ export class McpManager {
     const live = this.servers.find((item) => item.name === connection.name);
     if (!live) return undefined;
     return live.open ? live.client : this.connectedAgain(live.connection);
+  }
+  /** A request made again after each of `waits` while it fails in a way that may pass (`passing`). */
+  private async passingRetry<T>(
+    request: () => Promise<T>,
+    waits: readonly number[],
+    signal: AbortSignal,
+  ): Promise<T> {
+    for (let tries = 0; ; tries++) {
+      try {
+        return await request();
+      } catch (error) {
+        if (signal.aborted || tries >= waits.length || !passing(error))
+          throw error;
+        await this.wait(waits[tries]!, signal);
+      }
+    }
+  }
+  /**
+   * A server reached over the network whose connection dropped: connected again in the background, after each of the
+   * reconnect waits, until it is back. A call meanwhile waits for it. After the last try the server is failed, and
+   * `/mcp reconnect` tries again.
+   */
+  private reconnectDropped(connection: McpConnection): void {
+    if (this.reconnects.has(connection.name)) return;
+    const lifetime = this.lifetime.signal;
+    const reconnect = toolCalls.exit(async () => {
+      try {
+        for (const [index, ms] of this.reconnectWaitsMs.entries()) {
+          await this.wait(ms, lifetime);
+          await this.connectAgain(connection, lifetime);
+          const back = this.servers.find(
+            (server) => server.name === connection.name && server.open,
+          );
+          if (back) return back.client;
+          const state = this.status.find(
+            (item) => item.name === connection.name,
+          );
+          // A server that asks for a sign-in waits for it, as at its first connection
+          if (state?.authorize) return undefined;
+          if (state && index < this.reconnectWaitsMs.length - 1)
+            state.error = `the connection ended; reconnecting (${index + 1} of ${this.reconnectWaitsMs.length} tries failed: ${state.error})`;
+          this.services.onChange?.();
+        }
+        const state = this.status.find((item) => item.name === connection.name);
+        if (state)
+          state.error = `disconnected: ${this.reconnectWaitsMs.length} tries to connect again failed${state.error ? ` (${state.error})` : ''}; /mcp reconnect ${connection.name} tries again`;
+        this.services.onChange?.();
+        return undefined;
+      } catch {
+        return undefined;
+      } finally {
+        this.reconnects.delete(connection.name);
+      }
+    });
+    this.reconnects.set(connection.name, reconnect);
   }
   private reconnects = new Map<string, Promise<Client | undefined>>();
   /**

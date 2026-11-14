@@ -1011,6 +1011,29 @@ async function mcp(host: CommandHost, args: string): Promise<void> {
   const runtime = host.runtime;
   const [verb = '', ...rest] = args.trim().split(/\s+/);
   const server = rest.join(' ');
+  // Every server that failed or waits for a sign-in, connected again
+  if (verb.toLowerCase() === 'reconnect' && server === 'all') {
+    if (runtime.busy) {
+      host.flash('Busy · reconnect MCP after the current turn');
+      return;
+    }
+    let tried: string[];
+    try {
+      tried = await runtime.reconnectMcpServers();
+    } catch (error) {
+      host.fail(`MCP reconnect failed: ${reason(error)}`);
+      return;
+    }
+    const still = runtime.mcp.status.filter(
+      (row) => tried.includes(row.name) && row.error,
+    );
+    host.notice(
+      !tried.length
+        ? 'MCP · no server to reconnect'
+        : `MCP reconnected ${tried.length - still.length} of ${tried.length}${still.length ? ` · still failing: ${still.map((row) => row.name).join(', ')}` : ''}`,
+    );
+    return;
+  }
   // One server again; the others and their programs stay as they are (#559)
   if (
     ['reconnect', 'reload', 'refresh', 'connect'].includes(

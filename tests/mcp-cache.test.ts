@@ -349,7 +349,10 @@ test("nothing kept for a server outlives its connection: once the server's progr
   assert.match(await checksum.run({ file: 'a.bin' }, context), /^cached/);
   process.kill(pid);
   await until(() => manager.status[0]!.error !== '', { timeout: 10_000 });
-  assert.match(manager.status[0]!.error, /the connection ended/);
+  assert.match(
+    manager.status[0]!.error,
+    /the program exited; the next call starts it again/,
+  );
   // The next call starts the program again (#555) and is read by it, not answered from what the old one gave
   const again = await checksum.run({ file: 'a.bin' }, context);
   assert.doesNotMatch(again, /^cached/);

@@ -902,6 +902,8 @@ export class AgentRuntime {
       openUrl: this.options.openUrl,
       readFile: (path, context, limit) =>
         readFileBytes(this.sandbox, fileReads, path, context, limit),
+      // Someone can reconnect a server whose program exited: it stays failed until they do
+      interactive: !this.options.headless,
       // A server's question in the middle of a call is asked in the question panel (#556)
       ask: this.options.question
         ? (args, signal) => this.options.question!(args, signal)
@@ -3688,6 +3690,20 @@ export class AgentRuntime {
         if (this.askingForServers === asked) this.askingForServers = undefined;
       });
     this.askingForServers = asked;
+  }
+  /**
+   * Connects again every server that failed or waits for a sign-in, as `/mcp reconnect all` does; the servers that
+   * are connected, turned off or wait for approval are left as they are. Returns the names it tried.
+   */
+  async reconnectMcpServers(): Promise<string[]> {
+    const failed = this.mcp.status
+      .filter(
+        (row) =>
+          row.error && row.error !== 'disabled' && row.approval === undefined,
+      )
+      .map((row) => row.name);
+    for (const name of failed) await this.reloadMcpServer(name);
+    return failed;
   }
   async reloadMcpServer(name: string): Promise<void> {
     if (this.ownershipError) throw this.ownershipError;
