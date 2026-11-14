@@ -120,4 +120,38 @@ An MCP server can publish client tools for a pack under its `/local-tools` contr
 - `skill_run` runs a script only under the installed pack's `tools/`, with the current Node. `%NAME%` placeholders expand at execution from the variables in settings and the secrets saved with `/secrets`; a pack's instructions name the ones it needs, so define those once. An MCP entry can also give its endpoint and its token under names of its `placeholders`, such as the Hub's `%HUB_URL%` and `%HUB_TOKEN%`, without either being saved (see [Secrets by name](security.md#secrets-by-name)). The output shows every secret value as its `%NAME%`, and tokens never appear in arguments, results, logs or Git.
 - `skill_list` shows what is installed and the digest each pack was installed from.
 
+### Typed tools a pack declares
+
+A pack can declare its scripts' parameters in a `tools.json` at its root, listed in `pack.json` like its other files, so the pack's digest covers it. When this session loads the pack's skill, each declared script becomes a tool of its own, named `<pack>_<name>`, from the next model request on. Before that, and for a script the pack does not declare, `skill_run` works as above.
+
+```json
+{
+  "version": 1,
+  "tools": [{
+    "name": "convert",
+    "description": "Convert a text file to PDF or HTML.",
+    "script": "tools/convert.mjs",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "in": { "type": "string" },
+        "format": { "enum": ["pdf", "html"] },
+        "title": { "type": "string" }
+      },
+      "required": ["in", "format"]
+    },
+    "args": ["--in", "{in}", "--format", "{format}", { "flag": "--title", "param": "title" }],
+    "env": { "HUB_TOKEN": "%HUB_TOKEN%" }
+  }]
+}
+```
+
+- **The input.** `input_schema` is a small part of JSON Schema: an object whose properties are strings, numbers, integers, booleans or lists of strings, with `enum`, `default`, limits and `required`. `$ref` and other keywords are refused. Circle checks a call against it before the script starts, and a call that does not fit gets the reason, such as a `format` that is not `pdf` or `html`. A property the schema does not name is refused.
+- **The arguments.** `args` is a template. A literal string stays as written, with plain variables' `%NAME%` filled in. `"{in}"` is the value of a required property; a list gives one argument per item. `{ "flag": "--title", "param": "title" }` is `--title <value>` when the call gives one, the flag alone for `true`, and nothing when it gives none or `false`. An optional property is only allowed in that form. `"stdin": "json"` also writes the whole input to standard input as JSON.
+- **Values the model never sees.** `env` adds variables to the script's environment. `%NAME%` there takes a variable's or a secret's value when the script starts. A secret goes nowhere else: a literal in `args` never takes a secret's value, because a command line is visible to other processes, and `%NAME%` in what the model writes stays as written. The script's output shows every secret value as its `%NAME%`. `PATH`, `HOME`, `TMPDIR` and `NODE_OPTIONS` cannot be set.
+- **Checks when the skill loads.** The pack must verify against its manifest, and `tools.json` must be valid: unique names, scripts under `tools/` that the pack lists, and a template that names only declared properties. Otherwise the pack offers no tool and the model is told why. A tool whose name is already taken is not offered.
+- **Approval.** A typed tool runs like `skill_run`: its card shows the input by name, the approval rules and hooks match its own name, and `tool_input` is the named input. Once a script has a typed tool in this session, `skill_run` refuses it and names the tool.
+
+Loading the skill adds tools to the list, so the next request does not reuse the prompt cache of the requests before.
+
 Installing and running a pack executes the publisher's Node code; a server-side scan is not a sandbox. Read the pack before installing it, and treat what runs locally as a preview: the serving side's recomputation is the evidence. Packs and skills are supported on macOS and Linux only.

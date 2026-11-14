@@ -6494,10 +6494,11 @@ export class RuntimeController {
       case 'load-skill': {
         const skill = runtime.skills.find((skill) => skill.name === p.name);
         if (!skill) throw Error('skill not found');
-        await runtime.activateSkillHooks(skill.name);
+        const tools = await runtime.activateSkillHooks(skill.name);
+        const body = loadSkillBody(skill.name, runtime.skills);
         return {
           name: skill.name,
-          content: loadSkillBody(skill.name, runtime.skills),
+          content: tools ? `${body}\n\n${tools}` : body,
         };
       }
       case 'init':

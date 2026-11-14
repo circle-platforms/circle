@@ -538,6 +538,10 @@ export async function runTool(options: {
   stdin?: string;
   variables?: Record<string, string>;
   secrets?: Record<string, string>;
+  /** More environment for the script, with values already filled in (a pack's declared tool). */
+  env?: Record<string, string>;
+  /** False: `args` and `stdin` are used as given, with no `%NAME%` filled in (a declared tool built them). */
+  expand?: boolean;
   timeoutMs?: number;
   maxOutputBytes?: number;
 }): Promise<{
@@ -554,6 +558,8 @@ export async function runTool(options: {
     stdin = '',
     variables = {},
     secrets = {},
+    env: extraEnv = {},
+    expand = true,
     timeoutMs = 300_000,
     maxOutputBytes = 1024 * 1024,
   } = options;
@@ -582,13 +588,14 @@ export async function runTool(options: {
     );
 
   const values = { ...variables, ...secrets };
-  const expandedArgs = expandVariables(args, values);
-  const expandedStdin = expandVariables(stdin, values);
+  const expandedArgs = expand ? expandVariables(args, values) : args;
+  const expandedStdin = expand ? expandVariables(stdin, values) : stdin;
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? '',
     HOME: process.env.HOME ?? '',
     TMPDIR: process.env.TMPDIR ?? '/tmp',
     ...variables,
+    ...extraEnv,
   };
 
   return await new Promise((resolvePromise, reject) => {

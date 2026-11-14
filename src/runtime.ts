@@ -6,15 +6,18 @@ import {
 import { KnowledgeService, type KnowledgeAccess } from './knowledge/service.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { GitHubConnectionBackend } from './github_connection.js';
-import { join, dirname } from 'node:path';
+import { basename, join, dirname } from 'node:path';
 import {
   copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
 } from 'node:fs';
+import { SKILLS_ROOT } from './local_skills.js';
+import { packTool, readPackTools } from './pack_tools.js';
 import type { ChatModel, Message, ToolCall } from './types.js';
 import { GatewayModel, EFFORT_LEVELS, defaultEffort } from './model.js';
 import { WebSearchService } from './websearch_service.js';
@@ -201,6 +204,8 @@ export interface RuntimeOptions {
   home: string;
   // Embedders can isolate global context without changing the process HOME.
   userHome?: string;
+  /** Where `skill_install` puts packs and `skill_run` runs them. Tests give their own. */
+  localSkillsRoot?: string;
   localContext?: boolean;
   settings: CircleSettings;
   run?: RunOptions;
@@ -832,6 +837,8 @@ export class AgentRuntime {
     return wrapped;
   }
   private createHarness(modelOverride?: ChatModel): Harness {
+    // The tools a loaded pack declared belong to the session that loaded it
+    this.packTools = [];
     const model =
       modelOverride ??
       this.baseModel ??
@@ -881,6 +888,13 @@ export class AgentRuntime {
         settings: () => this.options.settings,
         secrets: () => this.runSecrets(),
         variables: () => this.runVariables(),
+        ...(this.options.localSkillsRoot
+          ? { root: this.options.localSkillsRoot }
+          : {}),
+        typed: (pack, script) =>
+          this.packTools.find(
+            (item) => item.pack === pack && item.script === script,
+          )?.name,
       },
       screenshot:
         this.options.screenshot === false
@@ -891,13 +905,14 @@ export class AgentRuntime {
         this.bus.emit('todo_list', { payload: { todos } });
       },
       skill: async (name, signal, reference) => {
-        await this.activateSkillHooks(name, signal);
-        return loadSkillBody(
+        const tools = await this.activateSkillHooks(name, signal);
+        const body = loadSkillBody(
           name,
           this.skills,
           reference,
           this.sandbox.credentialFiles,
         );
+        return tools ? `${body}\n\n${tools}` : body;
       },
       question: async (args, context) =>
         askQuestions(this.options.home, this.sandbox, args, context.signal, {
@@ -2124,15 +2139,94 @@ export class AgentRuntime {
    * Arm the hooks that ship with a skill. Installing the skill does nothing;
    * this runs from /skill and from the skill tool, and only for this session.
    */
-  async activateSkillHooks(name: string, signal?: AbortSignal): Promise<void> {
+  /**
+   * A skill was loaded in this session: its hooks start, and the tools its pack declares join the list from the
+   * next request. Returns what the model is told about those tools, or nothing.
+   */
+  async activateSkillHooks(
+    name: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
     const key = name.trim().toLowerCase();
-    if (!key || this.armedSkills.has(key)) return;
+    if (!key || this.armedSkills.has(key)) return '';
     this.armedSkills.add(key);
+    const tools = await this.armPackTools(key);
     const runner = this.hookRunner;
-    if (!runner) return;
+    if (!runner) return tools;
     const armed = runner.activateSkill(key);
     if (this.harness && armed.length)
       await this.harness.skillHooksArmed(armed, signal);
+    return tools;
+  }
+  /** The declared tools of the packs whose skill this session loaded. */
+  private packTools: { pack: string; script: string; name: string }[] = [];
+  /**
+   * The skill is an installed pack's (its folder is right under the packs' root, as `skill_install` puts it): the
+   * scripts the pack declares in `tools.json` become typed tools (#544). A pack whose files do not verify, or
+   * whose declaration does not hold, adds none, and the model is told why.
+   */
+  private async armPackTools(key: string): Promise<string> {
+    const skill = this.skills.find((item) => item.name.toLowerCase() === key);
+    if (!skill || !this.harness) return '';
+    let root: string;
+    try {
+      root = realpathSync(this.options.localSkillsRoot ?? SKILLS_ROOT);
+    } catch {
+      return '';
+    }
+    const folder = dirname(skill.path);
+    if (dirname(folder) !== root) return '';
+    const pack = basename(folder);
+    let declared;
+    try {
+      declared = await readPackTools(root, pack);
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      return `The pack ${pack} declares tools, and none is offered: ${why}`;
+    }
+    if (!declared.length) return '';
+    const taken = new Set(
+      [...this.coreTools, ...this.harness.tools].map((tool) => tool.name),
+    );
+    const added: string[] = [];
+    const skipped: string[] = [];
+    for (const declaration of declared) {
+      const tool = packTool({
+        root,
+        pack,
+        declaration,
+        variables: () => this.runVariables(),
+        secrets: () => this.runSecrets(),
+      });
+      if (taken.has(tool.name)) {
+        skipped.push(tool.name);
+        continue;
+      }
+      taken.add(tool.name);
+      this.coreTools.push(tool);
+      this.packTools.push({
+        pack,
+        script: declaration.script,
+        name: tool.name,
+      });
+      added.push(`${tool.name} (${declaration.script})`);
+    }
+    if (added.length) {
+      this.harness.tools = this.withIntegrationTools(
+        this.coreTools.filter((tool) => tool.name !== 'wait_jobs'),
+      );
+      this.describeSubagents(this.harness.tools);
+    }
+    return [
+      added.length
+        ? `Tools the pack ${pack} declares, offered from the next request: ${added.join(', ')}. Each checks its input before the script starts; call it rather than skill_run for that script.`
+        : '',
+      skipped.length
+        ? `Not offered, because a tool already has the name: ${skipped.join(', ')}.`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
   }
   /** Read hooks again. /reload uses this so a changed file applies to the next call. */
   reloadHooks(): void {
