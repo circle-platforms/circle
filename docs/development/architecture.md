@@ -7,7 +7,7 @@ nav_order: 1
 
 A map of the code for people who want to change it. For what Circle does, read [How Circle works](../how-circle-works.md) first.
 
-Circle is a TypeScript program for Node.js 24, under `src/`, compiled with strict checks. The agent loop is its own: there is no LangChain, LangGraph or deepagents. Model access goes through the `openai` and `@anthropic-ai/sdk` packages, MCP through `@modelcontextprotocol/sdk`, and sessions are stored with `node:sqlite`.
+Circle is a TypeScript program for Node.js 24, under `src/`, compiled with strict checks. The agent loop is its own: there is no LangChain, LangGraph or deepagents. Model access goes through the `openai` and `@anthropic-ai/sdk` packages, MCP through `@modelcontextprotocol/client` (version 2 of the MCP TypeScript SDK, with `@modelcontextprotocol/core` for its schemas; the WebSocket transport is Circle's own, `src/mcp_websocket.ts`), and sessions are stored with `node:sqlite`.
 
 ## Entry points
 
@@ -142,6 +142,7 @@ remembered for that model instance like a rejected signature.
 | `scheduler.ts`    | Firing them: one headless `circle -p` in a child process per run, the tick loop, the daemon file.                                   |
 | `schedule_cli.ts` | The `circle schedule` command line.                                                                                                 |
 | `mcp_loader.ts`   | Connects MCP servers and offers their tools under the same policy as built-in ones.                                                 |
+| `mcp_websocket.ts` | The MCP connection over WebSocket (`"type": "ws"`), which the MCP library does not have.                                         |
 | `extensions.ts`   | Loads extensions and what they register: tools, commands, middleware, renderers and event handlers.                                 |
 | `net.ts`          | The proxy and certificate settings for every request Circle makes itself.                                                           |
 

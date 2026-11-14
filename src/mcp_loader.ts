@@ -1,39 +1,35 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createHash, randomBytes } from 'node:crypto';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import {
+  Client,
+  ProtocolError,
+  SdkError,
+  SdkErrorCode,
+  SdkHttpError,
   SSEClientTransport,
   SseError,
-} from '@modelcontextprotocol/sdk/client/sse.js';
-import {
   StreamableHTTPClientTransport,
-  StreamableHTTPError,
-} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
-import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
+  UnauthorizedError,
+  type CallToolResult,
+  type ElicitResult,
+  type FetchLike,
+  type Implementation,
+  type JsonSchemaType,
+  type RequestOptions,
+  type Tool as ServerTool,
+  type Transport,
+} from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { AjvJsonSchemaValidator } from '@modelcontextprotocol/client/validators/ajv';
 import {
   CallToolResultSchema,
   CancelTaskResultSchema,
   CreateTaskResultSchema,
-  ElicitRequestSchema,
-  type ElicitResult,
-  ErrorCode,
   GetTaskResultSchema,
   ListToolsResultSchema,
-  McpError,
-  ToolListChangedNotificationSchema,
-  type CallToolResult,
-  type Implementation,
-} from '@modelcontextprotocol/sdk/types.js';
-import type { RequestOptions } from '@modelcontextprotocol/sdk/shared/protocol.js';
-import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
-import type { JsonSchemaType } from '@modelcontextprotocol/sdk/validation/types.js';
-import type {
-  FetchLike,
-  Transport,
-} from '@modelcontextprotocol/sdk/shared/transport.js';
+} from '@modelcontextprotocol/core';
+import { WebSocketClientTransport } from './mcp_websocket.js';
 import type {
   Tool,
   ToolContext,
@@ -619,7 +615,7 @@ interface CallStore {
   /** Fires when the call is stopped, as by esc. */
   signal?: AbortSignal;
   /** Ends the attempt under way: the stream its answer was to come on ended without it (#555). */
-  lost?: (error: McpError) => void;
+  lost?: (error: Lost) => void;
 }
 const toolCalls = new AsyncLocalStorage<CallStore>();
 /**
@@ -687,7 +683,7 @@ function callId(init: RequestInit | undefined): string | number | undefined {
 function watchAnswer(
   response: Response,
   id: string | number,
-  lost: (error: McpError) => void,
+  lost: (error: Lost) => void,
 ): Response {
   const type = response.headers.get('content-type') ?? '';
   if (!response.ok || !response.body || !/^text\/event-stream\b/i.test(type))
@@ -924,13 +920,15 @@ function notSent(error: unknown): boolean {
 }
 /** An HTTP status a request failed with, when it failed with one. */
 function httpStatus(error: unknown): number | undefined {
-  for (const cause of causes(error))
+  for (const cause of causes(error)) {
+    if (cause instanceof SdkHttpError && cause.status > 0) return cause.status;
     if (
-      (cause instanceof StreamableHTTPError || cause instanceof SseError) &&
+      cause instanceof SseError &&
       typeof cause.code === 'number' &&
       cause.code > 0
     )
       return cause.code;
+  }
   return undefined;
 }
 /** A server reached over HTTP that no longer knows the session the request named. */
@@ -948,9 +946,9 @@ function passing(error: unknown): boolean {
   return notSent(error) || (status !== undefined && status >= 500);
 }
 /** A call that reached the server and whose answer cannot come: its answer's stream ended, or its task was lost. */
-class Lost extends McpError {
+class Lost extends SdkError {
   constructor(message: string) {
-    super(ErrorCode.ConnectionClosed, message);
+    super(SdkErrorCode.ConnectionClosed, message);
   }
 }
 /**
@@ -960,18 +958,16 @@ class Lost extends McpError {
 class TaskSessionLost extends Error {}
 /**
  * The connection ended after the request was sent, so it may have reached the server (#555): the MCP library closed
- * the connection under the call (it has no transport since), the call's answer was lost, or the socket was cut. A
- * server's own error is none of these, whatever its code or words: -32000 is the library's code for a closed
- * connection and also a server's for an error of its own.
+ * the connection under the call, the call's answer was lost, or the socket was cut. A server's own error is none of
+ * these, whatever its code or words: the library tells a closed connection of its own (an SdkError) from an error
+ * the server sent (a ProtocolError).
  */
-function droppedAfterSending(error: unknown, client: Client): boolean {
+function droppedAfterSending(error: unknown): boolean {
   return causes(error).some((cause) => {
     if (cause instanceof Lost) return true;
-    if (cause instanceof McpError)
-      return (
-        cause.code === ErrorCode.ConnectionClosed &&
-        client.transport === undefined
-      );
+    if (cause instanceof ProtocolError) return false;
+    if (cause instanceof SdkError)
+      return cause.code === SdkErrorCode.ConnectionClosed;
     return (
       cause.code === 'UND_ERR_SOCKET' ||
       cause.code === 'ECONNRESET' ||
@@ -982,21 +978,27 @@ function droppedAfterSending(error: unknown, client: Client): boolean {
   });
 }
 /**
- * Calls a server's tool and gives its result as the server sent it. The SDK's `callTool` checks a result against the
- * output schema it kept from the last listing of the tools and throws the result away when it does not match, as when
- * the server added a field after Circle connected (#513); this sends `tools/call` itself. The server still checks the
- * request, and whether a result matches its schema is for the caller to say.
+ * Calls a server's tool and gives its result as the server sent it. The library would check a result against the
+ * output schema of the tool and throw the result away when it does not match, as when the server added a field after
+ * Circle connected (#513): it is given the tool as listed without its output schema, so it checks nothing of the
+ * result and still sends the headers a tool's input schema asks for (`x-mcp-header`, 2026-07-28). The server still
+ * checks the request, and whether a result matches its schema is for the caller to say.
  */
 function callServerTool(
   client: Client,
-  params: { name: string; arguments: Record<string, unknown> },
+  params: {
+    name: string;
+    arguments: Record<string, unknown>;
+    _meta?: Record<string, unknown>;
+  },
   options: RequestOptions,
+  spec?: ServerTool,
 ): Promise<ToolResult> {
-  return client.request(
-    { method: 'tools/call', params },
-    CallToolResultSchema,
-    options,
-  );
+  const { outputSchema: _unchecked, ...listed } = spec ?? {
+    name: params.name,
+    inputSchema: { type: 'object' as const },
+  };
+  return client.callTool(params, { ...options, toolDefinition: listed });
 }
 /** A server's words on one line of the screen: no control or bidirectional-text characters, cut at `max`. */
 function oneLine(text: string, max = 160): string {
@@ -1145,8 +1147,9 @@ interface Connected {
   instructions?: string;
   /** False once the connection ended, closed by Circle or by the server. */
   open: boolean;
+  /** Its tools as it listed them last, by their own names. */
+  specs: Map<string, ServerTool>;
 }
-type ServerTool = Awaited<ReturnType<Client['listTools']>>['tools'][number];
 /** How long after a server says its tools changed Circle lists them, so several notices in a row list them once. */
 export const TOOLS_CHANGED_WAIT_MS = 300;
 /** What a server whose tools changed shows while Circle keeps its earlier tools. */
@@ -1545,7 +1548,7 @@ export class McpManager {
                   const params = { name: spec.name, arguments: sending };
                   return mode === 'task'
                     ? await this.callAsTask(target, params, options, report)
-                    : await callServerTool(target, params, options);
+                    : await callServerTool(target, params, options, spec);
                 } catch (error) {
                   if (own.signal.aborted || error instanceof TaskSessionLost)
                     throw error;
@@ -1574,7 +1577,7 @@ export class McpManager {
                       continue;
                     }
                   }
-                  if (!droppedAfterSending(error, target)) throw error;
+                  if (!droppedAfterSending(error)) throw error;
                   const fresh =
                     !resent && (hints.readOnly || hints.idempotent)
                       ? await abortable(
@@ -1856,11 +1859,11 @@ export class McpManager {
       // says it takes both; where no one can be asked a question is cancelled, unless a hook answers it.
       { capabilities: { elicitation: { form: {}, url: {} } } },
     );
-    client.setRequestHandler(ElicitRequestSchema, (request, extra) =>
+    client.setRequestHandler('elicitation/create', (request, context) =>
       this.elicit(
         connection.name,
         request.params as Record<string, unknown>,
-        extra.signal,
+        context.mcpReq.signal,
       ),
     );
     let transport: Transport | undefined;
@@ -1894,7 +1897,7 @@ export class McpManager {
         }),
         combined,
       );
-      const { registered, said } = await this.listServerTools(
+      const { registered, said, specs } = await this.listServerTools(
         connection,
         client,
         filled.filled,
@@ -1909,6 +1912,7 @@ export class McpManager {
         ...(filled.url ? { url: filled.url } : {}),
         instructions: serverInstructions(client.getInstructions(), hide),
         open: true,
+        specs,
       };
       // The server went away: its instructions leave the prompt, /mcp says so, and no
       // result it gave earlier is given again
@@ -1929,7 +1933,7 @@ export class McpManager {
       // A server that says its tools can change is listed again when it says they did: the next turn has the new
       // tools, and the turn under way keeps the ones it started with
       if (client.getServerCapabilities()?.tools?.listChanged)
-        client.setNotificationHandler(ToolListChangedNotificationSchema, () =>
+        client.setNotificationHandler('notifications/tools/list_changed', () =>
           this.toolsChanged(server, filled.filled),
         );
       state.tools = registered.map((tool) => tool.name);
@@ -2104,10 +2108,10 @@ export class McpManager {
         lifetime,
       );
       // Handled from now: a refusal may come while the browser is being opened
-      redirect.code.catch(() => {});
+      redirect.callback.catch(() => {});
       await redirect.ready;
       await (this.services.openUrl ?? openInBrowser)(url).catch(() => {});
-      const code = await redirect.code;
+      const callback = await redirect.callback;
       const exchange = transportFor(
         connection,
         { headers: {}, filled: new Map(), missing: [], url: provider.server },
@@ -2116,7 +2120,8 @@ export class McpManager {
         provider,
       ) as StreamableHTTPClientTransport | SSEClientTransport;
       try {
-        await exchange.finishAuth(code);
+        // The code with the issuer it came from, which the library checks before it redeems the code (RFC 9207)
+        await exchange.finishAuth(callback);
       } finally {
         await exchange.close().catch(() => {});
       }
@@ -2134,8 +2139,8 @@ export class McpManager {
       .finally(() => this.signingIn.delete(provider.server));
   }
   /**
-   * A server's tools as it lists them now, page by page. Listed by Circle itself: the SDK's listTools would also compile
-   * every output schema for its own checks of results, and fail the whole server on one it cannot compile. One
+   * A server's tools as it lists them now, page by page, each page tried again as a listing that may pass is: Circle
+   * walks the pages itself, so a cursor that comes again ends the listing with an error rather than a loop. One
    * validator per listing: a schema with an $id is kept by it, and a server that changed has new schemas.
    */
   private async listServerTools(
@@ -2144,9 +2149,14 @@ export class McpManager {
     filled: Map<string, string>,
     taken: (name: string) => boolean,
     signal: AbortSignal,
-  ): Promise<{ registered: Tool[]; said: Map<string, ToolMarks> }> {
+  ): Promise<{
+    registered: Tool[];
+    said: Map<string, ToolMarks>;
+    specs: Map<string, ServerTool>;
+  }> {
     const registered: Tool[] = [];
     const said = new Map<string, ToolMarks>();
+    const specs = new Map<string, ServerTool>();
     const validator = new AjvJsonSchemaValidator();
     let cursor: string | undefined;
     const cursors = new Set<string>();
@@ -2172,6 +2182,7 @@ export class McpManager {
           server: connection.name,
           tool: spec.name,
         });
+        specs.set(spec.name, spec);
         registered.push(
           this.serverTool(
             connection,
@@ -2191,7 +2202,7 @@ export class McpManager {
         cursors.add(cursor);
       }
     } while (cursor);
-    return { registered, said };
+    return { registered, said, specs };
   }
   /** A server said its tools changed: they are listed again a moment later, once for several notices in a row. */
   private toolsChanged(server: Connected, filled: Map<string, string>): void {
@@ -2230,7 +2241,7 @@ export class McpManager {
     const state = this.status.find((item) => item.name === server.name);
     const own = new Set(state?.tools ?? []);
     try {
-      const { registered, said } = await this.listServerTools(
+      const { registered, said, specs } = await this.listServerTools(
         server.connection,
         server.client,
         filled,
@@ -2247,6 +2258,7 @@ export class McpManager {
         ...this.tools.filter((tool) => !own.has(tool.name)),
         ...registered,
       ];
+      server.specs = specs;
       for (const name of own) this.hinted.delete(name);
       for (const [name, hint] of said) this.hinted.set(name, hint);
       if (state) {
@@ -2275,9 +2287,9 @@ export class McpManager {
   ): Promise<ToolResult> {
     const signal = options.signal!;
     const created = await client.request(
-      { method: 'tools/call', params },
+      { method: 'tools/call', params: { ...params, task: {} } },
       CreateTaskResultSchema,
-      { ...options, task: {} },
+      options,
     );
     let task: {
       taskId: string;
@@ -2311,7 +2323,7 @@ export class McpManager {
             await this.wait(this.retryWaitsMs[tries]!, signal);
             continue;
           }
-          if (notSent(error) || droppedAfterSending(error, client))
+          if (notSent(error) || droppedAfterSending(error))
             throw new Lost(
               `the server made task ${taskId} for the call, and following it failed: ${error instanceof Error ? error.message : String(error)}`,
             );
@@ -2812,6 +2824,7 @@ export class McpManager {
       server.client,
       { name: toolName, arguments: args },
       { signal, timeout: this.timeout },
+      server.specs.get(toolName),
     );
     const text = JSON.stringify(response);
     if (Buffer.byteLength(text) > 1024 * 1024)
@@ -2836,6 +2849,7 @@ export class McpManager {
       server.client,
       { name: toolName, arguments: args },
       { signal, timeout: this.timeout },
+      server.specs.get(toolName),
     );
     const text = JSON.stringify(result);
     if (Buffer.byteLength(text) > 1024 * 1024)
