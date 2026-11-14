@@ -98,6 +98,17 @@ Circle tells a request that never left this machine from one that may have reach
 
 The model reads a tool's text. A result with no text gives its structured content as JSON instead, and so does an error with no text. Circle never throws a result away because its structured content does not match the output schema the server listed for the tool when Circle connected, as happens when a server adds a field after an upgrade. Such a result arrives whole: its text, then the line `structured result, as the server sent it: it does not match the output schema the server listed for this tool when Circle connected`, then the structured content. That is all Circle says of it; whether the result is right is the server's to say. An error's structured content is not checked at all, and a schema Circle cannot compile is not used. The tools are not listed again for such a result: a server lists them again by saying its tools changed (above), and `/mcp reload` lists them again.
 
+### Progress and tasks
+
+Every tool call asks its server for progress notices (`_meta.progressToken`). While the call runs, its row shows the latest one after the call, as `3/10 · indexing`: how far it has come, the total when the server gives one, and its message. That is so in the terminal and the desktop, and in [JSON mode](cli.md#json-events) each notice is a `tool_progress` event. Circle shows the server's words on one line, without control characters, cut at 160 characters, and without the values it filled in. The model reads none of it: the result is what it would be without them. The terminal shows the progress of the conversation's own calls, not of a subagent's.
+
+A tool its server lists with `execution.taskSupport` `optional` or `required` runs as a task, as the 2025-11-25 revision has it, when the server says it runs tool calls as tasks (`tasks.requests.tools.call`):
+
+1. Circle sends `tools/call` with `task: {}`, and the server answers at once with the task.
+2. Circle asks how the task stands with `tasks/get`, as often as its `pollInterval` says (at least 50 ms and at most 30 seconds apart; every second when it says nothing), and shows its state on the call's row: `task working · <its status message>`.
+3. Once the task has completed, failed or needs input, `tasks/result` gives the call's result, which reaches the model as any result does. A task the server cancelled is an error.
+
+`esc` sends `tasks/cancel`. A tool that must run as a task (`required`) on a server that does not say it runs them is not sent, and the model reads `<tool> runs only as a task, and <server> does not say it runs tool calls as tasks; nothing was sent`. One that may (`optional`) is called there as any other is. Once the server has made the task the call has reached it, so a failure to follow the task counts as a connection that ended after the call was sent ([above](#when-a-calls-connection-fails)). The tasks of the 2026-07-28 revision, an extension there (`io.modelcontextprotocol/tasks`), come with an MCP library that speaks that revision.
 
 ### What the model reads of a result
 

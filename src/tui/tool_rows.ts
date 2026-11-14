@@ -117,6 +117,8 @@ export interface ToolRowOptions {
   // The call has no result yet: running, waiting on you, or not started.
   pending?: 'running' | 'wait' | 'none';
   now?: number;
+  /** What the running call last said of its progress, after its text (#554). */
+  progress?: string;
 }
 // The call's row: lamp, short name and what it was called with.
 export function toolRow(
@@ -133,10 +135,17 @@ export function toolRow(
       summary += `:${window.first}-${window.last}`;
   }
   const waiting = !result && options.pending === 'wait';
+  // Progress takes up to a third of the row, after the call's text
+  const progress =
+    !result && options.pending === 'running' && options.progress
+      ? truncate(options.progress, Math.max(12, Math.floor(options.width / 3)))
+      : '';
   summary = fitSummary(
     name,
     summary,
-    options.width - (waiting ? WAIT_SUFFIX.length : 0),
+    options.width -
+      (waiting ? WAIT_SUFFIX.length : 0) -
+      (progress ? stringWidth(progress) + 2 : 0),
   );
   const text = `${name}(${summary})`;
   const bg = toolTint(call.name);
@@ -160,6 +169,7 @@ export function toolRow(
     ],
   ];
   if (waiting) segments.push(['', '  '], [p.blue, 'waiting for you']);
+  if (progress) segments.push(['', '  '], [p.dim, progress]);
   return tintedRow(segments, bg, options.width);
 }
 

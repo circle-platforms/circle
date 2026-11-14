@@ -9,7 +9,10 @@ import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/webso
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import {
   CallToolResultSchema,
+  CancelTaskResultSchema,
+  CreateTaskResultSchema,
   ErrorCode,
+  GetTaskResultSchema,
   ListToolsResultSchema,
   McpError,
   ToolListChangedNotificationSchema,
@@ -756,6 +759,51 @@ function callServerTool(
     options,
   );
 }
+/** A server's words on one line of the screen: no control or bidirectional-text characters, cut at `max`. */
+function oneLine(text: string, max = 160): string {
+  const line = text
+    .replace(/[\u0000-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+}
+/** A progress notice as the call's row reads it: `3/10 · indexing` (#554). */
+export function progressText(notice: {
+  progress: number;
+  total?: number;
+  message?: string;
+}): string {
+  const amount =
+    notice.total === undefined
+      ? String(notice.progress)
+      : `${notice.progress}/${notice.total}`;
+  return notice.message ? `${amount} · ${notice.message}` : amount;
+}
+/** A task's state as the call's row reads it: `task working · indexing` (#554). */
+function taskText(task: { status: string; statusMessage?: string }): string {
+  const status = `task ${task.status.replace(/_/g, ' ')}`;
+  return task.statusMessage ? `${status} · ${task.statusMessage}` : status;
+}
+/**
+ * How a tool is called (#554). A tool that says it may or must run as a task (`execution.taskSupport`, the
+ * 2025-11-25 revision) goes as one when its server says it runs tool calls as tasks; one that must, on a server that
+ * does not, is not sent, since the server would refuse it.
+ */
+function callMode(spec: unknown, client: Client): 'call' | 'task' | 'refused' {
+  const execution = isRecord(spec) ? spec.execution : undefined;
+  const support = isRecord(execution) ? execution.taskSupport : undefined;
+  const capabilities = client.getServerCapabilities() as
+    { tasks?: { requests?: { tools?: { call?: unknown } } } } | undefined;
+  const served = isRecord(capabilities?.tasks?.requests?.tools?.call);
+  if (support === 'required') return served ? 'task' : 'refused';
+  return support === 'optional' && served ? 'task' : 'call';
+}
+const TASK_ENDS = new Set([
+  'completed',
+  'failed',
+  'cancelled',
+  'input_required',
+]);
 /**
  * Whether a structured result matches the output schema a tool was listed with, compiled when first needed: undefined
  * when the tool has no output schema or it cannot be compiled, since then nothing can be said either way.
@@ -1116,6 +1164,16 @@ export class McpManager {
         // whether it then succeeds, fails or is interrupted
         if (!hints.readOnly) this.results.forget(connection.name);
         try {
+          // What the server says of the call's progress, on its row while it runs: on one line, without the values
+          // Circle filled in, and only while the call is under way
+          let ended = false;
+          let last: string | undefined;
+          const report = (text: string): void => {
+            const line = oneLine(shown(text));
+            if (ended || !line || line === last) return;
+            last = line;
+            context.progress?.(line);
+          };
           // A new trace for each call, on the requests made for it
           const store: CallStore = {
             traceparent: traceparent(),
@@ -1145,15 +1203,22 @@ export class McpManager {
                 // The stream its answer was to come on ended without it, and nothing resumes it
                 store.lost = (error) => attempt.abort(error);
                 try {
-                  return await callServerTool(
-                    target,
-                    { name: spec.name, arguments: sending },
-                    {
-                      signal: attempt.signal,
-                      timeout: this.callTimeout ?? NO_LIMIT,
-                      maxTotalTimeout: this.callTimeout,
-                    },
-                  );
+                  const mode = callMode(spec, target);
+                  if (mode === 'refused')
+                    throw new Error(
+                      `${spec.name} runs only as a task, and ${connection.name} does not say it runs tool calls as tasks; nothing was sent`,
+                    );
+                  const options: RequestOptions = {
+                    signal: attempt.signal,
+                    timeout: this.callTimeout ?? NO_LIMIT,
+                    maxTotalTimeout: this.callTimeout,
+                    // Asks the server for progress notices, shown on the call's row
+                    onprogress: (notice) => report(progressText(notice)),
+                  };
+                  const params = { name: spec.name, arguments: sending };
+                  return mode === 'task'
+                    ? await this.callAsTask(target, params, options, report)
+                    : await callServerTool(target, params, options);
                 } catch (error) {
                   if (own.signal.aborted) throw error;
                   const said =
@@ -1189,6 +1254,7 @@ export class McpManager {
                 }
               }
             } finally {
+              ended = true;
               context.signal.removeEventListener('abort', forward);
             }
           });
@@ -1718,6 +1784,105 @@ export class McpManager {
     // What a tool of the server returned before may not hold for the tools it has now
     this.results.forget(server.name);
     this.services.onChange?.();
+  }
+  /**
+   * A tool call as a task (2025-11-25, #554): the server makes the task and answers at once; Circle asks how it stands
+   * as often as the server says to and shows it on the call's row, then reads the call's result. esc cancels the task.
+   * Once the task is made the call has reached the server, so a failure to follow it is never one that left nothing
+   * sent (#555).
+   */
+  private async callAsTask(
+    client: Client,
+    params: { name: string; arguments: Record<string, unknown> },
+    options: RequestOptions,
+    show: (text: string) => void,
+  ): Promise<ToolResult> {
+    const signal = options.signal!;
+    const created = await client.request(
+      { method: 'tools/call', params },
+      CreateTaskResultSchema,
+      { ...options, task: {} },
+    );
+    let task: {
+      taskId: string;
+      status: string;
+      statusMessage?: string;
+      pollInterval?: number;
+    } = created.task;
+    const taskId = task.taskId;
+    const cancel = (): void => {
+      void client
+        .request(
+          { method: 'tasks/cancel', params: { taskId } },
+          CancelTaskResultSchema,
+          { timeout: this.timeout },
+        )
+        .catch(() => {});
+    };
+    signal.addEventListener('abort', cancel, { once: true });
+    const follow = async <T>(request: () => Promise<T>): Promise<T> => {
+      for (let tries = 0; ; tries++) {
+        try {
+          return await request();
+        } catch (error) {
+          if (signal.aborted) throw error;
+          if (notSent(error) && tries < this.retryWaitsMs.length) {
+            await this.wait(this.retryWaitsMs[tries]!, signal);
+            continue;
+          }
+          if (notSent(error) || droppedAfterSending(error))
+            throw new McpError(
+              ErrorCode.ConnectionClosed,
+              `the server made task ${taskId} for the call, and following it failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          throw error;
+        }
+      }
+    };
+    try {
+      for (;;) {
+        show(taskText(task));
+        if (TASK_ENDS.has(task.status)) break;
+        const interval = Math.min(
+          Math.max(task.pollInterval ?? 1000, 50),
+          30_000,
+        );
+        await delay(interval, undefined, { signal });
+        task = await follow(() =>
+          client.request(
+            { method: 'tasks/get', params: { taskId } },
+            GetTaskResultSchema,
+            { signal, timeout: this.timeout },
+          ),
+        );
+      }
+      if (task.status === 'cancelled')
+        throw new Error(
+          `the server cancelled task ${taskId}${task.statusMessage ? `: ${task.statusMessage}` : ''}`,
+        );
+      // The call's result or error. A task that waits on input is asked for it while this waits.
+      try {
+        return await follow(() =>
+          client.request(
+            { method: 'tasks/result', params: { taskId } },
+            CallToolResultSchema,
+            {
+              signal,
+              timeout: options.timeout,
+              maxTotalTimeout: options.maxTotalTimeout,
+            },
+          ),
+        );
+      } catch (error) {
+        if (task.status !== 'failed' || signal.aborted) throw error;
+        throw new Error(
+          `task ${taskId} failed${task.statusMessage ? `: ${task.statusMessage}` : ''} (${error instanceof Error ? error.message : String(error)})`,
+          { cause: error },
+        );
+      }
+    } finally {
+      signal.removeEventListener('abort', cancel);
+    }
   }
   /** Connects a server again for a call to be sent on, and gives its new client, or nothing if it is not back. */
   private async connectedAgain(

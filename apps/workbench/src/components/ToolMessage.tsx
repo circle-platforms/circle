@@ -362,6 +362,11 @@ function GenericToolMessage({
           <span className="tool-target">{target}</span>
         )}
         <span className="tool-row-end">
+          {live && tool.progress && (
+            <span className="tool-progress" title={tool.progress}>
+              {tool.progress}
+            </span>
+          )}
           {diff && (
             <span className="tool-diff-summary">
               <DiffSummary text={diff.summary} />

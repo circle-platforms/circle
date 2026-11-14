@@ -14,6 +14,8 @@ export interface StubTool {
   inputSchema?: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
   annotations?: Record<string, unknown>;
+  /** How it may be run, such as `{ taskSupport: 'required' }`. */
+  execution?: Record<string, unknown>;
 }
 export interface StubResult {
   content: unknown[];
@@ -41,7 +43,9 @@ export interface StubOptions {
   /** The initialize result's `instructions`, read at each initialize. */
   instructions?: () => string | undefined;
   /** Answers tools/call; by default the text names the tool. */
-  call?: (request: StubRequest) => StubResult | Promise<StubResult>;
+  call?: (
+    request: StubRequest,
+  ) => StubResult | Record<string, unknown> | Promise<StubResult>;
   /**
    * Declares that its tools can change (`tools.listChanged`) and keeps the stream a streamable HTTP client opens with
    * GET, so `notify` reaches it. `tools` is read again at each tools/list: change it, then notify.
@@ -57,6 +61,8 @@ export interface StubOptions {
   connectionClose?: boolean;
   /** Cuts the connection once a request arrived, before any answer. */
   drop?: (request: StubRequest) => boolean;
+  /** Messages sent on an event stream before the answer to a request, such as progress notices. */
+  before?: (request: StubRequest) => Record<string, unknown>[] | undefined;
   /** Answers a request with an event stream that ends without the answer. */
   endStream?: (request: StubRequest) => boolean;
   /** An HTTP status to refuse a request with, such as 401, with this body. */
@@ -187,11 +193,25 @@ export async function mcpStub(
       response.writeHead(200, { 'Content-Type': 'text/event-stream' }).end();
       return;
     }
+    // Messages that go before the answer are sent at once, so a client reads them while the answer is made
+    const first =
+      request.path === '/messages' ? undefined : options.before?.(request);
+    if (first?.length) {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      for (const message of first)
+        response.write(
+          `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', ...message })}\n\n`,
+        );
+    }
     const reply = JSON.stringify({
       jsonrpc: '2.0',
       id: request.message.id,
       result: await answer(request),
     });
+    if (first?.length) {
+      response.end(`event: message\ndata: ${reply}\n\n`);
+      return;
+    }
     if (request.path === '/messages') {
       stream?.write(`event: message\ndata: ${reply}\n\n`);
       response.writeHead(202).end();

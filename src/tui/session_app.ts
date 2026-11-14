@@ -1604,6 +1604,19 @@ export class SessionApp {
               String(event.payload.session_id ?? event.run_id ?? ''),
               String(event.payload.title),
             );
+          // What a running call says of its progress shows on its row until it ends (#554)
+          if (event.kind === 'tool_progress') {
+            this.state.toolProgress = {
+              ...this.state.toolProgress,
+              [String(event.payload.id)]: String(event.payload.text),
+            };
+            coalesce = true;
+          } else if (event.kind === 'tool_end' && this.state.toolProgress) {
+            const { [String(event.payload.id)]: _ended, ...rest } =
+              this.state.toolProgress;
+            this.state.toolProgress = rest;
+          } else if (['run_start', 'run_end', 'run_error'].includes(event.kind))
+            this.state.toolProgress = undefined;
           if (coalesce) this.requestRender();
           else this.repaint();
         });

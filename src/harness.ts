@@ -1999,6 +1999,8 @@ export class Harness {
         sessionId: this.sessionId,
         identity: this.identity(),
         callId: call.id,
+        progress: (text) =>
+          this.bus.emit('tool_progress', { payload: { id: call.id, text } }),
         ...(used.size ? { rawArgs: structuredClone(raw) } : {}),
         ...(usedSecrets.length ? { secretNames: usedSecrets } : {}),
         imageInput: callModel.imageInput,

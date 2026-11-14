@@ -117,6 +117,7 @@ A project hooks file runs only in a version you approved, and these modes cannot
 | `turn_start` | `message`, absent for a turn started for finished jobs | Before each prompt is sent. |
 | `assistant` | `id`, `text`, `tool_calls` (each `id`, `name`, `args`), `usage` (`input_tokens`, `output_tokens`, `cache_read_tokens`, and `cache_write_tokens` when the endpoint reports it) | Each time the model answers, with or without tool calls. |
 | `tool_result` | `id` (the call's), `name`, `status` (`success` or `error`), `output` | Each tool result. |
+| `tool_progress` | `id` (the call's), `text` | What a running MCP tool call says of how far it has come, as its row shows it: the server's progress (`3/10 · indexing`) or, for a call run as a task, the task's state (`task working · …`). See [MCP](mcp.md#progress-and-tasks). |
 | `not_run` | `name`, `args`, `reason` (why the call would ask, such as `runs a shell command` or `destructive operation`) | A call that is not run because nobody can approve it. Its `tool_result` follows with the error. |
 | `job` | `event` (`started`, `updated`, `ended`), `job` (`id`, `kind`, `title`, `status`, `reason`, `exitCode`, `startedBy`, `elapsed` in seconds, `output`, `sessionId`) | A [background job](background-jobs.md) started, changed or ended. |
 | `compaction` | `phase`, `trigger`, and as the phase has them `tokens_before`, `tokens_after`, `summarized`, `kept`, `file`, `seconds`, `message` | A [compaction](sessions.md#compaction) started, moved on, ended or failed. |

@@ -199,6 +199,8 @@ export interface ToolContext {
   /** Bound to this harness's model and connection, including child harnesses. */
   webSearch?: (query: string, numResults: number) => Promise<string>;
   recordModelCall?: (call: ToolModelCall) => void;
+  /** Says how far the call has come, on its row while it runs: what an MCP server reports (#554). */
+  progress?: (text: string) => void;
 }
 export interface MediaAttachment {
   kind: 'image' | 'document';
