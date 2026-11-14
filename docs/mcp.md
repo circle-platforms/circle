@@ -152,25 +152,27 @@ A tool its server lists with `execution.taskSupport` `optional` or `required` ru
 
 ### Questions from a server
 
-A server can ask you for input in the middle of a call (`elicitation/create`). Circle takes the form kind of question, where the server names the fields it wants. It does not take the kind that asks you to open a page: the MCP library answers that one with an error (`-32602`), and Circle says it takes forms when it connects (`elicitation: {form: {}}`), where someone can be asked.
+A server can ask you for input in the middle of a call (`elicitation/create`), with a form, where it names the fields it wants, or by asking you to open a page, as a sign-in does. Circle says it takes both when it connects (`elicitation: {form: {}, url: {}}`).
 
-The question panel the [`question` tool](tools.md) uses shows the form, headed by the server's name. The first question is the server's message, then a question follows for each field and a last one asks whether to send the answers:
+The question panel the [`question` tool](tools.md) uses shows a form, headed by the server's name. The first question is the server's message, then a question follows for each field and a last one asks whether to send the answers:
 
 - **Yes or no** is chosen from `yes` and `no`.
 - **A list of values** is chosen from (`enum`, or `oneOf` with titles), and a list of several (an `array` of them) takes more than one.
 - **Text and numbers** are typed. A number must be one, a whole number when the server asks for one, and inside its bounds. Text must be of the length and kind the server asks for: an email address, an address (`uri`), a date or a date and time.
 - **An optional field** says `(optional)` and can be left empty. A field with a default says what an empty answer gives (`empty: …`).
 
-When an answer does not fit, the panel comes back saying what was wrong (`Not sent: …`), and nothing reaches the server until the answers fit. The server gets:
+When an answer does not fit, the panel comes back saying what was wrong (`Not sent: …`), and nothing reaches the server until the answers fit.
+
+A page to open is asked about first: the panel shows the server's message and the address, and asks `open` or `decline`. Only `open` opens it, in the system browser or the desktop's browser panel, and the server is told you accepted; an address that is not `http` or `https` is declined without asking. The server gets:
 
 | What you do                     | What the server gets                                       |
 | ------------------------------- | ---------------------------------------------------------- |
-| Answer **send** (or **accept**) | `accept`, with the answers as the values its form asks for |
+| Answer **send** (or **accept**), or **open** a page | `accept`, with the answers as the values its form asks for |
 | Answer **decline**              | `decline`                                                  |
 | Close the panel                 | `cancel`                                                   |
 | Press `esc` on the call         | `cancel`                                                   |
 
-The server can also take its question back. A question that came on a stream of the server's own, as a program's questions do, is withdrawn once none of that server's calls is under way, so `esc` on the only call closes it. In print, JSON, line and RPC mode no one can be asked: Circle does not say it takes forms, so a server does not ask, and one that asks anyway is told the method is not found (`-32601`). A task that needs input (`input_required`) asks this way while Circle reads its result. The 2026-07-28 revision asks by a result instead (`input_required` with `inputResponses`), and comes with an MCP library that speaks that revision.
+[Hooks](hooks.md) can answer for you: an `Elicitation` hook, whose matcher is the server's name, runs before you are asked and can accept with values, decline or cancel, and an `ElicitationResult` hook runs after you answered and can change or block the answer. The server can also take its question back. A question that came on a stream of the server's own, as a program's questions do, is withdrawn once none of that server's calls is under way, so `esc` on the only call closes it. In print, JSON, line and RPC mode no one can be asked: a question no hook answers is cancelled. A task that needs input (`input_required`) asks this way while Circle reads its result. The 2026-07-28 revision asks by a result instead (`input_required` with `inputResponses`), and comes with an MCP library that speaks that revision.
 
 ### Long calls and large results
 

@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdirSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { McpManager } from '../src/mcp_loader.js';
 import { AgentRuntime } from '../src/runtime.js';
-import { defaultSettings } from '../src/settings.js';
+import { defaultSettings, saveSettings, trustFolder } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import type { Message, ModelResponse } from '../src/types.js';
 import { cleanup, scratch, until } from './helpers.js';
@@ -89,12 +95,13 @@ test('a form is asked field by field; answers that do not fit are asked again, a
       },
     },
   });
-  // The client said it takes forms, and only forms
+  // The client said it takes forms and pages to open
   const start = stub.requests.find(
     (request) => request.message?.method === 'initialize',
   )!;
   assert.deepEqual(start.message!.params!.capabilities.elicitation, {
     form: {},
+    url: {},
   });
   // Each round is one panel: the server's message, a question for each field, then whether to send
   assert.equal(asked.length, 2);
@@ -132,14 +139,20 @@ test('a server is told when the person declines or closes the panel', async (t) 
   );
 });
 
-test('where no one can be asked the client does not take forms, and a server that asks anyway is told so', async (t) => {
-  const stub = await shop(t);
-  const reply = (await ordered(t, stub)) as any;
-  assert.equal(reply.error.code, -32601);
-  const start = stub.requests.find(
-    (request) => request.message?.method === 'initialize',
-  )!;
-  assert.equal(start.message!.params!.capabilities.elicitation, undefined);
+test('where no one can be asked a question is cancelled, a form or a page alike', async (t) => {
+  const form = await shop(t);
+  assert.deepEqual(((await ordered(t, form)) as any).result, {
+    action: 'cancel',
+  });
+  const page = await shop(t, {
+    mode: 'url',
+    message: 'Sign the contract',
+    url: 'https://shop.example/sign',
+    elicitationId: 'e-1',
+  });
+  assert.deepEqual(((await ordered(t, page)) as any).result, {
+    action: 'cancel',
+  });
 });
 
 test('esc on the call closes the panel of a question the server sent on a stream of its own', async (t) => {
@@ -178,19 +191,55 @@ test('esc on the call closes the panel of a question the server sent on a stream
   await until(() => panel!.aborted, { timeout: 10_000 });
 });
 
-test('a request to open a page is refused: the client takes forms only', async (t) => {
-  let asked = false;
-  const stub = await shop(t, {
+test('a page a server asks to open is asked about first, and opened only when the person says so', async (t) => {
+  const page = {
     mode: 'url',
     message: 'Sign the contract',
     url: 'https://shop.example/sign',
     elicitationId: 'e-1',
-  });
-  const reply = (await ordered(t, stub, async () => {
+  };
+  for (const [answer, action, opened] of [
+    [['open'], 'accept', ['https://shop.example/sign']],
+    [['decline'], 'decline', []],
+    [null, 'cancel', []],
+  ] as const) {
+    const stub = await shop(t, page);
+    const asked: Record<string, any>[] = [];
+    const opens: string[] = [];
+    const manager = new McpManager(scratch(t), undefined, undefined, {
+      ask: async (args) => {
+        asked.push(args);
+        return JSON.stringify(answer);
+      },
+      openUrl: async (url) => {
+        opens.push(url);
+      },
+    });
+    cleanup(t, () => manager.close());
+    await manager.load({ shop: { url: stub.url, type: 'http' } });
+    const text = String(
+      await manager.tools[0]!.run(
+        {},
+        { sessionId: 'one', signal: new AbortController().signal },
+      ),
+    );
+    assert.deepEqual(JSON.parse(/asked: (.*)$/m.exec(text)![1]!).result, {
+      action,
+    });
+    assert.deepEqual(opens, opened);
+    assert.match(
+      asked[0]!.questions[0].question,
+      /^shop asks you to open a page: Sign the contract\nhttps:\/\/shop\.example\/sign\nOpen it in the browser\?$/,
+    );
+  }
+  // An address that is not a web page is declined without asking
+  const local = await shop(t, { ...page, url: 'file:///etc/passwd' });
+  let asked = false;
+  const reply = (await ordered(t, local, async () => {
     asked = true;
-    return '';
+    return JSON.stringify(['open']);
   })) as any;
-  assert.equal(reply.error.code, -32602);
+  assert.deepEqual(reply.result, { action: 'decline' });
   assert.equal(asked, false);
 });
 
@@ -242,4 +291,182 @@ test("in a conversation the server's question goes to the question panel, and it
     (message) => message.tool_call_id === 'call-1',
   )!;
   assert.match(result.content, /"action":"accept","content":\{\}/);
+});
+
+/** A conversation whose model calls the shop's tool once, with hooks in the settings of a trusted folder. */
+async function conversation(
+  t: Parameters<typeof scratch>[0],
+  stub: McpStub,
+  hooks: Record<string, unknown>,
+  answer = JSON.stringify(['Ada', '3', 'Gold', '', [], 'send']),
+) {
+  const root = realpathSync.native(scratch(t));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  mkdirSync(home);
+  mkdirSync(workspace);
+  const settings = trustFolder(defaultSettings(), workspace);
+  settings.mcpServers = { shop: { url: stub.url, type: 'http' } };
+  settings.hooks = hooks;
+  saveSettings(settings, home);
+  const asked: Record<string, any>[] = [];
+  const runtime = new AgentRuntime({
+    home,
+    workspace,
+    userHome: join(root, 'user'),
+    settings,
+    model: new ScriptedModel([
+      {
+        message: {
+          id: 'call',
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: 'call-1', name: 'mcp__shop__order', args: {} }],
+        },
+      },
+      { message: { id: 'done', role: 'assistant', content: 'done' } },
+    ]),
+    question: async (args) => {
+      asked.push(args);
+      return answer;
+    },
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.initialize();
+  runtime.policy.setYolo(runtime.session.id, true);
+  await runtime.harness.run('order');
+  const text = runtime.harness.messages.find(
+    (message) => message.tool_call_id === 'call-1',
+  )!.content;
+  return {
+    root,
+    asked,
+    got: JSON.parse(/asked: (.*)$/m.exec(text)![1]!).result,
+  };
+}
+/** A hook that keeps its input in `file` and prints `output`, or exits with `exit`. */
+function hookScript(
+  root: string,
+  name: string,
+  output: unknown,
+  exit = 0,
+): { type: string; command: string; args: string[] } {
+  const script = join(root, `${name}.mjs`);
+  const print =
+    output === undefined
+      ? ''
+      : `process.stdout.write(${JSON.stringify(JSON.stringify(output))});`;
+  writeFileSync(
+    script,
+    [
+      "import fs from 'node:fs';",
+      "let input = '';",
+      'process.stdin.on("data", (chunk) => (input += chunk));',
+      'process.stdin.on("end", () => {',
+      `  fs.writeFileSync(${JSON.stringify(join(root, `${name}.json`))}, input);`,
+      `  ${print}`,
+      `  process.exit(${exit});`,
+      '});',
+    ].join('\n'),
+  );
+  return { type: 'command', command: process.execPath, args: [script] };
+}
+
+test("an Elicitation hook answers a form in the person's place, told the server, the message and the form", async (t) => {
+  const stub = await shop(t);
+  const root = realpathSync.native(scratch(t));
+  const { asked, got } = await conversation(t, stub, {
+    Elicitation: [
+      {
+        matcher: 'shop',
+        hooks: [
+          hookScript(root, 'answer', {
+            hookSpecificOutput: {
+              hookEventName: 'Elicitation',
+              action: 'accept',
+              content: { name: 'Hook', count: 2, tier: 'basic' },
+            },
+          }),
+        ],
+      },
+    ],
+  });
+  assert.deepEqual(got, {
+    action: 'accept',
+    content: { name: 'Hook', count: 2, tier: 'basic' },
+  });
+  assert.equal(asked.length, 0);
+  const input = JSON.parse(readFileSync(join(root, 'answer.json'), 'utf8'));
+  assert.equal(input.hook_event_name, 'Elicitation');
+  assert.equal(input.mcp_server_name, 'shop');
+  assert.equal(input.message, 'Confirm the order');
+  assert.equal(input.mode, 'form');
+  assert.deepEqual(input.requested_schema, form);
+});
+
+test('an Elicitation hook that exits 2 declines without asking, and one for another server does not run', async (t) => {
+  const stub = await shop(t);
+  const root = realpathSync.native(scratch(t));
+  const { asked, got } = await conversation(t, stub, {
+    Elicitation: [
+      { matcher: 'shop', hooks: [hookScript(root, 'refuse', undefined, 2)] },
+      {
+        matcher: 'other',
+        hooks: [
+          hookScript(root, 'elsewhere', {
+            hookSpecificOutput: {
+              hookEventName: 'Elicitation',
+              action: 'accept',
+              content: {},
+            },
+          }),
+        ],
+      },
+    ],
+  });
+  assert.deepEqual(got, { action: 'decline' });
+  assert.equal(asked.length, 0);
+  assert.ok(!existsSync(join(root, 'elsewhere.json')));
+});
+
+test("an ElicitationResult hook sees the person's answer and can change it or block it before the server gets it", async (t) => {
+  const root = realpathSync.native(scratch(t));
+  const changed = await conversation(t, await shop(t), {
+    ElicitationResult: [
+      {
+        hooks: [
+          hookScript(root, 'change', {
+            hookSpecificOutput: {
+              hookEventName: 'ElicitationResult',
+              action: 'accept',
+              content: { name: 'Ada Lovelace', count: 3, tier: 'gold' },
+            },
+          }),
+        ],
+      },
+    ],
+  });
+  assert.equal(changed.asked.length, 1);
+  assert.deepEqual(changed.got, {
+    action: 'accept',
+    content: { name: 'Ada Lovelace', count: 3, tier: 'gold' },
+  });
+  const input = JSON.parse(readFileSync(join(root, 'change.json'), 'utf8'));
+  assert.equal(input.hook_event_name, 'ElicitationResult');
+  assert.equal(input.action, 'accept');
+  assert.equal(input.mode, 'form');
+  assert.deepEqual(input.content, {
+    name: 'Ada',
+    count: 3,
+    tier: 'gold',
+    gift: false,
+  });
+  const blocked = await conversation(t, await shop(t), {
+    ElicitationResult: [
+      {
+        hooks: [hookScript(root, 'block', { decision: 'block', reason: 'no' })],
+      },
+    ],
+  });
+  assert.deepEqual(blocked.got, { action: 'decline' });
 });

@@ -904,6 +904,13 @@ export class AgentRuntime {
         readFileBytes(this.sandbox, fileReads, path, context, limit),
       // Someone can reconnect a server whose program exited: it stays failed until they do
       interactive: !this.options.headless,
+      // The Elicitation and ElicitationResult hooks, about a server's question
+      elicitationHooks: {
+        before: (request, signal) =>
+          this.elicitationHooks('Elicitation', request, undefined, signal),
+        after: (request, answer, signal) =>
+          this.elicitationHooks('ElicitationResult', request, answer, signal),
+      },
       // A call of the conversation that runs on past its turn goes on as a background job
       background: (title, owner, run) => this.jobs.startCall(title, owner, run),
       // A result too large for the model is kept where read_file reads Circle's own output
@@ -3700,6 +3707,48 @@ export class AgentRuntime {
         if (this.askingForServers === asked) this.askingForServers = undefined;
       });
     this.askingForServers = asked;
+  }
+  /**
+   * The hooks of a server's question: Elicitation, before anyone is asked, which may answer it; ElicitationResult,
+   * after the person answered, which may change or block that answer. Their matcher is the server's name.
+   */
+  private async elicitationHooks(
+    event: 'Elicitation' | 'ElicitationResult',
+    request: import('./mcp_loader.js').ElicitationRequest,
+    answer: import('./hooks.js').ElicitationAnswer | undefined,
+    signal: AbortSignal,
+  ): Promise<import('./hooks.js').ElicitationAnswer | undefined> {
+    const runner = this.ensureHooks();
+    if (!runner.has(event)) return undefined;
+    const batch = await runner.run({
+      event,
+      sessionId: this.session.id,
+      cwd: this.options.workspace,
+      matchValue: request.server,
+      fields: {
+        mcp_server_name: request.server,
+        ...(event === 'Elicitation'
+          ? { message: request.message }
+          : { action: answer!.action }),
+        mode: request.mode,
+        ...(event === 'Elicitation' && request.url !== undefined
+          ? { url: request.url }
+          : {}),
+        ...(request.elicitationId !== undefined
+          ? { elicitation_id: request.elicitationId }
+          : {}),
+        ...(event === 'Elicitation' && request.requestedSchema !== undefined
+          ? { requested_schema: request.requestedSchema }
+          : {}),
+        ...(event === 'ElicitationResult' && answer?.content !== undefined
+          ? { content: answer.content }
+          : {}),
+      },
+      secrets: this.runSecrets(),
+      signal,
+    });
+    this.harness?.hookContext({ ...batch, context: '' }, event);
+    return batch.elicitation;
   }
   /**
    * Connects again every server that failed or waits for a sign-in, as `/mcp reconnect all` does; the servers that

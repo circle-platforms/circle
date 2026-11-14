@@ -407,6 +407,13 @@ export interface HookAnswer {
   updatedToolOutput?: unknown;
   sessionTitle?: string;
   suppressOriginalPrompt?: boolean;
+  /** Elicitation and ElicitationResult: the answer the server gets in the person's place. */
+  elicitation?: ElicitationAnswer;
+}
+/** What an MCP server is told of its question: accepted with the values, declined, or cancelled. */
+export interface ElicitationAnswer {
+  action: 'accept' | 'decline' | 'cancel';
+  content?: Record<string, unknown>;
 }
 
 export interface HookOutcome {
@@ -459,6 +466,8 @@ export interface HookBatch {
   suppressOriginalPrompt: boolean;
   /** PermissionRequest: a deny that also ends the turn. */
   interrupt: boolean;
+  /** Elicitation and ElicitationResult: what the hooks answer the server instead. */
+  elicitation?: ElicitationAnswer;
 }
 
 /** Events whose plain standard output reaches the model. */
@@ -481,7 +490,11 @@ const QUIET = new Set<HookEvent>([
   'PreCompact',
   'PostCompact',
   'SessionEnd',
+  'Elicitation',
+  'ElicitationResult',
 ]);
+/** The events of an MCP server's question, whose hooks answer it or change the answer. */
+const ELICITATION = new Set<HookEvent>(['Elicitation', 'ElicitationResult']);
 /** Events a blocking exit stops. */
 const CAN_BLOCK = new Set<HookEvent>([
   'PreToolUse',
@@ -621,6 +634,20 @@ export function readHookAnswer(
           'sessionTitle',
           'hookSpecificOutput.sessionTitle',
         );
+      // A hookSpecificOutput without an action says nothing of the question
+      if (ELICITATION.has(event) && specific.action !== undefined) {
+        const action = specific.action;
+        if (action !== 'accept' && action !== 'decline' && action !== 'cancel')
+          throw new Error('action must be "accept", "decline" or "cancel"');
+        if (specific.content !== undefined && !isRecord(specific.content))
+          throw new Error('content must be an object');
+        answer.elicitation = {
+          action,
+          ...(action === 'accept' && isRecord(specific.content)
+            ? { content: specific.content }
+            : {}),
+        };
+      }
       if (event === 'UserPromptSubmit') {
         if (
           specific.suppressOriginalPrompt !== undefined &&
@@ -1094,6 +1121,7 @@ export function combineOutcomes(
     outcome: HookOutcome;
   };
   const decided: Decided[] = [];
+  const answered: ElicitationAnswer[] = [];
   for (const outcome of ran) {
     const { hook, answer } = outcome;
     if (outcome.failed && !outcome.blocking)
@@ -1131,6 +1159,11 @@ export function combineOutcomes(
           message,
           outcome,
         });
+    } else if (ELICITATION.has(event)) {
+      // Exit 2, `decision: "block"` or a failure of a hook that blocks on failure declines, whatever else it said
+      if (outcome.blocking || answer?.block === true)
+        answered.push({ action: 'decline' });
+      else if (answer?.elicitation) answered.push(answer.elicitation);
     } else if (event === 'PermissionRequest') {
       // A blocking exit does not answer a permission request; a failure of a hook that blocks on failure denies it
       if (outcome.blocking && (outcome.failed || outcome.hook.legacy))
@@ -1285,6 +1318,11 @@ export function combineOutcomes(
       });
   }
   if (stop) notices.push({ kind: 'stopped', reason: stop.reason });
+  // Of several hooks' answers to a question, a decline wins, then a cancel, then an accept
+  const elicitation =
+    answered.find((item) => item.action === 'decline') ??
+    answered.find((item) => item.action === 'cancel') ??
+    answered.find((item) => item.action === 'accept');
   return {
     outcomes,
     notices,
@@ -1301,6 +1339,7 @@ export function combineOutcomes(
     ...(sessionTitle ? { sessionTitle } : {}),
     suppressOriginalPrompt,
     interrupt,
+    ...(elicitation ? { elicitation } : {}),
   };
 }
 

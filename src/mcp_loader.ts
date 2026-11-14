@@ -73,6 +73,7 @@ import { formatJcs } from './knowledge/canonical.js';
 import { replaceLongest } from './secrets.js';
 import { tokenLen } from './middleware/tool_result_prune.js';
 import type { Job, JobOwner } from './jobs.js';
+import type { ElicitationAnswer } from './hooks.js';
 import {
   environmentThenSecrets,
   expandReferences,
@@ -198,6 +199,30 @@ export interface McpServices {
   ) => Job;
   /** Keeps a result too large to give the model in a file, and gives the path the model reads it by. */
   saveResult?: (text: string, tool: string) => string;
+  /**
+   * The Elicitation hooks, which may answer a server's question in the person's place, and the ElicitationResult
+   * hooks, which may change or block the person's answer before the server gets it. Nothing: the hooks leave it.
+   */
+  elicitationHooks?: {
+    before(
+      request: ElicitationRequest,
+      signal: AbortSignal,
+    ): Promise<ElicitationAnswer | undefined>;
+    after(
+      request: ElicitationRequest,
+      answer: ElicitationAnswer,
+      signal: AbortSignal,
+    ): Promise<ElicitationAnswer | undefined>;
+  };
+}
+/** A server's question in the middle of a call, as its hooks are told of it. */
+export interface ElicitationRequest {
+  server: string;
+  mode: 'form' | 'url';
+  message: string;
+  url?: string;
+  elicitationId?: string;
+  requestedSchema?: unknown;
 }
 /** How long a call of the conversation runs before it goes on as a background job. */
 export const AUTO_BACKGROUND_MS = 120_000;
@@ -1097,6 +1122,51 @@ export const TOOLS_CHANGED_WAIT_MS = 300;
 /** What a server whose tools changed shows while Circle keeps its earlier tools. */
 export const TOOLS_NOT_LISTED_AGAIN =
   'the server changed its tools and listing them again failed; the earlier tools stay until a reload';
+const OPEN = 'open';
+const DECLINE_PAGE = 'decline';
+/** The question for a page a server asks the person to open. */
+function openPageQuestion(server: string, message: string, page: URL) {
+  return {
+    question: `${server} asks you to open a page: ${message.trim() || '(no message)'}\n${page.href}\nOpen it in the browser?`,
+    header: server.length > 24 ? `${server.slice(0, 23)}…` : server,
+    options: [
+      { label: OPEN, description: 'open the page, and tell the server so' },
+      { label: DECLINE_PAGE, description: `${server} is told you declined` },
+    ],
+    multiple: false,
+    custom: false,
+  };
+}
+/** The first answer of a panel's reply, or nothing when it was closed. */
+function firstAnswer(reply: string): string | undefined {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(reply);
+  } catch {
+    return undefined;
+  }
+  const values = Array.isArray(decoded)
+    ? decoded
+    : isRecord(decoded) && Array.isArray(decoded.answers)
+      ? decoded.answers
+      : undefined;
+  const first = values?.[0];
+  return first === undefined
+    ? undefined
+    : String(Array.isArray(first) ? first[0] : first).trim();
+}
+/** What a server gets: its values only with an accept of a form. */
+function elicitResult(
+  answer: ElicitationAnswer,
+  mode: 'form' | 'url',
+): ElicitResult {
+  return answer.action === 'accept' && mode === 'form' && answer.content
+    ? {
+        action: 'accept',
+        content: answer.content as NonNullable<ElicitResult['content']>,
+      }
+    : { action: answer.action };
+}
 export class McpManager {
   tools: Tool[] = [];
   status: McpStatus[] = [];
@@ -1751,15 +1821,17 @@ export class McpManager {
         version: VERSION,
         platform: process.platform,
       } as Implementation,
-      // A server may ask the person for input in the middle of a call, with a form (#556), where someone can be asked.
-      // The MCP library answers a request of another mode (a page to open) with an error; without a question panel
-      // (print, line and RPC mode) Circle does not say it takes forms, so a server does not ask.
-      { capabilities: this.services.ask ? { elicitation: { form: {} } } : {} },
+      // A server may ask the person for input in the middle of a call, with a form or by a page to open (#556). Circle
+      // says it takes both; where no one can be asked a question is cancelled, unless a hook answers it.
+      { capabilities: { elicitation: { form: {}, url: {} } } },
     );
-    if (this.services.ask)
-      client.setRequestHandler(ElicitRequestSchema, (request, extra) =>
-        this.elicit(connection.name, request.params, extra.signal),
-      );
+    client.setRequestHandler(ElicitRequestSchema, (request, extra) =>
+      this.elicit(
+        connection.name,
+        request.params as Record<string, unknown>,
+        extra.signal,
+      ),
+    );
     let transport: Transport | undefined;
     let provider: McpAuthProvider | undefined;
     const timeout = AbortSignal.timeout(this.timeout);
@@ -2276,17 +2348,17 @@ export class McpManager {
     };
   }
   /**
-   * A server's question in the middle of a call (form mode, #556), in the question panel: a question for each field,
-   * then whether to send the answers. Answers that do not fit the form are asked for again; closing the panel, esc on
-   * the call, or the server's own cancellation cancels it. Without a panel (print, line and RPC mode) it is cancelled.
+   * A server's question in the middle of a call (#556). An Elicitation hook may answer it in the person's place;
+   * otherwise a form is asked in the question panel, a question for each field and then whether to send the answers,
+   * and a page to open is asked about before it opens. Then the ElicitationResult hooks may change or block the
+   * answer. Closing the panel, esc on the call, or the server's own cancellation cancels it, and so does a run where
+   * no one can be asked.
    */
   private async elicit(
     server: string,
-    params: { message: string; requestedSchema?: unknown },
+    params: Record<string, unknown>,
     cancelled: AbortSignal,
   ): Promise<ElicitResult> {
-    const ask = this.services.ask;
-    if (!ask) return { action: 'cancel' };
     // The call it came with, when its answer's stream brought it; and in any case once no call to the server is under
     // way, as a program's question comes on a stream of its own
     const call = toolCalls.getStore()?.signal;
@@ -2297,36 +2369,102 @@ export class McpManager {
       ...(call ? [call] : []),
       ...(idle ? [idle] : []),
     ]);
-    const fields = elicitationFields(params.requestedSchema);
+    const mode = params.mode === 'url' ? 'url' : 'form';
+    const request: ElicitationRequest = {
+      server,
+      mode,
+      message: typeof params.message === 'string' ? params.message : '',
+      ...(mode === 'url' && typeof params.url === 'string'
+        ? { url: params.url }
+        : {}),
+      ...(typeof params.elicitationId === 'string'
+        ? { elicitationId: params.elicitationId }
+        : {}),
+      ...(mode === 'form' && params.requestedSchema !== undefined
+        ? { requestedSchema: params.requestedSchema }
+        : {}),
+    };
+    const hooks = this.services.elicitationHooks;
+    const hooked = await hooks?.before(request, signal).catch(() => undefined);
+    // A hook's answer goes as it is: the ElicitationResult hooks do not run for it
+    if (hooked) return elicitResult(hooked, mode);
+    const answered =
+      mode === 'url'
+        ? await this.askToOpen(request, signal)
+        : await this.askForm(server, request, signal);
+    const changed = await hooks
+      ?.after(request, answered, signal)
+      .catch(() => undefined);
+    return elicitResult(changed ?? answered, mode);
+  }
+  /** A question asked in the panel; it holds the move of the call it came with to the background while it is open. */
+  private async askPanel(
+    questions: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<string | undefined> {
+    const ask = this.services.ask;
+    if (!ask) return undefined;
+    const question = ask(questions, signal);
+    this.openQuestions.add(question);
+    try {
+      const reply = await question;
+      return signal.aborted ? undefined : reply;
+    } catch (error) {
+      if (signal.aborted) return undefined;
+      throw error;
+    } finally {
+      this.openQuestions.delete(question);
+    }
+  }
+  /** A form, asked field by field until the answers fit it. */
+  private async askForm(
+    server: string,
+    request: ElicitationRequest,
+    signal: AbortSignal,
+  ): Promise<ElicitationAnswer> {
+    const fields = elicitationFields(request.requestedSchema);
     let problems: string[] = [];
     for (;;) {
-      let reply: string;
-      // While it is open, the call it holds up is not moved to the background
-      const question = ask(
+      const reply = await this.askPanel(
         {
           questions: elicitationQuestions(
             server,
-            params.message,
+            request.message,
             fields,
             problems,
           ),
         },
         signal,
       );
-      this.openQuestions.add(question);
-      try {
-        reply = await question;
-      } catch (error) {
-        if (signal.aborted) return { action: 'cancel' };
-        throw error;
-      } finally {
-        this.openQuestions.delete(question);
-      }
-      if (signal.aborted) return { action: 'cancel' };
+      if (reply === undefined) return { action: 'cancel' };
       const outcome = elicitationOutcome(fields, reply);
       if (outcome.action !== 'again') return outcome;
       problems = outcome.problems;
     }
+  }
+  /** A page a server asks the person to open: opened in the browser once they say so. */
+  private async askToOpen(
+    request: ElicitationRequest,
+    signal: AbortSignal,
+  ): Promise<ElicitationAnswer> {
+    let page: URL;
+    try {
+      page = new URL(request.url ?? '');
+    } catch {
+      return { action: 'decline' };
+    }
+    if (page.protocol !== 'https:' && page.protocol !== 'http:')
+      return { action: 'decline' };
+    const reply = await this.askPanel(
+      { questions: [openPageQuestion(request.server, request.message, page)] },
+      signal,
+    );
+    const choice = reply === undefined ? undefined : firstAnswer(reply);
+    if (choice === OPEN) {
+      await (this.services.openUrl ?? openInBrowser)(page.href).catch(() => {});
+      return { action: 'accept' };
+    }
+    return { action: choice === DECLINE_PAGE ? 'decline' : 'cancel' };
   }
   /**
    * Where a call cut after it was sent goes once more: the server's connection when it is still open, as an HTTP one

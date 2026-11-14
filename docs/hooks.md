@@ -101,6 +101,7 @@ What the matcher is tested against depends on the event:
 | `SubagentStart`, `SubagentStop` | The subagent's type: `general-purpose`, `explore`, `plan`, a name of yours, or `<pack>:<name>` |
 | `PreCompact`, `PostCompact` | `manual` or `auto` |
 | `Notification` | `permission_prompt` or `idle_prompt` |
+| `Elicitation`, `ElicitationResult` | the MCP server's name |
 | `UserPromptSubmit`, `Stop` | Nothing: every group runs |
 
 `if` holds one rule, a tool's name with what its call must match in parentheses. It is read on the four tool events only; a hook with `if` on another event never runs.
@@ -128,6 +129,8 @@ The same handler in more than one settings file runs once for an occurrence. A p
 | `PreCompact` | Before a compaction | Stop it; add instructions for the summary |
 | `PostCompact` | After a compaction | Nothing: it gets the summary |
 | `Notification` | When an approval card has waited about 6 seconds, or a turn ended about a minute ago with no message since | Nothing: for side effects |
+| `Elicitation` | When an MCP server asks you something in the middle of a call, before you are asked | `hookSpecificOutput.action`: `accept` with the values in `content`, `decline` or `cancel` answers the server in your place, and you are not asked; exit 2 or `decision: "block"` declines. Nothing leaves it to you |
+| `ElicitationResult` | After you answered such a question, before the server gets the answer; not when an `Elicitation` hook answered | The same `action` and `content` replace your answer (`content` replaces all of it); exit 2 or `decision: "block"` declines. Nothing lets your answer through |
 
 A subagent runs the tool events of its own calls, at every depth: a subagent's own subagents too. `SessionStart`, `UserPromptSubmit` and `Stop` are the conversation's; `SubagentStart` and `SubagentStop` are the conversation's hooks about a subagent. A subagent definition's own hooks run beside them for that subagent alone, and its `Stop` hooks run as `SubagentStop` ([Subagents](agents.md#its-own-hooks)).
 
@@ -170,6 +173,8 @@ The fields of each event:
 | `PreCompact` | `trigger`, `custom_instructions` (what you gave `/compact`, else `null`) |
 | `PostCompact` | `trigger`, `compact_summary` |
 | `Notification` | `notification_type`, `title`, `message` |
+| `Elicitation` | `mcp_server_name`, `message`, `mode` (`form` or `url`), and `requested_schema` for a form, `url` for a page, `elicitation_id` when the server gives one |
+| `ElicitationResult` | `mcp_server_name`, `action`, `mode`, and `content` when you accepted a form, `elicitation_id` when the server gives one |
 
 A hook of a skill or a pack also gets `skill_dir`, and a `PostToolUse` hook with `screenshot` gets `files` (see below).
 
@@ -353,7 +358,6 @@ What changes all the same:
 ## Not here yet
 
 - Hook types other than `command`: `http`, `mcp_tool`, `prompt` and `agent` are reported and do not load. So is `asyncRewake`.
-- `Elicitation` and `ElicitationResult` hooks, which come with the next MCP changes.
 - A `PermissionRequest` allow with `updatedInput` or `updatedPermissions`: the first leaves the card to you, the second is ignored.
 - `transcript_path`, `prompt_id`, `effort` and `agent_transcript_path` in the input.
 - Events Circle has no occasion for: `Setup`, `InstructionsLoaded`, `UserPromptExpansion`, `MessageDisplay`, `PermissionDenied`, `PostToolBatch`, the task, teammate, config, directory, file, worktree and model-switch events.
