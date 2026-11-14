@@ -1285,6 +1285,13 @@ export class AgentRuntime {
           signal.addEventListener('abort', abort, { once: true });
           try {
             signal.throwIfAborted();
+            // subagent_start hooks (#557): what they say back is in its system prompt from its first request on
+            await this.subagentStartHooks(
+              child,
+              { sessionId: parentSessionId, id: session.id, type: name },
+              String(args.description || ''),
+              signal,
+            );
             return (await child.run(String(args.description || ''))).answer;
           } finally {
             signal.removeEventListener('abort', abort);
@@ -2413,6 +2420,31 @@ export class AgentRuntime {
     ]
       .filter(Boolean)
       .join('\n');
+  }
+  /**
+   * The conversation's subagent_start hooks, before a subagent's first request (#557): each gets the conversation's
+   * session, the subagent's own as `agent_id`, its type and its task.
+   */
+  private async subagentStartHooks(
+    child: Harness,
+    agent: { sessionId: string; id: string; type: string },
+    description: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const runner = this.hookRunner;
+    if (!runner?.active().some((hook) => hook.event === 'subagent_start'))
+      return;
+    const batch = await runner.run({
+      event: 'subagent_start',
+      sessionId: agent.sessionId,
+      agent: { id: agent.id, type: agent.type },
+      cwd: this.options.workspace,
+      description,
+      secrets: this.runSecrets(),
+      signal,
+    });
+    signal.throwIfAborted();
+    child.hookOutput(batch, 'subagent_start');
   }
   /** Read hooks again. /reload uses this so a changed file applies to the next call. */
   reloadHooks(): void {

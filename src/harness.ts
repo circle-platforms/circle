@@ -1165,6 +1165,7 @@ export class Harness {
           if (this.options.sessionHooks !== false)
             await this.options.reviewHooks?.(signal);
           await this.announceHooks(signal);
+          if (prompt !== undefined) await this.promptHooks(prompt, signal);
         }
         // The step starts here: a steerNow while the messages before are read stops it
         const stepControl = new AbortController();
@@ -1186,6 +1187,7 @@ export class Harness {
             continue;
           this.consumeInput(input, content);
           this.bus.emit('steer', { payload: { message } });
+          await this.promptHooks(message, signal);
         }
         this.options.beforeStep?.();
         try {
@@ -1546,6 +1548,66 @@ export class Harness {
       this.saveHook(notice, notice.kind === 'output');
     if (batch.context)
       this.hookPreface = `Hook session_start output:\n${batch.context}`;
+  }
+  /**
+   * user_prompt hooks (#557): each gets the person's message as written, and what they say back is added to the turn
+   * for the model, after the message. The screen shows each hook's first line, as for any hook output. Not in a
+   * subagent, whose first message is the task the model wrote.
+   */
+  private async promptHooks(
+    prompt: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const runner = this.options.hooks;
+    if (
+      this.options.sessionHooks === false ||
+      !runner?.active().some((hook) => hook.event === 'user_prompt')
+    )
+      return;
+    const batch = await runner.run({
+      event: 'user_prompt',
+      sessionId: this.sessionId,
+      cwd: this.options.session.workspace,
+      prompt,
+      secrets: this.hookSecrets(),
+      signal,
+    });
+    this.hookOutput(batch, 'user_prompt');
+  }
+  /**
+   * What hooks of an event said back: their notices, and their output for the model. user_prompt's goes in the turn,
+   * with the first notice of an output; subagent_start's is in the subagent's system prompt, so it holds after a
+   * compaction.
+   */
+  hookOutput(
+    batch: { notices: HookNotice[]; context: string },
+    event: 'user_prompt' | 'subagent_start',
+  ): void {
+    let told = event !== 'user_prompt' || !batch.context;
+    for (const notice of batch.notices) {
+      if (notice.kind === 'output' && !told) {
+        told = true;
+        this.hookNotes.push({
+          id: randomUUID(),
+          role: 'user',
+          internal: 'hook_notice',
+          content: `<system-reminder data-source="circle-hooks">\nHook user_prompt output, for this message:\n${batch.context}\n</system-reminder>`,
+          display: hookNoticeText({
+            ...notice,
+            reason: notice.message || notice.reason,
+          }),
+          hook: notice,
+        });
+      } else this.queueHook(notice, notice.kind === 'output');
+    }
+    this.flushHookNotes();
+    if (event === 'subagent_start' && batch.context)
+      this.hookPreface = [
+        this.hookPreface,
+        `Hook subagent_start output:\n${batch.context}`,
+      ]
+        .filter(Boolean)
+        .join('\n\n');
   }
   private async blockStop(signal: AbortSignal): Promise<boolean> {
     if (this.options.sessionHooks === false || !this.options.hooks)

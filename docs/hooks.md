@@ -108,8 +108,10 @@ Every matching hook for an event runs. Nothing stops the list early. For the thr
 | `after_tool`         | After a tool returns text                                              | Decisions are ignored. Exit 0 appends standard output to the tool result the model reads. A non-zero exit, a timeout, or a failure to start does not undo the tool: Circle logs it and shows a notice.                                                  |
 | `before_stop`        | When the model ends a turn with no tool call and no steering message   | `deny`, exit 2, or `ask` blocks the stop and sends the reason back. The turn continues, and the step still counts toward the turn's step limit.                                                                                                         |
 | `session_start`      | Once, before the first model request of the session                    | Decisions are ignored. Output is added to the system prompt for that session and shown as a notice.                                                                                                                                                     |
+| `user_prompt`        | When you send a message, before the model reads it: the message a turn starts with, a queued one, and one that steers a turn under way | Decisions are ignored. The JSON has `prompt`, your message as you wrote it. Output is added after your message, for the model, and shown as a notice.                                                                                                   |
+| `subagent_start`     | When `task` starts a subagent, before its first model request                                                                          | Decisions are ignored. The JSON has `agent_id`, `agent_type` and `description`, the task the model wrote. Output is added to that subagent's system prompt, so it stays after a compaction.                                                             |
 
-A subagent runs `before_tool`, `after_tool` and `permission_request`. It does not run `session_start` or `before_stop`. In a subagent, `session_id` is still the conversation's session, as in Claude Code and Codex, and the JSON adds `agent_id`, the subagent's own session, and `agent_type`, the name `task` was given (`general-purpose`, `explore` or yours). The conversation's own calls have neither field. Before this change, a subagent's hooks got the subagent's session as `session_id`: a hook that told subagents apart by it reads `agent_id` now.
+A subagent runs `before_tool`, `after_tool` and `permission_request`. It does not run `session_start`, `before_stop` or `user_prompt`: its first message is the task the model wrote, not yours. `subagent_start` is the conversation's hook about a subagent. A hook of these four events runs whatever its `tools` and `paths` say. In a subagent, `session_id` is still the conversation's session, as in Claude Code and Codex, and the JSON adds `agent_id`, the subagent's own session, and `agent_type`, the name `task` was given (`general-purpose`, `explore` or yours). The conversation's own calls have neither field. Before this change, a subagent's hooks got the subagent's session as `session_id`: a hook that told subagents apart by it reads `agent_id` now.
 
 ### What a hook cannot override
 
@@ -174,7 +176,7 @@ A hook with `"screenshot": true` also gets `"files": [{ "kind": "screenshot", "p
 
 A hook that ships with a skill also gets `"skill_dir": "/path/to/the/skill"`, the folder of its `SKILL.md`. See [A skill can ship hooks](#a-skill-can-ship-hooks).
 
-`tool_input` is the arguments after variables are filled in, with one exception: a saved secret's value is written back as `%NAME%` everywhere it appears in the arguments, the paths, the tool output, and the hook's environment. The hook runs as you, but it does not receive the secret. `paths` are canonical (symlinks resolved through `canonicalPath`). `tool_output` and `tool_status` are set for `after_tool`. `permission_reason` is set for `permission_request`. `stop_attempt` is set for `before_stop` and starts at 1.
+`tool_input` is the arguments after variables are filled in, with one exception: a saved secret's value is written back as `%NAME%` everywhere it appears in the arguments, the paths, the tool output, and the hook's environment. The hook runs as you, but it does not receive the secret. `paths` are canonical (symlinks resolved through `canonicalPath`). `tool_output` and `tool_status` are set for `after_tool`. `permission_reason` is set for `permission_request`. `stop_attempt` is set for `before_stop` and starts at 1. `prompt` is set for `user_prompt`, and `description` with `agent_id` and `agent_type` for `subagent_start`; a saved secret's value in them is written as `%NAME%` too.
 
 The hook's environment says the same as its JSON: `CIRCLE_SESSION_ID` is the conversation's session, and `CIRCLE_AGENT_ID` the subagent's in a subagent. The commands, scripts and MCP requests of the call carry the same values (see [the shell environment](security.md#the-shell-environment) and [MCP](mcp.md)).
 
@@ -192,7 +194,7 @@ The command's standard output and standard error are kept up to 100,000 characte
 
 ## How Circle reads the result
 
-| Exit                                                                                 | Gating event (`before_tool`, `permission_request`, `before_stop`)                                                          | `after_tool` and `session_start`                                                                                |
+| Exit                                                                                                                        | Gating event (`before_tool`, `permission_request`, `before_stop`)                                                          | `after_tool`, `session_start`, `user_prompt` and `subagent_start`                                               |
 | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | 0 and a JSON object `{"decision":"allow"\|"deny"\|"ask","reason":"…","context":"…","user_message":"…","updated_input":{…}}` | That decision. On `before_stop`, `ask` blocks like `deny`. Empty output, or a JSON object with no decision, is no opinion. | The decision is ignored. `context`, or `additional_context`, is fed back. Plain text is fed back too.           |
 | 0 and output that is not a JSON object                                               | Deny. The reason is `hook output is not JSON`.                                                                             | The text is context. The turn is not interrupted.                                                               |
@@ -206,6 +208,63 @@ A deny the model sees starts with `Hook denied this call:`. An ask that you then
 The model reads a reason once. Beside a deny it also gets a notice, but the notice only names the tool (`hook denied write_file`), because the reason is already in the tool result. The notice beside `after_tool` or `session_start` output only names the hook, because the output is in the tool result or the system prompt. An ask's notice keeps its reason, since not every way out of an ask puts it in the tool result. So does an allow's notice: a routine allow adds nothing to the tool result.
 
 `user_message` is optional and is for you, not the model. The notice and the approval card show it in place of the reason, so a hook can give the model a detailed instruction in `reason` and you a short line. Several hooks' messages are joined like their reasons. Without it, you see the reason, as before.
+
+## Keep what you said for this session
+
+Circle keeps nothing of what you said beyond the conversation. Hooks can: `user_prompt` sees your message as you wrote it, `subagent_start` speaks to a subagent before it starts, and `before_tool` judges each call, all with the same `session_id`. A hook that keeps your scope for the session, gives it to every subagent and refuses a write outside it:
+
+```json
+{
+  "hooks": {
+    "user_prompt": [{ "name": "scope", "command": "node ~/.circle/scope.mjs" }],
+    "subagent_start": [
+      { "name": "scope", "command": "node ~/.circle/scope.mjs" }
+    ],
+    "before_tool": [
+      {
+        "name": "scope",
+        "tools": ["write_file", "edit_file", "apply_patch"],
+        "command": "node ~/.circle/scope.mjs"
+      }
+    ]
+  }
+}
+```
+
+```js
+// ~/.circle/scope.mjs: "only <file>" in a message keeps <file> as this session's scope
+import { readFileSync, writeFileSync } from 'node:fs';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+const file = `${process.env.HOME}/.circle/scope-${input.session_id}.json`;
+const kept = (() => {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+})();
+const say = (value) => process.stdout.write(JSON.stringify(value));
+if (input.event === 'user_prompt') {
+  const only = /\bonly (\S+)/i.exec(input.prompt)?.[1];
+  if (only) writeFileSync(file, JSON.stringify({ only, said: input.prompt }));
+  if (only) say({ context: `Scope for this session: only ${only}.` });
+} else if (input.event === 'subagent_start') {
+  if (kept)
+    say({
+      context: `The person said: "${kept.said}". Change nothing but ${kept.only}.`,
+    });
+} else if (
+  kept &&
+  !input.paths.every((path) => path.endsWith(`/${kept.only}`))
+) {
+  say({
+    decision: 'deny',
+    reason: `The person asked to change only ${kept.only}.`,
+  });
+} else say({});
+```
+
+A new session has a new `session_id`, so it starts with no scope. The hook keeps the file, not Circle: delete it when you are done with the session.
 
 ## Path globs
 
