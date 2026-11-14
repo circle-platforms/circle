@@ -418,6 +418,10 @@ export class Harness {
   get stoppedAtTurnLimit(): boolean {
     return this.turnLimitHit;
   }
+  /** Ends the turn once this step's tool calls are done, as a hook's `continue: false` does: a tool that finished the work calls it. */
+  endTurnAfterCalls(): void {
+    this.hookStop ??= '';
+  }
   /** The approval mode this harness's calls are decided in. */
   private approvalMode(): ApprovalMode {
     return (

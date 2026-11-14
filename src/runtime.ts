@@ -16,11 +16,12 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { SKILL_DATA_FOLDER, SKILLS_ROOT } from './local_skills.js';
 import { packTool, readPackTools } from './pack_tools.js';
-import type { ChatModel, Message, ToolCall } from './types.js';
+import type { ChatModel, Message, PreparedRun, ToolCall } from './types.js';
 import { GatewayModel, EFFORT_LEVELS, defaultEffort } from './model.js';
 import { WebSearchService } from './websearch_service.js';
 import type { NativeSearchConnection } from './native_websearch.js';
@@ -36,7 +37,7 @@ import {
   type ApprovalMode,
   type SessionMode,
 } from './approvals.js';
-import { Sandbox } from './sandbox.js';
+import { Sandbox, WORKFLOW_RUNS_FOLDER } from './sandbox.js';
 import { EditorBridge } from './editor_bridge.js';
 import { buildTools, type Todo } from './tools.js';
 import { browserToolsWanted } from './browser/tools.js';
@@ -70,7 +71,7 @@ import {
   type ApprovalDecision,
   type HarnessOptions,
 } from './harness.js';
-import { EventBus } from './events.js';
+import { EventBus, type CircleEvent } from './events.js';
 import { defaultRunOptions, type RunOptions } from './run_options.js';
 import type { CircleSettings } from './settings.js';
 import { discoverSkills, loadSkillBody, type SkillInfo } from './skills.js';
@@ -111,6 +112,28 @@ import { FileMutationTools, type FileMutations } from './file_mutations.js';
 import { FileRewindJournal } from './file_rewind.js';
 import { FileSystemFileMutations } from './file_mutations_fs.js';
 import { readFileBytes } from './file_access.js';
+import { discoverWorkflows, type WorkflowSources } from './workflow_files.js';
+import {
+  prepareWorkflowScript,
+  type PreparedScript,
+} from './workflow_script.js';
+import {
+  AgentCallError,
+  RUN_ID,
+  WorkflowRun,
+  agentStallMs,
+  maxWorkflowAgents,
+  readJournal,
+  readRunRecord,
+  realStallTimer,
+  savedRuns,
+  structuredOutputAttempts,
+  workflowSummary,
+  type AgentRequest,
+  type AttemptHooks,
+  type StallTimer,
+  type WorkflowRunView,
+} from './workflows.js';
 import {
   ContextManager,
   restoredTodos,
@@ -181,6 +204,7 @@ const BUILTIN_TOOL_NAMES = new Set([
   'list_jobs',
   'stop_job',
   'wait_jobs',
+  'workflow',
 ]);
 const EXPLORE_TOOLS = new Set([
   'ls',
@@ -234,6 +258,10 @@ export interface RuntimeOptions {
   executeTool?: HarnessOptions['executeTool'];
   /** Called only for host-built coordination tools, before extension/extra tools are added. */
   classifyTool?: (tool: Tool, kind: 'control') => Tool;
+  /** How a workflow agent's stall window is timed; tests give their own. */
+  workflowStallTimer?: StallTimer;
+  /** How long a stretch of a workflow script may run without waiting for an agent (ms). */
+  workflowSliceMs?: number;
   catalog?: ModelCatalog;
   extraTools?: Tool[];
   /**
@@ -334,7 +362,43 @@ const NOT_FOR_SUBAGENTS = new Set([
   'plan_enter',
   'plan_exit',
   'compact_conversation',
+  'workflow',
 ]);
+/** The largest workflow script a call may name by its path. */
+const MAX_WORKFLOW_SCRIPT_BYTES = 1024 * 1024;
+/** The type a workflow's agent has when its script names none: its prompt is `prompts/agent/workflow.md`. */
+export const WORKFLOW_AGENT = 'workflow';
+/** The tool a workflow agent with a schema returns its value with. */
+export const STRUCTURED_OUTPUT = 'structured_output';
+const STRUCTURED_OUTPUT_PROMPT =
+  'Your result goes back to the script as data: when your work is done, call structured_output once, with the result as its arguments, matching its schema. Text you write is not read.';
+const STRUCTURED_OUTPUT_REMINDER =
+  '<system-reminder>\nYou ended without calling structured_output. Call it now with your result as its arguments, matching its schema: it is the only way your result reaches the script.\n</system-reminder>';
+/** The prompt of a workflow's own agents. */
+function workflowAgentPrompt(
+  dir = join(import.meta.dirname, 'prompts/agent'),
+): string {
+  return readFileSync(join(dir, 'workflow.md'), 'utf8');
+}
+/** What a workflow's run gives `task`'s path for one attempt of one agent. */
+interface WorkflowLaunch {
+  /** The run's job: the agent's cards wait under it, and its events carry it. */
+  jobId: string;
+  run: string;
+  label: string;
+  model?: string;
+  effort?: string;
+  schema?: Record<string, unknown>;
+  /** Tries the agent has to return a value that fits `schema`. */
+  attempts: number;
+  /** Every event of the agent's own conversation, as it happens. */
+  observe(event: CircleEvent): void;
+  session(id: string): void;
+  /** What structured_output was given. */
+  value?: unknown;
+  /** Set when the tries ran out: the call fails with it. */
+  failure?: AgentCallError;
+}
 /** A positive whole number from the environment, or the default. */
 function countFrom(value: string | undefined, fallback: number): number {
   const number = Number(value);
@@ -759,6 +823,10 @@ export class AgentRuntime {
       (path) => this.sandbox.resolvePath(path),
       options.settings.allowed_commands,
     );
+    // A workflow asks once in auto mode, and the yes is kept; nobody can be asked without a card, so there
+    // --yolo is the yes
+    this.policy.workflowConsent = () =>
+      !this.options.approve || this.options.settings.workflow_consent === true;
     // The plan folder takes this conversation's plan and nothing else
     this.sandbox.ownPlan = () => this.planFile;
     // Where file tools keep to the workspace (the desktop's backend), another checkout of
@@ -1142,6 +1210,7 @@ export class AgentRuntime {
       },
       compact: async (hint, context) => this.compact(hint, context.signal),
       task: (args, context) => this.runTask(args, context, vision),
+      workflow: (args, context) => this.prepareWorkflow(args, context),
     });
     tools.push(this.lsp.tool());
     tools = this.classifyCoreTools(tools);
@@ -1184,8 +1253,19 @@ export class AgentRuntime {
       bus: this.bus,
       headless: this.options.headless,
       approve: this.options.approve
-        ? (call: ToolCall, signal: AbortSignal) =>
-            this.noticeWaiting(call, () => this.options.approve!(call, signal))
+        ? async (call: ToolCall, signal: AbortSignal) => {
+            const decision = await this.noticeWaiting(call, () =>
+              this.options.approve!(call, signal),
+            );
+            // A yes to a workflow in auto mode holds for the later ones: they start without asking
+            if (
+              call.name === 'workflow' &&
+              decision === 'approve' &&
+              this.policy.mode(this.session.id) === 'auto'
+            )
+              this.recordWorkflowConsent();
+            return decision;
+          }
         : undefined,
       hooks: this.ensureHooks(),
       hookScreenshot: this.options.hookScreenshot,
@@ -1290,6 +1370,7 @@ export class AgentRuntime {
     args: Record<string, unknown>,
     context: ToolContext,
     vision: VisionConnection | undefined,
+    launch?: WorkflowLaunch,
   ): Promise<string> {
     context.signal.throwIfAborted();
     if (this.ownershipError) throw this.ownershipError;
@@ -1310,25 +1391,30 @@ export class AgentRuntime {
     const custom = this.customSubagents().find(
       (agent) => agent.spec.name === name,
     );
-    if (!custom && !Object.hasOwn(BUILTIN_SUBAGENT_PROMPTS, name)) {
+    if (
+      !custom &&
+      !Object.hasOwn(BUILTIN_SUBAGENT_PROMPTS, name) &&
+      !(launch && name === WORKFLOW_AGENT)
+    ) {
       this.describeSubagents(this.harness.tools);
       throw new Error('unknown subagent type');
     }
+    // A workflow's agents keep to the run's own limit, not to this one
     const limit = maxConcurrentSubagents();
     const running = [...this.runningSubagents.values()].filter(
       (owner) => owner === root,
     ).length;
-    if (running >= limit)
+    if (!launch && running >= limit)
       throw new Error(
         `Concurrent subagent limit reached: ${limit} subagents are running for this conversation. Do not retry this call: do the work yourself, or delegate it once a running subagent has finished.`,
       );
     const file = custom?.file;
     const caller = spawner?.harness ?? this.harness;
-    // A subagent without a model of its own runs on the model of the one that started it
-    const childModel = custom?.spec.model
-      ? this.modelWithSearch(
-          this.gatewayModel(this.options.settings, custom.spec.model),
-        )
+    // A subagent without a model of its own runs on the model of the one that started it; a workflow's script
+    // can name one for the call, which comes first
+    const ownModel = launch?.model ?? custom?.spec.model;
+    const childModel = ownModel
+      ? this.modelWithSearch(this.gatewayModel(this.options.settings, ownModel))
       : this.wrapModel(caller.model);
     const session = this.store.create(
       this.options.workspace,
@@ -1338,7 +1424,8 @@ export class AgentRuntime {
       context.sessionId,
     );
     // Its place counts until it ends, here or as a job
-    this.runningSubagents.set(session.id, root);
+    if (!launch) this.runningSubagents.set(session.id, root);
+    launch?.session(session.id);
     try {
       const parentState = this.store.contextState(context.sessionId);
       this.childJobOwners.set(session.id, {
@@ -1355,9 +1442,16 @@ export class AgentRuntime {
       const childBus = new EventBus(session.id);
       let backgroundJob: Job | undefined;
       let backgroundLog: ((text: string) => void) | undefined;
-      // The job a card waits under: its own, or the one of the background subagent it works under
+      // The job a card waits under: its own, the one of the background subagent it works under, or its workflow's
       const jobOf = (): string | undefined =>
-        backgroundJob?.id ?? spawner?.job();
+        launch?.jobId ?? backgroundJob?.id ?? spawner?.job();
+      // A workflow agent with a schema returns its value with structured_output, within so many tries
+      let structuredTries = 0;
+      let structuredError = '';
+      const structuredFailure = (why: string): AgentCallError =>
+        new AgentCallError(
+          `the agent's output did not fit its schema after ${structuredTries} ${structuredTries === 1 ? 'try' : 'tries'}: ${why}`,
+        );
       const interact = async <T>(
         action: (origin: InteractionContext) => Promise<T>,
       ): Promise<T> => {
@@ -1376,6 +1470,22 @@ export class AgentRuntime {
         }
       };
       childBus.subscribe((event) => {
+        launch?.observe(event);
+        // A call that does not fit the schema is refused before it runs: each refusal is one try
+        if (
+          launch?.schema &&
+          event.kind === 'tool_result' &&
+          event.payload.name === STRUCTURED_OUTPUT &&
+          event.payload.status === 'error' &&
+          launch.value === undefined
+        ) {
+          structuredTries++;
+          structuredError = String(event.payload.output ?? '');
+          if (structuredTries >= launch.attempts && !launch.failure) {
+            launch.failure = structuredFailure(structuredError);
+            void child.cancel();
+          }
+        }
         if (event.kind === 'tool_call') {
           // The log keeps the whole call for the model to read; the strip shows the
           // step as a tool row does, `Write(notes/a.md)`, not its raw JSON.
@@ -1401,6 +1511,13 @@ export class AgentRuntime {
             subagent: session.id,
             name,
             ...(jobId ? { job_id: jobId } : {}),
+            ...(launch
+              ? {
+                  job_id: launch.jobId,
+                  workflow: launch.run,
+                  label: launch.label,
+                }
+              : {}),
           },
           parent_run_id: context.sessionId,
         });
@@ -1471,6 +1588,23 @@ export class AgentRuntime {
                 : tool,
         ),
       );
+      // How a workflow agent with a schema hands back its value: the schema is the tool's own
+      if (launch?.schema)
+        ownedChildTools.push({
+          name: STRUCTURED_OUTPUT,
+          description:
+            'Return your result to the script that started you: call this once, when your work is done, with the result as the arguments. A call that does not fit the schema is refused with the reason; call it again with corrected arguments. Text you write is not read.',
+          parameters: launch.schema,
+          effect: 'read',
+          approval: false,
+          variables: false,
+          run: async (args) => {
+            launch.value = structuredClone(args);
+            // Nothing is left for it to do: its turn ends with this call
+            child.endTurnAfterCalls();
+            return 'Your result is recorded. Your work is done.';
+          },
+        });
       // Its permission mode, decided again for each call: the conversation's can change while it works
       const wanted = file?.permissionMode;
       const approval = () => subagentApproval(this.policy.mode(root), wanted);
@@ -1494,12 +1628,13 @@ export class AgentRuntime {
         model: childModel,
         // Hooks, MCP servers and its processes hear the conversation's session, with this one as the agent's
         agent: { sessionId: root, type: name },
-        // A depth of its own: the definition's, unless the run's CIRCLE_REASONING_EFFORT says otherwise (#549)
-        ...(custom?.spec.effort
+        // A depth of its own: the workflow call's or the definition's, unless the run's CIRCLE_REASONING_EFFORT
+        // says otherwise (#549)
+        ...((launch?.effort ?? custom?.spec.effort)
           ? {
               effort: defaultEffort(
                 this.options.settings.auth.protocol,
-                custom.spec.effort,
+                (launch?.effort ?? custom?.spec.effort)!,
               ),
             }
           : {}),
@@ -1516,7 +1651,11 @@ export class AgentRuntime {
         session,
         policy: this.policy,
         system:
-          (custom?.spec.system_prompt ?? builtinSubagentPrompt(name)) +
+          (custom?.spec.system_prompt ??
+            (launch && name === WORKFLOW_AGENT
+              ? workflowAgentPrompt()
+              : builtinSubagentPrompt(name))) +
+          (launch?.schema ? '\n\n' + STRUCTURED_OUTPUT_PROMPT : '') +
           '\n' +
           this.harness.system,
         bus: childBus,
@@ -1628,6 +1767,18 @@ export class AgentRuntime {
             }
             ({ answer } = await child.run(next));
           }
+          // A workflow agent with a schema hands its value back through structured_output: one that ends without
+          // calling it is told again, within its tries
+          while (launch?.schema && launch.value === undefined) {
+            if (launch.failure) throw launch.failure;
+            structuredTries++;
+            if (child.stoppedAtTurnLimit || structuredTries >= launch.attempts)
+              throw structuredFailure(
+                structuredError || 'it ended without calling structured_output',
+              );
+            structuredError = 'it ended without calling structured_output';
+            ({ answer } = await child.run(STRUCTURED_OUTPUT_REMINDER));
+          }
           return child.stoppedAtTurnLimit
             ? `Partial result: this subagent used its ${file?.maxTurns} turns (maxTurns) before it finished.\n\n${answer.trim() || '(it wrote no report)'}`
             : answer;
@@ -1640,7 +1791,11 @@ export class AgentRuntime {
         }
       };
       // A subagent's own subagents run in the foreground: it waits for each report
-      if (!spawner && (args.background === true || file?.background === true)) {
+      if (
+        !spawner &&
+        !launch &&
+        (args.background === true || file?.background === true)
+      ) {
         context.signal.throwIfAborted();
         const job = this.jobs.startAgent(
           `${name}: ${description}`,
@@ -1716,9 +1871,350 @@ export class AgentRuntime {
       ]);
     }
   }
+  /** The workflow runs this runtime started, by id: the engine and its job. */
+  private workflowRuns = new Map<string, { run: WorkflowRun; job?: string }>();
+  /** Where a project's workflow runs keep their scripts, journals, records and results. */
+  get workflowRunsFolder(): string {
+    return join(
+      this.sandbox.offloadRoot ??
+        projectDataDir(this.options.workspace, this.options.home),
+      WORKFLOW_RUNS_FOLDER,
+    );
+  }
+  /** Where installed packs are: the folders `skill_install` puts them in. */
+  private packsRoot(): string {
+    return (
+      this.options.localSkillsRoot ??
+      join(this.options.userHome ?? homedir(), '.agents', 'skills')
+    );
+  }
+  /** The saved workflows, as their folders hold them now, and why a file was passed over. */
+  savedWorkflows(): WorkflowSources {
+    return this.options.localContext === false
+      ? { workflows: [], problems: [] }
+      : discoverWorkflows({
+          workspace: this.options.workspace,
+          home: this.options.home,
+          packsRoot: this.packsRoot(),
+        });
+  }
+  /** The runs the folder keeps for a conversation, read again when two seconds old: a list open reads often. */
+  private keptRuns?: { sessionId: string; at: number; runs: WorkflowRunView[] };
+  /** This conversation's workflow runs, newest first: those running here and those its folder keeps. */
+  workflowRunViews(sessionId = this.session.id): WorkflowRunView[] {
+    const live = [...this.workflowRuns.values()]
+      .map((entry) => entry.run.view)
+      .filter((view) => view.sessionId === sessionId);
+    if (
+      this.keptRuns?.sessionId !== sessionId ||
+      Date.now() - this.keptRuns.at > 2000
+    )
+      this.keptRuns = {
+        sessionId,
+        at: Date.now(),
+        runs: savedRuns(this.workflowRunsFolder, sessionId),
+      };
+    const kept = this.keptRuns.runs.filter(
+      (record) => !live.some((view) => view.id === record.id),
+    );
+    return [...live, ...kept].sort((a, b) => b.started - a.started);
+  }
+  /** Stops a run and every agent it started; its notice says it was stopped. */
+  async stopWorkflow(id: string, reason = 'user'): Promise<boolean> {
+    const job = this.workflowRuns.get(id)?.job;
+    if (!job || this.jobs.get(job)?.status !== 'running') return false;
+    await this.jobs.stop(job, reason);
+    return true;
+  }
+  /** Stops one agent of a run: the script gets null for it, and a relaunch runs it again. */
+  stopWorkflowAgent(id: string, index: number): boolean {
+    return this.workflowRuns.get(id)?.run.stopAgent(index) ?? false;
+  }
+  /** A yes to a workflow in auto mode, kept in the person's settings: later runs start without a card. */
+  private recordWorkflowConsent(): void {
+    if (this.options.settings.workflow_consent) return;
+    this.options.settings.workflow_consent = true;
+    try {
+      saveSettingsChange(this.options.home, (saved) => {
+        saved.workflow_consent = true;
+      });
+    } catch {
+      /* Kept for this run; the next one asks again. */
+    }
+  }
+  /** Why an agent type cannot be a workflow agent's, or nothing. */
+  private workflowAgentType(name: string): string | undefined {
+    if (
+      name === WORKFLOW_AGENT ||
+      Object.hasOwn(BUILTIN_SUBAGENT_PROMPTS, name)
+    )
+      return undefined;
+    this.loadSubagentFiles();
+    return this.customSubagents().some((agent) => agent.spec.name === name)
+      ? undefined
+      : `agentType ${name} is not a subagent this session has; /agents lists them`;
+  }
+  /**
+   * `workflow`, before anyone is asked: the script the call names, read and checked, and its meta for the card.
+   * What was read here is what starts once the call is allowed.
+   */
+  private async prepareWorkflow(
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ): Promise<PreparedRun> {
+    if (this.childHarnesses.has(context.sessionId))
+      throw new Error('a subagent cannot start a workflow');
+    const text = (key: string): string | undefined =>
+      typeof args[key] === 'string' && (args[key] as string).trim()
+        ? (args[key] as string).trim()
+        : undefined;
+    const name = text('name');
+    const path = text('script_path');
+    const inline =
+      typeof args.script === 'string' && args.script.trim()
+        ? args.script
+        : undefined;
+    const resume = text('resume_from_run_id');
+    if ([name, path, inline].filter((value) => value !== undefined).length > 1)
+      throw new Error('give one of name, script and script_path');
+    let previous:
+      | {
+          id: string;
+          events: ReturnType<typeof readJournal>;
+          agents: WorkflowRunView['agents'];
+        }
+      | undefined;
+    if (resume) {
+      const record = RUN_ID.test(resume)
+        ? readRunRecord(join(this.workflowRunsFolder, resume))
+        : undefined;
+      if (!record || record.sessionId !== context.sessionId)
+        throw new Error(
+          `nothing to resume: this conversation has no workflow run ${resume}`,
+        );
+      if (this.workflowRuns.get(resume)?.run.view.status === 'running')
+        throw new Error(
+          `run ${resume} is still running, or its agents have not exited yet: stop it, wait for its notice, then relaunch it`,
+        );
+      const events = readJournal(
+        join(this.workflowRunsFolder, resume, 'journal.jsonl'),
+      );
+      if (!events.length)
+        throw new Error(
+          `nothing to resume: run ${resume} saved no agent results; start the workflow over as a new run`,
+        );
+      previous = { id: resume, events, agents: record.agents };
+    }
+    let source: string;
+    let file: string;
+    let saved: string | undefined;
+    if (name) {
+      const sources = this.savedWorkflows();
+      const found = sources.workflows.find(
+        (workflow) => workflow.name === name,
+      );
+      if (!found)
+        throw new Error(
+          `no saved workflow is named ${name}` +
+            (sources.workflows.length
+              ? `; saved: ${sources.workflows.map((workflow) => workflow.name).join(', ')}`
+              : ''),
+        );
+      source = readFileSync(found.path, 'utf8');
+      file = saved = found.path;
+    } else if (inline !== undefined) {
+      source = inline;
+      file = 'script.js';
+    } else if (path) {
+      // Read as read_file reads it: with the desktop's backend, a file outside the workspace only with a grant
+      const read = await readFileBytes(
+        this.sandbox,
+        this.options.fileMutations
+          ? new FileMutationTools(this.sandbox, this.options.fileMutations)
+          : undefined,
+        path,
+        context,
+        MAX_WORKFLOW_SCRIPT_BYTES,
+      );
+      source = read.bytes.toString('utf8');
+      file = path;
+    } else if (previous) {
+      source = readFileSync(
+        join(this.workflowRunsFolder, previous.id, 'script.js'),
+        'utf8',
+      );
+      file = `/${WORKFLOW_RUNS_FOLDER}/${previous.id}/script.js`;
+    } else throw new Error('give name, script or script_path');
+    const prepared = prepareWorkflowScript(source, file);
+    const start = async (
+      _args: Record<string, unknown>,
+      approved: ToolContext,
+    ): Promise<string> =>
+      this.startWorkflow(prepared, {
+        sessionId: approved.sessionId,
+        ...(args.args !== undefined ? { args: args.args } : {}),
+        ...(path ? { path } : {}),
+        ...(previous ? { previous } : {}),
+      });
+    return Object.assign(start, {
+      shown: {
+        meta: {
+          name: prepared.meta.name,
+          description: prepared.meta.description,
+          phases: prepared.meta.phases.map((phase) => phase.title),
+          ...(saved ? { file: saved } : {}),
+        },
+      },
+    });
+  }
+  /** Starts a checked script as a run in the background, as a job of the conversation, and says how it went. */
+  private startWorkflow(
+    prepared: PreparedScript,
+    options: {
+      sessionId: string;
+      args?: unknown;
+      path?: string;
+      previous?: {
+        id: string;
+        events: ReturnType<typeof readJournal>;
+        agents: WorkflowRunView['agents'];
+      };
+    },
+  ): string {
+    const id = `w${randomUUID().replaceAll('-', '').slice(0, 8)}`;
+    const folder = join(this.workflowRunsFolder, id);
+    mkdirSync(folder, { recursive: true });
+    const scriptFile = join(folder, 'script.js');
+    writeFileSync(scriptFile, prepared.source);
+    // Where the model edits it: the file it ran from, or the run's own copy
+    const script = options.path ?? `/${WORKFLOW_RUNS_FOLDER}/${id}/script.js`;
+    const entry: { run?: WorkflowRun; job?: string } = {};
+    let write: ((line: string) => void) | undefined;
+    let summary = '';
+    const run = new WorkflowRun({
+      id,
+      sessionId: options.sessionId,
+      prepared,
+      ...(options.args !== undefined ? { args: options.args } : {}),
+      folder,
+      script,
+      scriptFile,
+      ...(options.previous ? { previous: options.previous } : {}),
+      runner: (request, hooks) =>
+        this.runWorkflowAgent(request, hooks, {
+          job: () => entry.job ?? '',
+          run: id,
+          sessionId: options.sessionId,
+          phaseModel: prepared.meta.phases.find(
+            (phase) => phase.title === request.phase,
+          )?.model,
+        }),
+      checkAgentType: (name) => this.workflowAgentType(name),
+      maxConcurrent: maxWorkflowAgents(),
+      stallMs: agentStallMs(),
+      timer: this.options.workflowStallTimer ?? realStallTimer,
+      ...(this.options.workflowSliceMs
+        ? { sliceMs: this.options.workflowSliceMs }
+        : {}),
+      progress: (line) => write?.(line),
+      changed: (view) => {
+        const next = workflowSummary(view);
+        if (entry.job && next !== summary) {
+          summary = next;
+          this.jobs.activity(entry.job, next);
+        }
+      },
+    });
+    entry.run = run;
+    this.workflowRuns.set(id, entry as { run: WorkflowRun; job?: string });
+    const job = this.jobs.startAgent(
+      `workflow ${prepared.meta.name}`,
+      { sessionId: options.sessionId, startedBy: 'model' },
+      async (signal, log) => {
+        // A line for its log; the strip keeps showing where the run is
+        write = (line) => {
+          log(line);
+          if (entry.job && summary) this.jobs.activity(entry.job, summary);
+        };
+        return await run.run(signal);
+      },
+      undefined,
+      {
+        workflow: {
+          run: id,
+          name: prepared.meta.name,
+          result: join(folder, 'result.txt'),
+        },
+        failure: 'script error',
+      },
+    );
+    entry.job = job.id;
+    run.view.job = job.id;
+    const phases = prepared.meta.phases.map((phase) => phase.title);
+    return [
+      `Workflow ${prepared.meta.name} started as run ${id}.` +
+        (phases.length ? ` Phases: ${phases.join(', ')}.` : '') +
+        (options.previous
+          ? ` It relaunches run ${options.previous.id}: agents called as they were then return their saved results.`
+          : ''),
+      `Script: ${script}. To relaunch it after an edit, call workflow with script_path: ${script} and resume_from_run_id: ${id}.`,
+      `In background: ${jobLine(job)}. The result arrives as a notice when the run ends; do not poll or sleep.`,
+    ].join('\n');
+  }
+  /** One attempt of one workflow agent, through the path `task` takes. */
+  private async runWorkflowAgent(
+    request: AgentRequest,
+    hooks: AttemptHooks,
+    run: {
+      job: () => string;
+      run: string;
+      sessionId: string;
+      phaseModel?: string;
+    },
+  ): Promise<unknown> {
+    const model = request.model ?? run.phaseModel;
+    const launch: WorkflowLaunch = {
+      jobId: run.job(),
+      run: run.run,
+      label: request.label,
+      ...(model ? { model } : {}),
+      ...(request.effort ? { effort: request.effort } : {}),
+      ...(request.schema ? { schema: request.schema } : {}),
+      attempts: structuredOutputAttempts(),
+      observe: (event) => {
+        if (event.kind === 'llm_start') hooks.activity('start');
+        else if (event.kind === 'llm_token') hooks.activity('output');
+        else if (event.kind === 'llm_end') {
+          hooks.activity('end');
+          hooks.tokens(
+            Number(event.usage?.input_tokens ?? 0),
+            Number(event.usage?.output_tokens ?? 0),
+          );
+        } else if (event.kind === 'run_end' || event.kind === 'run_error')
+          hooks.activity('end');
+      },
+      session: (id) => hooks.session(id),
+    };
+    try {
+      const answer = await this.runTask(
+        {
+          description: request.prompt,
+          subagent_type: request.agentType ?? WORKFLOW_AGENT,
+        },
+        { signal: hooks.signal, sessionId: run.sessionId },
+        this.visionForRun(),
+        launch,
+      );
+      return request.schema ? launch.value : answer;
+    } catch (error) {
+      if (launch.failure) throw launch.failure;
+      throw error;
+    }
+  }
   private classifyCoreTools(tools: Tool[]): Tool[] {
     const control = new Set([
       'task',
+      'workflow',
       'list_jobs',
       'stop_job',
       'wait_jobs',
@@ -2224,6 +2720,7 @@ export class AgentRuntime {
     this.describeSubagents(this.harness.tools);
   }
   private describeSubagents(tools: Tool[]): void {
+    this.describeWorkflows(tools);
     const task = tools.find((tool) => tool.name === 'task');
     if (!task) return;
     const subagents = new Map<string, string>(
@@ -2240,6 +2737,29 @@ export class AgentRuntime {
       [...subagents]
         .map(([name, description]) => `- ${name}: ${description}`)
         .join('\n');
+  }
+  /** The workflow tool's words, with the saved workflows it can run by name. */
+  private describeWorkflows(tools: Tool[]): void {
+    const tool = tools.find((item) => item.name === 'workflow');
+    if (!tool) return;
+    const saved = this.savedWorkflows().workflows;
+    tool.description =
+      readFileSync(
+        join(import.meta.dirname, 'prompts/tools/workflow.md'),
+        'utf8',
+      ).trim() +
+      (saved.length
+        ? '\n\nSaved workflows:\n' +
+          saved
+            .map(
+              (workflow) =>
+                `- ${workflow.name}: ${workflow.meta.description}` +
+                (workflow.meta.whenToUse
+                  ? ` Use when: ${workflow.meta.whenToUse}`
+                  : ''),
+            )
+            .join('\n')
+        : '');
   }
   private withIntegrationTools(tools: Tool[], limits = true): Tool[] {
     const names = new Set<string>();
@@ -2693,10 +3213,18 @@ export class AgentRuntime {
       .filter((job) => job.status === 'running')
       .map((job) => ({
         id: job.id,
-        type: job.kind === 'agent' ? 'subagent' : 'shell',
+        type: job.workflow
+          ? 'workflow'
+          : job.kind === 'agent'
+            ? 'subagent'
+            : 'shell',
         status: job.status,
         description: job.title.slice(0, 1000),
-        ...(job.command ? { command: job.command.slice(0, 1000) } : {}),
+        // A workflow is named, not run as a command
+        ...(job.command && !job.workflow
+          ? { command: job.command.slice(0, 1000) }
+          : {}),
+        ...(job.workflow ? { name: job.workflow.name } : {}),
       }));
   }
   /** Skills whose hooks are armed for the current session. */
@@ -3818,6 +4346,8 @@ export class AgentRuntime {
       return 'you are that subagent: there is nothing to send to yourself';
     if (job.kind !== 'agent')
       return `${jobId} is a ${job.kind}: a message is for a subagent`;
+    if (job.workflow)
+      return `${jobId} is a workflow run: a message is for a subagent`;
     if (job.status !== 'running')
       return `${jobId} ${outcomeWords(job)}: nothing was sent`;
     const channel = this.channels.get(jobId);

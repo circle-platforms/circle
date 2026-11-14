@@ -73,6 +73,14 @@ export interface ToolHooks {
     args: Record<string, unknown>,
     context: ToolContext,
   ) => Promise<string>;
+  /**
+   * `workflow`: reads and checks the script a call names, before anyone is asked, and gives back what starts
+   * it, with the script's meta for the card.
+   */
+  workflow?: (
+    args: Record<string, unknown>,
+    context: ToolContext,
+  ) => Promise<import('./types.js').PreparedRun>;
   skill?: (
     name: string,
     signal?: AbortSignal,
@@ -172,6 +180,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
   // What these take becomes a model's input or the conversation's: a secret stays its name
   const MODEL_INPUT = new Set([
     'task',
+    'workflow',
     'question',
     'write_todos',
     'plan_enter',
@@ -847,6 +856,35 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       ),
       hooks.task,
     );
+  if (hooks.workflow) {
+    const prepare = hooks.workflow;
+    const tool = add(
+      'workflow',
+      'execute',
+      schema({
+        name: text(
+          'A saved workflow to run, by name (one listed below). Give one of name, script and script_path.',
+        ),
+        script: text(
+          'The JavaScript of a workflow written for this task. It begins with export const meta = { name, description, phases }.',
+        ),
+        script_path: text(
+          'A workflow script file to run, such as the script of an earlier run after you edited it.',
+        ),
+        args: {
+          description:
+            'The value the script reads as its args global, as JSON data: a list or an object stays one.',
+        },
+        resume_from_run_id: text(
+          'An earlier run of this conversation to relaunch: agents called as in that run return its saved results.',
+        ),
+      }),
+      async (args, context) => (await prepare(args, context))(args, context),
+    );
+    // What the call runs is read and checked before the card: what was approved is what starts
+    tool.prepare = prepare;
+    tool.subagents = false;
+  }
   if (hooks.skill)
     add(
       'skill',

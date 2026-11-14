@@ -43,6 +43,7 @@ export function approvalBody(
   }
   if (['write_file', 'edit_file', 'delete'].includes(name))
     return String(text(args, 'file_path', 'path') ?? '');
+  if (name === 'workflow') return workflowBody(args);
   // A permission card has to show the call. Cutting a value with no mark hides
   // what is being allowed; a long value keeps a head and says how much remains.
   return Object.entries(args)
@@ -54,6 +55,37 @@ export function approvalBody(
         ? text
         : `${text.slice(0, limit)}… (${text.length - limit} more characters)`;
     })
+    .join('\n');
+}
+/** A workflow's card: what the script's meta says, where the script comes from, and its input. */
+function workflowBody(args: Record<string, unknown>): string {
+  const meta =
+    args.meta && typeof args.meta === 'object'
+      ? (args.meta as Record<string, unknown>)
+      : {};
+  const phases = Array.isArray(meta.phases)
+    ? meta.phases.filter((phase) => typeof phase === 'string')
+    : [];
+  const input = JSON.stringify(args.args);
+  return [
+    [meta.name, meta.description]
+      .filter((part) => typeof part === 'string' && part)
+      .join(' · '),
+    phases.length ? `phases: ${phases.join(', ')}` : '',
+    typeof meta.file === 'string'
+      ? `saved: ${meta.file}`
+      : typeof args.script_path === 'string'
+        ? `script: ${args.script_path}`
+        : '',
+    typeof args.resume_from_run_id === 'string'
+      ? `relaunches run ${args.resume_from_run_id}: unchanged agents return their saved results`
+      : '',
+    input === undefined
+      ? ''
+      : `args=${input.length > 800 ? `${input.slice(0, 800)}… (${input.length - 800} more characters)` : input}`,
+    'runs in the background; its agents ask for their own calls as they come',
+  ]
+    .filter(Boolean)
     .join('\n');
 }
 /** Lines with their endings, as Python's `splitlines(keepends=True)` cuts them. */
@@ -295,6 +327,7 @@ export function approvalPreview(
   resolve?: (path: string) => string,
   maxRows = APPROVAL_PREVIEW_LINES,
 ): CardLine[] {
+  if (name === 'workflow') return workflowScript(args, resolve, maxRows);
   if (!['edit_file', 'write_file', 'apply_patch'].includes(name)) return [];
   const path = String(text(args, 'file_path', 'path') ?? '');
   const before = resolve && path ? fileText(resolve, path) : undefined;
@@ -336,6 +369,40 @@ export function approvalPreview(
     summary = `+${added} -${removed}`;
   }
   return [row(summary), ...cut(rows, maxRows)];
+}
+/** The script a workflow call runs, as the card shows it: the one written in the call, or the file it names. */
+function workflowScript(
+  args: Record<string, unknown>,
+  resolve: ((path: string) => string) | undefined,
+  maxRows: number,
+): CardLine[] {
+  const meta =
+    args.meta && typeof args.meta === 'object'
+      ? (args.meta as Record<string, unknown>)
+      : {};
+  const file =
+    typeof meta.file === 'string'
+      ? meta.file
+      : typeof args.script_path === 'string'
+        ? args.script_path
+        : undefined;
+  const source =
+    typeof args.script === 'string'
+      ? args.script
+      : file && resolve
+        ? fileText(resolve, file)
+        : undefined;
+  if (!source) return [];
+  const lines = source.replace(/\s+$/, '').split(/\r\n|\n|\r/);
+  return [
+    row(`script, ${lines.length} ${lines.length === 1 ? 'line' : 'lines'}`),
+    ...cut(
+      lines.map((line, index) =>
+        row(`${String(index + 1).padStart(3)}  ${line}`),
+      ),
+      maxRows,
+    ),
+  ];
 }
 function cut(rows: Row[], maxRows: number): Row[] {
   return rows.length > maxRows

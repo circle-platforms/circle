@@ -83,6 +83,8 @@ export interface Job extends JobOwner {
   agent?: string;
   /** Messages sent to this subagent that it has not reached yet. */
   pending?: number;
+  /** A workflow run: its id, its workflow's name, and the file its result is kept in. */
+  workflow?: { run: string; name: string; result?: string };
 }
 /**
  * Whose hand may reach one job. A conversation owns every job of its own session;
@@ -234,7 +236,22 @@ export function noticeLine(job: Job): string {
   const chars = Array.from(title);
   return `◆ ${job.id} ${outcomeWords(job)} · ${chars.length > 60 ? chars.slice(0, 59).join('') + '…' : title} · ${elapsed(job)}`;
 }
+/** The most of a workflow's result its notice carries; the rest stays in its file. */
+const RESULT_NOTICE_BYTES = 32_768;
 export function jobNotice(job: Job): string {
+  // A workflow's notice is its result, whole up to a limit: the model reads the rest in its file
+  if (job.workflow?.result && job.status === 'done')
+    try {
+      const size = statSync(job.workflow.result).size;
+      const result = readHead(job.workflow.result, RESULT_NOTICE_BYTES);
+      return `${jobLine(job)}\nResult:\n${redact(result) || '(empty)'}${
+        size > RESULT_NOTICE_BYTES
+          ? `\n… the whole result is in /workflow_runs/${job.workflow.run}/result.txt`
+          : ''
+      }`;
+    } catch {
+      /* Its output says how it ended. */
+    }
   let output = 'Output is unavailable.';
   try {
     output =
@@ -1068,10 +1085,13 @@ export class JobRegistry {
     ) => Promise<string>,
     /** The session the subagent runs in, so that its job and its conversation are one. */
     agent?: string,
+    /** A workflow run's job: what it is, and the reason a failure gives. */
+    options: { workflow?: Job['workflow']; failure?: string } = {},
   ): Job {
     this.checkCapacity('agent');
     const entry = this.entry(title, owner);
     const job = this.publish(entry, 'agent', undefined, agent);
+    if (options.workflow) job.workflow = { ...options.workflow };
     const log = (text: string): void => {
       if (!entry.finished) {
         writeFileSync(entry.path, redact(text) + '\n', { flag: 'a' });
@@ -1086,7 +1106,7 @@ export class JobRegistry {
       })
       .catch((error: unknown) => {
         if (!entry.controller.signal.aborted) {
-          entry.reason = 'agent error';
+          entry.reason = options.failure ?? 'agent error';
           log(error instanceof Error ? error.message : String(error));
         }
       })
