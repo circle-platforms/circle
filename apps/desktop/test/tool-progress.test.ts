@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { RuntimeController } from '../src/runtime-controller.ts';
@@ -12,22 +11,19 @@ import {
   saveSettings,
   trustFolder,
 } from '../../../src/settings.ts';
-import { until } from '../../../tests/helpers.ts';
+import { cleanup, scratch, until } from '../../../tests/helpers.ts';
 import { mcpStub } from '../../../tests/mcp-stub.ts';
 
 // #554: what a running MCP call says of its progress is on its row in the desktop, and leaves when it ends
 test("a running MCP call's row carries the server's latest progress until its result is in", async (t) => {
-  const root = realpathSync.native(
-    await mkdtemp(join(tmpdir(), 'circle-desktop-progress-')),
-  );
-  t.after(() => rm(root, { recursive: true, force: true }));
+  // Closed before its folder goes: Windows cannot remove a database still open
+  const root = realpathSync.native(scratch(t));
   const home = join(root, 'home');
   const workspace = join(root, 'workspace');
   await mkdir(home);
   await mkdir(workspace);
   let answer: (() => void) | undefined;
   const answered = new Promise<void>((resolve) => (answer = resolve));
-  t.after(() => answer?.());
   const stub = await mcpStub(t, {
     // Read-only, so it runs without a card
     tools: [
@@ -77,7 +73,9 @@ test("a running MCP call's row carries the server's latest progress until its re
     model,
     emit: () => {},
   });
-  t.after(() => controller.close());
+  // Last registered, first run: the held call is let go, then the controller closes, then the stub
+  cleanup(t, () => controller.close());
+  cleanup(t, () => answer?.());
   const row = () =>
     controller
       .snapshot()
