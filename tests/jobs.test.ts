@@ -478,7 +478,7 @@ test('an idle job notice resumes the model without inventing a user prompt and s
   assert.equal(await runtime.runJobNotices(), undefined);
   assert.equal(model.requests.length, 1);
 });
-test('native background subagents return immediately, retain live read-only checks and report without nested task tools', async (t) => {
+test('native background subagents return immediately, retain live read-only checks, and start subagents of their own only in the foreground', async (t) => {
   const root = scratch(t);
   const reached = deferred<void>();
   const release = deferred<void>();
@@ -549,7 +549,15 @@ test('native background subagents return immediately, retain live read-only chec
   const childRequest = requests.find(
     (request) => request.messages[0]?.content === 'research',
   )!;
-  assert.ok(!childRequest.tools.some((tool) => tool.name === 'task'));
+  // It may start subagents of its own; they run in the foreground, so its task has no background
+  const nested = childRequest.tools.find((tool) => tool.name === 'task');
+  assert.ok(nested);
+  assert.ok(
+    !Object.hasOwn(
+      (nested.parameters as { properties: object }).properties,
+      'background',
+    ),
+  );
   assert.ok(childRequest.tools.some((tool) => tool.name === 'wait_jobs'));
   assert.ok(!runtime.harness.tools.some((tool) => tool.name === 'wait_jobs'));
 });

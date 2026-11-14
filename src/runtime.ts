@@ -33,6 +33,7 @@ import {
 import {
   defaultPolicy,
   DEFAULT_CREDENTIAL_FILES,
+  type ApprovalMode,
   type SessionMode,
 } from './approvals.js';
 import { Sandbox } from './sandbox.js';
@@ -89,6 +90,7 @@ import {
   discoverSubagents,
   readSubagentFolder,
   type SubagentFileInfo,
+  type SubagentPermissionMode,
 } from './subagent_files.js';
 import { abortable } from './watch.js';
 import {
@@ -317,7 +319,116 @@ export const SEND_MAX_WAITING = 8;
 export const BUILTIN_SUBAGENT_PROMPTS: Readonly<Record<string, string>> = {
   'general-purpose': 'general-purpose.md',
   explore: 'explore.md',
+  plan: 'plan.md',
 };
+/** What `task` and `/agents` say of each subagent that ships with Circle. */
+const BUILTIN_SUBAGENT_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  'general-purpose': 'General coding tasks.',
+  explore: 'Read-only project exploration.',
+  plan: 'Read-only research before a plan: how the code works now and what a change would touch.',
+};
+/** Built-ins that only read: they get the read-only tools and run in read-only mode. */
+const READ_ONLY_BUILTINS = new Set(['explore', 'plan']);
+/** Tools no subagent gets, whatever its definition lists: they ask the person, or act on the conversation itself. */
+const NOT_FOR_SUBAGENTS = new Set([
+  'question',
+  'plan_enter',
+  'plan_exit',
+  'compact_conversation',
+]);
+/** A positive whole number from the environment, or the default. */
+function countFrom(value: string | undefined, fallback: number): number {
+  const number = Number(value);
+  return value?.trim() && Number.isInteger(number) && number > 0
+    ? number
+    : fallback;
+}
+/** How many layers of subagents may run below the conversation (`CIRCLE_MAX_SUBAGENT_SPAWN_DEPTH`); 1 is no nesting. */
+export function maxSubagentDepth(env: NodeJS.ProcessEnv = process.env): number {
+  return countFrom(env.CIRCLE_MAX_SUBAGENT_SPAWN_DEPTH, 3);
+}
+/** How many subagents may run at once for one conversation (`CIRCLE_MAX_CONCURRENT_SUBAGENTS`). */
+export function maxConcurrentSubagents(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  return countFrom(env.CIRCLE_MAX_CONCURRENT_SUBAGENTS, 20);
+}
+/** Whether a `disallowedTools` entry takes a tool: its name, a prefix before `*`, or an MCP server's whole name. */
+function toolDenied(entries: readonly string[], name: string): boolean {
+  return entries.some((entry) =>
+    entry.endsWith('*')
+      ? name.startsWith(entry.slice(0, -1))
+      : name === entry ||
+        (entry.startsWith('mcp__') &&
+          !entry.slice(5).includes('__') &&
+          name.startsWith(`${entry}__`)),
+  );
+}
+/**
+ * The approval a subagent works under. The conversation's `accept-edits` and `auto` hold for it whatever its
+ * definition says; under `manual` its `permissionMode` decides, except that `bypassPermissions` and `auto` (a mode
+ * Circle does not have) keep `manual`.
+ */
+export function subagentApproval(
+  conversation: ApprovalMode,
+  wanted: SubagentPermissionMode | undefined,
+): { mode: ApprovalMode; readOnly: boolean; dontAsk: boolean } {
+  if (conversation !== 'manual' || !wanted)
+    return { mode: conversation, readOnly: false, dontAsk: false };
+  return {
+    mode: wanted === 'acceptEdits' ? 'accept-edits' : 'manual',
+    readOnly: wanted === 'plan',
+    dontAsk: wanted === 'dontAsk',
+  };
+}
+/** A subagent's own `task`: the subagents it starts run in the foreground, so it is not offered `background`. */
+function foregroundTask(tool: Tool): Tool {
+  const parameters = tool.parameters as {
+    properties?: Record<string, unknown>;
+  };
+  const { background: _background, ...properties } =
+    parameters.properties ?? {};
+  return { ...tool, parameters: { ...tool.parameters, properties } };
+}
+/** One subagent as `/agents` shows it. */
+export interface SubagentListing {
+  name: string;
+  description: string;
+  source: string;
+  model?: string;
+  effort?: string;
+  tools?: string[];
+  path?: string;
+  disallowedTools?: string[];
+  permissionMode?: string;
+  maxTurns?: number;
+  /** Skills loaded into its conversation before its task. */
+  skills?: string[];
+  /** Those of them that are not installed: they are left out. */
+  missingSkills?: string[];
+  mcpServers?: string[];
+  /** The events its own hooks run at. */
+  hooks?: string[];
+  /** Why its hooks do not run: hooks are off, or its project folder is not trusted. */
+  hooksHeld?: string;
+  background?: boolean;
+  /** Keys it has that Circle reads and does not apply yet, with their values. */
+  unsupported?: string[];
+  /** Keys a pack's definition has that are not read for a pack. */
+  ignored?: string[];
+}
+/** One subagent a person, a pack or an extension defined, as `task` runs it. */
+interface CustomSubagent {
+  spec: SubagentSpec;
+  /** Its allowlist; undefined for every tool a subagent may have. */
+  tools?: Tool[];
+  /** The tools of the MCP servers its definition names. */
+  serverTools?: Tool[];
+  source: string;
+  path?: string;
+  /** What its file says beyond the spec; absent for an extension's. */
+  file?: SubagentFileInfo;
+}
 /** A built-in subagent's own prompt. A missing file is an error that names it, never another agent's prompt (#547). */
 export function builtinSubagentPrompt(
   name: string,
@@ -668,6 +779,9 @@ export class AgentRuntime {
       this.sandbox,
       (kind, job) => {
         if (kind === 'job_ended') this.userShells?.ended(job);
+        // A background subagent's place frees when its job ends, also one stopped before it ran
+        if (kind === 'job_ended' && job.kind === 'agent' && job.agent)
+          this.runningSubagents.delete(job.agent);
         this.bus.emit(kind, {
           payload: { job },
           tags: { session_id: job.sessionId },
@@ -1031,369 +1145,7 @@ export class AgentRuntime {
         return 'The user closed the question without choosing. Plan mode stays on; end your turn.';
       },
       compact: async (hint, context) => this.compact(hint, context.signal),
-      task: async (args, context) => {
-        context.signal.throwIfAborted();
-        if (this.ownershipError) throw this.ownershipError;
-        if (this.closing || this.deleting)
-          throw new Error('session is closing');
-        const parentHarness = this.harness;
-        const parentSessionId = context.sessionId;
-        const name = String(args.subagent_type || 'general-purpose');
-        // As the folders hold them now: one written this step is found, and one a replaced pack took away is not
-        this.loadSubagentFiles();
-        const custom = this.customSubagents().find(
-          (agent) => agent.spec.name === name,
-        );
-        if (!custom && !Object.hasOwn(BUILTIN_SUBAGENT_PROMPTS, name)) {
-          this.describeSubagents(parentHarness.tools);
-          throw new Error('unknown subagent type');
-        }
-        const childModel = custom?.spec.model
-          ? this.modelWithSearch(
-              this.gatewayModel(this.options.settings, custom.spec.model),
-            )
-          : this.wrapModel(parentHarness.model);
-        const session = this.store.create(
-          this.options.workspace,
-          childModel.model,
-          `${name}: ${String(args.description || '')}`.slice(0, 160),
-          undefined,
-          parentSessionId,
-        );
-        const parentState = this.store.contextState(parentSessionId);
-        this.childJobOwners.set(session.id, {
-          sessionId: parentSessionId,
-          parent: session.id,
-          startedBy: 'model',
-        });
-        this.store.setContextState(parentSessionId, {
-          ...parentState,
-          subagentSessionIds: [
-            ...new Set([...(parentState.subagentSessionIds ?? []), session.id]),
-          ],
-        });
-        const childBus = new EventBus(session.id);
-        let backgroundJob: Job | undefined;
-        let backgroundLog: ((text: string) => void) | undefined;
-        const interact = async <T>(
-          action: (origin: InteractionContext) => Promise<T>,
-        ): Promise<T> => {
-          // what the job said it was doing comes back once the answer is in
-          const before = backgroundJob?.detail;
-          if (backgroundJob)
-            this.jobs.activity(backgroundJob.id, 'waiting for you');
-          try {
-            return await action({
-              jobId: backgroundJob?.id,
-              name,
-              agent: session.id,
-            });
-          } finally {
-            if (backgroundJob)
-              this.jobs.activity(
-                backgroundJob.id,
-                before && before !== 'waiting for you' ? before : 'working',
-              );
-          }
-        };
-        childBus.subscribe((event) => {
-          if (event.kind === 'tool_call') {
-            // The log keeps the whole call for the model to read; the strip shows the
-            // step as a tool row does, `Write(notes/a.md)`, not its raw JSON.
-            backgroundLog?.(
-              `${event.payload.name}(${JSON.stringify(event.payload.args)})`,
-            );
-            if (backgroundJob)
-              this.jobs.activity(
-                backgroundJob.id,
-                toolCallLine(String(event.payload.name), event.payload.args),
-              );
-          }
-          if (event.kind === 'llm_end')
-            backgroundLog?.(
-              String((event.payload.message as Message)?.content || ''),
-            );
-          this.bus.emit(event.kind, {
-            payload: event.payload,
-            usage: event.usage,
-            tags: {
-              subagent: session.id,
-              name,
-              ...(backgroundJob ? { job_id: backgroundJob.id } : {}),
-            },
-            parent_run_id: parentSessionId,
-          });
-        });
-        // The tools this subagent may have: now, and those a skill it loads adds later
-        const allows = (tool: Tool): boolean =>
-          tool.subagents !== false &&
-          tool.name !== 'task' &&
-          tool.name !== 'compact_conversation' &&
-          tool.name !== 'plan_enter' &&
-          tool.name !== 'plan_exit' &&
-          (name !== 'explore' ||
-            custom !== undefined ||
-            EXPLORE_TOOLS.has(tool.name)) &&
-          (!custom?.tools ||
-            custom.tools.some((item) => item.name === tool.name));
-        const childTools = (custom?.tools ?? this.allTools).filter(allows);
-        const jobTools = buildTools(this.sandbox, {
-          fileMutations: this.options.fileMutations,
-          captures: this.captures,
-          jobs: this.jobs,
-          sendToJob: (context, jobId, message) =>
-            this.sendToJob(context, jobId, message),
-          ...(vision
-            ? {
-                vision: (
-                  paths: string[],
-                  question: string,
-                  context: ToolContext,
-                ) => this.describeImages(vision, paths, question, context),
-              }
-            : {}),
-          displayCommand: (raw, context) =>
-            this.redact(raw, {}, () =>
-              written(this.store.messages(context.sessionId)),
-            ),
-          jobOwner: () => ({
-            sessionId: parentSessionId,
-            parent: backgroundJob?.id ?? session.id,
-            startedBy: 'model',
-          }),
-          question: (args, context) =>
-            askQuestions(
-              this.options.home,
-              this.sandbox,
-              args,
-              context.signal,
-              {
-                ask: this.options.question
-                  ? (args, signal) =>
-                      interact((origin) =>
-                        this.options.question!(args, signal, origin),
-                      )
-                  : undefined,
-                secret: this.options.secret
-                  ? (request, signal) =>
-                      interact((origin) =>
-                        this.options.secret!(request, signal, origin),
-                      )
-                  : undefined,
-                keep: (name, value) => this.keepVariable(name, value),
-              },
-            ),
-        });
-        const ownedChildTools = this.classifyCoreTools(
-          childTools.map((tool) =>
-            tool.name === 'write_todos'
-              ? {
-                  ...tool,
-                  run: async (args: Record<string, unknown>) => {
-                    childBus.emit('todo_list', {
-                      payload: { todos: args.todos },
-                    });
-                    return 'Updated todo list.';
-                  },
-                }
-              : [
-                    'execute',
-                    'list_jobs',
-                    'stop_job',
-                    'wait_jobs',
-                    'question',
-                  ].includes(tool.name)
-                ? jobTools.find((jobTool) => jobTool.name === tool.name)!
-                : tool,
-          ),
-        );
-        const child: Harness = new Harness({
-          commandExecution: {
-            epoch: this.jobs.runName,
-            forCall: (sessionId, callId) =>
-              this.jobs.executionFor(sessionId, callId),
-          },
-          variables: () => this.runVariables(),
-          secrets: () => this.runSecrets(),
-          redact: this.redact,
-          model: childModel,
-          // Hooks, MCP servers and its processes hear the conversation's session, with this one as the agent's
-          agent: { sessionId: parentSessionId, type: name },
-          // A depth of its own: the definition's, unless the run's CIRCLE_REASONING_EFFORT says otherwise (#549)
-          ...(custom?.spec.effort
-            ? {
-                effort: defaultEffort(
-                  this.options.settings.auth.protocol,
-                  custom.spec.effort,
-                ),
-              }
-            : {}),
-          tools: ownedChildTools,
-          store: this.store,
-          session,
-          policy: this.policy,
-          system:
-            (custom?.spec.system_prompt ?? builtinSubagentPrompt(name)) +
-            '\n' +
-            parentHarness.system,
-          bus: childBus,
-          approve: this.options.approve
-            ? (call, signal) =>
-                this.noticeWaiting(call, () =>
-                  interact((origin) =>
-                    this.options.approve!(call, signal, origin),
-                  ),
-                )
-            : undefined,
-          hooks: this.ensureHooks(),
-          hookScreenshot: this.options.hookScreenshot,
-          sessionHooks: false,
-          headless: this.options.headless,
-          approvalSessionId: parentSessionId,
-          priceUsage: (model, usage) =>
-            priceCall(this.catalog.facts(model, this.options.settings), usage),
-          parentPlanMode: () => this.harness.planMode,
-          toolBoundary: (tool, args, context) =>
-            this.extensionToolBoundary(tool, args, context),
-          executeTool: this.options.executeTool,
-          ...(vision
-            ? {
-                vision: (
-                  paths: string[],
-                  question: string,
-                  context: ToolContext,
-                ) => this.describeImages(vision, paths, question, context),
-              }
-            : {}),
-          saveImageAttachment: (item) =>
-            saveMediaAttachment(this.offloadImages(), item),
-          webSearch: (model, query, count, context) =>
-            this.searchFromModel(model, query, count, context),
-          prepareMessages: (signal): Promise<Message[]> =>
-            this.context
-              .prepare(
-                session.id,
-                child.model,
-                child.system,
-                child.tools,
-                signal,
-                true,
-              )
-              .then((messages) => {
-                // Read means this: the message is in the request that goes to the
-                // model now. Its row exists from the moment it was queued, so the
-                // store says nothing about whether the subagent has met it yet.
-                const job = backgroundJob;
-                const channel = job ? this.channels.get(job.id) : undefined;
-                if (job && channel?.waiting) {
-                  channel.sent = channel.sent.filter(
-                    (mark) =>
-                      !messages.some((message) =>
-                        String(message.content ?? '').includes(
-                          `about="${mark}"`,
-                        ),
-                      ),
-                  );
-                  channel.waiting = channel.sent.length;
-                  this.jobs.pending(job.id, channel.waiting);
-                }
-                return messages;
-              }),
-        });
-        child.planMode = name === 'explore';
-        const runChild = async (signal: AbortSignal): Promise<string> => {
-          const abort = (): void => {
-            void child.cancel();
-          };
-          signal.addEventListener('abort', abort, { once: true });
-          // While it runs, a skill it loads can add its pack's tools to it
-          this.childHarnesses.set(session.id, {
-            harness: child,
-            allows,
-            type: name,
-            parent: parentSessionId,
-          });
-          try {
-            signal.throwIfAborted();
-            // subagent_start hooks (#557): what they say back is in its system prompt from its first request on
-            await this.subagentStartHooks(
-              child,
-              { sessionId: parentSessionId, id: session.id, type: name },
-              String(args.description || ''),
-              signal,
-            );
-            let { answer } = await child.run(String(args.description || ''));
-            // SubagentStop hooks can send it back to work, a few times in a row at most
-            const agent = {
-              sessionId: parentSessionId,
-              id: session.id,
-              type: name,
-            };
-            for (let again = 0; ; again++) {
-              const next = await this.subagentStopHooks(
-                child,
-                agent,
-                answer,
-                again > 0,
-                signal,
-              );
-              if (next === undefined) break;
-              if (again >= stopHookCap()) {
-                child.hookContext(
-                  {
-                    ...combineOutcomes('SubagentStop', [], undefined, {}),
-                    notices: [{ kind: 'limit', name: 'SubagentStop' }],
-                  },
-                  'SubagentStop',
-                );
-                break;
-              }
-              ({ answer } = await child.run(next));
-            }
-            return answer;
-          } finally {
-            signal.removeEventListener('abort', abort);
-            await this.jobs.stopOwned(backgroundJob?.id ?? session.id);
-            this.childJobOwners.delete(session.id);
-            this.childHarnesses.delete(session.id);
-          }
-        };
-        if (args.background === true) {
-          context.signal.throwIfAborted();
-          const job = this.jobs.startAgent(
-            `${name}: ${String(args.description || '')}`,
-            { sessionId: parentSessionId, startedBy: 'model' },
-            async (signal, log, job) => {
-              backgroundJob = job;
-              this.childJobOwners.set(session.id, {
-                sessionId: parentSessionId,
-                parent: job.id,
-                startedBy: 'model',
-              });
-              // Open only now: before this call there is no job id to answer to, and
-              // after it the harness is there to take the message.
-              this.channels.set(job.id, {
-                harness: child,
-                waiting: 0,
-                sent: [],
-              });
-              backgroundLog = log;
-              try {
-                return await runChild(signal);
-              } finally {
-                // A message the subagent never reached stays in that session's
-                // queue, where its own transcript shows it. Nothing here pretends a
-                // delivery that did not happen, and no count survives the job.
-                this.channels.delete(job.id);
-                this.jobs.pending(job.id, 0);
-              }
-            },
-            session.id,
-          );
-          return `In background: ${jobLine(job)}. The subagent report will arrive as a notice; do not poll or sleep.`;
-        }
-        return runChild(context.signal);
-      },
+      task: (args, context) => this.runTask(args, context, vision),
     });
     tools.push(this.lsp.tool());
     tools = this.classifyCoreTools(tools);
@@ -1533,6 +1285,439 @@ export class AgentRuntime {
     this.adoptPlan(harness.messages);
     return harness;
   }
+  /**
+   * `task`: one subagent, run to its report. The conversation starts it, or a subagent starts one of its own while
+   * the depth limit allows. Every layer works for the conversation: hooks, processes and MCP servers hear its
+   * session, its rules decide the calls, and each subagent is a session of its own under the one that started it.
+   */
+  private async runTask(
+    args: Record<string, unknown>,
+    context: ToolContext,
+    vision: VisionConnection | undefined,
+  ): Promise<string> {
+    context.signal.throwIfAborted();
+    if (this.ownershipError) throw this.ownershipError;
+    if (this.closing || this.deleting) throw new Error('session is closing');
+    // Who asks: the conversation, or a subagent that starts one of its own
+    const spawner = this.childHarnesses.get(context.sessionId);
+    const root = spawner?.parent ?? context.sessionId;
+    const depth = (spawner?.depth ?? 0) + 1;
+    const maxDepth = maxSubagentDepth();
+    if (depth > maxDepth)
+      throw new Error(
+        `a subagent at the depth limit of ${maxDepth} cannot start another`,
+      );
+    const name = String(args.subagent_type || 'general-purpose');
+    const description = String(args.description || '');
+    // As the folders hold them now: one written this step is found, and one a replaced pack took away is not
+    this.loadSubagentFiles();
+    const custom = this.customSubagents().find(
+      (agent) => agent.spec.name === name,
+    );
+    if (!custom && !Object.hasOwn(BUILTIN_SUBAGENT_PROMPTS, name)) {
+      this.describeSubagents(this.harness.tools);
+      throw new Error('unknown subagent type');
+    }
+    const limit = maxConcurrentSubagents();
+    const running = [...this.runningSubagents.values()].filter(
+      (owner) => owner === root,
+    ).length;
+    if (running >= limit)
+      throw new Error(
+        `Concurrent subagent limit reached: ${limit} subagents are running for this conversation. Do not retry this call: do the work yourself, or delegate it once a running subagent has finished.`,
+      );
+    const file = custom?.file;
+    const caller = spawner?.harness ?? this.harness;
+    // A subagent without a model of its own runs on the model of the one that started it
+    const childModel = custom?.spec.model
+      ? this.modelWithSearch(
+          this.gatewayModel(this.options.settings, custom.spec.model),
+        )
+      : this.wrapModel(caller.model);
+    const session = this.store.create(
+      this.options.workspace,
+      childModel.model,
+      `${name}: ${description}`.slice(0, 160),
+      undefined,
+      context.sessionId,
+    );
+    // Its place counts until it ends, here or as a job
+    this.runningSubagents.set(session.id, root);
+    try {
+      const parentState = this.store.contextState(context.sessionId);
+      this.childJobOwners.set(session.id, {
+        sessionId: root,
+        parent: session.id,
+        startedBy: 'model',
+      });
+      this.store.setContextState(context.sessionId, {
+        ...parentState,
+        subagentSessionIds: [
+          ...new Set([...(parentState.subagentSessionIds ?? []), session.id]),
+        ],
+      });
+      const childBus = new EventBus(session.id);
+      let backgroundJob: Job | undefined;
+      let backgroundLog: ((text: string) => void) | undefined;
+      // The job a card waits under: its own, or the one of the background subagent it works under
+      const jobOf = (): string | undefined =>
+        backgroundJob?.id ?? spawner?.job();
+      const interact = async <T>(
+        action: (origin: InteractionContext) => Promise<T>,
+      ): Promise<T> => {
+        const jobId = jobOf();
+        // what the job said it was doing comes back once the answer is in
+        const before = jobId ? this.jobs.get(jobId)?.detail : undefined;
+        if (jobId) this.jobs.activity(jobId, 'waiting for you');
+        try {
+          return await action({ jobId, name, agent: session.id });
+        } finally {
+          if (jobId)
+            this.jobs.activity(
+              jobId,
+              before && before !== 'waiting for you' ? before : 'working',
+            );
+        }
+      };
+      childBus.subscribe((event) => {
+        if (event.kind === 'tool_call') {
+          // The log keeps the whole call for the model to read; the strip shows the
+          // step as a tool row does, `Write(notes/a.md)`, not its raw JSON.
+          backgroundLog?.(
+            `${event.payload.name}(${JSON.stringify(event.payload.args)})`,
+          );
+          if (backgroundJob)
+            this.jobs.activity(
+              backgroundJob.id,
+              toolCallLine(String(event.payload.name), event.payload.args),
+            );
+        }
+        if (event.kind === 'llm_end')
+          backgroundLog?.(
+            String((event.payload.message as Message)?.content || ''),
+          );
+        this.bus.emit(event.kind, {
+          payload: event.payload,
+          usage: event.usage,
+          tags: {
+            subagent: session.id,
+            name,
+            ...(backgroundJob ? { job_id: backgroundJob.id } : {}),
+          },
+          parent_run_id: context.sessionId,
+        });
+      });
+      const builtinReadOnly = !custom && READ_ONLY_BUILTINS.has(name);
+      const denied = file?.disallowedTools ?? [];
+      const serverTools = custom?.serverTools ?? [];
+      // The tools this subagent may have: now, and those a skill it loads adds later
+      const allows = (tool: Tool): boolean =>
+        tool.subagents !== false &&
+        !NOT_FOR_SUBAGENTS.has(tool.name) &&
+        (tool.name !== 'task' || depth < maxDepth) &&
+        (!builtinReadOnly || EXPLORE_TOOLS.has(tool.name)) &&
+        (!custom?.tools ||
+          custom.tools.some((item) => item.name === tool.name) ||
+          serverTools.some((item) => item.name === tool.name)) &&
+        !toolDenied(denied, tool.name);
+      const pool = custom?.tools
+        ? [
+            ...custom.tools,
+            ...serverTools.filter((tool) => !custom.tools!.includes(tool)),
+          ]
+        : this.allTools;
+      const childTools = pool.filter(allows);
+      const jobTools = buildTools(this.sandbox, {
+        fileMutations: this.options.fileMutations,
+        captures: this.captures,
+        jobs: this.jobs,
+        sendToJob: (context, jobId, message) =>
+          this.sendToJob(context, jobId, message),
+        ...(vision
+          ? {
+              vision: (
+                paths: string[],
+                question: string,
+                context: ToolContext,
+              ) => this.describeImages(vision, paths, question, context),
+            }
+          : {}),
+        displayCommand: (raw, context) =>
+          this.redact(raw, {}, () =>
+            written(this.store.messages(context.sessionId)),
+          ),
+        jobOwner: () => ({
+          sessionId: root,
+          parent: backgroundJob?.id ?? session.id,
+          startedBy: 'model',
+        }),
+      });
+      const ownedChildTools = this.classifyCoreTools(
+        childTools.map((tool) =>
+          tool.name === 'write_todos'
+            ? {
+                ...tool,
+                run: async (args: Record<string, unknown>) => {
+                  childBus.emit('todo_list', {
+                    payload: { todos: args.todos },
+                  });
+                  return 'Updated todo list.';
+                },
+              }
+            : tool.name === 'task'
+              ? foregroundTask(tool)
+              : ['execute', 'list_jobs', 'stop_job', 'wait_jobs'].includes(
+                    tool.name,
+                  )
+                ? jobTools.find((jobTool) => jobTool.name === tool.name)!
+                : tool,
+        ),
+      );
+      // Its permission mode, decided again for each call: the conversation's can change while it works
+      const wanted = file?.permissionMode;
+      const approval = () => subagentApproval(this.policy.mode(root), wanted);
+      // A read-only conversation, or a read-only subagent that started this one, keeps it read-only
+      const callerReadOnly = (): boolean =>
+        spawner ? spawner.harness.readOnly : this.harness.planMode;
+      // Its own hooks, for its calls and its stop: a project's definition waits for its folder to be trusted
+      const agentHooks =
+        file?.hooks?.length && !this.agentHooksHeld(file)
+          ? file.hooks
+          : undefined;
+      const child: Harness = new Harness({
+        commandExecution: {
+          epoch: this.jobs.runName,
+          forCall: (sessionId, callId) =>
+            this.jobs.executionFor(sessionId, callId),
+        },
+        variables: () => this.runVariables(),
+        secrets: () => this.runSecrets(),
+        redact: this.redact,
+        model: childModel,
+        // Hooks, MCP servers and its processes hear the conversation's session, with this one as the agent's
+        agent: { sessionId: root, type: name },
+        // A depth of its own: the definition's, unless the run's CIRCLE_REASONING_EFFORT says otherwise (#549)
+        ...(custom?.spec.effort
+          ? {
+              effort: defaultEffort(
+                this.options.settings.auth.protocol,
+                custom.spec.effort,
+              ),
+            }
+          : {}),
+        ...(agentHooks ? { agentHooks } : {}),
+        ...(wanted
+          ? {
+              approvalMode: () => approval().mode,
+              dontAsk: () => approval().dontAsk,
+            }
+          : {}),
+        ...(file?.maxTurns ? { maxTurns: file.maxTurns } : {}),
+        tools: ownedChildTools,
+        store: this.store,
+        session,
+        policy: this.policy,
+        system:
+          (custom?.spec.system_prompt ?? builtinSubagentPrompt(name)) +
+          '\n' +
+          this.harness.system,
+        bus: childBus,
+        approve: this.options.approve
+          ? (call, signal) =>
+              this.noticeWaiting(call, () =>
+                interact((origin) =>
+                  this.options.approve!(call, signal, origin),
+                ),
+              )
+          : undefined,
+        hooks: this.ensureHooks(),
+        hookScreenshot: this.options.hookScreenshot,
+        sessionHooks: false,
+        headless: this.options.headless,
+        approvalSessionId: root,
+        priceUsage: (model, usage) =>
+          priceCall(this.catalog.facts(model, this.options.settings), usage),
+        parentPlanMode: () =>
+          callerReadOnly() || (wanted !== undefined && approval().readOnly),
+        toolBoundary: (tool, args, context) =>
+          this.extensionToolBoundary(tool, args, context),
+        executeTool: this.options.executeTool,
+        ...(vision
+          ? {
+              vision: (
+                paths: string[],
+                question: string,
+                context: ToolContext,
+              ) => this.describeImages(vision, paths, question, context),
+            }
+          : {}),
+        saveImageAttachment: (item) =>
+          saveMediaAttachment(this.offloadImages(), item),
+        webSearch: (model, query, count, context) =>
+          this.searchFromModel(model, query, count, context),
+        prepareMessages: (signal): Promise<Message[]> =>
+          this.context
+            .prepare(
+              session.id,
+              child.model,
+              child.system,
+              child.tools,
+              signal,
+              true,
+            )
+            .then((messages) => {
+              // Read means this: the message is in the request that goes to the
+              // model now. Its row exists from the moment it was queued, so the
+              // store says nothing about whether the subagent has met it yet.
+              const job = backgroundJob;
+              const channel = job ? this.channels.get(job.id) : undefined;
+              if (job && channel?.waiting) {
+                channel.sent = channel.sent.filter(
+                  (mark) =>
+                    !messages.some((message) =>
+                      String(message.content ?? '').includes(`about="${mark}"`),
+                    ),
+                );
+                channel.waiting = channel.sent.length;
+                this.jobs.pending(job.id, channel.waiting);
+              }
+              return messages;
+            }),
+      });
+      child.planMode = builtinReadOnly;
+      const runChild = async (signal: AbortSignal): Promise<string> => {
+        const abort = (): void => {
+          void child.cancel();
+        };
+        signal.addEventListener('abort', abort, { once: true });
+        // While it runs, a skill it loads can add its pack's tools to it, and it can start subagents of its own
+        this.childHarnesses.set(session.id, {
+          harness: child,
+          allows,
+          type: name,
+          parent: root,
+          depth,
+          job: jobOf,
+        });
+        const agent = { sessionId: root, id: session.id, type: name };
+        try {
+          signal.throwIfAborted();
+          // SubagentStart hooks (#557): what they say back starts its conversation
+          await this.subagentStartHooks(child, agent, description, signal);
+          // The skills its definition names are in its conversation before its task, as if it had loaded them
+          await this.preloadSkills(file?.skills ?? [], session.id, signal);
+          let { answer } = await child.run(description);
+          // SubagentStop hooks can send it back to work, a few times in a row at most, while it has turns left
+          for (let again = 0; ; again++) {
+            const next = await this.subagentStopHooks(
+              child,
+              agent,
+              answer,
+              again > 0,
+              signal,
+              agentHooks,
+            );
+            if (next === undefined || child.stoppedAtTurnLimit) break;
+            if (again >= stopHookCap()) {
+              child.hookContext(
+                {
+                  ...combineOutcomes('SubagentStop', [], undefined, {}),
+                  notices: [{ kind: 'limit', name: 'SubagentStop' }],
+                },
+                'SubagentStop',
+              );
+              break;
+            }
+            ({ answer } = await child.run(next));
+          }
+          return child.stoppedAtTurnLimit
+            ? `Partial result: this subagent used its ${file?.maxTurns} turns (maxTurns) before it finished.\n\n${answer.trim() || '(it wrote no report)'}`
+            : answer;
+        } finally {
+          signal.removeEventListener('abort', abort);
+          await this.jobs.stopOwned(backgroundJob?.id ?? session.id);
+          this.childJobOwners.delete(session.id);
+          this.childHarnesses.delete(session.id);
+          this.runningSubagents.delete(session.id);
+        }
+      };
+      // A subagent's own subagents run in the foreground: it waits for each report
+      if (!spawner && (args.background === true || file?.background === true)) {
+        context.signal.throwIfAborted();
+        const job = this.jobs.startAgent(
+          `${name}: ${description}`,
+          { sessionId: root, startedBy: 'model' },
+          async (signal, log, job) => {
+            backgroundJob = job;
+            this.childJobOwners.set(session.id, {
+              sessionId: root,
+              parent: job.id,
+              startedBy: 'model',
+            });
+            // Open only now: before this call there is no job id to answer to, and
+            // after it the harness is there to take the message.
+            this.channels.set(job.id, {
+              harness: child,
+              waiting: 0,
+              sent: [],
+            });
+            backgroundLog = log;
+            try {
+              return await runChild(signal);
+            } finally {
+              // A message the subagent never reached stays in that session's
+              // queue, where its own transcript shows it. Nothing here pretends a
+              // delivery that did not happen, and no count survives the job.
+              this.channels.delete(job.id);
+              this.jobs.pending(job.id, 0);
+            }
+          },
+          session.id,
+        );
+        return `In background: ${jobLine(job)}. The subagent report will arrive as a notice; do not poll or sleep.`;
+      }
+      return await runChild(context.signal);
+    } catch (error) {
+      this.runningSubagents.delete(session.id);
+      this.childJobOwners.delete(session.id);
+      throw error;
+    }
+  }
+  /**
+   * The skills a definition preloads, in its conversation before its task: each loaded as the `skill` tool loads it,
+   * its hooks and its pack's tools included. One that is not installed is left out, and `/agents` says so.
+   */
+  private async preloadSkills(
+    names: string[],
+    sessionId: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    for (const name of names) {
+      let body: string;
+      try {
+        body = loadSkillBody(
+          name,
+          this.skills,
+          undefined,
+          this.sandbox.credentialFiles,
+        );
+      } catch {
+        continue;
+      }
+      const tools = await this.activateSkillHooks(name, signal, sessionId);
+      signal.throwIfAborted();
+      this.store.append(sessionId, [
+        {
+          id: randomUUID(),
+          role: 'user',
+          internal: 'skill',
+          content:
+            `[Circle system] Skill \`${name}\` is preloaded for this task. Follow it.\n\n${body}` +
+            (tools ? `\n\n${tools}` : ''),
+        },
+      ]);
+    }
+  }
   private classifyCoreTools(tools: Tool[]): Tool[] {
     const control = new Set([
       'task',
@@ -1626,7 +1811,7 @@ export class AgentRuntime {
         const folder = join(root, pack, 'agents');
         if (!existsSync(join(root, pack, 'pack.json')) || !existsSync(folder))
           continue;
-        const read = readSubagentFolder(folder, `Pack ${pack}`);
+        const read = readSubagentFolder(folder, `Pack ${pack}`, true);
         agents.push(
           ...read.agents.map((agent) => ({
             ...agent,
@@ -1641,39 +1826,67 @@ export class AgentRuntime {
     this.packAgentProblems = problems;
   }
   /**
+   * The tools a definition lists, and the entries that name no tool. An entry ending in `*` takes every tool whose
+   * name starts with what comes before it, and names nothing missing when none does.
+   */
+  private listedTools(entries: string[]): { tools: Tool[]; missing: string[] } {
+    const tools: Tool[] = [];
+    const missing: string[] = [];
+    for (const entry of entries) {
+      const found = entry.endsWith('*')
+        ? this.allTools.filter((tool) =>
+            tool.name.startsWith(entry.slice(0, -1)),
+          )
+        : this.allTools.filter((tool) => tool.name === entry);
+      if (!found.length && !entry.endsWith('*')) missing.push(entry);
+      for (const tool of found) if (!tools.includes(tool)) tools.push(tool);
+    }
+    return { tools, missing };
+  }
+  /**
+   * One definition as `task` runs it, or why it is not offered: a tool it names that does not exist, or an MCP
+   * server this session does not have.
+   */
+  private fileSubagent(
+    agent: SubagentFileInfo,
+    shown: string,
+  ): CustomSubagent | string {
+    const listed = agent.tools ? this.listedTools(agent.tools) : undefined;
+    if (listed?.missing.length)
+      return `${shown} names tools that do not exist: ${listed.missing.join(', ')} · not offered`;
+    const servers = agent.mcpServers ?? [];
+    const unknown = servers.filter(
+      (name) => !this.mcp.status.some((server) => server.name === name),
+    );
+    if (unknown.length)
+      return `${shown} names MCP servers this session does not have: ${unknown.join(', ')} · not offered`;
+    const serverTools = this.mcp.status
+      .filter((server) => servers.includes(server.name))
+      .flatMap((server) =>
+        server.tools.flatMap(
+          (name) => this.allTools.find((tool) => tool.name === name) ?? [],
+        ),
+      );
+    return {
+      spec: agent.spec,
+      source: agent.source_label,
+      path: agent.path,
+      file: agent,
+      ...(listed ? { tools: listed.tools } : {}),
+      ...(serverTools.length ? { serverTools } : {}),
+    };
+  }
+  /**
    * The subagents a person or an extension defined. Folders first, so an extension of the
    * same name wins, as it already does over a built-in. A file naming a tool that does not
    * exist is passed over and `problems` says so, rather than running with a broken set.
    */
-  private customSubagents(
-    problems: string[] = [],
-  ): { spec: SubagentSpec; tools?: Tool[]; source: string; path?: string }[] {
-    const byName = new Map<
-      string,
-      { spec: SubagentSpec; tools?: Tool[]; source: string; path?: string }
-    >();
+  private customSubagents(problems: string[] = []): CustomSubagent[] {
+    const byName = new Map<string, CustomSubagent>();
     for (const agent of this.fileAgents) {
-      const missing = (agent.tools ?? []).filter(
-        (name) => !this.allTools.some((tool) => tool.name === name),
-      );
-      if (missing.length) {
-        problems.push(
-          `${agent.spec.name} names tools that do not exist: ${missing.join(', ')} · not offered`,
-        );
-        continue;
-      }
-      byName.set(agent.spec.name, {
-        spec: agent.spec,
-        source: agent.source_label,
-        path: agent.path,
-        ...(agent.tools
-          ? {
-              tools: agent.tools.map((name) =>
-                this.allTools.find((tool) => tool.name === name)!,
-              ),
-            }
-          : {}),
-      });
+      const read = this.fileSubagent(agent, agent.spec.name);
+      if (typeof read === 'string') problems.push(read);
+      else byName.set(agent.spec.name, read);
     }
     for (const agent of this.extensions.subagents(this.allTools))
       byName.set(agent.spec.name, {
@@ -1693,82 +1906,51 @@ export class AgentRuntime {
         );
         continue;
       }
-      const missing = (agent.tools ?? []).filter(
-        (tool) => !this.allTools.some((item) => item.name === tool),
+      const read = this.fileSubagent(
+        agent,
+        `${name} from the pack ${agent.pack}`,
       );
-      if (missing.length) {
-        problems.push(
-          `${name} from the pack ${agent.pack} names tools that do not exist: ${missing.join(', ')} · not offered`,
-        );
-        continue;
-      }
-      byName.set(name, {
-        spec: agent.spec,
-        source: agent.source_label,
-        path: agent.path,
-        ...(agent.tools
-          ? {
-              tools: agent.tools.map((tool) =>
-                this.allTools.find((item) => item.name === tool)!,
-              ),
-            }
-          : {}),
-      });
+      if (typeof read === 'string') problems.push(read);
+      else byName.set(name, read);
     }
     return [...byName.values()];
   }
+  /** Why a definition's own hooks do not run: hooks are off, or its project folder is not trusted yet. */
+  private agentHooksHeld(file: SubagentFileInfo): string | undefined {
+    if (this.ensureHooks().loaded.disabled) return 'hooks are off';
+    if (
+      file.source_label.startsWith('Project') &&
+      !isFolderTrusted(this.options.settings, this.options.workspace)
+    )
+      return 'this folder is not trusted';
+    return undefined;
+  }
   /**
-   * Everything `task` may choose, for `/agents`: the two that ship with Circle, then the
+   * Everything `task` may choose, for `/agents`: the three that ship with Circle, then the
    * folders and extensions, with the reason any definition was passed over. The folders are
    * read again here, as `task` will see them.
    */
   inspectSubagents(): {
-    agents: {
-      name: string;
-      description: string;
-      source: string;
-      model?: string;
-      effort?: string;
-      tools?: string[];
-      path?: string;
-    }[];
+    agents: SubagentListing[];
     problems: string[];
   } {
     this.loadSubagentFiles();
     const problems = [...this.fileAgentProblems, ...this.packAgentProblems];
-    const byName = new Map([
-      [
-        'general-purpose',
-        {
-          name: 'general-purpose',
-          description: 'General coding tasks.',
-          source: 'Circle',
-          tools: undefined,
-          model: undefined,
-        },
-      ],
-      [
-        'explore',
-        {
-          name: 'explore',
-          description: 'Read-only project exploration.',
-          source: 'Circle',
-          tools: undefined,
-          model: undefined,
-        },
-      ],
-    ] as [
-      string,
-      {
-        name: string;
-        description: string;
-        source: string;
-        model?: string;
-        effort?: string;
-        tools?: string[];
-      },
-    ][]);
-    for (const agent of this.customSubagents(problems))
+    const byName = new Map<string, SubagentListing>(
+      Object.entries(BUILTIN_SUBAGENT_DESCRIPTIONS).map(
+        ([name, description]) => [
+          name,
+          { name, description, source: 'Circle' },
+        ],
+      ),
+    );
+    for (const agent of this.customSubagents(problems)) {
+      const file = agent.file;
+      const skills = file?.skills ?? [];
+      const missing = skills.filter(
+        (name) =>
+          !this.skills.some((skill) => skill.name === name.toLowerCase()),
+      );
       byName.set(agent.spec.name, {
         name: agent.spec.name,
         description: agent.spec.description,
@@ -1777,7 +1959,37 @@ export class AgentRuntime {
         ...(agent.spec.effort ? { effort: agent.spec.effort } : {}),
         ...(agent.tools ? { tools: agent.tools.map((tool) => tool.name) } : {}),
         ...(agent.path ? { path: agent.path } : {}),
+        ...(file?.disallowedTools
+          ? { disallowedTools: file.disallowedTools }
+          : {}),
+        ...(file?.permissionMode
+          ? { permissionMode: file.permissionMode }
+          : {}),
+        ...(file?.maxTurns ? { maxTurns: file.maxTurns } : {}),
+        ...(skills.length ? { skills } : {}),
+        ...(missing.length ? { missingSkills: missing } : {}),
+        ...(file?.mcpServers ? { mcpServers: file.mcpServers } : {}),
+        ...(file?.hooks?.length
+          ? {
+              hooks: [...new Set(file.hooks.map((hook) => hook.event))],
+              ...(this.agentHooksHeld(file)
+                ? { hooksHeld: this.agentHooksHeld(file) }
+                : {}),
+            }
+          : {}),
+        ...(file?.background ? { background: true } : {}),
+        ...(file?.memory || file?.isolation || file?.color
+          ? {
+              unsupported: [
+                ...(file.memory ? [`memory ${file.memory}`] : []),
+                ...(file.isolation ? [`isolation ${file.isolation}`] : []),
+                ...(file.color ? [`color ${file.color}`] : []),
+              ],
+            }
+          : {}),
+        ...(file?.ignored?.length ? { ignored: file.ignored } : {}),
       });
+    }
     return { agents: [...byName.values()], problems };
   }
   private systemPrompt(model: string): string {
@@ -1968,10 +2180,9 @@ export class AgentRuntime {
   private describeSubagents(tools: Tool[]): void {
     const task = tools.find((tool) => tool.name === 'task');
     if (!task) return;
-    const subagents = new Map<string, string>([
-      ['general-purpose', 'General coding tasks.'],
-      ['explore', 'Read-only project exploration.'],
-    ]);
+    const subagents = new Map<string, string>(
+      Object.entries(BUILTIN_SUBAGENT_DESCRIPTIONS),
+    );
     for (const agent of this.customSubagents())
       subagents.set(agent.spec.name, agent.spec.description);
     task.description =
@@ -2498,8 +2709,14 @@ export class AgentRuntime {
       /** Its type and the conversation it works for, for the hooks that hear of it. */
       type: string;
       parent: string;
+      /** 1 for one the conversation started, 2 for one that one started, and so on. */
+      depth: number;
+      /** The background job it works under, its own or one above it: its cards wait under that job. */
+      job: () => string | undefined;
     }
   >();
+  /** The subagents running, by their session, each with the conversation it counts against. */
+  private runningSubagents = new Map<string, string>();
   /** Adds the tools of a loaded skill's pack to a subagent, and says which it got and which it may not have. */
   private offerPackTools(
     name: string,
@@ -2667,9 +2884,11 @@ export class AgentRuntime {
     answer: string,
     active: boolean,
     signal: AbortSignal,
+    /** The subagent's own hooks: its Stop hooks run here as SubagentStop. */
+    extra?: HookDefinition[],
   ): Promise<string | undefined> {
     const runner = this.hookRunner;
-    if (!runner?.has('SubagentStop')) return undefined;
+    if (!runner?.has('SubagentStop', extra)) return undefined;
     const mode = hookPermissionMode(this.policy.mode(this.session.id));
     const batch = await runner.run({
       event: 'SubagentStop',
@@ -2680,6 +2899,7 @@ export class AgentRuntime {
       matchValue: agent.type,
       fields: { stop_hook_active: active, last_assistant_message: answer },
       secrets: this.runSecrets(),
+      ...(extra ? { extra } : {}),
       signal,
     });
     signal.throwIfAborted();
@@ -3059,8 +3279,17 @@ export class AgentRuntime {
         }
     };
     addCompactionReceipts(this.session.id);
-    for (const id of state.subagentSessionIds ?? []) {
-      if (!this.store.get(id)) continue;
+    // Every layer of subagents: each lists those it started
+    const subagents: string[] = [];
+    const descend = (ids: string[] = []): void => {
+      for (const id of ids)
+        if (!subagents.includes(id) && this.store.get(id)) {
+          subagents.push(id);
+          descend(this.store.contextState(id).subagentSessionIds);
+        }
+    };
+    descend(state.subagentSessionIds);
+    for (const id of subagents) {
       addCompactionReceipts(id);
       const messages = this.store.messages(id);
       for (const message of messages)

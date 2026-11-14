@@ -2222,6 +2222,61 @@ test('/agents lists the subagents, a single one, and what is wrong with a file',
   assert.match(app.state.notices.at(-1)!, /No subagent nobody/);
 });
 
+test('/agents shows the keys a definition sets, and the ones Circle does not apply yet', async (t) => {
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  const userHome = join(root, 'user');
+  mkdirSync(join(home, 'agents'), { recursive: true });
+  mkdirSync(workspace, { recursive: true });
+  mkdirSync(userHome, { recursive: true });
+  writeFileSync(
+    join(home, 'agents', 'keeper.md'),
+    [
+      '---',
+      'name: keeper',
+      'description: Keeps notes.',
+      'disallowedTools: execute',
+      'permissionMode: acceptEdits',
+      'maxTurns: 5',
+      'skills: [nowhere]',
+      'background: true',
+      'hooks:',
+      '  Stop:',
+      '    - hooks:',
+      '        - type: command',
+      '          command: echo done',
+      'memory: user',
+      'color: blue',
+      '---',
+      '',
+      'Keep notes.',
+      '',
+    ].join('\n'),
+  );
+  const { app } = await session(t, [], { home, workspace, userHome });
+  await app.submit('/agents');
+  const listed = app.state.notices.join('\n');
+  assert.match(listed, /plan\s+Read-only research before a plan/);
+  assert.match(
+    listed,
+    /Not supported yet:\n {2}keeper: memory user, color blue/,
+  );
+  await app.submit('/agents keeper');
+  const one = app.state.notices.at(-1)!;
+  for (const line of [
+    'disallowed tools: execute',
+    'permission mode: acceptEdits',
+    'max turns: 5',
+    'skills: nowhere · not installed: nowhere',
+    'hooks: SubagentStop',
+    'background: always',
+    'memory user · not supported yet',
+    'color blue · not supported yet',
+  ])
+    assert.ok(one.includes(line), `${line}\n${one}`);
+});
+
 test('/hub names the switch while the hub extension is off, and once on connects a Hub by its address alone', async (t) => {
   // Off, as Circle ships it: the shipped extension's command names the switch
   const off = await session(t, [], { integrations: true });

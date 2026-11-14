@@ -171,11 +171,12 @@ test('task chooses a file-defined agent, with its prompt, tools and the list the
     [
       ['general-purpose', 'Circle'],
       ['explore', 'Circle'],
+      ['plan', 'Circle'],
       ['inspector', 'Circle'],
     ],
   );
   assert.deepEqual(listed.problems, []);
-  assert.match(listed.agents[2]!.path ?? '', /agents/);
+  assert.match(listed.agents[3]!.path ?? '', /agents/);
 });
 
 test('a file may replace a built-in agent, and keeps the default tools', async (t) => {
@@ -202,12 +203,15 @@ test('a file may replace a built-in agent, and keeps the default tools', async (
     model.requests[1]!.tools.some((tool) => tool.name === 'write_file'),
     'the file-defined explore gets the default tools',
   );
+  // and is not held read-only by the built-in's name
+  assert.doesNotMatch(model.requests[1]!.system, /Read-only mode/);
   const listed = runtime.inspectSubagents();
   assert.deepEqual(
     listed.agents.map((agent) => [agent.name, agent.source]),
     [
       ['general-purpose', 'Circle'],
       ['explore', 'Circle'],
+      ['plan', 'Circle'],
     ],
   );
 });
@@ -298,6 +302,7 @@ test('general-purpose works from a prompt for general tasks, and a built-in with
   assert.deepEqual(Object.keys(BUILTIN_SUBAGENT_PROMPTS).sort(), [
     'explore',
     'general-purpose',
+    'plan',
   ]);
   assert.throws(
     () => builtinSubagentPrompt('general-purpose', join(root, 'no-prompts')),
