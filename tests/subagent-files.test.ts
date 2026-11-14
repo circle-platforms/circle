@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { AgentRuntime } from '../src/runtime.js';
+import {
+  AgentRuntime,
+  BUILTIN_SUBAGENT_PROMPTS,
+  builtinSubagentPrompt,
+} from '../src/runtime.js';
 import { discoverSubagents } from '../src/subagent_files.js';
 import { defaultSettings } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
@@ -267,5 +271,33 @@ test('an agent naming a tool that does not exist is not offered, and says why', 
   assert.match(
     listed.problems.join('\n'),
     /ghost names tools that do not exist: no_such_tool · not offered/,
+  );
+});
+
+test('general-purpose works from a prompt for general tasks, and a built-in without its prompt file says which file', async (t) => {
+  const root = scratch(t);
+  const { home, workspace, userHome } = harness(root);
+  const model = taskModel('general-purpose');
+  const runtime = new AgentRuntime({
+    home,
+    workspace,
+    userHome,
+    settings: defaultSettings(),
+    model,
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('do it');
+  // Not the prompt that writes agent configurations (#547)
+  const system = model.requests[1]!.system;
+  assert.match(system, /general-purpose agent/);
+  assert.doesNotMatch(system, /agent architect|whenToUse|"identifier"/);
+  // Every built-in has its own file; a missing one is named, not replaced by another
+  assert.deepEqual(Object.keys(BUILTIN_SUBAGENT_PROMPTS).sort(), [
+    'explore',
+    'general-purpose',
+  ]);
+  assert.throws(
+    () => builtinSubagentPrompt('general-purpose', join(root, 'no-prompts')),
+    /general-purpose subagent has no prompt: prompts\/agent\/general-purpose\.md is missing/,
   );
 });

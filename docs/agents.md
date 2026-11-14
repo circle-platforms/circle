@@ -6,6 +6,8 @@ nav_order: 12.4
 
 A subagent is a second Circle with its own context: `task` starts one, it works alone, and only its report comes back to your conversation. Two ship with Circle — `general-purpose` and the read-only `explore` — [extensions](extensions.md) register more, and **folders of markdown files define the rest**. This page is about those.
 
+Each built-in has a prompt of its own, followed by the conversation's system prompt: `general-purpose` works from a short prompt for general tasks (do what the task asks, report in the format it asks for), `explore` from one for read-only searching. A built-in whose prompt file is missing is an error that names the file; it never borrows another agent's prompt.
+
 ## A file per agent
 
 One file is one agent: `<name>.md` in one of the folders below. The keys say what it is, and the text under them is the system prompt the agent works from.

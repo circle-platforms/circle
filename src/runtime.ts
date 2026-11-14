@@ -308,6 +308,26 @@ export interface RuntimeOptions {
 export const SEND_MAX_CHARS = 4000;
 export const SEND_MAX_WAITING = 8;
 
+/** The prompt file of each subagent that ships with Circle, in `prompts/agent`. */
+export const BUILTIN_SUBAGENT_PROMPTS: Readonly<Record<string, string>> = {
+  'general-purpose': 'general-purpose.md',
+  explore: 'explore.md',
+};
+/** A built-in subagent's own prompt. A missing file is an error that names it, never another agent's prompt (#547). */
+export function builtinSubagentPrompt(
+  name: string,
+  dir = join(import.meta.dirname, 'prompts/agent'),
+): string {
+  const file = BUILTIN_SUBAGENT_PROMPTS[name];
+  if (!file) throw new Error(`unknown subagent type: ${name}`);
+  try {
+    return readFileSync(join(dir, file), 'utf8');
+  } catch {
+    throw new Error(
+      `the built-in ${name} subagent has no prompt: prompts/agent/${file} is missing`,
+    );
+  }
+}
 export class AgentRuntime {
   private readonly searches = new WebSearchService();
   private readonly vision = new VisionService();
@@ -988,7 +1008,7 @@ export class AgentRuntime {
         const custom = this.customSubagents().find(
           (agent) => agent.spec.name === name,
         );
-        if (!custom && !['general-purpose', 'explore'].includes(name))
+        if (!custom && !Object.hasOwn(BUILTIN_SUBAGENT_PROMPTS, name))
           throw new Error('unknown subagent type');
         const childModel = custom?.spec.model
           ? this.modelWithSearch(
@@ -1162,15 +1182,7 @@ export class AgentRuntime {
           session,
           policy: this.policy,
           system:
-            (custom?.spec.system_prompt ??
-              readFileSync(
-                join(
-                  import.meta.dirname,
-                  'prompts/agent',
-                  name === 'explore' ? 'explore.md' : 'generate.md',
-                ),
-                'utf8',
-              )) +
+            (custom?.spec.system_prompt ?? builtinSubagentPrompt(name)) +
             '\n' +
             parentHarness.system,
           bus: childBus,
