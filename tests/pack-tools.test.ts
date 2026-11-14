@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
@@ -14,7 +20,8 @@ import { saveSecret } from '../src/secrets.js';
 import { defaultSettings, saveSettings, trustFolder } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import type { Message } from '../src/types.js';
-import { cleanup, scratch } from './helpers.js';
+import { discoverSkills, loadSkillBody } from '../src/skills.js';
+import { cleanup, scratch, until } from './helpers.js';
 
 const sha = (text: string) => createHash('sha256').update(text).digest('hex');
 
@@ -158,13 +165,19 @@ test('a loaded pack offers its declared scripts as typed tools that check their 
   const packs = join(userHome, '.agents', 'skills');
   mkdirSync(packs, { recursive: true });
   const marker = join(root, 'runs.jsonl');
-  const script = `import { appendFileSync, readFileSync } from 'node:fs';
+  const script = `import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
   argv: process.argv.slice(2),
   token: process.env.HUB_TOKEN ?? null,
   session: process.env.CIRCLE_SESSION_ID ?? null,
   stdin: readFileSync(0, 'utf8'),
+  cwd: process.cwd(),
+  skillDir: process.env.CIRCLE_SKILL_DIR ?? null,
+  data: process.env.CIRCLE_SKILL_DATA ?? null,
+  leaked: process.env.CIRCLE_TEST_YOURS ?? null,
 }) + '\\n');
+// A relative path is the workspace's
+writeFileSync('converted.txt', 'done');
 console.log('converted with ' + process.env.HUB_TOKEN);
 `;
   installPack(packs, 'example-pack', {
@@ -176,6 +189,11 @@ console.log('converted with ' + process.env.HUB_TOKEN);
       'console.log(JSON.stringify([process.env.CIRCLE_SESSION_ID ?? null, process.env.CIRCLE_AGENT_ID ?? null]));\n',
   });
   saveSecret(home, 'HUB_TOKEN', 'synthetic-hub-token');
+  // A variable of yours a pack's script must not see
+  process.env.CIRCLE_TEST_YOURS = 'yours';
+  t.after(() => {
+    delete process.env.CIRCLE_TEST_YOURS;
+  });
   const call = (id: string, name: string, args: Record<string, unknown>) => ({
     message: {
       id: crypto.randomUUID(),
@@ -232,12 +250,15 @@ console.log('converted with ' + process.env.HUB_TOKEN);
   const tool = model.requests[2]!.tools.find(
     (item) => item.name === 'example-pack_convert',
   )!;
+  // The declared input, then how long and where it runs, as execute takes them
   assert.deepEqual(Object.keys(tool.parameters.properties as object), [
     'in',
     'format',
     'title',
     'tag',
     'draft',
+    'timeout',
+    'background',
   ]);
   assert.doesNotMatch(JSON.stringify(tool), /HUB_TOKEN/);
   const results = model.requests
@@ -259,6 +280,7 @@ console.log('converted with ' + process.env.HUB_TOKEN);
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line));
+  // It ran in the workspace, found its pack and its data folder by name, and got nothing else of yours
   assert.deepEqual(runs, [
     {
       argv: ['--in', '%IN_FILE%', '--format', 'pdf', '--title', '%HUB_TOKEN%'],
@@ -266,9 +288,19 @@ console.log('converted with ' + process.env.HUB_TOKEN);
       // The conversation the call runs for (#551)
       session: runtime.session.id,
       stdin: '',
+      cwd: realpathSync(workspace),
+      skillDir: realpathSync(join(packs, 'example-pack')),
+      data: join(home, 'skill-data', 'example-pack'),
+      leaked: null,
     },
   ]);
-  assert.match(String(results[3]?.content), /converted with %HUB_TOKEN%/);
+  assert.equal(readFileSync(join(workspace, 'converted.txt'), 'utf8'), 'done');
+  // The pack is as it was installed: what the script wrote is not in it
+  assert.equal((await readPackTools(packs, 'example-pack')).length, 1);
+  assert.match(
+    String(results[3]?.content),
+    /converted with %HUB_TOKEN%\n[\s\S]*Exit code: 0$/,
+  );
   assert.doesNotMatch(
     model.requests
       .at(-1)!
@@ -281,7 +313,8 @@ console.log('converted with ' + process.env.HUB_TOKEN);
     String(results[4]?.content),
     /The pack declares this script's parameters: call example-pack_convert/,
   );
-  assert.deepEqual(JSON.parse(JSON.parse(String(results[5]?.content)).stdout), [
+  // skill_run's output comes back as execute's: what the script printed, then its exit code
+  assert.deepEqual(JSON.parse(String(results[5]?.content).split('\n')[0]!), [
     runtime.session.id,
     null,
   ]);
@@ -371,4 +404,182 @@ test("a pack's tool gives way to an extension's tool of the same name, and the t
     (message) => message.role === 'tool',
   );
   assert.equal(results.at(-1)?.content, 'from the extension');
+});
+
+/** A runtime with one installed pack whose tool `run` is `script`, loaded, and the tool as the model calls it. */
+async function loadedTool(
+  t: Parameters<typeof scratch>[0],
+  script: string,
+  before?: (packs: string) => void,
+) {
+  const root = realpathSync(scratch(t));
+  const home = join(root, 'home');
+  const userHome = join(root, 'user');
+  const workspace = join(root, 'project');
+  mkdirSync(home);
+  mkdirSync(workspace);
+  const packs = join(userHome, '.agents', 'skills');
+  mkdirSync(packs, { recursive: true });
+  installPack(packs, 'example-pack', {
+    'SKILL.md':
+      '---\nname: example-pack\ndescription: Runs a script.\n---\n\nUse run.\n',
+    'tools.json': JSON.stringify({
+      version: 1,
+      tools: [
+        {
+          name: 'run',
+          description: 'Run the script.',
+          script: 'tools/run.mjs',
+          input_schema: { type: 'object', properties: {} },
+        },
+      ],
+    }),
+    'tools/run.mjs': script,
+  });
+  before?.(packs);
+  const runtime = new AgentRuntime({
+    workspace,
+    home,
+    userHome,
+    localSkillsRoot: packs,
+    settings: defaultSettings(),
+    model: new ScriptedModel([]),
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.initialize();
+  await runtime.activateSkillHooks('example-pack');
+  const tool = runtime.harness.tools.find(
+    (item) => item.name === 'example-pack_run',
+  )!;
+  assert.ok(tool, 'the pack offers its tool');
+  const call = (args: Record<string, unknown>, signal: AbortSignal) =>
+    tool.run(args, {
+      sessionId: runtime.session.id,
+      callId: crypto.randomUUID(),
+      signal,
+    });
+  return { root, packs, runtime, call };
+}
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+/** A script that starts a process of its own, says both ids, and waits. */
+const WAITS = (file: string) => `import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+writeFileSync(${JSON.stringify(file)}, JSON.stringify([process.pid, child.pid]));
+setInterval(() => {}, 1000);
+`;
+
+test('a declared script given a timeout is ended then, together with what it started', async (t) => {
+  const file = join(realpathSync(scratch(t)), 'pids.json');
+  const { call } = await loadedTool(t, WAITS(file));
+  const result = await call({ timeout: 1 }, new AbortController().signal);
+  assert.match(String(result), /Command ended: timeout/);
+  const pids = JSON.parse(readFileSync(file, 'utf8')) as number[];
+  for (const pid of pids) await until(() => !alive(pid), { timeout: 10_000 });
+});
+
+test('esc on a declared script ends it and what it started', async (t) => {
+  const file = join(realpathSync(scratch(t)), 'pids.json');
+  const { call } = await loadedTool(t, WAITS(file));
+  const controller = new AbortController();
+  const running = call({}, controller.signal);
+  await until(() => existsSync(file), { timeout: 10_000 });
+  controller.abort(new Error('esc'));
+  await assert.rejects(running);
+  const pids = JSON.parse(readFileSync(file, 'utf8')) as number[];
+  for (const pid of pids) await until(() => !alive(pid), { timeout: 10_000 });
+});
+
+test('a declared script can start as a background job, as execute can', async (t) => {
+  const { call } = await loadedTool(t, "console.log('started');\n");
+  assert.match(
+    String(await call({ background: true }, new AbortController().signal)),
+    /^In background: j\d+ · shell · /,
+  );
+});
+
+test('a character a script writes in two pieces reaches the model whole', async (t) => {
+  const { call } = await loadedTool(
+    t,
+    `process.stdout.write(Buffer.from([0xe4]));
+setTimeout(() => process.stdout.write(Buffer.from([0xb8, 0xad, 0x0a])), 100);
+`,
+  );
+  const result = String(await call({}, new AbortController().signal));
+  assert.match(result, /^中\n/);
+  assert.doesNotMatch(result, /\uFFFD/);
+});
+
+test('a skill folder under the packs without a pack.json is not a pack: loading it says nothing of tools', async (t) => {
+  const { packs, runtime } = await loadedTool(
+    t,
+    'process.exit(0);\n',
+    (packs) => {
+      mkdirSync(join(packs, 'plain'));
+      writeFileSync(
+        join(packs, 'plain', 'SKILL.md'),
+        '---\nname: plain\ndescription: A skill of your own.\n---\n\nPlain.\n',
+      );
+    },
+  );
+  assert.deepEqual(await readPackTools(packs, 'plain'), []);
+  // It is a skill the session knows, so loading it does reach the pack check
+  assert.ok(runtime.skills.some((skill) => skill.name === 'plain'));
+  assert.equal(await runtime.activateSkillHooks('plain'), '');
+});
+
+test("a declaration cannot name the run options as its input, or set Circle's own variables", () => {
+  const files = ['tools/convert.mjs', 'tools.json', 'SKILL.md'];
+  const declare = (tool: Record<string, unknown>) =>
+    JSON.stringify({ version: 1, tools: [{ ...CONVERT, ...tool }] });
+  assert.throws(
+    () =>
+      parsePackTools(
+        declare({
+          input_schema: {
+            type: 'object',
+            properties: { timeout: { type: 'integer' } },
+          },
+          args: [],
+        }),
+        files,
+      ),
+    /timeout is how long or where the script runs/,
+  );
+  assert.throws(
+    () => parsePackTools(declare({ env: { CIRCLE_SKILL_DIR: '/x' } }), files),
+    /env cannot set CIRCLE_SKILL_DIR/,
+  );
+});
+
+test('SKILL.md names its own folder with ${CIRCLE_SKILL_DIR}', (t) => {
+  const root = realpathSync(scratch(t));
+  const workspace = join(root, 'project');
+  const folder = join(workspace, '.agents', 'skills', 'kit');
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(
+    join(folder, 'SKILL.md'),
+    '---\nname: kit\ndescription: A kit.\n---\n\nRun node ${CIRCLE_SKILL_DIR}/scripts/go.mjs.\n',
+  );
+  const skills = discoverSkills(
+    workspace,
+    join(root, 'home'),
+    join(root, 'user'),
+    false,
+  );
+  const body = loadSkillBody('kit', skills);
+  assert.match(
+    body,
+    new RegExp(
+      `Run node ${folder.replace(/[\\\\^$.*+?()[\]{}|]/g, '\\$&')}/scripts/go\\.mjs`,
+    ),
+  );
+  assert.doesNotMatch(body, /\$\{CIRCLE_SKILL_DIR\}/);
 });

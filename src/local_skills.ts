@@ -2,13 +2,16 @@ import { spawn } from 'node:child_process';
 import {
   lstat,
   mkdir,
+  mkdtemp,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   writeFile,
 } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
+import { StringDecoder } from 'node:string_decoder';
 import { dirname, join, relative, sep } from 'node:path';
 import { isRecord, type CircleSettings } from './settings.js';
 import { McpLoginRequired } from './mcp_auth.js';
@@ -17,6 +20,7 @@ import { serverBaseUrl } from './server_resolution.js';
 import { expandVariables, redactSecrets } from './secrets.js';
 import { assertNoCaseCollisions, isSafePackPath } from './pack_files.js';
 import { sha256 } from './knowledge/canonical.js';
+import { stopProcessTree } from './process_group.js';
 
 export { serverBaseUrl };
 
@@ -29,6 +33,8 @@ export const LIMITS = {
 } as const;
 
 export const SKILLS_ROOT = join(homedir(), '.agents', 'skills');
+/** The folder in Circle's data folder where each pack keeps what outlives an update (`CIRCLE_SKILL_DATA`). */
+export const SKILL_DATA_FOLDER = 'skill-data';
 
 export interface LocalToolsFile {
   path: string;
@@ -530,7 +536,52 @@ export async function verifyInstalled(
   };
 }
 
-export async function runTool(options: {
+/** The variables of yours a pack's script gets, by platform: enough to run, and nothing else of your environment. */
+const SCRIPT_ENV =
+  process.platform === 'win32'
+    ? [
+        'PATH',
+        'PATHEXT',
+        'SYSTEMROOT',
+        'WINDIR',
+        'COMSPEC',
+        'TEMP',
+        'TMP',
+        'USERPROFILE',
+        'APPDATA',
+        'LOCALAPPDATA',
+      ]
+    : ['PATH', 'HOME', 'TMPDIR'];
+function scriptEnvironment(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const name of SCRIPT_ENV) {
+    // Windows names a variable in any case
+    const key = Object.keys(process.env).find(
+      (item) => item.toUpperCase() === name,
+    );
+    if (key !== undefined && process.env[key] !== undefined)
+      env[key] = process.env[key];
+  }
+  if (process.platform !== 'win32') {
+    env.HOME ??= '';
+    env.TMPDIR ??= '/tmp';
+  }
+  return env;
+}
+
+/** A pack's script, checked and ready to start, with its arguments, input and whole environment. */
+export interface PreparedRun {
+  pack: string;
+  script: string;
+  /** The pack's folder, as the script finds it in `CIRCLE_SKILL_DIR`. */
+  packDir: string;
+  target: string;
+  args: string[];
+  stdin: string;
+  env: NodeJS.ProcessEnv;
+}
+
+export interface RunToolOptions {
   root?: string;
   pack: string;
   script: string;
@@ -542,14 +593,17 @@ export async function runTool(options: {
   env?: Record<string, string | undefined>;
   /** False: `args` and `stdin` are used as given, with no `%NAME%` filled in (a declared tool built them). */
   expand?: boolean;
-  timeoutMs?: number;
-  maxOutputBytes?: number;
-}): Promise<{
-  exit_code: number | null;
-  stdout: string;
-  stderr: string;
-  truncated: boolean;
-}> {
+  /** Where packs keep what outlives an update: the script gets `<dataRoot>/<pack>` as `CIRCLE_SKILL_DATA`. */
+  dataRoot?: string;
+}
+
+/**
+ * Checks a pack's script and builds what it runs with. Its environment is the few variables in SCRIPT_ENV, Circle's
+ * variables, the declared ones, `CIRCLE_SKILL_DIR` (the pack's folder) and, with a data root, `CIRCLE_SKILL_DATA`.
+ */
+export async function prepareRun(
+  options: RunToolOptions,
+): Promise<PreparedRun> {
   const {
     root = SKILLS_ROOT,
     pack,
@@ -560,8 +614,7 @@ export async function runTool(options: {
     secrets = {},
     env: extraEnv = {},
     expand = true,
-    timeoutMs = 300_000,
-    maxOutputBytes = 1024 * 1024,
+    dataRoot,
   } = options;
   if (!/^[a-z][a-z0-9-]{0,63}$/.test(pack))
     throw new LocalSkillsError(
@@ -586,54 +639,144 @@ export async function runTool(options: {
       '只运行 TypeScript/JavaScript 脚本',
       '从 SKILL.md 照抄脚本路径',
     );
-
   const values = { ...variables, ...secrets };
-  const expandedArgs = expand ? expandVariables(args, values) : args;
-  const expandedStdin = expand ? expandVariables(stdin, values) : stdin;
-  const env: NodeJS.ProcessEnv = {
-    PATH: process.env.PATH ?? '',
-    HOME: process.env.HOME ?? '',
-    TMPDIR: process.env.TMPDIR ?? '/tmp',
-    ...variables,
-    ...extraEnv,
+  const data = dataRoot === undefined ? undefined : join(dataRoot, pack);
+  if (data !== undefined) await mkdir(data, { recursive: true, mode: 0o700 });
+  return {
+    pack,
+    script,
+    packDir: await realpath(packDir),
+    target,
+    args: expand ? expandVariables(args, values) : args,
+    stdin: expand ? expandVariables(stdin, values) : stdin,
+    env: {
+      ...scriptEnvironment(),
+      ...variables,
+      ...extraEnv,
+      CIRCLE_SKILL_DIR: await realpath(packDir),
+      ...(data === undefined ? {} : { CIRCLE_SKILL_DATA: data }),
+    },
   };
+}
 
+// Starts a prepared script with its exact arguments and input. It is written next to them in a private folder,
+// which it removes once read, so the command a shell runs names only paths.
+const RUNNER = `import { readFileSync, rmSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { dirname } from 'node:path';
+const specPath = process.argv[2];
+const spec = JSON.parse(readFileSync(specPath, 'utf8'));
+try { rmSync(dirname(specPath), { recursive: true, force: true }); } catch {}
+const child = spawn(process.execPath, [spec.target, ...spec.args], { stdio: ['pipe', 'inherit', 'inherit'] });
+child.stdin.on('error', () => {});
+child.stdin.end(spec.stdin);
+for (const name of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(name, () => child.kill(name));
+child.on('error', (error) => { process.stderr.write(error.message + '\\n'); process.exit(127); });
+child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
+`;
+function quoteForShell(value: string): string {
+  return process.platform === 'win32'
+    ? `"${value}"`
+    : `'${value.replaceAll("'", `'\\''`)}'`;
+}
+/** The shell command that runs a prepared script, for a background job to start as it starts any command. */
+export async function scriptCommand(prepared: PreparedRun): Promise<string> {
+  const folder = await mkdtemp(join(tmpdir(), 'circle-script-'));
+  try {
+    await writeFile(join(folder, 'run.mjs'), RUNNER, { mode: 0o600 });
+    await writeFile(
+      join(folder, 'spec.json'),
+      JSON.stringify({
+        target: prepared.target,
+        args: prepared.args,
+        stdin: prepared.stdin,
+      }),
+      { mode: 0o600 },
+    );
+  } catch (error) {
+    await rm(folder, { recursive: true, force: true });
+    throw error;
+  }
+  return [process.execPath, join(folder, 'run.mjs'), join(folder, 'spec.json')]
+    .map(quoteForShell)
+    .join(' ');
+}
+
+/**
+ * Runs a pack's script to its end, where background jobs are not available. It runs in `cwd`, the workspace. esc and
+ * the timeout end the script and what it started, and a timeout is reported as one, not as a long output.
+ */
+export async function runTool(
+  options: RunToolOptions & {
+    cwd?: string;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+    maxOutputBytes?: number;
+  },
+): Promise<{
+  exit_code: number | null;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+  timed_out: boolean;
+}> {
+  const {
+    cwd = process.cwd(),
+    signal,
+    timeoutMs = 120_000,
+    maxOutputBytes = 1024 * 1024,
+    secrets = {},
+  } = options;
+  signal?.throwIfAborted();
+  const prepared = await prepareRun(options);
   return await new Promise((resolvePromise, reject) => {
-    const child = spawn(process.execPath, [target, ...expandedArgs], {
-      cwd: packDir,
-      env,
+    const child = spawn(process.execPath, [prepared.target, ...prepared.args], {
+      cwd,
+      env: prepared.env,
       stdio: ['pipe', 'pipe', 'pipe'],
+      // Its own process group, so esc and the timeout reach what it starts too
+      detached: process.platform !== 'win32',
     });
-    let stdout = '';
-    let stderr = '';
     let truncated = false;
-    const collect = (current: string, chunk: Buffer): string => {
-      if (Buffer.byteLength(current) >= maxOutputBytes) {
-        truncated = true;
-        return current;
-      }
-      return current + chunk.toString('utf8');
+    let timedOut = false;
+    // Decoded as a stream, so a character split between two chunks stays whole; cut by bytes
+    const collect = () => {
+      const decoder = new StringDecoder('utf8');
+      let text = '';
+      let bytes = 0;
+      let cut = false;
+      return {
+        add(chunk: Buffer): void {
+          const room = maxOutputBytes - bytes;
+          if (room <= 0) {
+            truncated = cut = true;
+            return;
+          }
+          const part = chunk.length > room ? chunk.subarray(0, room) : chunk;
+          if (part.length < chunk.length) truncated = cut = true;
+          bytes += part.length;
+          text += decoder.write(part);
+        },
+        text: (): string => (cut ? text : text + decoder.end()),
+      };
     };
+    const stdout = collect();
+    const stderr = collect();
+    let cancelKill: (() => void) | undefined;
     const timer = setTimeout(() => {
-      truncated = true;
-      child.kill('SIGKILL');
+      timedOut = true;
+      cancelKill ??= stopProcessTree(child);
     }, timeoutMs);
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout = collect(stdout, chunk);
-      if (Buffer.byteLength(stdout) > maxOutputBytes) {
-        truncated = true;
-        stdout = stdout.slice(0, maxOutputBytes);
-      }
-    });
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr = collect(stderr, chunk);
-      if (Buffer.byteLength(stderr) > maxOutputBytes) {
-        truncated = true;
-        stderr = stderr.slice(0, maxOutputBytes);
-      }
-    });
+    const abort = (): void => {
+      cancelKill ??= stopProcessTree(child);
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+    child.stdout.on('data', (chunk: Buffer) => stdout.add(chunk));
+    child.stderr.on('data', (chunk: Buffer) => stderr.add(chunk));
+    child.stdin.on('error', () => {});
     child.on('error', (error) => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
       reject(
         new LocalSkillsError(
           `脚本没有启动：${error.message}`,
@@ -643,13 +786,19 @@ export async function runTool(options: {
     });
     child.on('close', (code) => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      if (signal?.aborted) {
+        reject(signal.reason);
+        return;
+      }
       resolvePromise({
         exit_code: code,
-        stdout: redactSecrets(stdout, secrets),
-        stderr: redactSecrets(stderr, secrets),
+        stdout: redactSecrets(stdout.text(), secrets),
+        stderr: redactSecrets(stderr.text(), secrets),
         truncated,
+        timed_out: timedOut,
       });
     });
-    child.stdin.end(expandedStdin);
+    child.stdin.end(prepared.stdin);
   });
 }

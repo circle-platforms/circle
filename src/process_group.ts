@@ -1,6 +1,6 @@
-// Signals a POSIX process group, as Circle stops what it started. Callers on
-// Windows end process trees with taskkill instead.
-import { execFile } from 'node:child_process';
+// Signals a POSIX process group, as Circle stops what it started, and ends a
+// process tree on any platform (taskkill on Windows).
+import { execFile, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
@@ -33,4 +33,47 @@ export async function signalProcessGroup(
     if (code === 'EPERM' && !(await groupHasLiveMember(pgid))) return false;
     throw error;
   }
+}
+
+/**
+ * Ends a process together with what it started. On POSIX that is the process group it leads, so it must have been
+ * spawned with `detached: true`. On Windows it is its process tree, always forced. A process that is already gone is
+ * not an error.
+ */
+export function killProcessTree(
+  child: ChildProcess,
+  force: boolean,
+): Promise<void> {
+  const pid = child.pid;
+  if (!pid) return Promise.resolve();
+  if (process.platform === 'win32')
+    return new Promise((done) =>
+      execFile('taskkill', ['/PID', String(pid), '/T', '/F'], () => done()),
+    );
+  try {
+    process.kill(-pid, force ? 'SIGKILL' : 'SIGTERM');
+  } catch {
+    try {
+      child.kill(force ? 'SIGKILL' : 'SIGTERM');
+    } catch {
+      /* Already gone. */
+    }
+  }
+  return Promise.resolve();
+}
+
+/**
+ * Asks a process tree to end, then forces it after `graceMs`. Returns a function that cancels the forced kill, for
+ * when the process ended in time.
+ */
+export function stopProcessTree(
+  child: ChildProcess,
+  graceMs = 500,
+): () => void {
+  void killProcessTree(child, false);
+  const escalation = setTimeout(
+    () => void killProcessTree(child, true),
+    graceMs,
+  );
+  return () => clearTimeout(escalation);
 }

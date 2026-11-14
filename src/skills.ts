@@ -225,5 +225,9 @@ export function loadSkillBody(
     )
       throw Error('skill reference is a credential file');
   }
-  return `<skill_content name="${skill.name}">\n${readFileSync(path, 'utf8').trim()}\n\nBase directory for this skill: ${dirname(skill.path)}\nRelative paths in this skill are relative to this base directory.\n</skill_content>`;
+  // `${CIRCLE_SKILL_DIR}` in the text names this skill's folder, as a path the model can use as written
+  const text = readFileSync(path, 'utf8')
+    .trim()
+    .replaceAll('${CIRCLE_SKILL_DIR}', dirname(skill.path));
+  return `<skill_content name="${skill.name}">\n${text}\n\nBase directory for this skill: ${dirname(skill.path)}\nRelative paths in this skill are relative to this base directory.\n</skill_content>`;
 }

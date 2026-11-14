@@ -16,7 +16,7 @@ import {
   rmSync,
   statSync,
 } from 'node:fs';
-import { SKILLS_ROOT } from './local_skills.js';
+import { SKILL_DATA_FOLDER, SKILLS_ROOT } from './local_skills.js';
 import { packTool, readPackTools } from './pack_tools.js';
 import type { ChatModel, Message, ToolCall } from './types.js';
 import { GatewayModel, EFFORT_LEVELS, defaultEffort } from './model.js';
@@ -2329,6 +2329,14 @@ export class AgentRuntime {
         declaration,
         variables: () => this.runVariables(),
         secrets: () => this.runSecrets(),
+        workspace: this.options.workspace,
+        dataRoot: join(this.options.home, SKILL_DATA_FOLDER),
+        jobs: this.jobs,
+        jobOwner: (context) =>
+          this.childJobOwners.get(context.sessionId) ?? {
+            sessionId: context.sessionId,
+            startedBy: 'model',
+          },
       });
       if (taken.has(tool.name)) {
         skipped.push(tool.name);

@@ -28,9 +28,10 @@ import {
   installPack,
   listInstalled,
   resolveServer,
-  runTool,
+  SKILL_DATA_FOLDER,
   SKILLS_ROOT,
 } from './local_skills.js';
+import { runScript } from './script_runs.js';
 import { discoverServer } from './server_resolution.js';
 import type { CircleSettings } from './settings.js';
 import { GREP_SCHEMA, grepSearch } from './grep_tool.js';
@@ -602,6 +603,15 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
           stdin: text(
             'Standard input; %NAME% placeholders expand at execution',
           ),
+          timeout: integer(
+            'Seconds the script may run before it is ended, at most 600; without it, a run still going after 120 seconds goes on as a background job',
+            0,
+          ),
+          background: {
+            type: 'boolean',
+            description:
+              'Run as a background job; a notice arrives when it ends. Do not poll or sleep.',
+          },
         },
         ['pack', 'script'],
       ),
@@ -615,20 +625,51 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
           throw new Error(
             `The pack declares this script's parameters: call ${typed}, which checks them before the script starts.`,
           );
+        const owner = hooks.jobOwner?.(context) ?? {
+          sessionId: context.sessionId,
+          startedBy: 'model' as const,
+        };
+        const raw = Array.isArray(args.args) ? args.args.map(String) : [];
         try {
-          return JSON.stringify(
-            await runTool({
+          return await runScript(
+            {
               root,
               pack: string(args, 'pack'),
               script: string(args, 'script'),
-              ...(Array.isArray(args.args)
-                ? { args: args.args.map(String) }
-                : {}),
+              args: raw,
               ...(typeof args.stdin === 'string' ? { stdin: args.stdin } : {}),
               variables: localSkills.variables(),
               secrets: localSkills.secrets(),
+              ...(localSkills.home
+                ? { dataRoot: join(localSkills.home, SKILL_DATA_FOLDER) }
+                : {}),
               env: identityEnvironment(context.identity),
-            }),
+            },
+            {
+              jobs: hooks.jobs,
+              owner: {
+                ...owner,
+                origin: {
+                  ...owner.origin,
+                  executionSessionId: context.sessionId,
+                  toolCallId: context.callId,
+                  ...(context.identity ? { identity: context.identity } : {}),
+                  // As the model wrote them: %NAME% stays unfilled on screen
+                  displayCommand: [
+                    string(args, 'pack'),
+                    string(args, 'script'),
+                    ...raw,
+                  ].join(' '),
+                  description: `${string(args, 'pack')} ${string(args, 'script')}`,
+                },
+              },
+              signal: context.signal,
+              cwd: sandbox.workspace,
+              ...(typeof args.timeout === 'number'
+                ? { timeout: args.timeout }
+                : {}),
+              ...(args.background === true ? { background: true } : {}),
+            },
           );
         } catch (error) {
           return failure(error);

@@ -701,7 +701,11 @@ export class JobRegistry {
     }
     this.executionChanged(entry);
   }
-  private launch(command: string, owner: JobOwner): Entry {
+  private launch(
+    command: string,
+    owner: JobOwner,
+    env: NodeJS.ProcessEnv = shellEnvironment(),
+  ): Entry {
     if (owner.origin?.toolCallId && owner.origin.userShellId)
       throw new Error('a command cannot have both tool and human origins');
     const verdict = classifyCommand(command, this.sandbox.credentialFiles);
@@ -748,7 +752,7 @@ export class JobRegistry {
             command,
             cwd: this.sandbox.workspace,
             env: {
-              ...shellEnvironment(),
+              ...env,
               ...identityEnvironment(owner.origin?.identity),
             },
             outputPath: entry.path,
@@ -824,7 +828,7 @@ export class JobRegistry {
       const child = spawn(command, {
         cwd: this.sandbox.workspace,
         env: {
-          ...shellEnvironment(),
+          ...env,
           ...identityEnvironment(owner.origin?.identity),
         },
         shell: true,
@@ -875,6 +879,7 @@ export class JobRegistry {
     owner: JobOwner,
     timeout?: number,
     signal?: AbortSignal,
+    env?: NodeJS.ProcessEnv,
   ): Promise<Job> {
     signal?.throwIfAborted();
     this.checkCapacity('shell');
@@ -883,7 +888,7 @@ export class JobRegistry {
       (!Number.isFinite(timeout) || timeout < 0 || timeout > 86_400)
     )
       throw new Error('background timeout must be between 0 and 86400 seconds');
-    const entry = this.launch(command, owner);
+    const entry = this.launch(command, owner, env);
     entry.reserved = true;
     if (timeout) entry.deadline = Date.now() + timeout * 1000;
     this.publish(entry, 'shell');
@@ -908,12 +913,17 @@ export class JobRegistry {
       signal?.removeEventListener('abort', cancel);
     }
   }
+  /**
+   * Runs a command in the foreground: one still running at `defaultTimeout` goes on as a job, and one the model gave
+   * its own `timeout` is ended then. `env`, when given, is the command's whole environment in place of the shell's.
+   */
   async execute(
     command: string,
     owner: JobOwner,
     signal: AbortSignal,
     timeout?: number,
     defaultTimeout = 120_000,
+    env?: NodeJS.ProcessEnv,
   ): Promise<ExecuteResult> {
     if (this.closed) throw new Error('background jobs are closed');
     if (
@@ -925,7 +935,7 @@ export class JobRegistry {
       );
     signal.throwIfAborted();
     if (this.processOptions.commandLauncher) this.checkCapacity('shell');
-    const entry = this.launch(command, owner);
+    const entry = this.launch(command, owner, env);
     const sequence = this.endSequence;
     let awakened: Job[] = [];
     const sleeping = /^\s*sleep\s+\d+(?:\.\d+)?[smhd]?\s*$/.test(command);

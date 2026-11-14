@@ -6,7 +6,14 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -27,7 +34,7 @@ const sha = (bytes: Uint8Array | string): string =>
 
 const ECHO_TOOL = `const chunks: Buffer[] = []
 for await (const chunk of process.stdin) chunks.push(chunk as Buffer)
-console.log(JSON.stringify({ args: process.argv.slice(2), stdin: Buffer.concat(chunks).toString(), url: process.env.API_URL, token: process.env.API_TOKEN }))
+console.log(JSON.stringify({ args: process.argv.slice(2), stdin: Buffer.concat(chunks).toString(), url: process.env.API_URL, token: process.env.API_TOKEN, cwd: process.cwd() }))
 `;
 
 function settingsWith(server: Record<string, unknown>): CircleSettings {
@@ -469,7 +476,7 @@ test('a different installed version needs replace, and replace backs the old tre
   }
 });
 
-test('runTool expands placeholders, runs under the pack and redacts secrets', async () => {
+test('runTool expands placeholders, runs in the folder it is given and redacts secrets', async () => {
   const root = await tempRoot();
   const value = pack();
   const server = await stubServer(
@@ -477,6 +484,7 @@ test('runTool expands placeholders, runs under the pack and redacts secrets', as
   );
   try {
     await installPack({ url: server.url, token: TOKEN, ref: value.ref, root });
+    const workspace = await realpath(await mkdtemp(join(tmpdir(), 'run-in-')));
     const result = await runTool({
       root,
       pack: 'demo-tools',
@@ -485,14 +493,19 @@ test('runTool expands placeholders, runs under the pack and redacts secrets', as
       stdin: '%API_TOKEN%\n',
       variables: { API_URL: 'http://127.0.0.1:1' },
       secrets: { API_TOKEN: TOKEN },
+      cwd: workspace,
     });
+    await rm(workspace, { recursive: true, force: true });
     assert.equal(result.exit_code, 0);
     const printed = JSON.parse(result.stdout) as {
       args: string[];
       stdin: string;
       url: string;
       token?: string;
+      cwd: string;
     };
+    // The workspace it was given, not the pack's folder
+    assert.equal(printed.cwd, workspace);
     assert.deepEqual(printed.args, ['--url', 'http://127.0.0.1:1', 'literal']);
     assert.equal(printed.stdin, '%API_TOKEN%\n');
     assert.equal(printed.url, 'http://127.0.0.1:1');
@@ -531,8 +544,67 @@ test('runTool refuses scripts outside tools/ and reports a timeout', async () =>
       script: 'tools/sleep.ts',
       timeoutMs: 200,
     });
+    // A timeout is said as one, not as output that was cut
     assert.equal(slow.exit_code, null);
-    assert.equal(slow.truncated, true);
+    assert.equal(slow.timed_out, true);
+    assert.equal(slow.truncated, false);
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('runTool ends the script and what it started on esc, and keeps a character split between two writes whole', async () => {
+  const root = await tempRoot();
+  const pids = join(root, 'pids.json');
+  const files = {
+    'SKILL.md': '# 合成\n',
+    'tools/wait.mjs': `import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+writeFileSync(${JSON.stringify(pids)}, JSON.stringify([process.pid, child.pid]));
+setInterval(() => {}, 1000);
+`,
+    'tools/split.mjs': `process.stdout.write(Buffer.from([0xe4]));
+setTimeout(() => process.stdout.write(Buffer.from([0xb8, 0xad])), 100);
+`,
+  };
+  const value = pack('demo-tools', '1.0.0', files);
+  const server = await stubServer(
+    new Map([[value.ref, { manifest: value.manifest, files: value.files }]]),
+  );
+  const alive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  try {
+    await installPack({ url: server.url, token: TOKEN, ref: value.ref, root });
+    const controller = new AbortController();
+    const running = runTool({
+      root,
+      pack: 'demo-tools',
+      script: 'tools/wait.mjs',
+      signal: controller.signal,
+    });
+    const { until } = await import('./helpers.js');
+    await until(
+      async () => (await stat(pids).catch(() => undefined)) !== undefined,
+      { timeout: 10_000 },
+    );
+    controller.abort(new Error('esc'));
+    await assert.rejects(running, /esc/);
+    for (const pid of JSON.parse(await readFile(pids, 'utf8')) as number[])
+      await until(() => !alive(pid), { timeout: 10_000 });
+    const split = await runTool({
+      root,
+      pack: 'demo-tools',
+      script: 'tools/split.mjs',
+    });
+    assert.equal(split.stdout, '中');
   } finally {
     await server.close();
     await rm(root, { recursive: true, force: true });
