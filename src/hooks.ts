@@ -48,7 +48,6 @@ export interface HookNotice {
     | 'denied'
     | 'asked'
     | 'allowed'
-    | 'rewrote'
     | 'output'
     | 'blocked'
     | 'limit'
@@ -222,8 +221,6 @@ export function hookNoticeText(notice: HookNotice): string {
       return `hook asked ${notice.tool ?? 'tool'}${tail}`;
     case 'allowed':
       return `hook allowed ${notice.tool ?? 'tool'}${tail}`;
-    case 'rewrote':
-      return `hook rewrote ${notice.tool ?? 'tool'}${notice.name ? ` · ${notice.name}` : ''}`;
     case 'output':
       return `hook ${notice.name ?? 'hook'}${tail}`;
     case 'blocked':
@@ -246,8 +243,7 @@ export const HOOK_DENIED_LINE = 'Hook denied this call:';
 export const HOOK_ASKED_LINE = 'Hook asked before this call:';
 export { HOOK_ALLOWED_LINE } from './hook_display.js';
 export const HOOK_OUTPUT_LINE = 'Hook output';
-/** Starts the tool result of a call a before_tool hook rewrote: `… (name): key = value`. */
-export const HOOK_CHANGED_LINE = "Hook changed this call's input";
+export { HOOK_CHANGED_LINE } from './hook_display.js';
 
 export function hookDeniedMessage(reason: string): string {
   return `${HOOK_DENIED_LINE} ${reason}`;
@@ -1458,7 +1454,7 @@ export class HookRunner {
       .filter(Boolean)
       .join('\n\n');
     // A deny voids every rewrite: the call does not run in any form. Whether a rewrite changes what runs is the
-    // harness's to tell, once it has checked it; it reports the hooks that rewrote the call then.
+    // harness's to tell, once it has checked it.
     const rewritten =
       request.event === 'before_tool' &&
       decision.decision !== 'deny' &&

@@ -65,12 +65,12 @@ test('routine allow is filtered only for display, with other hook lines translat
       shownToolOutput('Hook output (lint):\nformatted'),
       '钩子输出（lint）：\nformatted',
     );
-    // A rewrite's line: the words translate, the hook's names and the arguments stay
+    // What a rewrite changed is the model's alone; a rewrite that could not run says why, in the interface language
     assert.equal(
       shownToolOutput(
-        'Hook changed this call\'s input (one, two):\nfile_path = "b.txt"\n\nwrote b.txt',
+        'Hook changed this call\'s input (one, two):\nfile_path = "b.txt"\ncontent = "one two"\n\nwrote b.txt',
       ),
-      '钩子改写了此次调用的输入（one, two）：\nfile_path = "b.txt"\n\nwrote b.txt',
+      'wrote b.txt',
     );
     assert.equal(
       shownToolOutput(

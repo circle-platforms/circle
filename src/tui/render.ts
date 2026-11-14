@@ -66,7 +66,7 @@ import {
 } from './agent_rows.js';
 import { paletteRev } from '../ink/theme.js';
 import { PLAN_CHOICES } from '../plan_file.js';
-import { withoutHookAllowedLine } from '../hook_display.js';
+import { withoutHookLines } from '../hook_display.js';
 export interface ScreenState {
   messages: Message[];
   notices: string[];
@@ -417,7 +417,7 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
       for (const call of message.tool_calls ?? []) {
         const result = toolResults.get(call.id);
         const shownResult = result
-          ? { ...result, content: withoutHookAllowedLine(result.content) }
+          ? { ...result, content: withoutHookLines(result.content) }
           : undefined;
         // A call left without a result by a turn that has ended (interrupted, or a
         // session from an older version) is not running: its lamp stays unlit.
@@ -465,7 +465,7 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
       if (!called && !HIDDEN_TOOLS.has(message.name ?? '')) {
         const shownMessage = {
           ...message,
-          content: withoutHookAllowedLine(message.content),
+          content: withoutHookLines(message.content),
         };
         const call = {
           id: message.tool_call_id ?? '',

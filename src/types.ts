@@ -8,16 +8,6 @@ export interface ToolCall {
   hook_reason?: string;
   /** What a hook that asked wrote for the person (`user_message`). Shown on the card, never sent to the model. */
   hook_message?: string;
-  /**
-   * Set when before_tool hooks rewrote the input (`updated_input`): which hooks, in order, the arguments as the
-   * model sent them (secrets as `%NAME%`), and the names of those that differ. `args` are the rewrite. Not part
-   * of what the model sent.
-   */
-  hook_changed?: {
-    hooks: string[];
-    original: Record<string, unknown>;
-    changed: string[];
-  };
 }
 export interface Usage {
   input_tokens: number;

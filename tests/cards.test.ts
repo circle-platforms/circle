@@ -1076,38 +1076,20 @@ test('setup asks for the key of a new host instead of sending it the key saved f
   assert.equal(loadCredentials(home).api_key, 'new-key');
 });
 
-test('the card of a call a hook rewrote names the hook and what each changed argument was', (t) => {
+test("a hook's lines on the approval card each wrap inside the box", (t) => {
   const root = scratch(t);
   const policy = defaultPolicy(root, root);
   const call = {
     id: 'w',
     name: 'write_file',
-    args: { file_path: 'b.txt', content: 'x' },
-    hook_changed: {
-      hooks: ['canon'],
-      original: { file_path: 'a.txt', content: 'x', mode: 'append' },
-      changed: ['file_path', 'mode'],
-    },
+    args: { file_path: 'notes/a.txt', content: 'x' },
+    hook_reason: 'Keep notes in notes/.',
   };
-  const request = approvalRequest(
-    call,
-    policy.review('write_file', call.args),
-    (path) => join(root, path),
-  );
-  assert.deepEqual((request.policy ?? '').split('\n').slice(-3), [
-    'rewritten by hook · canon',
-    'was · file_path = "a.txt"',
-    'was · mode = "append"',
-  ]);
-  // The body is the rewrite: what runs
-  assert.match(request.body, /b\.txt/);
-  // Each line the policy and the hooks add wraps on its own inside the box, as a hook's ask did not before
+  // Before, the policy's line and the hook's were one text with a newline inside a row of the box
   const rows = dialogRows(
     new ApprovalCard(
-      approvalRequest(
-        { ...call, hook_reason: 'Keep notes in notes/.' },
-        policy.review('write_file', call.args),
-        (path) => join(root, path),
+      approvalRequest(call, policy.review('write_file', call.args), (path) =>
+        join(root, path),
       ),
     ).state(),
     48,
@@ -1118,10 +1100,5 @@ test('the card of a call a hook rewrote names the hook and what each changed arg
     assert.ok(!row.includes('\n'), row);
   }
   const plain = rows.map((row) => stripAnsi(row).slice(1, -1).trim());
-  for (const line of [
-    'hook · Keep notes in notes/.',
-    'rewritten by hook · canon',
-    'was · file_path = "a.txt"',
-  ])
-    assert.ok(plain.includes(line), line);
+  assert.ok(plain.includes('hook · Keep notes in notes/.'));
 });

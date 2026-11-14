@@ -4267,9 +4267,6 @@ export class RuntimeController {
         ...(call.hook_message || call.hook_reason
           ? { hookReason: call.hook_message || call.hook_reason }
           : {}),
-        ...(call.hook_changed
-          ? { hookChanged: structuredClone(call.hook_changed) }
-          : {}),
         prefix: review.prefix.length ? review.prefix.join(' ') : undefined,
         tool: call.name,
         command:

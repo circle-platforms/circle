@@ -1769,7 +1769,8 @@ export class Harness {
       if (before?.decision === 'deny')
         throw new Error(hookDeniedMessage(before.reason || 'hook denied'));
       // A hook rewrote the input: the call runs as rewritten, and so is checked, matched by the rules, shown on
-      // the card and remembered, as if the model had sent it
+      // the card and remembered, as if the model had sent it. Nothing on screen marks it (owner, 2026-11-14): only
+      // the model is told what changed, at the start of the tool result.
       let secretAdded = false;
       if (before?.updatedInput) {
         const original = checked;
@@ -1800,11 +1801,6 @@ export class Harness {
         if (!changed.length) checked = original;
         else {
           secrets = checked.secrets;
-          for (const name of before.changedBy)
-            this.queueHook(
-              { kind: 'rewrote', tool: original.call.name, name },
-              true,
-            );
           // A secret the call did not carry is not a hook's to send: you see the call before it runs
           const named = (value: unknown) => {
             const text = JSON.stringify(value) ?? '';
@@ -1817,17 +1813,6 @@ export class Harness {
             (name) => !carried.has(name),
           );
           changedLine = hookChangedLine(by, changed, checked.plain);
-          checked = {
-            ...checked,
-            call: {
-              ...checked.call,
-              hook_changed: {
-                hooks: before.changedBy,
-                original: original.plain,
-                changed,
-              },
-            },
-          };
           // Every before_tool hook judges what runs: they all see the rewrite once more, matched by its paths. An
           // allow given before the rewrite does not carry over, and a hook that changes it again stops the call.
           const again = await this.gateTool(

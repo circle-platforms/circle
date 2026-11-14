@@ -72,12 +72,6 @@ const item: Interaction =
         tool: 'edit_file',
         target: 'src/example.ts',
         command: 'node local-only.js',
-        // A before_tool hook rewrote the call: the card shows the rewrite, and folds what the model sent
-        hookChanged: {
-          hooks: ['canon'],
-          original: { command: 'node local-only.js --fast' },
-          changed: ['command'],
-        },
         choices: question
           ? ['small patch', 'full rewrite']
           : ['approve', 'always'],

@@ -138,8 +138,8 @@ A `before_tool` hook can let a call through in another form, rather than deny it
 - **Facts.** Facts Circle works out for the card, such as who sees a screenshot, are worked out again. A rewrite cannot set them.
 - **Several hooks.** Hooks run in order, and each gets the rewrite of the one before as `tool_input`. The call runs with the last rewrite. Which hooks run in this round is settled by the call as the model sent it. Handing back the input as it came, in any key order, is no rewrite.
 - **Once more.** Every `before_tool` hook then sees the rewrite, matched by the rewrite's own paths, so a hook that guards `config/**` also sees a call rewritten into `config/`. A deny stops the call, and an ask shows the card. Only an allow given to the rewrite skips an ordinary card: an allow given to the call as the model sent it does not carry over. A hook that changes the rewrite again stops the call, so a rewrite must come back unchanged when its hook sees it. Such a hook runs twice for one call.
-- **What you see.** The transcript shows `hook rewrote <tool> · <name>` for each hook that rewrote the call. The approval card shows the rewrite, `rewritten by hook · <names>` and, for each argument that changed, what it `was` as the model sent it. In the desktop that part is folded.
-- **What the model sees.** Its call stays as it sent it. The tool result starts with what changed, so its next call can be written that way, also when the rewrite was then denied:
+- **What you see.** The approval card shows the call that will run, the rewrite. Nothing on screen marks it as rewritten, by the owner's decision (2026-11-14): the transcript's row shows the call as the model sent it, and its result without the lines below.
+- **What the model sees.** Its call stays as it sent it. The tool result starts with what changed, so its next call can be written that way, also when the rewrite was then denied. Only the model reads these lines:
 
   ```text
   Hook changed this call's input (canon):
