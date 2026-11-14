@@ -3,7 +3,7 @@
 // policy (sudo, or a command that names a credential file) and read-only mode
 // are decided before any hook runs, and a hook cannot undo them. A file tool
 // still refuses a credential file when it runs, after the hooks.
-import { spawn, execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   appendFileSync,
@@ -28,6 +28,7 @@ import {
 import { canonicalPath, ensureHome } from './paths.js';
 import { redactSecrets } from './secrets.js';
 import { isHostAbsolutePath, shellEnvironment } from './sandbox.js';
+import { killProcessTree } from './process_group.js';
 import { discoverSkills } from './skills.js';
 import { isRecord, withPrivateJsonLock, writePrivateJson } from './settings.js';
 
@@ -1089,25 +1090,12 @@ function runHookCommand(
       /* The command can ignore stdin. */
     }
     let escalation: NodeJS.Timeout | undefined;
+    // Windows ends the whole tree at once; the hook finishes after that has run
     let windowsKill: Promise<void> | undefined;
     const kill = (force: boolean) => {
-      if (!child.pid) return;
       if (process.platform === 'win32')
-        windowsKill ??= new Promise((done) =>
-          execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], () =>
-            done(),
-          ),
-        );
-      else
-        try {
-          process.kill(-child.pid, force ? 'SIGKILL' : 'SIGTERM');
-        } catch {
-          try {
-            child.kill(force ? 'SIGKILL' : 'SIGTERM');
-          } catch {
-            /* Already gone. */
-          }
-        }
+        windowsKill ??= killProcessTree(child, true);
+      else void killProcessTree(child, force);
     };
     const stop = (timeout: boolean) => {
       timedOut = timedOut || timeout;

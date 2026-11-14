@@ -1,11 +1,14 @@
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Ajv, type ValidateFunction } from 'ajv';
-import { LIMITS, runTool, verifyInstalled } from './local_skills.js';
+import type { JobOwner, JobRegistry } from './jobs.js';
+import { LIMITS, verifyInstalled } from './local_skills.js';
 import { mcpToolName } from './mcp_loader.js';
 import { isSafePackPath } from './pack_files.js';
+import { runScript } from './script_runs.js';
 import { expandVariables } from './secrets.js';
-import type { Tool } from './types.js';
+import type { Tool, ToolContext } from './types.js';
 
 /**
  * Typed tools a pack declares for its scripts (#544). The pack lists `tools.json` in its manifest, so the file is
@@ -39,7 +42,29 @@ const MAX_TOOLS = 32;
 const NAME = '^[A-Za-z_][A-Za-z0-9_]{0,63}$';
 const PARAM = /^\{([A-Za-z_][A-Za-z0-9_]{0,63})\}$/;
 /** What Circle itself gives every script, which a declaration cannot replace. */
-const RESERVED_ENV = new Set(['PATH', 'HOME', 'TMPDIR', 'NODE_OPTIONS']);
+const RESERVED_ENV = new Set([
+  'PATH',
+  'HOME',
+  'TMPDIR',
+  'NODE_OPTIONS',
+  'CIRCLE_SKILL_DIR',
+  'CIRCLE_SKILL_DATA',
+]);
+/** The run options every declared tool takes as execute does, which a declaration cannot name as its own input. */
+const RUN_OPTIONS = {
+  timeout: {
+    type: 'integer',
+    minimum: 0,
+    maximum: 600,
+    description:
+      'Seconds the script may run before it is ended, at most 600. Without it, a run still going after 120 seconds goes on as a background job.',
+  },
+  background: {
+    type: 'boolean',
+    description:
+      'Run as a background job; a notice arrives when it ends. Do not poll or sleep.',
+  },
+} as const;
 
 const SCALAR = { type: ['string', 'number', 'boolean'] };
 const PROPERTY = {
@@ -192,6 +217,11 @@ export function parsePackTools(
     for (const name of required)
       if (!Object.hasOwn(properties, name))
         throw new Error(`${where}: required ${name} is not a property`);
+    for (const name of Object.keys(RUN_OPTIONS))
+      if (Object.hasOwn(properties, name))
+        throw new Error(
+          `${where}: ${name} is how long or where the script runs, not an input it can declare`,
+        );
     for (const item of tool.args ?? []) {
       const param =
         typeof item === 'string' ? PARAM.exec(item)?.[1] : item.param;
@@ -233,6 +263,8 @@ export async function readPackTools(
   pack: string,
 ): Promise<PackToolDeclaration[]> {
   const directory = join(root, pack);
+  // A skill folder without a manifest is not a pack, and declares nothing
+  if (!existsSync(join(directory, 'pack.json'))) return [];
   await verifyInstalled(directory);
   // Every file the manifest lists was just checked against its digest
   const listed = (
@@ -288,17 +320,31 @@ export function packTool(options: {
   declaration: PackToolDeclaration;
   variables: () => Record<string, string>;
   secrets: () => Record<string, string>;
+  /** The workspace, where the script runs. */
+  workspace: string;
+  /** Where packs keep what outlives an update (`CIRCLE_SKILL_DATA`). */
+  dataRoot?: string;
+  jobs?: JobRegistry;
+  jobOwner?: (context: ToolContext) => JobOwner;
 }): Tool {
   const { root, pack, declaration } = options;
+  const schema = declaration.input_schema;
   return {
     name: mcpToolName(pack, declaration.name),
-    description: `${declaration.description}\n\nRuns ${declaration.script} of the installed pack ${pack}; returns exit_code, stdout, stderr and truncated.`,
-    parameters: declaration.input_schema,
+    description: `${declaration.description}\n\nRuns ${declaration.script} of the installed pack ${pack} in the workspace, as execute runs a command: a run still going after 120 seconds goes on as a background job, and its output and exit code come back.`,
+    parameters: {
+      ...schema,
+      properties: {
+        ...(schema.properties as Record<string, unknown>),
+        ...RUN_OPTIONS,
+      },
+    },
     effect: 'execute',
     // What the model writes is checked against the schema and runs as written, %NAME% included: values from
     // variables and secrets go only where the pack declared them
     variables: false,
-    run: async (args) => {
+    run: async (args, context) => {
+      const { timeout, background, ...input } = args;
       const variables = options.variables();
       const secrets = options.secrets();
       const env = Object.fromEntries(
@@ -307,18 +353,41 @@ export function packTool(options: {
           expandVariables(value, { ...variables, ...secrets }),
         ]),
       );
-      return JSON.stringify(
-        await runTool({
+      const owner = options.jobOwner?.(context) ?? {
+        sessionId: context.sessionId,
+        startedBy: 'model' as const,
+      };
+      const argv = packToolArgv(declaration.args, input, variables);
+      return runScript(
+        {
           root,
           pack,
           script: declaration.script,
-          args: packToolArgv(declaration.args, args, variables),
-          stdin: declaration.stdin === 'json' ? JSON.stringify(args) : '',
+          args: argv,
+          stdin: declaration.stdin === 'json' ? JSON.stringify(input) : '',
           variables,
           secrets,
           env,
           expand: false,
-        }),
+          ...(options.dataRoot ? { dataRoot: options.dataRoot } : {}),
+        },
+        {
+          jobs: options.jobs,
+          owner: {
+            ...owner,
+            origin: {
+              ...owner.origin,
+              executionSessionId: context.sessionId,
+              toolCallId: context.callId,
+              displayCommand: [pack, declaration.script, ...argv].join(' '),
+              description: `${pack} ${declaration.name}`,
+            },
+          },
+          signal: context.signal,
+          cwd: options.workspace,
+          ...(typeof timeout === 'number' ? { timeout } : {}),
+          ...(background === true ? { background: true } : {}),
+        },
       );
     },
   };
