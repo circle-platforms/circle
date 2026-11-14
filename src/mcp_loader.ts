@@ -1502,6 +1502,37 @@ export class McpManager {
     this.services.onChange?.();
   }
   /** After a sign-in: the server connected again with its tokens; its status, connection and tools replace the old. */
+  /**
+   * One server again, from its entry as the settings have it now: connected again and its tools listed again, while
+   * the other servers, and the programs started for them, stay as they are (#559). Without an entry the server is
+   * left: closed, and its tools gone.
+   */
+  async reloadServer(
+    name: string,
+    entry: Record<string, unknown> | undefined,
+  ): Promise<void> {
+    const { connections, skipped } = buildMcpConnections(entry ? [entry] : []);
+    const connection = connections.find((item) => item.name === name);
+    if (connection) {
+      await this.connectAgain(connection, this.lifetime.signal);
+      return;
+    }
+    // Not to be connected (removed, turned off, or not valid): what it had goes, and the status says why
+    const before = this.status.find((item) => item.name === name);
+    const own = new Set(before?.tools ?? []);
+    const replaced = this.servers.filter((item) => item.name === name);
+    this.servers = this.servers.filter((item) => item.name !== name);
+    this.tools = this.tools.filter((tool) => !own.has(tool.name));
+    for (const tool of own) this.hinted.delete(tool);
+    const state = skipped.find((item) => item.name === name);
+    this.status = [
+      ...this.status.filter((item) => item.name !== name),
+      ...(state ? [state] : []),
+    ];
+    this.results.forget(name);
+    await McpManager.disconnect(replaced);
+    this.services.onChange?.();
+  }
   private async connectAgain(
     connection: McpConnection,
     lifetime: AbortSignal,

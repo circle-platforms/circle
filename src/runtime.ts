@@ -2286,6 +2286,32 @@ export class AgentRuntime {
     this.hookRunner = undefined;
     if (this.harness) this.harness.options.hooks = this.ensureHooks();
   }
+  /**
+   * Connects one MCP server again, from the settings as they are now, and lists its tools again; the other servers
+   * and the programs started for them stay as they are (#559). Between turns, as a reload is.
+   */
+  async reloadMcpServer(name: string): Promise<void> {
+    if (this.ownershipError) throw this.ownershipError;
+    if (this.closing || this.deleting) throw new Error('session is closing');
+    if (this.busy) throw new Error('reload after the current turn');
+    this.options.settings = settingsForRun(
+      this.options.home,
+      this.options.workspace,
+      this.options.modelOverride,
+    ).settings;
+    const entry = this.options.settings.mcp_servers.find(
+      (item) => item.name === name,
+    );
+    if (!entry && !this.mcp.status.some((row) => row.name === name))
+      throw new Error(`no MCP server named ${name}`);
+    await this.integrationsReady;
+    await this.mcp.reloadServer(name, entry);
+    this.harness.tools = this.withIntegrationTools(
+      this.coreTools.filter((tool) => tool.name !== 'wait_jobs'),
+    );
+    this.describeSubagents(this.harness.tools);
+    this.refreshSystemPrompt();
+  }
   async reloadIntegrations(): Promise<void> {
     if (this.ownershipError) throw this.ownershipError;
     if (this.closing || this.deleting) throw new Error('session is closing');

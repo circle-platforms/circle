@@ -6288,6 +6288,15 @@ export class RuntimeController {
           for (const owner of this.runtimes.values()) owner.refreshPrompt();
         return {};
       }
+      case 'mcp-reload-server': {
+        // One server again; the others and the programs started for them stay as they are (#559)
+        if (
+          !isFolderTrusted(loadSettings(this.home), runtime.options.workspace)
+        )
+          throw Error('trust the workspace first');
+        await runtime.reloadMcpServer(text(p.name, 'server', 200));
+        return {};
+      }
       case 'reload': {
         if (
           !isFolderTrusted(loadSettings(this.home), runtime.options.workspace)
