@@ -1314,6 +1314,8 @@ export class AgentRuntime {
         if (this.activeCompaction) throw new Error('a compaction is running');
         await this.initialize(signal);
         await this.waitForExtensionChanges(signal);
+        // An MCP server's list of tools that outlived its ttlMs is listed again, so the turn offers what it lists now
+        await this.mcp.refreshExpired(signal);
         this.refreshIntegrationTools();
       },
       beforeTurn: (prompt) => {

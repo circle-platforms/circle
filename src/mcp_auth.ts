@@ -1,8 +1,9 @@
 // The MCP authorization on Circle's side (OAuth 2.1 with PKCE, through the official MCP library's client). A server
-// reached by URL that answers 401 with its resource metadata is authorized in the system browser; Circle keeps what that
-// gave it, the client registration, the tokens and the port of its loopback redirect, per server in mcp-auth.json under
-// the Circle home (0600). Nothing here belongs to one server: any server that follows the specification is authorized
-// the same way. A server whose entry already sends a credential header is not authorized this way; its header is used.
+// reached by URL that answers 401 with its resource metadata is authorized in the system browser; Circle keeps what
+// that gave it, the client registration, the tokens and the port of its loopback redirect, per server in mcp-auth.json
+// under the Circle home (0600). Nothing here belongs to one server: any server that follows the specification is
+// authorized the same way. A server whose entry already sends a credential header is not authorized this way; its
+// header is used.
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { hostname } from 'node:os';

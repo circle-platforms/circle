@@ -143,6 +143,7 @@ remembered for that model instance like a rejected signature.
 | `schedule_cli.ts` | The `circle schedule` command line.                                                                                                 |
 | `mcp_loader.ts`   | Connects MCP servers and offers their tools under the same policy as built-in ones.                                                 |
 | `mcp_websocket.ts` | The MCP connection over WebSocket (`"type": "ws"`), which the MCP library does not have.                                         |
+| `mcp_protocol.ts` | Which MCP revision a server is asked for, and what a program answered, kept for 7 days in `mcp-protocol.json`.                     |
 | `extensions.ts`   | Loads extensions and what they register: tools, commands, middleware, renderers and event handlers.                                 |
 | `net.ts`          | The proxy and certificate settings for every request Circle makes itself.                                                           |
 

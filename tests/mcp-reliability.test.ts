@@ -21,9 +21,11 @@ const context = () => ({
   sessionId: 'one',
   signal: new AbortController().signal,
 });
+// Each connection, a first one and every reconnection, starts by asking the server for its revision
 const starts = (stub: McpStub) =>
-  stub.requests.filter((request) => request.message?.method === 'initialize')
-    .length;
+  stub.requests.filter(
+    (request) => request.message?.method === 'server/discover',
+  ).length;
 
 /** A manager whose waits are recorded and pass at once. */
 function manager(

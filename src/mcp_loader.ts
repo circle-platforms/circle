@@ -16,6 +16,8 @@ import {
   type FetchLike,
   type Implementation,
   type JsonSchemaType,
+  type McpSubscription,
+  type PriorDiscovery,
   type RequestOptions,
   type Tool as ServerTool,
   type Transport,
@@ -27,9 +29,17 @@ import {
   CancelTaskResultSchema,
   CreateTaskResultSchema,
   GetTaskResultSchema,
+  ListResourcesResultSchema,
   ListToolsResultSchema,
 } from '@modelcontextprotocol/core';
 import { WebSocketClientTransport } from './mcp_websocket.js';
+import {
+  negotiationSetting,
+  programKey,
+  rememberedEra,
+  rememberEra,
+  type Era,
+} from './mcp_protocol.js';
 import type {
   Tool,
   ToolContext,
@@ -931,6 +941,21 @@ function httpStatus(error: unknown): number | undefined {
   }
   return undefined;
 }
+/**
+ * What a failure to connect says, with what the server answered when the library's words leave that out, as they do
+ * when the server refused Circle's question for its revision.
+ */
+function failureText(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  for (const cause of causes(error))
+    if (cause instanceof SdkHttpError && typeof cause.data.text === 'string') {
+      const answered = oneLine(cause.data.text);
+      return answered && !message.includes(answered)
+        ? `${message}: ${answered}`
+        : message;
+    }
+  return message;
+}
 /** A server reached over HTTP that no longer knows the session the request named. */
 function sessionGone(error: unknown, client: Client): boolean {
   const transport = client.transport;
@@ -1149,12 +1174,58 @@ interface Connected {
   open: boolean;
   /** Its tools as it listed them last, by their own names. */
   specs: Map<string, ServerTool>;
+  /** The values filled into its entry, which what it says is shown without. */
+  filled: Map<string, string>;
+  /** When it listed its tools last, by the manager's clock. */
+  listedAt: number;
+  /** How long that list stays good, when the server said (`ttlMs`, 2026-07-28). */
+  ttlMs?: number;
+  /** A digest of that list, to tell a listing that changed nothing. */
+  listing: string;
 }
 /** How long after a server says its tools changed Circle lists them, so several notices in a row list them once. */
 export const TOOLS_CHANGED_WAIT_MS = 300;
 /** What a server whose tools changed shows while Circle keeps its earlier tools. */
 export const TOOLS_NOT_LISTED_AGAIN =
   'the server changed its tools and listing them again failed; the earlier tools stay until a reload';
+/** The same for a server whose list of tools expired (`ttlMs`). */
+export const TOOLS_EXPIRED_NOT_LISTED =
+  "the server's list of tools expired and listing them again failed; the earlier tools stay until a reload";
+/** The longest a server's `ttlMs` is believed: a day, as the MCP library holds a cached list at most. */
+export const MAX_LIST_TTL_MS = 24 * 60 * 60_000;
+/** A change stream that closes sooner than this after it opened closed at once. */
+export const LISTEN_QUICK_MS = 10_000;
+/** How many times in a row such a stream is opened again before Circle stops for the connection. */
+export const LISTEN_QUICK_REOPENS = 3;
+/** How many times a longer-lived stream is opened again within an hour before Circle pauses. */
+export const LISTEN_HOURLY_REOPENS = 5;
+/** That pause. */
+export const LISTEN_PAUSE_MS = 6 * 60 * 60_000;
+/** What the change streams of one connection did: how many in a row closed at once, and when longer ones reopened. */
+export interface StreamHistory {
+  quick: number;
+  reopened: number[];
+}
+/**
+ * What follows a change stream that closed, opened at `openedAt` and closed at `now`: open it again at once (0), after
+ * a pause (its milliseconds), or stop for the connection.
+ */
+export function afterStreamClosed(
+  history: StreamHistory,
+  openedAt: number,
+  now: number,
+): number | 'stop' {
+  if (now - openedAt < LISTEN_QUICK_MS)
+    return ++history.quick > LISTEN_QUICK_REOPENS ? 'stop' : 0;
+  history.quick = 0;
+  while (history.reopened.length && history.reopened[0]! <= now - 60 * 60_000)
+    history.reopened.shift();
+  const pause =
+    history.reopened.length >= LISTEN_HOURLY_REOPENS ? LISTEN_PAUSE_MS : 0;
+  if (pause) history.reopened.length = 0;
+  history.reopened.push(now + pause);
+  return pause;
+}
 const OPEN = 'open';
 const DECLINE_PAGE = 'decline';
 /** The question for a page a server asks the person to open. */
@@ -1252,9 +1323,10 @@ export class McpManager {
         effect: effect,
         run: async (args, context) => {
           const { client, name } = find(args.server);
+          // Read afresh each time, whatever the server said of how long a read stays good
           const { contents } = await client.readResource(
             { uri: String(args.uri) },
-            { signal: context.signal, timeout: NO_LIMIT },
+            { signal: context.signal, timeout: NO_LIMIT, cacheMode: 'bypass' },
           );
           const attachments: MediaAttachment[] = [];
           const parts = contents.map((item) => {
@@ -1300,10 +1372,14 @@ export class McpManager {
           const lines: string[] = [];
           for (const { client, name } of from) {
             let cursor: string | undefined;
-            // At most ten pages from a server: enough to see what it has, and never a loop
+            // At most ten pages from a server, each asked for afresh: enough to see what it has, and never a loop
             for (let page = 0; page < 10; page++) {
-              const listed = await client.listResources(
-                cursor ? { cursor } : {},
+              const listed = await client.request(
+                {
+                  method: 'resources/list',
+                  params: cursor ? { cursor } : undefined,
+                },
+                ListResourcesResultSchema,
                 { signal: context.signal, timeout: NO_LIMIT },
               );
               for (const item of listed.resources)
@@ -1375,6 +1451,98 @@ export class McpManager {
   /** How such a wait is made. */
   wait = (ms: number, signal: AbortSignal): Promise<void> =>
     delay(ms, undefined, { signal });
+  /** The clock the manager reads: for a program's kept answer, a list's `ttlMs` and a change stream's age. */
+  now = (): number => Date.now();
+  /**
+   * How long a program asked for its revision may take to answer before it is taken for one of the older revision; a
+   * third of the time a server has to connect unless set, so the older handshake still fits in it.
+   */
+  probeMs?: number;
+  /**
+   * How a server is asked for its revision as it connects (mcp_protocol.ts). A program, and a server reached over
+   * Streamable HTTP, is asked unless CIRCLE_MCP_PROTOCOL_NEGOTIATION is `legacy`; an `sse` or `ws` server is not. A
+   * program that answered within the last 7 days that it speaks only the older revision is not asked again (unless the
+   * setting is `auto`): it is connected with the older handshake at once. What a program answers is kept, where the
+   * manager has a home to keep it in.
+   */
+  private negotiation(connection: McpConnection): {
+    ask: boolean;
+    probeMs?: number;
+    prior?: PriorDiscovery;
+    answered: (era: Era | undefined) => void;
+  } {
+    const setting = negotiationSetting();
+    const nothing = (): void => {};
+    if (
+      setting === 'legacy' ||
+      (connection.transport !== 'http' && connection.transport !== 'stdio')
+    )
+      return { ask: false, answered: nothing };
+    if (connection.transport === 'http')
+      return { ask: true, answered: nothing };
+    const home = this.services.home;
+    if (!home)
+      return {
+        ask: true,
+        probeMs: this.probeMs ?? Math.floor(this.timeout / 3),
+        answered: nothing,
+      };
+    const key = programKey({
+      command: connection.command!,
+      args: connection.args ?? [],
+      ...(connection.env ? { env: connection.env } : {}),
+      folder: this.workspace,
+    });
+    if (
+      setting === 'default' &&
+      rememberedEra(home, key, this.now()) === 'legacy'
+    )
+      return { ask: false, prior: { kind: 'legacy' }, answered: nothing };
+    return {
+      ask: true,
+      probeMs: this.probeMs ?? Math.floor(this.timeout / 3),
+      answered: (era) => {
+        if (!era) return;
+        try {
+          rememberEra(home, key, era, this.now());
+        } catch {
+          // Not kept: the program is asked again next time
+        }
+      },
+    };
+  }
+  /**
+   * A server on the 2026-07-28 revision tells of changes only on a stream the client holds open
+   * (`subscriptions/listen`): Circle holds one open with a server that says its tools can change, and opens it again
+   * when it closes. A stream that closes within 10 seconds of opening is opened again three times in a row at most, for
+   * this connection; one that stayed open longer is opened again at once, until five were opened again within an hour,
+   * and the next after six hours. Until it is open again the server's tools stay as last listed.
+   */
+  private listenForChanges(server: Connected): void {
+    const streams: StreamHistory = { quick: 0, reopened: [] };
+    void toolCalls
+      .exit(async () => {
+        for (;;) {
+          if (!server.open) return;
+          const opened = this.now();
+          let subscription: McpSubscription | undefined;
+          try {
+            subscription = await server.client.listen(
+              { toolsListChanged: true },
+              { timeout: this.timeout, signal: this.lifetime.signal },
+            );
+          } catch {
+            // Refused, or not acknowledged in time: a stream that closed at once
+          }
+          if (subscription && (await subscription.closed) === 'local') return;
+          if (!server.open || this.lifetime.signal.aborted) return;
+          const next = afterStreamClosed(streams, opened, this.now());
+          if (next === 'stop') return;
+          if (next > 0) await this.wait(next, this.lifetime.signal);
+        }
+      })
+      .catch(() => {});
+  }
   /**
    * The client a call of this server goes out on: its connection now, since a turn keeps the tools it started with
    * when the server is connected again. A connection that ended by itself, as when the server's program exited, is
@@ -1890,20 +2058,31 @@ export class McpManager {
       );
       if (transport instanceof StdioClientTransport)
         transport.stderr?.on('data', () => {});
+      const negotiation = this.negotiation(connection);
+      if (negotiation.ask)
+        client.setVersionNegotiation({
+          mode: 'auto',
+          ...(negotiation.probeMs
+            ? { probe: { timeoutMs: negotiation.probeMs } }
+            : {}),
+        });
       await abortable(
         client.connect(transport, {
           signal: combined,
           timeout: this.timeout,
+          ...(negotiation.prior ? { prior: negotiation.prior } : {}),
         }),
         combined,
       );
-      const { registered, said, specs } = await this.listServerTools(
-        connection,
-        client,
-        filled.filled,
-        (name) => reserved.has(name) || taken(name),
-        combined,
-      );
+      negotiation.answered(client.getProtocolEra());
+      const { registered, said, specs, ttlMs, listing } =
+        await this.listServerTools(
+          connection,
+          client,
+          filled.filled,
+          (name) => reserved.has(name) || taken(name),
+          combined,
+        );
       combined.throwIfAborted();
       const server: Connected = {
         name: connection.name,
@@ -1913,6 +2092,10 @@ export class McpManager {
         instructions: serverInstructions(client.getInstructions(), hide),
         open: true,
         specs,
+        filled: filled.filled,
+        listedAt: this.now(),
+        ...(ttlMs === undefined ? {} : { ttlMs }),
+        listing,
       };
       // The server went away: its instructions leave the prompt, /mcp says so, and no
       // result it gave earlier is given again
@@ -1931,11 +2114,14 @@ export class McpManager {
         this.services.onChange?.();
       };
       // A server that says its tools can change is listed again when it says they did: the next turn has the new
-      // tools, and the turn under way keeps the ones it started with
-      if (client.getServerCapabilities()?.tools?.listChanged)
+      // tools, and the turn under way keeps the ones it started with. One on the 2026-07-28 revision says so only on
+      // a stream Circle holds open for it.
+      if (client.getServerCapabilities()?.tools?.listChanged) {
         client.setNotificationHandler('notifications/tools/list_changed', () =>
-          this.toolsChanged(server, filled.filled),
+          this.toolsChanged(server),
         );
+        if (client.getProtocolEra() === 'modern') this.listenForChanges(server);
+      }
       state.tools = registered.map((tool) => tool.name);
       return { state, server, tools: registered, said };
     } catch (error) {
@@ -1945,10 +2131,7 @@ export class McpManager {
         !signal?.aborted
       )
         this.signIn(connection, provider, state);
-      else
-        state.error = hide(
-          error instanceof Error ? error.message : String(error),
-        );
+      else state.error = hide(failureText(error));
       await client.close().catch(() => {});
       await transport?.close().catch(() => {});
       if (signal?.aborted) throw signal.reason;
@@ -2153,11 +2336,17 @@ export class McpManager {
     registered: Tool[];
     said: Map<string, ToolMarks>;
     specs: Map<string, ServerTool>;
+    /** How long the list stays good, when the server said so on its first page. */
+    ttlMs?: number;
+    /** A digest of what it listed. */
+    listing: string;
   }> {
     const registered: Tool[] = [];
     const said = new Map<string, ToolMarks>();
     const specs = new Map<string, ServerTool>();
     const validator = new AjvJsonSchemaValidator();
+    const digest = createHash('sha256');
+    let ttlMs: number | undefined;
     let cursor: string | undefined;
     const cursors = new Set<string>();
     do {
@@ -2171,6 +2360,15 @@ export class McpManager {
         this.listWaitsMs,
         signal,
       );
+      digest.update(JSON.stringify(listed.tools));
+      const ttl = (listed as Record<string, unknown>).ttlMs;
+      if (
+        !cursors.size &&
+        typeof ttl === 'number' &&
+        Number.isSafeInteger(ttl) &&
+        ttl >= 0
+      )
+        ttlMs = ttl;
       for (const spec of listed.tools) {
         const name = mcpToolName(connection.name, spec.name);
         if (taken(name) || registered.some((tool) => tool.name === name))
@@ -2202,10 +2400,16 @@ export class McpManager {
         cursors.add(cursor);
       }
     } while (cursor);
-    return { registered, said, specs };
+    return {
+      registered,
+      said,
+      specs,
+      ...(ttlMs === undefined ? {} : { ttlMs }),
+      listing: digest.digest('hex'),
+    };
   }
   /** A server said its tools changed: they are listed again a moment later, once for several notices in a row. */
-  private toolsChanged(server: Connected, filled: Map<string, string>): void {
+  private toolsChanged(server: Connected): void {
     if (!server.open) return;
     let pending = this.relisting.get(server);
     if (!pending) this.relisting.set(server, (pending = {}));
@@ -2217,34 +2421,88 @@ export class McpManager {
     const own = pending;
     own.wait = setTimeout(() => {
       own.wait = undefined;
-      own.running = this.listAgain(server, filled).finally(() => {
+      own.running = this.listAgain(server, 'changed').finally(() => {
         own.running = undefined;
         if (own.again) {
           own.again = false;
-          this.toolsChanged(server, filled);
+          this.toolsChanged(server);
         } else if (this.relisting.get(server) === own)
           this.relisting.delete(server);
       });
     }, TOOLS_CHANGED_WAIT_MS);
     own.wait.unref?.();
   }
+  /** A server's list of tools outlived its `ttlMs`: it is listed again now, or the listing under way is waited for. */
+  private listExpired(server: Connected): Promise<void> {
+    let pending = this.relisting.get(server);
+    if (pending?.running) return pending.running;
+    if (!pending) this.relisting.set(server, (pending = {}));
+    const own = pending;
+    own.running = this.listAgain(server, 'expired').finally(() => {
+      own.running = undefined;
+      if (own.again) {
+        own.again = false;
+        this.toolsChanged(server);
+      } else if (!own.wait && this.relisting.get(server) === own)
+        this.relisting.delete(server);
+    });
+    return own.running;
+  }
   /**
-   * The server's tools, status and kept results replaced by what it lists now, all at once. When the listing fails, its
-   * earlier tools stay and its status says so.
+   * Lists the tools again of each server whose last list has outlived the `ttlMs` it came with (2026-07-28; at most a
+   * day is believed), before a turn starts, so the turn offers what the server lists now. A server that gave no `ttlMs`
+   * is listed again only when it says its tools changed, or is reconnected. The turn waits for these listings at most
+   * ttlWaitMs: one still under way then gives the next turn its tools. A listing that fails keeps the earlier tools.
+   */
+  async refreshExpired(signal?: AbortSignal): Promise<void> {
+    const now = this.now();
+    const listings = this.servers
+      .filter(
+        (server) =>
+          server.open &&
+          server.ttlMs !== undefined &&
+          now - server.listedAt >= Math.min(server.ttlMs, MAX_LIST_TTL_MS),
+      )
+      .map((server) => this.listExpired(server));
+    if (!listings.length) return;
+    const waited = new AbortController();
+    try {
+      await Promise.race([
+        Promise.allSettled(listings),
+        delay(this.ttlWaitMs, undefined, {
+          signal: signal
+            ? AbortSignal.any([signal, waited.signal])
+            : waited.signal,
+          ref: false,
+        }).catch(() => {}),
+      ]);
+    } finally {
+      waited.abort();
+    }
+  }
+  /** How long a turn waits for the listings refreshExpired starts. */
+  ttlWaitMs = 5_000;
+  /**
+   * The server's tools, status and kept results replaced by what it lists now, all at once, when it said they changed
+   * or its list expired. When the listing fails, its earlier tools stay and its status says so. A list that expired and
+   * comes back the same changes nothing: its tools and the results kept for them stay.
    */
   private async listAgain(
     server: Connected,
-    filled: Map<string, string>,
+    why: 'changed' | 'expired',
   ): Promise<void> {
     const current = () => server.open && this.servers.includes(server);
     if (!current()) return;
     const state = this.status.find((item) => item.name === server.name);
     const own = new Set(state?.tools ?? []);
+    const noted = (): boolean =>
+      state?.error === TOOLS_NOT_LISTED_AGAIN ||
+      state?.error === TOOLS_EXPIRED_NOT_LISTED;
     try {
-      const { registered, said, specs } = await this.listServerTools(
+      const listed = await this.listServerTools(
         server.connection,
         server.client,
-        filled,
+        server.filled,
         (name) =>
           this.reserved.has(name) ||
           this.tools.some((tool) => tool.name === name && !own.has(name)),
@@ -2254,20 +2512,28 @@ export class McpManager {
         ]),
       );
       if (!current()) return;
+      server.listedAt = this.now();
+      if (listed.ttlMs === undefined) delete server.ttlMs;
+      else server.ttlMs = listed.ttlMs;
+      if (why === 'expired' && listed.listing === server.listing && !noted())
+        return;
+      server.listing = listed.listing;
       this.tools = [
         ...this.tools.filter((tool) => !own.has(tool.name)),
-        ...registered,
+        ...listed.registered,
       ];
-      server.specs = specs;
+      server.specs = listed.specs;
       for (const name of own) this.hinted.delete(name);
-      for (const [name, hint] of said) this.hinted.set(name, hint);
+      for (const [name, hint] of listed.said) this.hinted.set(name, hint);
       if (state) {
-        state.tools = registered.map((tool) => tool.name);
-        if (state.error === TOOLS_NOT_LISTED_AGAIN) state.error = '';
+        state.tools = listed.registered.map((tool) => tool.name);
+        if (noted()) state.error = '';
       }
     } catch {
       if (!current()) return;
-      if (state) state.error = TOOLS_NOT_LISTED_AGAIN;
+      if (state)
+        state.error =
+          why === 'changed' ? TOOLS_NOT_LISTED_AGAIN : TOOLS_EXPIRED_NOT_LISTED;
     }
     // What a tool of the server returned before may not hold for the tools it has now
     this.results.forget(server.name);
@@ -2912,7 +3178,8 @@ export class McpManager {
             ? '\n    ' + server.error + ': ' + server.authorize
             : server.error === 'disabled'
               ? '\n    disabled'
-              : server.error === TOOLS_NOT_LISTED_AGAIN
+              : server.error === TOOLS_NOT_LISTED_AGAIN ||
+                  server.error === TOOLS_EXPIRED_NOT_LISTED
                 ? '\n    ' + server.tools.join(', ') + '\n    ' + server.error
                 : server.error
                   ? '\n    failed: ' + server.error
