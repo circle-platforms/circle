@@ -611,7 +611,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         );
         if (typed)
           throw new Error(
-            `这个脚本的参数由包声明；调用工具 ${typed}，它在脚本启动前检查参数`,
+            `The pack declares this script's parameters: call ${typed}, which checks them before the script starts.`,
           );
         try {
           return JSON.stringify(

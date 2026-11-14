@@ -839,6 +839,7 @@ export class AgentRuntime {
   private createHarness(modelOverride?: ChatModel): Harness {
     // The tools a loaded pack declared belong to the session that loaded it
     this.packTools = [];
+    this.packToolNotes = new Map();
     const model =
       modelOverride ??
       this.baseModel ??
@@ -891,10 +892,14 @@ export class AgentRuntime {
         ...(this.options.localSkillsRoot
           ? { root: this.options.localSkillsRoot }
           : {}),
+        // Paths in a pack differ in more than case (its manifest refuses others), and a case-blind disk opens
+        // `tools/Convert.mjs` as `tools/convert.mjs`
         typed: (pack, script) =>
           this.packTools.find(
-            (item) => item.pack === pack && item.script === script,
-          )?.name,
+            (item) =>
+              item.pack === pack &&
+              item.script.toLowerCase() === script.toLowerCase(),
+          )?.tool.name,
       },
       screenshot:
         this.options.screenshot === false
@@ -905,13 +910,14 @@ export class AgentRuntime {
         this.bus.emit('todo_list', { payload: { todos } });
       },
       skill: async (name, signal, reference) => {
-        const tools = await this.activateSkillHooks(name, signal);
+        // A skill that cannot be read is not loaded: nothing of it starts
         const body = loadSkillBody(
           name,
           this.skills,
           reference,
           this.sandbox.credentialFiles,
         );
+        const tools = await this.activateSkillHooks(name, signal);
         return tools ? `${body}\n\n${tools}` : body;
       },
       question: async (args, context) =>
@@ -1791,22 +1797,32 @@ export class AgentRuntime {
   }
   private withIntegrationTools(tools: Tool[], limits = true): Tool[] {
     const names = new Set<string>();
-    return [...tools, ...this.mcp.tools, ...this.extensions.tools()].filter(
-      (tool) => {
-        if (names.has(tool.name))
-          throw new Error(`tool '${tool.name}' already exists`);
-        if (limits && tool.name !== 'compact_conversation') {
-          if (
-            this.runOptions.tools !== null &&
-            !this.runOptions.tools.includes(tool.name)
-          )
-            return false;
-          if (this.runOptions.exclude_tools.includes(tool.name)) return false;
-        }
-        names.add(tool.name);
-        return true;
-      },
-    );
+    const integrations = [
+      ...tools,
+      ...this.mcp.tools,
+      ...this.extensions.tools(),
+    ];
+    // A pack's tool whose name another tool took is left out, not a clash
+    const taken = new Set(integrations.map((tool) => tool.name));
+    return [
+      ...integrations,
+      ...this.packTools
+        .map((item) => item.tool)
+        .filter((tool) => !taken.has(tool.name)),
+    ].filter((tool) => {
+      if (names.has(tool.name))
+        throw new Error(`tool '${tool.name}' already exists`);
+      if (limits && tool.name !== 'compact_conversation') {
+        if (
+          this.runOptions.tools !== null &&
+          !this.runOptions.tools.includes(tool.name)
+        )
+          return false;
+        if (this.runOptions.exclude_tools.includes(tool.name)) return false;
+      }
+      names.add(tool.name);
+      return true;
+    });
   }
   private async extensionToolBoundary(
     tool: Tool,
@@ -2148,9 +2164,12 @@ export class AgentRuntime {
     signal?: AbortSignal,
   ): Promise<string> {
     const key = name.trim().toLowerCase();
-    if (!key || this.armedSkills.has(key)) return '';
+    if (!key) return '';
+    // Loaded again: the model is told again which tools it has, in case that part of the conversation is gone
+    if (this.armedSkills.has(key)) return this.packToolNotes.get(key) ?? '';
     this.armedSkills.add(key);
     const tools = await this.armPackTools(key);
+    if (tools) this.packToolNotes.set(key, tools);
     const runner = this.hookRunner;
     if (!runner) return tools;
     const armed = runner.activateSkill(key);
@@ -2158,8 +2177,13 @@ export class AgentRuntime {
       await this.harness.skillHooksArmed(armed, signal);
     return tools;
   }
-  /** The declared tools of the packs whose skill this session loaded. */
-  private packTools: { pack: string; script: string; name: string }[] = [];
+  /**
+   * The declared tools of the packs whose skill this session loaded. They come after every other tool: a name a
+   * built-in tool, an MCP server or an extension has, now or once it connects, stays theirs.
+   */
+  private packTools: { pack: string; script: string; tool: Tool }[] = [];
+  /** What the model was told of them, by skill, to tell it again when the skill is loaded again. */
+  private packToolNotes = new Map<string, string>();
   /**
    * The skill is an installed pack's (its folder is right under the packs' root, as `skill_install` puts it): the
    * scripts the pack declares in `tools.json` become typed tools (#544). A pack whose files do not verify, or
@@ -2186,7 +2210,11 @@ export class AgentRuntime {
     }
     if (!declared.length) return '';
     const taken = new Set(
-      [...this.coreTools, ...this.harness.tools].map((tool) => tool.name),
+      [
+        ...this.allTools,
+        ...this.harness.tools,
+        ...(this.options.deferredTools ?? []),
+      ].map((tool) => tool.name),
     );
     const added: string[] = [];
     const skipped: string[] = [];
@@ -2203,12 +2231,7 @@ export class AgentRuntime {
         continue;
       }
       taken.add(tool.name);
-      this.coreTools.push(tool);
-      this.packTools.push({
-        pack,
-        script: declaration.script,
-        name: tool.name,
-      });
+      this.packTools.push({ pack, script: declaration.script, tool });
       added.push(`${tool.name} (${declaration.script})`);
     }
     if (added.length) {

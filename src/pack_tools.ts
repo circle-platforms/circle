@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Ajv } from 'ajv';
+import { Ajv, type ValidateFunction } from 'ajv';
 import { LIMITS, runTool, verifyInstalled } from './local_skills.js';
 import { mcpToolName } from './mcp_loader.js';
 import { isSafePackPath } from './pack_files.js';
@@ -143,7 +143,11 @@ const DECLARATION = {
     },
   },
 };
-const validateDeclaration = new Ajv({ allErrors: false }).compile(DECLARATION);
+// Compiled on first use, not when Circle starts. Not strict, as for tool calls: strict mode prints its notes on
+// union types to standard error, which a CLI run must keep clean.
+let declarationCheck: ValidateFunction | undefined;
+const validateDeclaration = (value: unknown): boolean =>
+  (declarationCheck ??= new Ajv({ strict: false }).compile(DECLARATION))(value);
 
 /**
  * The tools a declaration file names, or why it cannot be used. `files` are the paths the pack's manifest lists:
@@ -160,7 +164,7 @@ export function parsePackTools(
     throw new Error(`${PACK_TOOLS_FILE} is not JSON`);
   }
   if (!validateDeclaration(value)) {
-    const error = validateDeclaration.errors?.[0];
+    const error = declarationCheck?.errors?.[0];
     throw new Error(
       `${PACK_TOOLS_FILE}${error?.instancePath ? ` ${error.instancePath}` : ''} ${error?.message ?? 'is not valid'}`,
     );
@@ -291,8 +295,9 @@ export function packTool(options: {
     description: `${declaration.description}\n\nRuns ${declaration.script} of the installed pack ${pack}; returns exit_code, stdout, stderr and truncated.`,
     parameters: declaration.input_schema,
     effect: 'execute',
-    // Plain variables' values go into what the model writes; a secret only goes where the pack declared it
-    variables: 'plain',
+    // What the model writes is checked against the schema and runs as written, %NAME% included: values from
+    // variables and secrets go only where the pack declared them
+    variables: false,
     run: async (args) => {
       const variables = options.variables();
       const secrets = options.secrets();

@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import {
   packToolArgv,
   parsePackTools,
@@ -10,7 +11,7 @@ import {
 } from '../src/pack_tools.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { saveSecret } from '../src/secrets.js';
-import { defaultSettings } from '../src/settings.js';
+import { defaultSettings, saveSettings, trustFolder } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import type { Message } from '../src/types.js';
 import { cleanup, scratch } from './helpers.js';
@@ -181,16 +182,20 @@ console.log('converted with ' + process.env.HUB_TOKEN);
     } satisfies Message,
   });
   const model = new ScriptedModel([
+    // A skill that cannot be read is not loaded: its tools do not start
+    call('missing', 'skill', { name: 'example-pack', reference: 'nope.md' }),
     call('load', 'skill', { name: 'example-pack' }),
     call('bad', 'example-pack_convert', { in: 'a.txt', format: 'docx' }),
+    // What the model writes is checked and runs as written: a variable's or a secret's name is not its value here
     call('good', 'example-pack_convert', {
-      in: 'a.txt',
+      in: '%IN_FILE%',
       format: 'pdf',
-      title: 'T',
+      title: '%HUB_TOKEN%',
     }),
+    // The same script by another case of its path
     call('free', 'skill_run', {
       pack: 'example-pack',
-      script: 'tools/convert.mjs',
+      script: 'tools/Convert.mjs',
       args: ['--in', 'a.txt'],
     }),
     {
@@ -202,7 +207,7 @@ console.log('converted with ' + process.env.HUB_TOKEN);
     home,
     userHome,
     localSkillsRoot: packs,
-    settings: defaultSettings(),
+    settings: { ...defaultSettings(), variables: { IN_FILE: '/etc/passwd' } },
     model,
     headless: true,
   });
@@ -214,8 +219,9 @@ console.log('converted with ' + process.env.HUB_TOKEN);
     model.requests[index]!.tools.map((tool) => tool.name);
   // Not before the skill loads; from the next request on, with only the declared parameters
   assert.ok(!offered(0).includes('example-pack_convert'));
-  assert.ok(offered(1).includes('example-pack_convert'));
-  const tool = model.requests[1]!.tools.find(
+  assert.ok(!offered(1).includes('example-pack_convert'));
+  assert.ok(offered(2).includes('example-pack_convert'));
+  const tool = model.requests[2]!.tools.find(
     (item) => item.name === 'example-pack_convert',
   )!;
   assert.deepEqual(Object.keys(tool.parameters.properties as object), [
@@ -229,13 +235,14 @@ console.log('converted with ' + process.env.HUB_TOKEN);
   const results = model.requests
     .at(-1)!
     .messages.filter((message) => message.role === 'tool');
+  assert.doesNotMatch(String(results[0]?.content), /offered/);
   assert.match(
-    String(results[0]?.content),
+    String(results[1]?.content),
     /offered from the next request: example-pack_convert \(tools\/convert\.mjs\)/,
   );
   // A value outside the declared ones is refused before the script starts
   assert.match(
-    String(results[1]?.content),
+    String(results[2]?.content),
     /example-pack_convert was called with invalid arguments.*format/,
   );
   // The script ran once: with the arguments the template made and the secret in its environment, which the
@@ -246,12 +253,12 @@ console.log('converted with ' + process.env.HUB_TOKEN);
     .map((line) => JSON.parse(line));
   assert.deepEqual(runs, [
     {
-      argv: ['--in', 'a.txt', '--format', 'pdf', '--title', 'T'],
+      argv: ['--in', '%IN_FILE%', '--format', 'pdf', '--title', '%HUB_TOKEN%'],
       token: 'synthetic-hub-token',
       stdin: '',
     },
   ]);
-  assert.match(String(results[2]?.content), /converted with %HUB_TOKEN%/);
+  assert.match(String(results[3]?.content), /converted with %HUB_TOKEN%/);
   assert.doesNotMatch(
     model.requests
       .at(-1)!
@@ -259,6 +266,95 @@ console.log('converted with ' + process.env.HUB_TOKEN);
       .join('\n'),
     /synthetic-hub-token/,
   );
-  // skill_run points at the typed tool for a declared script
-  assert.match(String(results[3]?.content), /调用工具 example-pack_convert/);
+  // skill_run points at the typed tool for a declared script, whatever the case of its path
+  assert.match(
+    String(results[4]?.content),
+    /The pack declares this script's parameters: call example-pack_convert/,
+  );
+  // Loaded again, the skill tells the model again which tools it has
+  assert.match(
+    await runtime.activateSkillHooks('example-pack'),
+    /offered from the next request: example-pack_convert/,
+  );
+});
+
+test("a pack's tool gives way to an extension's tool of the same name, and the tool list still refreshes", async (t) => {
+  const root = realpathSync(scratch(t));
+  const home = join(root, 'home');
+  const userHome = join(root, 'user');
+  const workspace = join(root, 'project');
+  mkdirSync(workspace);
+  const settings = trustFolder(defaultSettings(), workspace);
+  saveSettings(settings, home);
+  const packs = join(userHome, '.agents', 'skills');
+  mkdirSync(packs, { recursive: true });
+  installPack(packs, 'example-pack', {
+    'SKILL.md':
+      '---\nname: example-pack\ndescription: Converts text files.\n---\n\nUse the convert tool.\n',
+    'tools.json': JSON.stringify({ version: 1, tools: [CONVERT] }),
+    'tools/convert.mjs': "console.log('from the pack');\n",
+  });
+  // An extension that, once connected, offers a tool with the pack tool's name
+  const extension = join(home, 'extensions', 'remote');
+  mkdirSync(extension, { recursive: true });
+  writeFileSync(
+    join(extension, 'extension.mjs'),
+    `export function register(api){
+      const schema = { type: 'object', properties: {} };
+      api.registerTool('connect', 'connect', schema, () => {
+        api.registerTool('example-pack_convert', 'convert', schema, () => 'from the extension', { readOnly: true });
+        return 'connected';
+      }, { readOnly: true });
+    }`,
+  );
+  const call = (id: string, name: string, args: Record<string, unknown>) => ({
+    message: {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content: '',
+      tool_calls: [{ id, name, args }],
+    } satisfies Message,
+  });
+  const say = (content: string) => ({
+    message: {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      content,
+    } satisfies Message,
+  });
+  const model = new ScriptedModel([
+    call('load', 'skill', { name: 'example-pack' }),
+    call('connect', 'connect', {}),
+    say('connected'),
+    call('use', 'example-pack_convert', {}),
+    say('done'),
+  ]);
+  const runtime = new AgentRuntime({
+    workspace,
+    home,
+    userHome,
+    localSkillsRoot: packs,
+    settings,
+    model,
+    headless: true,
+    // Load the extension in a headless run, as `--extensions` does
+    integrations: true,
+    bundledExtensions: false,
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.initialize();
+  runtime.setMode('auto');
+  await runtime.harness.run('load and connect');
+  // Between turns the list is built again: the extension's tool takes the name, once
+  await delay(5);
+  await runtime.harness.run('convert');
+  const names = model.requests.at(-2)!.tools.map((tool) => tool.name);
+  assert.equal(
+    names.filter((name) => name === 'example-pack_convert').length,
+    1,
+  );
+  const results = runtime.harness.messages.filter(
+    (message) => message.role === 'tool',
+  );
+  assert.equal(results.at(-1)?.content, 'from the extension');
 });

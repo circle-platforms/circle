@@ -6494,8 +6494,9 @@ export class RuntimeController {
       case 'load-skill': {
         const skill = runtime.skills.find((skill) => skill.name === p.name);
         if (!skill) throw Error('skill not found');
-        const tools = await runtime.activateSkillHooks(skill.name);
+        // A skill that cannot be read is not loaded: nothing of it starts
         const body = loadSkillBody(skill.name, runtime.skills);
+        const tools = await runtime.activateSkillHooks(skill.name);
         return {
           name: skill.name,
           content: tools ? `${body}\n\n${tools}` : body,
