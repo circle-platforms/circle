@@ -47,6 +47,12 @@ Read in this order, lowest first, so a later folder replaces an earlier one of t
 
 An **extension** that registers the name wins over a file, and a file wins over a built-in: your `explore.md` replaces the shipped `explore`, and gets the tools its own keys name rather than the read-only set.
 
+### A skill can ship subagents
+
+A skill can bring definitions of its own in an `agents` folder next to its `SKILL.md`, as a pack installed with `skill_install` can: `agents/reviewer.md`, in the format above. They do nothing while the skill is only installed. After this session loads the skill, with `/skill` or the `skill` tool, they join `task`'s list from the next request, for that session, as the skill's [hooks](hooks.md#a-skill-can-ship-hooks) start. The model is told the names it can give `task` and every definition that is not offered, with why, in what loading the skill returns. `/agents` lists them as from `Skill <name>`.
+
+They keep their names, with no prefix. A name a folder above, an extension, a built-in or a skill loaded earlier already gives is theirs: the skill's definition is not offered, and the model and `/agents` are told so. The folder is read again whenever the others are, and before each `task` call. A pack replaced with a new version therefore offers what the new version has: a definition it renamed or left out is `unknown subagent type` under its old name.
+
 ## Seeing them: `/agents`
 
 `/agents` lists what `task` can choose — the built-ins first, then the files and extensions — one line each, and under `Not offered:` every definition that could not be used, with the reason:
@@ -69,4 +75,4 @@ The desktop application's `/agents` opens the subagents panel, which lists the a
 - With `background: true` it keeps running and its report arrives as a notice. See [Background jobs](background-jobs.md).
 - A file naming a tool that does not exist is skipped rather than run with a broken set, so load the MCP server or the extension first.
 
-The folders are read again with every rebuild of the system prompt — a new or resumed session, a model switch, `/reload`, `/mcp reload`, `/extensions reload` — so a file you have just written is in the next turn's list.
+The folders are read again before each `task` call and with every rebuild of the system prompt: a new or resumed session, a model switch, `/reload`, `/mcp reload`, `/extensions reload`. A file written during a turn can therefore be given to `task` at once, also by a later call in the same reply that wrote it. `task`'s list of names is written again with the tools: when the session starts, when tools change, and when a skill that ships subagents loads.

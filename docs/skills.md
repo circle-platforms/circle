@@ -26,7 +26,7 @@ Add entries under `## Unreleased`, newest first, one line each ...
 - Give it a `name` and a `description`. Without a `name`, or with one that is not lowercase letters, digits and hyphens, the folder name is used; without a `description`, the model sees only `Skill from <folder>`.
 - The name should match the folder name.
 - The description is what Circle reads to decide whether the skill applies, so say **what it does and when to use it**. Descriptions are cut at 1,024 characters.
-- Put scripts, templates and references next to `SKILL.md` and mention them in the text by relative path. When the skill is loaded, the model is told the skill's folder, so it can find them. Circle never runs bundled scripts by itself. A `hooks.json` next to `SKILL.md` is optional and is the exception: after this session loads the skill, Circle runs those commands at the hook events. See [Hooks](hooks.md#a-skill-can-ship-hooks).
+- Put scripts, templates and references next to `SKILL.md` and mention them in the text by relative path. When the skill is loaded, the model is told the skill's folder, so it can find them. Circle never runs bundled scripts by itself. A `hooks.json` next to `SKILL.md` is optional and is the exception: after this session loads the skill, Circle runs those commands at the hook events. See [Hooks](hooks.md#a-skill-can-ship-hooks). So is an `agents` folder of subagent definitions, which join `task`'s list once the skill loads. See [A skill can ship subagents](agents.md#a-skill-can-ship-subagents).
 
 A skill is a folder below the skills folder, `skills/changelog/SKILL.md`, or one level deeper inside a folder that has no `SKILL.md` of its own, `skills/team/changelog/SKILL.md`.
 

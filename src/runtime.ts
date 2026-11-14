@@ -83,7 +83,11 @@ import {
 } from './knowledge/session-memory.js';
 import { McpManager } from './mcp_loader.js';
 import { ExtensionHost, type SubagentSpec } from './extensions.js';
-import { discoverSubagents, type SubagentFileInfo } from './subagent_files.js';
+import {
+  discoverSubagents,
+  readSubagentFolder,
+  type SubagentFileInfo,
+} from './subagent_files.js';
 import { abortable } from './watch.js';
 import {
   isFolderTrusted,
@@ -519,6 +523,13 @@ export class AgentRuntime {
   /** The subagents the agent folders define, read again with every system prompt. */
   private fileAgents: SubagentFileInfo[] = [];
   private fileAgentProblems: string[] = [];
+  /** The `agents` folders of the skills this session loaded, by skill (#552); read again with the other folders. */
+  private skillAgentFolders = new Map<
+    string,
+    { skill: string; folder: string }
+  >();
+  private skillAgents: (SubagentFileInfo & { skill: string })[] = [];
+  private skillAgentProblems: string[] = [];
   private extensionChanges = new Map<string, Promise<void>>();
   private extensionChangeListeners = new Set<() => void>();
   private readonly integrationLifetime = new AbortController();
@@ -1009,11 +1020,15 @@ export class AgentRuntime {
         const parentHarness = this.harness;
         const parentSessionId = context.sessionId;
         const name = String(args.subagent_type || 'general-purpose');
+        // As the folders hold them now: one written this step is found, and one a replaced pack took away is not
+        this.loadSubagentFiles();
         const custom = this.customSubagents().find(
           (agent) => agent.spec.name === name,
         );
-        if (!custom && !Object.hasOwn(BUILTIN_SUBAGENT_PROMPTS, name))
+        if (!custom && !Object.hasOwn(BUILTIN_SUBAGENT_PROMPTS, name)) {
+          this.describeSubagents(parentHarness.tools);
           throw new Error('unknown subagent type');
+        }
         const childModel = custom?.spec.model
           ? this.modelWithSearch(
               this.gatewayModel(this.options.settings, custom.spec.model),
@@ -1542,6 +1557,17 @@ export class AgentRuntime {
           );
     this.fileAgents = found.agents;
     this.fileAgentProblems = found.problems;
+    // What the skills this session loaded bring, as their folders hold it now: a pack replaced since takes its old
+    // definitions with it
+    const agents: (SubagentFileInfo & { skill: string })[] = [];
+    const problems: string[] = [];
+    for (const { skill, folder } of this.skillAgentFolders.values()) {
+      const read = readSubagentFolder(folder, `Skill ${skill}`);
+      agents.push(...read.agents.map((agent) => ({ ...agent, skill })));
+      problems.push(...read.problems);
+    }
+    this.skillAgents = agents;
+    this.skillAgentProblems = problems;
   }
   /**
    * The subagents a person or an extension defined. Folders first, so an extension of the
@@ -1584,6 +1610,40 @@ export class AgentRuntime {
         tools: agent.tools,
         source: 'Extension',
       });
+    // A skill's definitions come last: a name a folder, an extension, Circle or a skill loaded before has stays theirs
+    for (const agent of this.skillAgents) {
+      const name = agent.spec.name;
+      const taken =
+        byName.get(name)?.source ??
+        (Object.hasOwn(BUILTIN_SUBAGENT_PROMPTS, name) ? 'Circle' : undefined);
+      if (taken) {
+        problems.push(
+          `${name} from the skill ${agent.skill} has a name ${taken} gives a subagent already · not offered`,
+        );
+        continue;
+      }
+      const missing = (agent.tools ?? []).filter(
+        (tool) => !this.allTools.some((item) => item.name === tool),
+      );
+      if (missing.length) {
+        problems.push(
+          `${name} from the skill ${agent.skill} names tools that do not exist: ${missing.join(', ')} · not offered`,
+        );
+        continue;
+      }
+      byName.set(name, {
+        spec: agent.spec,
+        source: agent.source_label,
+        path: agent.path,
+        ...(agent.tools
+          ? {
+              tools: agent.tools.map((tool) =>
+                this.allTools.find((item) => item.name === tool)!,
+              ),
+            }
+          : {}),
+      });
+    }
     return [...byName.values()];
   }
   /**
@@ -1604,7 +1664,7 @@ export class AgentRuntime {
     problems: string[];
   } {
     this.loadSubagentFiles();
-    const problems = [...this.fileAgentProblems];
+    const problems = [...this.fileAgentProblems, ...this.skillAgentProblems];
     const byName = new Map([
       [
         'general-purpose',
@@ -2230,7 +2290,9 @@ export class AgentRuntime {
     // Loaded again: the model is told again which tools it has, in case that part of the conversation is gone
     if (this.armedSkills.has(key)) return this.packToolNotes.get(key) ?? '';
     this.armedSkills.add(key);
-    const tools = await this.armPackTools(key);
+    const tools = [await this.armPackTools(key), this.armSkillAgents(key)]
+      .filter(Boolean)
+      .join('\n');
     if (tools) this.packToolNotes.set(key, tools);
     const runner = this.hookRunner;
     if (!runner) return tools;
@@ -2308,6 +2370,45 @@ export class AgentRuntime {
         : '',
       skipped.length
         ? `Not offered, because a tool already has the name: ${skipped.join(', ')}.`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+  /**
+   * The subagents a loaded skill ships in its `agents` folder (#552) join `task`'s list, as a skill's hooks start: for
+   * this session, from the next request. Returns what the model is told: the names it can give `task`, and why a
+   * definition is not offered.
+   */
+  private armSkillAgents(key: string): string {
+    const skill = this.skills.find((item) => item.name.toLowerCase() === key);
+    if (!skill) return '';
+    const folder = join(dirname(skill.path), 'agents');
+    try {
+      if (!statSync(folder).isDirectory()) return '';
+    } catch {
+      return '';
+    }
+    this.skillAgentFolders.set(key, { skill: skill.name, folder });
+    this.loadSubagentFiles();
+    const problems: string[] = [];
+    const offered = this.customSubagents(problems)
+      .filter((agent) => agent.source === `Skill ${skill.name}`)
+      .map((agent) => agent.spec.name);
+    const wrong = [
+      ...this.skillAgentProblems.filter((line) => line.startsWith(folder)),
+      ...problems.filter((line) =>
+        line.includes(` from the skill ${skill.name} `),
+      ),
+    ];
+    if (this.harness && offered.length)
+      this.describeSubagents(this.harness.tools);
+    return [
+      offered.length
+        ? `Subagents the skill ${skill.name} brings, for task from the next request: ${offered.join(', ')}.`
+        : '',
+      wrong.length
+        ? `Subagent definitions of the skill ${skill.name} that are not offered: ${wrong.join('; ')}`
         : '',
     ]
       .filter(Boolean)
@@ -2915,6 +3016,7 @@ export class AgentRuntime {
     this.memorySession = undefined;
     this.todos = [];
     this.armedSkills.clear();
+    this.skillAgentFolders.clear();
     this.hookRunner = undefined;
     this.harness = this.createHarness(this.options.model);
     this.todos = restoredTodos(this.harness.messages);
@@ -2942,6 +3044,7 @@ export class AgentRuntime {
     const repaired = this.store.get(session.id);
     if (repaired) this.session = repaired;
     this.armedSkills.clear();
+    this.skillAgentFolders.clear();
     this.hookRunner = undefined;
     this.harness = this.createHarness(this.options.model);
     this.todos = restoredTodos(this.harness.messages);
@@ -2966,6 +3069,7 @@ export class AgentRuntime {
       this.store.claimSession(session.id, (error) => this.ownershipLost(error));
       this.session = session;
       this.armedSkills.clear();
+      this.skillAgentFolders.clear();
       this.hookRunner = undefined;
       this.harness = this.createHarness(this.options.model);
       this.todos = restoredTodos(this.harness.messages);
