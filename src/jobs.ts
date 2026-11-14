@@ -65,7 +65,7 @@ export interface JobOwner {
 }
 export interface Job extends JobOwner {
   id: string;
-  kind: 'shell' | 'adopted' | 'agent' | 'watch';
+  kind: 'shell' | 'adopted' | 'agent' | 'watch' | 'call';
   title: string;
   status: 'running' | 'done' | 'failed' | 'stopped';
   reason: string;
@@ -1114,6 +1114,44 @@ export class JobRegistry {
         await this.stopOwned(job.id);
         this.finish(entry);
       });
+    return { ...job };
+  }
+  /**
+   * A tool call that went on in the background after it ran a while, as an MCP call of the conversation does: `run`
+   * gives its result, which is the job's output, and is told to stop with the job's signal. `log` shows what the call
+   * says of its progress on the job's row.
+   */
+  startCall(
+    title: string,
+    owner: JobOwner,
+    run: (signal: AbortSignal, log: (text: string) => void) => Promise<string>,
+  ): Job {
+    this.checkCapacity('call');
+    const entry = this.entry(title, owner);
+    const job = this.publish(entry, 'call');
+    const log = (text: string): void => {
+      if (entry.finished) return;
+      job.detail = redact(text).split('\n').at(-1)?.slice(0, 200);
+      this.emit('job_updated', job);
+    };
+    void Promise.resolve()
+      .then(async () => {
+        entry.controller.signal.throwIfAborted();
+        const text = await run(entry.controller.signal, log);
+        writeFileSync(entry.path, redact(text) + '\n', { flag: 'a' });
+      })
+      .catch((error: unknown) => {
+        if (!entry.controller.signal.aborted) {
+          entry.reason = 'call error';
+          writeFileSync(
+            entry.path,
+            redact(error instanceof Error ? error.message : String(error)) +
+              '\n',
+            { flag: 'a' },
+          );
+        }
+      })
+      .finally(() => this.finish(entry));
     return { ...job };
   }
   startWatch(watch: Watch, owner: JobOwner, source = ''): Job {

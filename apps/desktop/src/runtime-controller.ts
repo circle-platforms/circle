@@ -2724,10 +2724,13 @@ export class RuntimeController {
       owner.jobs.list().map((job) => ({
         id: `${job.sessionId}:${job.id}`,
         sessionId: job.sessionId,
+        // A tool call that went on in the background shows as a watch does: its title and what it last said
         kind:
           job.kind === 'shell' || job.kind === 'adopted'
             ? ('command' as const)
-            : job.kind,
+            : job.kind === 'call'
+              ? ('watch' as const)
+              : job.kind,
         title: job.title,
         ...(job.command ? { command: job.command } : {}),
         state:

@@ -904,6 +904,16 @@ export class AgentRuntime {
         readFileBytes(this.sandbox, fileReads, path, context, limit),
       // Someone can reconnect a server whose program exited: it stays failed until they do
       interactive: !this.options.headless,
+      // A call of the conversation that runs on past its turn goes on as a background job
+      background: (title, owner, run) => this.jobs.startCall(title, owner, run),
+      // A result too large for the model is kept where read_file reads Circle's own output
+      saveResult: (text, tool) => {
+        const name = `${createHash('sha256').update(`${tool}\0${text}`).digest('hex').slice(0, 24)}.txt`;
+        const folder = join(this.sandbox.offloadRoot!, 'large_tool_results');
+        mkdirSync(folder, { recursive: true });
+        writeFileSync(join(folder, name), text, { mode: 0o600 });
+        return `/large_tool_results/${name}`;
+      },
       // A server's question in the middle of a call is asked in the question panel (#556)
       ask: this.options.question
         ? (args, signal) => this.options.question!(args, signal)

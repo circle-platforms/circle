@@ -172,6 +172,12 @@ When an answer does not fit, the panel comes back saying what was wrong (`Not se
 
 The server can also take its question back. A question that came on a stream of the server's own, as a program's questions do, is withdrawn once none of that server's calls is under way, so `esc` on the only call closes it. In print, JSON, line and RPC mode no one can be asked: Circle does not say it takes forms, so a server does not ask, and one that asks anyway is told the method is not found (`-32601`). A task that needs input (`input_required`) asks this way while Circle reads its result. The 2026-07-28 revision asks by a result instead (`input_required` with `inputResponses`), and comes with an MCP library that speaks that revision.
 
+### Long calls and large results
+
+A call the conversation makes (not a subagent's) that is still running after 2 minutes goes on as a [background job](background-jobs.md) in the full-screen interface and the desktop application: the model is told the job's id at once and goes on, and reads the call's result in the job's notice when it ends. The job shows the latest progress the server reported, and stopping it cancels the call at the server, which may already have done some of the work. A call the server holds up with an open question moves once the question is answered. The call's time limits still apply. `CIRCLE_MCP_AUTO_BACKGROUND_MS` changes the 2 minutes, in milliseconds; `0` turns it off. In print, line and RPC mode a call stays where it was made until it ends, since the run can end before it does.
+
+A result of a call that ends where it was made, longer than 50,000 characters or than 25,000 tokens (`CIRCLE_MAX_MCP_OUTPUT_TOKENS` changes the tokens), is kept in a file in Circle's data folder, and the model reads `The result of <tool> is too large to give here (<n> characters, about <m> tokens), so it was kept in full in /large_tool_results/<file>.txt` and reads the parts it needs with `read_file`. A result with a picture is given as it is.
+
 ### What the model reads of a result
 
 | A block of the result | What the model gets |

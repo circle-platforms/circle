@@ -71,6 +71,8 @@ import {
 import { VERSION } from './version.js';
 import { formatJcs } from './knowledge/canonical.js';
 import { replaceLongest } from './secrets.js';
+import { tokenLen } from './middleware/tool_result_prune.js';
+import type { Job, JobOwner } from './jobs.js';
 import {
   environmentThenSecrets,
   expandReferences,
@@ -185,7 +187,23 @@ export interface McpServices {
    * started again by the next call.
    */
   interactive?: boolean;
+  /**
+   * Starts a background job for a call that runs on after its turn (jobs.ts startCall). Without it, or outside an
+   * interactive session, a call runs where it was made until it ends.
+   */
+  background?: (
+    title: string,
+    owner: JobOwner,
+    run: (signal: AbortSignal, log: (text: string) => void) => Promise<string>,
+  ) => Job;
+  /** Keeps a result too large to give the model in a file, and gives the path the model reads it by. */
+  saveResult?: (text: string, tool: string) => string;
 }
+/** How long a call of the conversation runs before it goes on as a background job. */
+export const AUTO_BACKGROUND_MS = 120_000;
+/** A result longer than this many characters, or than MAX_RESULT_TOKENS, is kept in a file. */
+export const MAX_RESULT_CHARS = 50_000;
+export const MAX_RESULT_TOKENS = 25_000;
 /** A limit in milliseconds from the environment, or the default when it is not a number of 0 or more. */
 function envMs(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -1334,7 +1352,7 @@ export class McpManager {
     };
     // The server is sent each file's bytes; Circle shows the file by path, size and digest.
     // `reuse` is the kept result the card said this call gets, decided before the card.
-    const call = async (
+    const callNow = async (
       args: Record<string, unknown>,
       context: ToolContext,
       sent: SentFile[] = [],
@@ -1527,6 +1545,17 @@ export class McpManager {
         );
       return framed(shown(text || JSON.stringify(structured ?? {})));
     };
+    // Where the call runs: here, or on as a background job once it ran a while; and how much of its result the model
+    // is given
+    const call = (
+      args: Record<string, unknown>,
+      context: ToolContext,
+      sent: SentFile[] = [],
+      reuse?: string,
+    ): Promise<string> =>
+      this.outcome(name, context, (running) =>
+        callNow(args, running, sent, reuse),
+      );
     // Before the approval: each named file is read under read_file's rules, so the card shows
     // what will be sent, and the call sends those bytes
     const prepare = async (
@@ -2272,21 +2301,26 @@ export class McpManager {
     let problems: string[] = [];
     for (;;) {
       let reply: string;
+      // While it is open, the call it holds up is not moved to the background
+      const question = ask(
+        {
+          questions: elicitationQuestions(
+            server,
+            params.message,
+            fields,
+            problems,
+          ),
+        },
+        signal,
+      );
+      this.openQuestions.add(question);
       try {
-        reply = await ask(
-          {
-            questions: elicitationQuestions(
-              server,
-              params.message,
-              fields,
-              problems,
-            ),
-          },
-          signal,
-        );
+        reply = await question;
       } catch (error) {
         if (signal.aborted) return { action: 'cancel' };
         throw error;
+      } finally {
+        this.openQuestions.delete(question);
       }
       if (signal.aborted) return { action: 'cancel' };
       const outcome = elicitationOutcome(fields, reply);
@@ -2305,6 +2339,113 @@ export class McpManager {
     const live = this.servers.find((item) => item.name === connection.name);
     if (!live) return undefined;
     return live.open ? live.client : this.connectedAgain(live.connection);
+  }
+  /** How long a call of the conversation runs before it goes on as a background job; 0: it never does. */
+  autoBackgroundMs = envMs('CIRCLE_MCP_AUTO_BACKGROUND_MS', AUTO_BACKGROUND_MS);
+  /** The questions servers ask that are open now: a call waiting on one is not moved to the background. */
+  private openQuestions = new Set<Promise<unknown>>();
+  /**
+   * Runs a call. In an interactive session a call of the conversation itself (not a subagent's) that still runs after
+   * autoBackgroundMs goes on as a background job: the model is told the job's id at once and reads the call's result
+   * in the job's notice; stopping the job cancels the call. A call a server's open question holds up moves once the
+   * question is answered. The result of a call that ends where it was made is given whole up to MAX_RESULT_CHARS
+   * characters and MAX_RESULT_TOKENS tokens (CIRCLE_MAX_MCP_OUTPUT_TOKENS); a longer one, without pictures, is kept
+   * in a file and the model is told its path.
+   */
+  private async outcome(
+    tool: string,
+    context: ToolContext,
+    run: (context: ToolContext) => Promise<string>,
+  ): Promise<string> {
+    let attached = false;
+    let moved = false;
+    let progress = context.progress;
+    const own = new AbortController();
+    const forward = (): void => own.abort(context.signal.reason);
+    context.signal.addEventListener('abort', forward, { once: true });
+    if (context.signal.aborted) forward();
+    const running = run({
+      ...context,
+      signal: own.signal,
+      progress: (text) => progress?.(text),
+      ...(context.emitAttachments
+        ? {
+            emitAttachments: (items) => {
+              // The turn has ended for a call in the background: what it shows goes nowhere
+              if (moved) return;
+              attached = true;
+              context.emitAttachments!(items);
+            },
+          }
+        : {}),
+    });
+    const background = this.services.background;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      if (
+        !background ||
+        !this.services.interactive ||
+        context.identity?.agentId ||
+        !this.autoBackgroundMs
+      )
+        return this.limited(tool, await running, attached);
+      const first = await Promise.race([
+        running.then((text) => ({ text })),
+        new Promise<undefined>((resolve) => {
+          timer = setTimeout(() => resolve(undefined), this.autoBackgroundMs);
+          timer.unref?.();
+        }),
+      ]);
+      if (first) return this.limited(tool, first.text, attached);
+      // A question the server asks holds the move until it is answered
+      while (this.openQuestions.size) {
+        const ended = await Promise.race([
+          running.then(
+            () => true,
+            () => true,
+          ),
+          Promise.allSettled([...this.openQuestions]).then(() => false),
+        ]);
+        if (ended) return this.limited(tool, await running, attached);
+      }
+      if (context.signal.aborted)
+        return this.limited(tool, await running, attached);
+      let job: Job;
+      try {
+        job = background(
+          tool,
+          { sessionId: context.sessionId, startedBy: 'model' },
+          (signal, log) => {
+            const stop = (): void => own.abort(signal.reason);
+            signal.addEventListener('abort', stop, { once: true });
+            if (signal.aborted) stop();
+            progress = log;
+            return running;
+          },
+        );
+      } catch {
+        // No room for another job: the call goes on here
+        return this.limited(tool, await running, attached);
+      }
+      moved = true;
+      context.signal.removeEventListener('abort', forward);
+      // Its result is the job's, read in its notice: nothing waits for it here
+      running.catch(() => {});
+      return `${tool} was still running after ${Math.round(this.autoBackgroundMs / 1000)} seconds, so it goes on as background job ${job.id}; its result arrives in a notice when it ends. Do not poll or sleep for it. stop_job stops it, though the server may already have done some of the work.`;
+    } finally {
+      clearTimeout(timer);
+      if (!moved) context.signal.removeEventListener('abort', forward);
+    }
+  }
+  /** A result as the model is given it: whole, or, when too large and without pictures, the path of the file it is kept in. */
+  private limited(tool: string, text: string, attached: boolean): string {
+    const save = this.services.saveResult;
+    if (!save || attached) return text;
+    const most = envMs('CIRCLE_MAX_MCP_OUTPUT_TOKENS', MAX_RESULT_TOKENS);
+    const tokens = tokenLen(text);
+    if (text.length <= MAX_RESULT_CHARS && tokens <= most) return text;
+    const path = save(text, tool);
+    return `The result of ${tool} is too large to give here (${text.length} characters, about ${tokens} tokens), so it was kept in full in ${path}. Read the parts you need with read_file, with offset and limit, or search it with grep.`;
   }
   /** A request made again after each of `waits` while it fails in a way that may pass (`passing`). */
   private async passingRetry<T>(
