@@ -83,7 +83,11 @@ import {
 } from './knowledge/session-memory.js';
 import { McpManager } from './mcp_loader.js';
 import { ExtensionHost, type SubagentSpec } from './extensions.js';
-import { discoverSubagents, type SubagentFileInfo } from './subagent_files.js';
+import {
+  discoverSubagents,
+  readSubagentFolder,
+  type SubagentFileInfo,
+} from './subagent_files.js';
 import { abortable } from './watch.js';
 import {
   isFolderTrusted,
@@ -308,6 +312,26 @@ export interface RuntimeOptions {
 export const SEND_MAX_CHARS = 4000;
 export const SEND_MAX_WAITING = 8;
 
+/** The prompt file of each subagent that ships with Circle, in `prompts/agent`. */
+export const BUILTIN_SUBAGENT_PROMPTS: Readonly<Record<string, string>> = {
+  'general-purpose': 'general-purpose.md',
+  explore: 'explore.md',
+};
+/** A built-in subagent's own prompt. A missing file is an error that names it, never another agent's prompt (#547). */
+export function builtinSubagentPrompt(
+  name: string,
+  dir = join(import.meta.dirname, 'prompts/agent'),
+): string {
+  const file = BUILTIN_SUBAGENT_PROMPTS[name];
+  if (!file) throw new Error(`unknown subagent type: ${name}`);
+  try {
+    return readFileSync(join(dir, file), 'utf8');
+  } catch {
+    throw new Error(
+      `the built-in ${name} subagent has no prompt: prompts/agent/${file} is missing`,
+    );
+  }
+}
 export class AgentRuntime {
   private readonly searches = new WebSearchService();
   private readonly vision = new VisionService();
@@ -499,6 +523,13 @@ export class AgentRuntime {
   /** The subagents the agent folders define, read again with every system prompt. */
   private fileAgents: SubagentFileInfo[] = [];
   private fileAgentProblems: string[] = [];
+  /** The `agents` folders of the skills this session loaded, by skill (#552); read again with the other folders. */
+  private skillAgentFolders = new Map<
+    string,
+    { skill: string; folder: string }
+  >();
+  private skillAgents: (SubagentFileInfo & { skill: string })[] = [];
+  private skillAgentProblems: string[] = [];
   private extensionChanges = new Map<string, Promise<void>>();
   private extensionChangeListeners = new Set<() => void>();
   private readonly integrationLifetime = new AbortController();
@@ -687,6 +718,10 @@ export class AgentRuntime {
       openUrl: this.options.openUrl,
       readFile: (path, context, limit) =>
         readFileBytes(this.sandbox, fileReads, path, context, limit),
+      // A server's question in the middle of a call is asked in the question panel (#556)
+      ask: this.options.question
+        ? (args, signal) => this.options.question!(args, signal)
+        : undefined,
       // A server that went away leaves the system prompt between turns, as tools do
       onChange: () => {
         if (this.closing) return;
@@ -985,11 +1020,15 @@ export class AgentRuntime {
         const parentHarness = this.harness;
         const parentSessionId = context.sessionId;
         const name = String(args.subagent_type || 'general-purpose');
+        // As the folders hold them now: one written this step is found, and one a replaced pack took away is not
+        this.loadSubagentFiles();
         const custom = this.customSubagents().find(
           (agent) => agent.spec.name === name,
         );
-        if (!custom && !['general-purpose', 'explore'].includes(name))
+        if (!custom && !Object.hasOwn(BUILTIN_SUBAGENT_PROMPTS, name)) {
+          this.describeSubagents(parentHarness.tools);
           throw new Error('unknown subagent type');
+        }
         const childModel = custom?.spec.model
           ? this.modelWithSearch(
               this.gatewayModel(this.options.settings, custom.spec.model),
@@ -1157,20 +1196,23 @@ export class AgentRuntime {
           secrets: () => this.runSecrets(),
           redact: this.redact,
           model: childModel,
+          // Hooks, MCP servers and its processes hear the conversation's session, with this one as the agent's
+          agent: { sessionId: parentSessionId, type: name },
+          // A depth of its own: the definition's, unless the run's CIRCLE_REASONING_EFFORT says otherwise (#549)
+          ...(custom?.spec.effort
+            ? {
+                effort: defaultEffort(
+                  this.options.settings.auth.protocol,
+                  custom.spec.effort,
+                ),
+              }
+            : {}),
           tools: ownedChildTools,
           store: this.store,
           session,
           policy: this.policy,
           system:
-            (custom?.spec.system_prompt ??
-              readFileSync(
-                join(
-                  import.meta.dirname,
-                  'prompts/agent',
-                  name === 'explore' ? 'explore.md' : 'generate.md',
-                ),
-                'utf8',
-              )) +
+            (custom?.spec.system_prompt ?? builtinSubagentPrompt(name)) +
             '\n' +
             parentHarness.system,
           bus: childBus,
@@ -1243,6 +1285,13 @@ export class AgentRuntime {
           signal.addEventListener('abort', abort, { once: true });
           try {
             signal.throwIfAborted();
+            // subagent_start hooks (#557): what they say back is in its system prompt from its first request on
+            await this.subagentStartHooks(
+              child,
+              { sessionId: parentSessionId, id: session.id, type: name },
+              String(args.description || ''),
+              signal,
+            );
             return (await child.run(String(args.description || ''))).answer;
           } finally {
             signal.removeEventListener('abort', abort);
@@ -1461,6 +1510,7 @@ export class AgentRuntime {
         this.scheduleToolRefresh();
       },
       openUrl: this.options.openUrl,
+      saveMcpServer: (entry) => this.saveMcpServer(entry),
       settings: this.options.settings.extensions,
       reservedTools: new Set([...BUILTIN_TOOL_NAMES, ...reservedTools]),
       reservedCommands: new Set([
@@ -1487,6 +1537,17 @@ export class AgentRuntime {
           );
     this.fileAgents = found.agents;
     this.fileAgentProblems = found.problems;
+    // What the skills this session loaded bring, as their folders hold it now: a pack replaced since takes its old
+    // definitions with it
+    const agents: (SubagentFileInfo & { skill: string })[] = [];
+    const problems: string[] = [];
+    for (const { skill, folder } of this.skillAgentFolders.values()) {
+      const read = readSubagentFolder(folder, `Skill ${skill}`);
+      agents.push(...read.agents.map((agent) => ({ ...agent, skill })));
+      problems.push(...read.problems);
+    }
+    this.skillAgents = agents;
+    this.skillAgentProblems = problems;
   }
   /**
    * The subagents a person or an extension defined. Folders first, so an extension of the
@@ -1529,6 +1590,40 @@ export class AgentRuntime {
         tools: agent.tools,
         source: 'Extension',
       });
+    // A skill's definitions come last: a name a folder, an extension, Circle or a skill loaded before has stays theirs
+    for (const agent of this.skillAgents) {
+      const name = agent.spec.name;
+      const taken =
+        byName.get(name)?.source ??
+        (Object.hasOwn(BUILTIN_SUBAGENT_PROMPTS, name) ? 'Circle' : undefined);
+      if (taken) {
+        problems.push(
+          `${name} from the skill ${agent.skill} has a name ${taken} gives a subagent already · not offered`,
+        );
+        continue;
+      }
+      const missing = (agent.tools ?? []).filter(
+        (tool) => !this.allTools.some((item) => item.name === tool),
+      );
+      if (missing.length) {
+        problems.push(
+          `${name} from the skill ${agent.skill} names tools that do not exist: ${missing.join(', ')} · not offered`,
+        );
+        continue;
+      }
+      byName.set(name, {
+        spec: agent.spec,
+        source: agent.source_label,
+        path: agent.path,
+        ...(agent.tools
+          ? {
+              tools: agent.tools.map((tool) =>
+                this.allTools.find((item) => item.name === tool)!,
+              ),
+            }
+          : {}),
+      });
+    }
     return [...byName.values()];
   }
   /**
@@ -1542,13 +1637,14 @@ export class AgentRuntime {
       description: string;
       source: string;
       model?: string;
+      effort?: string;
       tools?: string[];
       path?: string;
     }[];
     problems: string[];
   } {
     this.loadSubagentFiles();
-    const problems = [...this.fileAgentProblems];
+    const problems = [...this.fileAgentProblems, ...this.skillAgentProblems];
     const byName = new Map([
       [
         'general-purpose',
@@ -1577,6 +1673,7 @@ export class AgentRuntime {
         description: string;
         source: string;
         model?: string;
+        effort?: string;
         tools?: string[];
       },
     ][]);
@@ -1586,6 +1683,7 @@ export class AgentRuntime {
         description: agent.spec.description,
         source: agent.source,
         ...(agent.spec.model ? { model: agent.spec.model } : {}),
+        ...(agent.spec.effort ? { effort: agent.spec.effort } : {}),
         ...(agent.tools ? { tools: agent.tools.map((tool) => tool.name) } : {}),
         ...(agent.path ? { path: agent.path } : {}),
       });
@@ -1800,6 +1898,10 @@ export class AgentRuntime {
     const integrations = [
       ...tools,
       ...this.mcp.tools,
+      // Reading what the servers publish, while one does: a name a server's own tool has stays the server's
+      ...this.mcp.resourceTools.filter(
+        (tool) => !this.mcp.tools.some((have) => have.name === tool.name),
+      ),
       ...this.extensions.tools(),
     ];
     // A pack's tool whose name another tool took is left out, not a clash
@@ -2168,7 +2270,9 @@ export class AgentRuntime {
     // Loaded again: the model is told again which tools it has, in case that part of the conversation is gone
     if (this.armedSkills.has(key)) return this.packToolNotes.get(key) ?? '';
     this.armedSkills.add(key);
-    const tools = await this.armPackTools(key);
+    const tools = [await this.armPackTools(key), this.armSkillAgents(key)]
+      .filter(Boolean)
+      .join('\n');
     if (tools) this.packToolNotes.set(key, tools);
     const runner = this.hookRunner;
     if (!runner) return tools;
@@ -2251,10 +2355,137 @@ export class AgentRuntime {
       .filter(Boolean)
       .join('\n');
   }
+  /**
+   * The subagents a loaded skill ships in its `agents` folder (#552) join `task`'s list, as a skill's hooks start: for
+   * this session, from the next request. Returns what the model is told: the names it can give `task`, and why a
+   * definition is not offered.
+   */
+  private armSkillAgents(key: string): string {
+    const skill = this.skills.find((item) => item.name.toLowerCase() === key);
+    if (!skill) return '';
+    const folder = join(dirname(skill.path), 'agents');
+    try {
+      if (!statSync(folder).isDirectory()) return '';
+    } catch {
+      return '';
+    }
+    this.skillAgentFolders.set(key, { skill: skill.name, folder });
+    this.loadSubagentFiles();
+    const problems: string[] = [];
+    const offered = this.customSubagents(problems)
+      .filter((agent) => agent.source === `Skill ${skill.name}`)
+      .map((agent) => agent.spec.name);
+    const wrong = [
+      ...this.skillAgentProblems.filter((line) => line.startsWith(folder)),
+      ...problems.filter((line) =>
+        line.includes(` from the skill ${skill.name} `),
+      ),
+    ];
+    if (this.harness && offered.length)
+      this.describeSubagents(this.harness.tools);
+    return [
+      offered.length
+        ? `Subagents the skill ${skill.name} brings, for task from the next request: ${offered.join(', ')}.`
+        : '',
+      wrong.length
+        ? `Subagent definitions of the skill ${skill.name} that are not offered: ${wrong.join('; ')}`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+  /**
+   * The conversation's subagent_start hooks, before a subagent's first request (#557): each gets the conversation's
+   * session, the subagent's own as `agent_id`, its type and its task.
+   */
+  private async subagentStartHooks(
+    child: Harness,
+    agent: { sessionId: string; id: string; type: string },
+    description: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const runner = this.hookRunner;
+    if (!runner?.active().some((hook) => hook.event === 'subagent_start'))
+      return;
+    const batch = await runner.run({
+      event: 'subagent_start',
+      sessionId: agent.sessionId,
+      agent: { id: agent.id, type: agent.type },
+      cwd: this.options.workspace,
+      description,
+      secrets: this.runSecrets(),
+      signal,
+    });
+    signal.throwIfAborted();
+    child.hookOutput(batch, 'subagent_start');
+  }
   /** Read hooks again. /reload uses this so a changed file applies to the next call. */
   reloadHooks(): void {
     this.hookRunner = undefined;
     if (this.harness) this.harness.options.hooks = this.ensureHooks();
+  }
+  /**
+   * Connects one MCP server again, from the settings as they are now, and lists its tools again; the other servers
+   * and the programs started for them stay as they are (#559). Between turns, as a reload is.
+   */
+  /**
+   * Saves an MCP server entry in settings.json, replacing the one of the same name, and connects that server alone, for
+   * an extension (#548). The entry keeps the id it had, so the desktop's list keeps its row. Refused, with nothing
+   * saved, while a turn runs.
+   */
+  async saveMcpServer(
+    entry: Record<string, unknown>,
+  ): Promise<import('./extensions.js').McpServerState> {
+    if (this.ownershipError) throw this.ownershipError;
+    if (this.closing || this.deleting) throw new Error('session is closing');
+    if (this.busy)
+      throw new Error(
+        'a turn is running: nothing was saved; try again after it',
+      );
+    const name = String(entry.name);
+    saveSettingsChange(this.options.home, (settings) => {
+      const before = settings.mcp_servers.find((row) => row.name === name);
+      settings.mcp_servers = [
+        ...settings.mcp_servers.filter((row) => row.name !== name),
+        {
+          ...(typeof before?.id === 'string' ? { id: before.id } : {}),
+          ...entry,
+        },
+      ];
+    });
+    await this.reloadMcpServer(name);
+    const row = this.mcp.status.find((item) => item.name === name);
+    return {
+      name,
+      state: row?.authorize
+        ? 'signing-in'
+        : row?.error
+          ? 'failed'
+          : 'connected',
+      tools: row?.tools.length ?? 0,
+      ...(row?.error && !row.authorize ? { error: row.error } : {}),
+      ...(row?.authorize ? { signIn: row.authorize } : {}),
+      ...(row?.authorize && row.code ? { code: row.code } : {}),
+    };
+  }
+  async reloadMcpServer(name: string): Promise<void> {
+    if (this.ownershipError) throw this.ownershipError;
+    if (this.closing || this.deleting) throw new Error('session is closing');
+    if (this.busy) throw new Error('reload after the current turn');
+    // Only the servers are read again: the rest of the settings is /reload's, with what depends on it
+    const servers = settingsForRun(
+      this.options.home,
+      this.options.workspace,
+      this.options.modelOverride,
+    ).settings.mcp_servers;
+    await this.integrationsReady;
+    await this.mcp.reloadServer(name, servers);
+    this.options.settings.mcp_servers = servers;
+    this.harness.tools = this.withIntegrationTools(
+      this.coreTools.filter((tool) => tool.name !== 'wait_jobs'),
+    );
+    this.describeSubagents(this.harness.tools);
+    this.refreshSystemPrompt();
   }
   async reloadIntegrations(): Promise<void> {
     if (this.ownershipError) throw this.ownershipError;
@@ -2827,6 +3058,7 @@ export class AgentRuntime {
     this.memorySession = undefined;
     this.todos = [];
     this.armedSkills.clear();
+    this.skillAgentFolders.clear();
     this.hookRunner = undefined;
     this.harness = this.createHarness(this.options.model);
     this.todos = restoredTodos(this.harness.messages);
@@ -2854,6 +3086,7 @@ export class AgentRuntime {
     const repaired = this.store.get(session.id);
     if (repaired) this.session = repaired;
     this.armedSkills.clear();
+    this.skillAgentFolders.clear();
     this.hookRunner = undefined;
     this.harness = this.createHarness(this.options.model);
     this.todos = restoredTodos(this.harness.messages);
@@ -2878,6 +3111,7 @@ export class AgentRuntime {
       this.store.claimSession(session.id, (error) => this.ownershipLost(error));
       this.session = session;
       this.armedSkills.clear();
+      this.skillAgentFolders.clear();
       this.hookRunner = undefined;
       this.harness = this.createHarness(this.options.model);
       this.todos = restoredTodos(this.harness.messages);

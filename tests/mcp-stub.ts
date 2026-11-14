@@ -14,6 +14,8 @@ export interface StubTool {
   inputSchema?: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
   annotations?: Record<string, unknown>;
+  /** How it may be run, such as `{ taskSupport: 'required' }`. */
+  execution?: Record<string, unknown>;
 }
 export interface StubResult {
   content: unknown[];
@@ -32,6 +34,8 @@ export interface StubRequest {
     method: string;
     params?: Record<string, any>;
   };
+  /** The client's answer to the request the stub sent it during this call (`serverRequest`). */
+  reply?: { result?: Record<string, any>; error?: Record<string, any> };
 }
 export interface StubOptions {
   name?: string;
@@ -41,12 +45,41 @@ export interface StubOptions {
   /** The initialize result's `instructions`, read at each initialize. */
   instructions?: () => string | undefined;
   /** Answers tools/call; by default the text names the tool. */
-  call?: (request: StubRequest) => StubResult | Promise<StubResult>;
+  call?: (
+    request: StubRequest,
+  ) => StubResult | Record<string, unknown> | Promise<StubResult>;
   /**
    * Declares that its tools can change (`tools.listChanged`) and keeps the stream a streamable HTTP client opens with
    * GET, so `notify` reaches it. `tools` is read again at each tools/list: change it, then notify.
    */
   listChanged?: boolean;
+  /** More server capabilities to declare, such as `resources` or `tasks`. */
+  capabilities?: Record<string, unknown>;
+  /** Answers a method the stub has no answer of its own for; undefined falls back to an empty result. */
+  answer?: (request: StubRequest) => unknown;
+  /** Answers a GET of another path with JSON, such as a discovery document; undefined is a 405. */
+  get?: (path: string, origin: string) => unknown;
+  /** Closes each connection after its answer, so a client opens a new one for each request. */
+  connectionClose?: boolean;
+  /** Cuts the connection once a request arrived, before any answer. */
+  drop?: (request: StubRequest) => boolean;
+  /**
+   * A request the stub sends the client during a tools/call, on the call's event stream, such as
+   * `elicitation/create`; it answers the call once the client answered, with that answer as the call's `reply`.
+   */
+  serverRequest?: (
+    request: StubRequest,
+  ) => { method: string; params: Record<string, unknown> } | undefined;
+  /** Sends `serverRequest` on the streams a client holds open with GET (`listChanged`) instead of the call's own. */
+  serverRequestOnStream?: boolean;
+  /** Answers a request with this JSON-RPC error instead of a result. */
+  error?: (
+    request: StubRequest,
+  ) => { code: number; message: string } | undefined;
+  /** Messages sent on an event stream before the answer to a request, such as progress notices. */
+  before?: (request: StubRequest) => Record<string, unknown>[] | undefined;
+  /** Answers a request with an event stream that ends without the answer. */
+  endStream?: (request: StubRequest) => boolean;
   /** An HTTP status to refuse a request with, such as 401, with this body. */
   refuse?: (
     request: StubRequest,
@@ -63,12 +96,19 @@ export interface McpStub {
   calls(): StubRequest[];
   /** Sends a notification on every stream a client holds open. */
   notify(method: string): void;
+  /** Stops listening, so a connection is refused, until `resume`. */
+  pause(): Promise<void>;
+  /** Listens again, on the same port. */
+  resume(): Promise<void>;
 }
 export async function mcpStub(
   t: TestContext,
   options: StubOptions = {},
 ): Promise<McpStub> {
   const requests: StubRequest[] = [];
+  // Requests the stub sent a client, by id, waiting for its answer
+  const asked = new Map<string, (reply: StubRequest['reply']) => void>();
+  let sent = 0;
   let stream: ServerResponse | undefined;
   const pushed: ServerResponse[] = [];
   const answer = async (request: StubRequest): Promise<unknown> => {
@@ -79,6 +119,7 @@ export async function mcpStub(
         protocolVersion: message.params?.protocolVersion,
         capabilities: {
           tools: options.listChanged ? { listChanged: true } : {},
+          ...options.capabilities,
         },
         serverInfo: { name: options.name ?? 'files-server', version: '1' },
         ...(instructions === undefined ? {} : { instructions }),
@@ -99,10 +140,15 @@ export async function mcpStub(
         ? options.call(request)
         : {
             content: [
-              { type: 'text', text: `ran ${String(message.params?.name)}` },
+              {
+                type: 'text',
+                text: request.reply
+                  ? `asked: ${JSON.stringify(request.reply)}`
+                  : `ran ${String(message.params?.name)}`,
+              },
             ],
           };
-    return {};
+    return (await options.answer?.(request)) ?? {};
   };
   const server = createServer(async (incoming, response) => {
     let body = '';
@@ -120,6 +166,11 @@ export async function mcpStub(
         /* Not JSON-RPC: kept as it came. */
       }
     requests.push(request);
+    if (options.connectionClose) response.setHeader('Connection', 'close');
+    if (options.drop?.(request)) {
+      incoming.socket.destroy();
+      return;
+    }
     const refused = options.refuse?.(request);
     if (refused) {
       response.writeHead(refused.status).end(refused.body);
@@ -141,19 +192,75 @@ export async function mcpStub(
       response.flushHeaders();
       return;
     }
+    if (request.method === 'GET' && options.get) {
+      const found = options.get(
+        request.path,
+        `http://${String(incoming.headers.host)}`,
+      );
+      if (found !== undefined) {
+        response
+          .writeHead(200, { 'Content-Type': 'application/json' })
+          .end(JSON.stringify(found));
+        return;
+      }
+    }
     if (request.method !== 'POST' || !request.message) {
       response.writeHead(405).end();
+      return;
+    }
+    // The client's answer to a request the stub sent it
+    if (
+      request.message.method === undefined &&
+      request.message.id !== undefined
+    ) {
+      asked.get(String(request.message.id))?.(
+        request.message as StubRequest['reply'] & object,
+      );
+      response.writeHead(202).end();
       return;
     }
     if (request.message.id === undefined) {
       response.writeHead(202).end();
       return;
     }
+    if (options.endStream?.(request)) {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' }).end();
+      return;
+    }
+    // Messages that go before the answer are sent at once, so a client reads them while the answer is made
+    const first =
+      request.path === '/messages' ? undefined : options.before?.(request);
+    const ask =
+      request.path !== '/messages' && request.message.method === 'tools/call'
+        ? options.serverRequest?.(request)
+        : undefined;
+    if (first?.length || ask)
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    for (const message of first ?? [])
+      response.write(
+        `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', ...message })}\n\n`,
+      );
+    if (ask) {
+      const id = `server-${++sent}`;
+      const answered = new Promise<StubRequest['reply']>((resolve) =>
+        asked.set(id, resolve),
+      );
+      const event = `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id, ...ask })}\n\n`;
+      if (options.serverRequestOnStream)
+        for (const open of pushed) open.write(event);
+      else response.write(event);
+      request.reply = await answered;
+    }
+    const failure = options.error?.(request);
     const reply = JSON.stringify({
       jsonrpc: '2.0',
       id: request.message.id,
-      result: await answer(request),
+      ...(failure ? { error: failure } : { result: await answer(request) }),
     });
+    if (first?.length || ask) {
+      response.end(`event: message\ndata: ${reply}\n\n`);
+      return;
+    }
     if (request.path === '/messages') {
       stream?.write(`event: message\ndata: ${reply}\n\n`);
       response.writeHead(202).end();
@@ -178,5 +285,18 @@ export async function mcpStub(
       for (const open of [...pushed, ...(stream ? [stream] : [])])
         open.write(event);
     },
+    pause: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      }),
+    resume: () =>
+      new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(address.port, '127.0.0.1', () => {
+          server.off('error', reject);
+          resolve();
+        });
+      }),
   };
 }

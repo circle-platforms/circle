@@ -278,9 +278,19 @@ function ranBoth(f: Fixture, events: Record<string, any>[], output: string) {
       (request) => request.headers.authorization === `Bearer ${RUN_TOKEN}`,
     ),
   );
+  // Each call asks for progress notices (#554)
   assert.deepEqual(
-    f.stub.calls().map((call) => call.message?.params),
-    [{ name: 'list_docs', arguments: { folder: 'manuals' } }],
+    f.stub.calls().map((call) => {
+      const { _meta, ...params } = call.message?.params ?? {};
+      return { ...params, progress: typeof _meta?.progressToken };
+    }),
+    [
+      {
+        name: 'list_docs',
+        arguments: { folder: 'manuals' },
+        progress: 'number',
+      },
+    ],
   );
 }
 

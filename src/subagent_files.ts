@@ -7,6 +7,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { EFFORT_LEVELS } from './effort.js';
 import { parseFrontmatter } from './skills.js';
 import type { SubagentSpec } from './extensions.js';
 
@@ -70,6 +71,79 @@ function markdownFiles(directory: string): string[] {
 }
 
 /**
+ * The definitions in one folder, and why a file there was passed over: the folders below, and the `agents` folder a
+ * skill ships (#552).
+ */
+export function readSubagentFolder(
+  root: string,
+  label: string,
+): SubagentSources {
+  const agents: SubagentFileInfo[] = [];
+  const problems: string[] = [];
+  const takenHere = new Set<string>();
+  for (const file of markdownFiles(root)) {
+    const path = join(root, file);
+    let text: string;
+    try {
+      if (!statSync(path).isFile()) continue;
+      text = readFileSync(path, 'utf8');
+    } catch (error) {
+      problems.push(`${path}: cannot be read (${String(error)})`);
+      continue;
+    }
+    const { meta, body } = parseFrontmatter(text);
+    const stem = file.replace(/\.md$/i, '');
+    const claimed = (meta.name || stem).trim();
+    if (!NAME.test(claimed)) {
+      problems.push(
+        `${path}: '${claimed}' is not a name (letters, digits, _ and -, up to 64)`,
+      );
+      continue;
+    }
+    if (takenHere.has(claimed)) {
+      problems.push(`${path}: two files in ${root} claim '${claimed}'`);
+      continue;
+    }
+    const description = (meta.description || '').trim();
+    if (!description) {
+      problems.push(`${path}: no description`);
+      continue;
+    }
+    const prompt = body.trim();
+    if (!prompt) {
+      problems.push(`${path}: no prompt after the --- lines`);
+      continue;
+    }
+    // A depth of its own, as Claude Code's `effort`; a word that is not one does not load
+    const effort = meta.effort?.trim();
+    if (effort && !(EFFORT_LEVELS as readonly string[]).includes(effort)) {
+      problems.push(
+        `${path}: effort '${effort}' is not one of ${EFFORT_LEVELS.join(', ')}`,
+      );
+      continue;
+    }
+    const listed = (meta.tools || '')
+      .split(/[,;\s]+/)
+      .map((word) => word.trim())
+      .filter(Boolean);
+    takenHere.add(claimed);
+    agents.push({
+      spec: {
+        name: claimed,
+        description: description.slice(0, 1024),
+        system_prompt: prompt,
+        ...(meta.model?.trim() ? { model: meta.model.trim() } : {}),
+        ...(effort ? { effort } : {}),
+      },
+      ...(meta.tools?.trim() ? { tools: listed } : {}),
+      path: existsSync(path) ? realpathSync(path) : path,
+      source_label: label,
+    });
+  }
+  return { agents, problems };
+}
+
+/**
  * Read the folders of agent definitions. A file that cannot be used is reported in
  * `problems` rather than dropped quietly, so `/agents` can say what is wrong with it.
  */
@@ -81,57 +155,9 @@ export function discoverSubagents(
   const agents: SubagentFileInfo[] = [];
   const problems: string[] = [];
   for (const [root, label] of subagentSources(workspace, home, userHome)) {
-    const takenHere = new Set<string>();
-    for (const file of markdownFiles(root)) {
-      const path = join(root, file);
-      let text: string;
-      try {
-        if (!statSync(path).isFile()) continue;
-        text = readFileSync(path, 'utf8');
-      } catch (error) {
-        problems.push(`${path}: cannot be read (${String(error)})`);
-        continue;
-      }
-      const { meta, body } = parseFrontmatter(text);
-      const stem = file.replace(/\.md$/i, '');
-      const claimed = (meta.name || stem).trim();
-      if (!NAME.test(claimed)) {
-        problems.push(
-          `${path}: '${claimed}' is not a name (letters, digits, _ and -, up to 64)`,
-        );
-        continue;
-      }
-      if (takenHere.has(claimed)) {
-        problems.push(`${path}: two files in ${root} claim '${claimed}'`);
-        continue;
-      }
-      const description = (meta.description || '').trim();
-      if (!description) {
-        problems.push(`${path}: no description`);
-        continue;
-      }
-      const prompt = body.trim();
-      if (!prompt) {
-        problems.push(`${path}: no prompt after the --- lines`);
-        continue;
-      }
-      const listed = (meta.tools || '')
-        .split(/[,;\s]+/)
-        .map((word) => word.trim())
-        .filter(Boolean);
-      takenHere.add(claimed);
-      agents.push({
-        spec: {
-          name: claimed,
-          description: description.slice(0, 1024),
-          system_prompt: prompt,
-          ...(meta.model?.trim() ? { model: meta.model.trim() } : {}),
-        },
-        ...(meta.tools?.trim() ? { tools: listed } : {}),
-        path: existsSync(path) ? realpathSync(path) : path,
-        source_label: label,
-      });
-    }
+    const found = readSubagentFolder(root, label);
+    agents.push(...found.agents);
+    problems.push(...found.problems);
   }
   // Later folders replace earlier ones, in the order the folders are read.
   const byName = new Map<string, SubagentFileInfo>();

@@ -174,6 +174,11 @@ export interface ToolContext {
   signal: AbortSignal;
   readOnlyCommand?: string;
   sessionId: string;
+  /**
+   * Who the call runs for, as hooks, MCP servers and child processes are told (#550, #551): the conversation's
+   * session, and in a subagent that agent's own (`sessionId` above) as `agentId`.
+   */
+  identity?: import('./sandbox.js').CallIdentity;
   /** The call being run: a request the tool raises can be shown under it. */
   callId?: string;
   /** The secrets whose values went into this call's arguments, by name. */
@@ -194,6 +199,8 @@ export interface ToolContext {
   /** Bound to this harness's model and connection, including child harnesses. */
   webSearch?: (query: string, numResults: number) => Promise<string>;
   recordModelCall?: (call: ToolModelCall) => void;
+  /** Says how far the call has come, on its row while it runs: what an MCP server reports (#554). */
+  progress?: (text: string) => void;
 }
 export interface MediaAttachment {
   kind: 'image' | 'document';

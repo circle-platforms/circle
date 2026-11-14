@@ -72,6 +72,7 @@ Circle asks models for extended thinking when the protocol supports it. The dept
 - `alt+t` switches to the next depth.
 - `--thinking <level>` sets it for one run and is never saved.
 - `CIRCLE_REASONING_EFFORT` sets it for a run and wins over `default_thinking`.
+- A [subagent](agents.md) can carry its own depth (`effort`) for its requests. `CIRCLE_REASONING_EFFORT` wins over that too; without either, a subagent follows the conversation's depth.
 
 For documented Claude models that support thinking summaries, Circle requests `display: "summarized"` so progress can include thinking text. That field is Anthropic-only; OpenAI-compatible endpoints are not asked for an equivalent. On both protocols, Circle maps provider reasoning into the same `thinking` field (`reasoning_content` / `reasoning` on OpenAI-compatible streams, thinking blocks on Anthropic) and maps visible progress into ordinary assistant text. The desktop transcript keeps a thinking-only step visible between tool batches when thinking is shown, rather than folding it into the tool summary. The thinking visibility switch only changes the interface; it does not change the model request, effort or output limit. An endpoint that explicitly rejects `thinking.display` is retried once without that field, keeping the remaining thinking settings. Unknown model aliases and older profiles keep their existing request format. Thinking blocks and signatures are retained as returned; ordinary text is shown only when the provider sends it.
 

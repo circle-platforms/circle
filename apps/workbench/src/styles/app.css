@@ -2992,7 +2992,8 @@ button.project-chip > span:first-of-type {
     gap: 6px;
   }
   span.tool-target,
-  .tool-time {
+  .tool-time,
+  .tool-progress {
     display: none;
   }
   .tool-head code {
@@ -3975,6 +3976,15 @@ button.project-chip > span:first-of-type {
   font-family: var(--mono);
   font-size: var(--ui-tiny);
   color: var(--muted);
+  white-space: nowrap;
+}
+.tool-progress {
+  max-width: 28ch;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: var(--ui-tiny);
+  color: var(--muted);
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .tool-content > .diff-block {

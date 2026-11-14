@@ -148,6 +148,16 @@ export function hubEndpoint(settings: CircleSettings): string | undefined {
  */
 export const HUB_PLACEHOLDERS = { url: 'HUB_URL', token: 'HUB_TOKEN' } as const;
 
+/** The MCP entry of a Hub at this endpoint: the one the desktop's Hub page and the terminal's `/hub` save. */
+export function hubEntry(endpoint: string): Record<string, unknown> {
+  return {
+    name: HUB_SERVER,
+    url: endpoint,
+    transport: 'streamable_http',
+    enabled: true,
+    placeholders: { ...HUB_PLACEHOLDERS },
+  };
+}
 /**
  * Puts the Hub entry for `endpoint` into `settings` (as saveSettingsChange changes them), keeping that entry's id when
  * there was one, and keeps the extension on.
@@ -158,11 +168,7 @@ export function addHub(settings: CircleSettings, endpoint: string): void {
     ...settings.mcp_servers.filter((row) => row.name !== HUB_SERVER),
     {
       ...(typeof before?.id === 'string' ? { id: before.id } : {}),
-      name: HUB_SERVER,
-      url: endpoint,
-      transport: 'streamable_http',
-      enabled: true,
-      placeholders: { ...HUB_PLACEHOLDERS },
+      ...hubEntry(endpoint),
     },
   ];
   settings.extensions = {

@@ -1,1 +1,1 @@
-{"version":"0.1.0","description":"Connect a Circle Hub by its IP address and sign in with your Hub account"}
+{"version":"0.1.0","description":"Connect a Circle Hub by its IP address and sign in with your Hub account","commands":["hub"]}

@@ -892,6 +892,21 @@ export function McpPage() {
                 [t('status')]: server.status,
               }}
             />
+            <div className="inline-actions">
+              <Button
+                onClick={() => {
+                  runtime.request('mcp.reload-server', { name: server.name });
+                  notify(
+                    runtime.mode === 'live'
+                      ? t('reconnecting {name}', { name: server.name })
+                      : 'reconnect requested; no server was started',
+                  );
+                }}
+              >
+                <RotateCcw size={13} />
+                {t('reconnect')}
+              </Button>
+            </div>
             {server.tools.map((tool) => (
               <details key={tool.name} className="tool-definition">
                 <summary>

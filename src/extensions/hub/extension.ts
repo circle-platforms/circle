@@ -1,15 +1,45 @@
-import type { ExtensionAPI } from '../../extensions.js';
-// The Hub extension: in the desktop application its page takes a Hub's address and keeps the MCP entry named Hub
-// (src/hub_connection.ts); the sign-in is the MCP authorization of any server, by a one-time code where the Hub
-// offers it. Here it only says where that is done. No Hub address is built in.
+import type { ExtensionAPI, McpServerState } from '../../extensions.js';
+import { findHub, hubEntry } from '../../hub_connection.js';
+// The Hub extension: given a Hub's address, it finds the Hub's MCP endpoint and saves the MCP entry named Hub
+// (src/hub_connection.ts), in the desktop from its page and in the terminal from /hub. The sign-in is the MCP
+// authorization of any server. No Hub address is built in.
 const HUB_HINT =
-  'Connect a Circle Hub in Settings → Capabilities → Extensions → Hub (设置 → 能力 → 扩展 → Hub): type its IP address, then sign in on the page that opens with your Hub user name and password, and enter the code Circle shows if it shows one. In the terminal, add the Hub to mcp_servers in settings.json as {"name": "Hub", "url": "http://<IP address>:7420/mcp", "transport": "streamable_http", "placeholders": {"url": "HUB_URL", "token": "HUB_TOKEN"}}; /mcp then shows the page to sign in on, and the placeholders give the commands of a Hub skill the address and token of the Hub.';
+  "Connect a Circle Hub: /hub <its IP address or URL>. Circle finds the Hub's MCP endpoint, saves the MCP entry named Hub and connects it. Sign in on the page it then shows: with the invite code the Hub's administrator gave you, or after signing in to the Hub's console in that browser. Circle keeps the sign-in in mcp-auth.json in its data folder. /mcp shows the entry and its tools; in the desktop the same is under Settings → Capabilities → Extensions → Hub (设置 → 能力 → 扩展 → Hub).";
+
+function stateLine(state: McpServerState, endpoint: string): string {
+  if (state.state === 'signing-in')
+    return [
+      `Hub saved: ${endpoint}. Sign in on this page: ${state.signIn}`,
+      ...(state.code ? [`and type this code there: ${state.code}`] : []),
+      "Use the invite code from the Hub's administrator, or sign in to the Hub's console in that browser first. /mcp shows the Hub's tools once you have signed in.",
+    ].join('\n');
+  if (state.state === 'failed')
+    return `Hub saved: ${endpoint}, but it could not connect: ${state.error ?? 'no reason given'}. Fix that, then /mcp reload ${state.name}.`;
+  return `Hub connected: ${endpoint} · ${state.tools} tools.`;
+}
+
 export function register(api: ExtensionAPI) {
   api.registerCommand(
     'hub',
-    'how to connect a circle hub',
-    async (_args, context) => {
-      context.append(HUB_HINT);
+    'connect a circle hub: /hub <IP address or URL>',
+    async (args, context) => {
+      const typed = args.trim();
+      if (!typed) {
+        context.append(HUB_HINT);
+        return;
+      }
+      let endpoint: string;
+      try {
+        endpoint = await findHub(typed);
+      } catch (error) {
+        context.append(
+          `No Circle Hub found at ${typed}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return;
+      }
+      context.append(
+        stateLine(await api.saveMcpServer(hubEntry(endpoint)), endpoint),
+      );
     },
   );
 }

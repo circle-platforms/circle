@@ -16,6 +16,8 @@ export class ScriptedModel implements ChatModel {
       structuredClone({
         system: request.system,
         messages: request.messages,
+        // The depth a request asks for, when it asks for its own (a subagent's `effort`)
+        ...(request.effort !== undefined ? { effort: request.effort } : {}),
         // What the model is offered of each tool: its data, without the functions that run it
         tools: request.tools.map((tool) =>
           Object.fromEntries(

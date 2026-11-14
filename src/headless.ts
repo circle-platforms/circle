@@ -62,6 +62,8 @@ export function jsonEvent(
         : {}),
     };
   if (event.kind === 'steer') return { type: 'steer', message: data.message };
+  if (event.kind === 'tool_progress')
+    return { type: 'tool_progress', id: data.id, text: data.text };
   return undefined;
 }
 // Tool rows for --verbose: a short name and one phrase.

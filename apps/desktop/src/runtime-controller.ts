@@ -498,7 +498,12 @@ export class RuntimeController {
   >();
   private toolStates = new Map<
     string,
-    { status: 'running' | 'waiting' | 'error' | 'success'; output?: string }
+    {
+      status: 'running' | 'waiting' | 'error' | 'success';
+      output?: string;
+      /** What the running call last said of its progress (#554). */
+      progress?: string;
+    }
   >();
   // Per `${session}:${call}`: the diff a file tool showed before it ran.
   private diffs = new Map<string, DiffView>();
@@ -3114,6 +3119,9 @@ export class RuntimeController {
               input: call.args,
               output: state?.output ?? '',
               status: state?.status ?? 'unknown',
+              ...(state?.status === 'running' && state.progress
+                ? { progress: state.progress }
+                : {}),
               filePath:
                 String(call.args.file_path ?? call.args.path ?? '') ||
                 undefined,
@@ -4115,6 +4123,15 @@ export class RuntimeController {
     }
     if (['llm_end', 'run_end', 'run_error', 'error'].includes(event.kind))
       this.streams.delete(id);
+    if (event.kind === 'tool_progress') {
+      const key = `${id}:${String(event.payload.id ?? '')}`;
+      const state = this.toolStates.get(key);
+      if (state?.status === 'running')
+        this.toolStates.set(key, {
+          ...state,
+          progress: String(event.payload.text ?? ''),
+        });
+    }
     if (
       ['tool_waiting', 'tool_start', 'tool_result', 'tool_end'].includes(
         event.kind,
@@ -6286,6 +6303,15 @@ export class RuntimeController {
         // The next request in every open conversation says whether to credit Circle.
         if (data.attribution !== undefined)
           for (const owner of this.runtimes.values()) owner.refreshPrompt();
+        return {};
+      }
+      case 'mcp-reload-server': {
+        // One server again; the others and the programs started for them stay as they are (#559)
+        if (
+          !isFolderTrusted(loadSettings(this.home), runtime.options.workspace)
+        )
+          throw Error('trust the workspace first');
+        await runtime.reloadMcpServer(text(p.name, 'server', 200));
         return {};
       }
       case 'reload': {

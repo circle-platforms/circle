@@ -27,7 +27,11 @@ import {
 } from 'node:path';
 import { canonicalPath, ensureHome } from './paths.js';
 import { redactSecrets } from './secrets.js';
-import { isHostAbsolutePath, shellEnvironment } from './sandbox.js';
+import {
+  identityEnvironment,
+  isHostAbsolutePath,
+  shellEnvironment,
+} from './sandbox.js';
 import { discoverSkills } from './skills.js';
 import { isRecord, withPrivateJsonLock, writePrivateJson } from './settings.js';
 
@@ -37,7 +41,16 @@ export const HOOK_EVENTS = [
   'before_stop',
   'session_start',
   'permission_request',
+  'user_prompt',
+  'subagent_start',
 ] as const;
+/** Events about no tool: every hook of the event runs, whatever its `tools` and `paths` say. */
+const NO_TOOL = new Set<HookEvent>([
+  'session_start',
+  'before_stop',
+  'user_prompt',
+  'subagent_start',
+]);
 export type HookEvent = (typeof HOOK_EVENTS)[number];
 export type HookSource = 'user' | 'project' | 'skill';
 export type HookDecision = 'allow' | 'deny' | 'ask';
@@ -169,7 +182,9 @@ export interface HookBatch {
 
 export interface HookRunRequest {
   event: HookEvent;
+  /** The conversation's session. In a subagent, `agent` names the agent the call came from. */
   sessionId: string;
+  agent?: { id: string; type: string };
   cwd: string;
   toolName?: string;
   toolInput?: Record<string, unknown>;
@@ -178,6 +193,10 @@ export interface HookRunRequest {
   toolOutput?: string;
   toolStatus?: 'success' | 'error';
   permissionReason?: string;
+  /** user_prompt: the person's message, as written (#557). */
+  prompt?: string;
+  /** subagent_start: the task the subagent was given. */
+  description?: string;
   /** Saved secrets. Their values are written as %NAME% before the hook sees them. */
   secrets?: Record<string, string>;
   /** Run only these hook ids. Used when a skill is loaded after the session started. */
@@ -389,8 +408,7 @@ export function matchHookPath(
 }
 
 function toolMatches(hook: HookDefinition, tool: string | undefined): boolean {
-  if (hook.event === 'session_start' || hook.event === 'before_stop')
-    return true;
+  if (NO_TOOL.has(hook.event)) return true;
   if (!tool) return hook.tools === '*';
   if (hook.tools === '*') return true;
   return hook.tools.includes(tool);
@@ -401,8 +419,7 @@ function pathsMatch(
   paths: string[] | undefined,
   options: HookPathOptions,
 ): boolean {
-  if (hook.event === 'session_start' || hook.event === 'before_stop')
-    return true;
+  if (NO_TOOL.has(hook.event)) return true;
   if (!hook.paths.length) return true;
   if (!paths?.length) return false;
   return paths.some((file) =>
@@ -1355,6 +1372,9 @@ export class HookRunner {
         session_id: request.sessionId,
         cwd: request.cwd,
         hook: hook.name,
+        ...(request.agent
+          ? { agent_id: request.agent.id, agent_type: request.agent.type }
+          : {}),
         source: hook.source,
         source_label: hook.sourceLabel,
         tool_name: request.toolName,
@@ -1363,6 +1383,14 @@ export class HookRunner {
         tool_output: redactHookValue(request.toolOutput, secrets),
         tool_status: request.toolStatus,
         permission_reason: redactHookValue(request.permissionReason, secrets),
+        ...(request.event === 'user_prompt'
+          ? { prompt: redactHookValue(request.prompt ?? '', secrets) }
+          : {}),
+        ...(request.event === 'subagent_start'
+          ? {
+              description: redactHookValue(request.description ?? '', secrets),
+            }
+          : {}),
         ...(hook.skillDir ? { skill_dir: hook.skillDir } : {}),
         ...(file ? { files: [file] } : {}),
         ...(request.event === 'before_stop'
@@ -1379,8 +1407,15 @@ export class HookRunner {
           hook.timeoutMs,
           request.signal ?? new AbortController().signal,
           secrets,
-          // Only a skill's hook has its folder; no other hook inherits one from Circle's own environment
-          { [SKILL_DIR_VARIABLE]: hook.skillDir },
+          // Only a skill's hook has its folder; no other hook inherits one from Circle's own environment. Every hook
+          // knows whose call it judges, as the call's own processes do (#551).
+          {
+            [SKILL_DIR_VARIABLE]: hook.skillDir,
+            ...identityEnvironment({
+              sessionId: request.sessionId,
+              ...(request.agent ? { agentId: request.agent.id } : {}),
+            }),
+          },
         );
       } catch (error) {
         command = {
@@ -1444,11 +1479,7 @@ export class HookRunner {
       const notice = noticeFor(outcome, request.toolName);
       if (notice) notices.push(notice);
     }
-    const decision = strictest(
-      request.event === 'after_tool' || request.event === 'session_start'
-        ? []
-        : outcomes,
-    );
+    const decision = strictest(GATING.has(request.event) ? outcomes : []);
     const context = outcomes
       .map((item) => item.context)
       .filter(Boolean)
@@ -1477,6 +1508,7 @@ export class HookRunner {
     const line = {
       ts: new Date().toISOString(),
       session_id: request.sessionId,
+      ...(request.agent ? { agent_id: request.agent.id } : {}),
       event: request.event,
       source: outcome.hook.source,
       source_label: outcome.hook.sourceLabel,

@@ -82,14 +82,8 @@ import {
 // What a Chat Completions tool row says when the tool returned no text. Strict
 // gateways such as DashScope reject a message whose content is empty.
 const EMPTY_TOOL_RESULT = '(no output)';
-export const EFFORT_LEVELS = [
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
-] as const;
+import { EFFORT_LEVELS } from './effort.js';
+export { EFFORT_LEVELS };
 function completion(
   protocol: 'openai' | 'anthropic' | 'responses',
   finish: string | null | undefined,
