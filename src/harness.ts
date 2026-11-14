@@ -21,6 +21,7 @@ import { CheckpointStore, type Session } from './checkpoint_store.js';
 import { attachPrompt } from './mentions.js';
 import { prepareToolCall, RecoverableToolError } from './tool_call_compat.js';
 import { redact } from './redact.js';
+import { isRecord } from './settings.js';
 import {
   expandVariables,
   redactSecrets,
@@ -63,6 +64,7 @@ import {
   hookFileShown,
   hookNoticeText,
   hookToolPaths,
+  canonicalJson,
   redactHookValue,
   HOOK_ASKED_LINE,
   HOOK_CHANGED_LINE,
@@ -236,6 +238,34 @@ function hookAsked(call: ToolCall, batch: HookBatch): ToolCall {
     ...(batch.reason ? { hook_reason: batch.reason } : {}),
     ...(batch.userMessage ? { hook_message: batch.userMessage } : {}),
   };
+}
+/**
+ * The rewrite, with every part the hooks handed back as they were shown taken from the call as the model sent it.
+ * The hooks see each secret's value as its name: a part they did not change keeps the value, also for a tool that
+ * would take the name as written.
+ */
+function keepUnchanged(
+  rewrite: unknown,
+  shown: unknown,
+  sent: unknown,
+): unknown {
+  if (canonicalJson(rewrite) === canonicalJson(shown)) return sent;
+  if (Array.isArray(rewrite) && Array.isArray(shown) && Array.isArray(sent))
+    return rewrite.map((item, index) =>
+      index < shown.length && index < sent.length
+        ? keepUnchanged(item, shown[index], sent[index])
+        : item,
+    );
+  if (isRecord(rewrite) && isRecord(shown) && isRecord(sent))
+    return Object.fromEntries(
+      Object.entries(rewrite).map(([key, item]) => [
+        key,
+        Object.hasOwn(shown, key) && Object.hasOwn(sent, key)
+          ? keepUnchanged(item, shown[key], sent[key])
+          : item,
+      ]),
+    );
+  return rewrite;
 }
 /** The arguments a before_tool rewrite changed, added or took out. Both sides have secrets as `%NAME%`. */
 function changedArguments(
@@ -1725,7 +1755,7 @@ export class Harness {
       // Hooks see the arguments with secret values put back to %NAME%. A deny
       // stands in every approval mode. A hard denial above is not reconsidered.
       // An allow can skip an ordinary card only: an always-ask stays a card.
-      const before = await this.gateTool(
+      let before = await this.gateTool(
         'before_tool',
         checked.call,
         checked.resolved,
@@ -1740,12 +1770,19 @@ export class Harness {
       if (before?.updatedInput) {
         const original = checked;
         const by = before.changedBy.join(', ');
+        const saved = this.hookSecrets();
+        // What the hooks were given: each secret's value as its name
+        const shown = redactHookValue(original.resolved, saved);
         try {
           checked = check(
             {
               id: original.call.id,
               name: original.call.name,
-              args: before.updatedInput,
+              args: keepUnchanged(
+                before.updatedInput,
+                shown,
+                original.raw,
+              ) as Record<string, unknown>,
             },
             original.facts,
           );
@@ -1754,23 +1791,27 @@ export class Harness {
             `${HOOK_CHANGED_LINE} (${by}), and it cannot run: ${error instanceof Error ? error.message : String(error)}`,
           );
         }
-        secrets = checked.secrets;
-        // A secret the call did not carry is not a hook's to send: you see the call before it runs
-        const saved = this.hookSecrets();
-        const named = (value: unknown) => {
-          const text = JSON.stringify(value) ?? '';
-          return Object.keys(saved).filter((name) =>
-            text.includes(`%${name}%`),
-          );
-        };
-        const carried = new Set(
-          named(redactHookValue(original.resolved, saved)),
-        );
-        secretAdded = named(before.updatedInput).some(
-          (name) => !carried.has(name),
-        );
         const changed = changedArguments(original.plain, checked.plain);
-        if (changed.length) {
+        // Only a key order or a fact Circle works out again differs: the call is the model's
+        if (!changed.length) checked = original;
+        else {
+          secrets = checked.secrets;
+          for (const name of before.changedBy)
+            this.queueHook(
+              { kind: 'rewrote', tool: original.call.name, name },
+              true,
+            );
+          // A secret the call did not carry is not a hook's to send: you see the call before it runs
+          const named = (value: unknown) => {
+            const text = JSON.stringify(value) ?? '';
+            return Object.keys(saved).filter((name) =>
+              text.includes(`%${name}%`),
+            );
+          };
+          const carried = new Set(named(shown));
+          secretAdded = named(before.updatedInput).some(
+            (name) => !carried.has(name),
+          );
           changedLine = hookChangedLine(by, changed, checked.plain);
           checked = {
             ...checked,
@@ -1783,6 +1824,40 @@ export class Harness {
               },
             },
           };
+          // Every before_tool hook judges what runs: they all see the rewrite once more, matched by its paths. An
+          // allow given before the rewrite does not carry over, and a hook that changes it again stops the call.
+          const again = await this.gateTool(
+            'before_tool',
+            checked.call,
+            checked.resolved,
+            checked.paths,
+            signal,
+          );
+          if (again?.decision === 'deny')
+            throw new Error(hookDeniedMessage(again.reason || 'hook denied'));
+          if (again?.updatedInput)
+            throw new Error(
+              `Hook ${again.changedBy.join(', ')} changed the rewrite again when shown it, so the call does not run. A rewrite must come back unchanged.`,
+            );
+          if (again) {
+            const asked = [before, again].filter(
+              (batch) => batch.decision === 'ask',
+            );
+            before = asked.length
+              ? {
+                  ...again,
+                  decision: 'ask',
+                  reason: asked
+                    .map((batch) => batch.reason)
+                    .filter(Boolean)
+                    .join('\n'),
+                  userMessage: asked
+                    .map((batch) => batch.userMessage)
+                    .filter(Boolean)
+                    .join('\n'),
+                }
+              : again;
+          }
         }
       }
       const { tool, used, raw, resolved, usedSecrets, effect, paths, found } =

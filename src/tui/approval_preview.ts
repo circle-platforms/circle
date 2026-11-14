@@ -367,7 +367,6 @@ export function fileChange(
     summary = `+${rows.filter((item) => item.tone === 'added').length} -${rows.filter((item) => item.tone === 'removed').length}`;
   return [row(summary), ...cut(rows, maxRows)];
 }
-/** Everything an approval card shows for `call`, from what the policy said about it. */
 /**
  * A call before_tool hooks rewrote: the card shows the rewrite, and says who made it and what each changed argument
  * was as the model sent it.
@@ -386,6 +385,7 @@ function rewriteLines(call: ToolCall): string[] {
   ];
 }
 
+/** Everything an approval card shows for `call`, from what the policy said about it. */
 export function approvalRequest(
   call: ToolCall,
   review: Review,

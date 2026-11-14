@@ -975,6 +975,21 @@ interface CommandResult {
   error?: string;
 }
 
+/** JSON with every object's keys in order: two values that differ only in key order are the same input. */
+export function canonicalJson(value: unknown): string {
+  const sorted = (item: unknown): unknown =>
+    Array.isArray(item)
+      ? item.map(sorted)
+      : isRecord(item)
+        ? Object.fromEntries(
+            Object.keys(item)
+              .sort()
+              .map((key) => [key, sorted(item[key])]),
+          )
+        : item;
+  return JSON.stringify(sorted(value)) ?? '';
+}
+
 /** A value as a hook sees it: each saved secret's value written back as `%NAME%`. */
 export function redactHookValue(
   value: unknown,
@@ -1414,11 +1429,11 @@ export class HookRunner {
         durationMs: Date.now() - started,
       };
       outcomes.push(outcome);
-      // Handing back the input it was given is no rewrite
+      // Handing back the input it was given, in any key order, is no rewrite
       if (
         outcome.updatedInput &&
-        JSON.stringify(outcome.updatedInput) !==
-          JSON.stringify(redactHookValue(input, secrets))
+        canonicalJson(outcome.updatedInput) !==
+          canonicalJson(redactHookValue(input, secrets))
       ) {
         input = outcome.updatedInput;
         changedBy.push(hook.name);
@@ -1442,14 +1457,12 @@ export class HookRunner {
       .map((item) => item.context)
       .filter(Boolean)
       .join('\n\n');
-    // A deny voids every rewrite: the call does not run in any form
+    // A deny voids every rewrite: the call does not run in any form. Whether a rewrite changes what runs is the
+    // harness's to tell, once it has checked it; it reports the hooks that rewrote the call then.
     const rewritten =
       request.event === 'before_tool' &&
       decision.decision !== 'deny' &&
       changedBy.length > 0;
-    if (rewritten)
-      for (const name of changedBy)
-        notices.push({ kind: 'rewrote', tool: request.toolName, name });
     return {
       ...decision,
       ...(rewritten ? { updatedInput: input } : {}),

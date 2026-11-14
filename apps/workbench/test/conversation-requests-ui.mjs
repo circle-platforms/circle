@@ -22,6 +22,18 @@ try {
   );
   const allow = page.getByRole('button', { name: 'allow once', exact: true });
   await allow.waitFor();
+  // A call a hook rewrote: the card names the hook and folds what the model had sent
+  const rewrite = page.locator('.inline-request .hook-rewrite');
+  assert.equal(
+    (await rewrite.locator('summary').textContent())?.trim(),
+    'rewritten by hook canon',
+  );
+  assert.equal(await rewrite.evaluate((node) => node.open), false);
+  await rewrite.locator('summary').click();
+  assert.match(
+    (await rewrite.textContent()) ?? '',
+    /node local-only\.js --fast/,
+  );
   assert.equal(
     await page.locator('.tool-summary .spin').count(),
     0,

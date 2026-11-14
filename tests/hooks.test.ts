@@ -1057,7 +1057,7 @@ function answering(dir: string, name: string, body: string): string {
   const script = join(dir, `${name}.mjs`);
   writeFileSync(
     script,
-    `import { readFileSync, writeFileSync } from 'node:fs';\nconst input = JSON.parse(readFileSync(0, 'utf8'));\nlet answer = {};\n${body}\nprocess.stdout.write(JSON.stringify(answer));\n`,
+    `import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';\nconst input = JSON.parse(readFileSync(0, 'utf8'));\nlet answer = {};\n${body}\nprocess.stdout.write(JSON.stringify(answer));\n`,
   );
   return nodeCommand(script);
 }
@@ -1068,9 +1068,9 @@ const firstToolResult = (run: Awaited<ReturnType<typeof turn>>) =>
       ?.content,
   );
 
-test('a before_tool rewrite runs instead, hooks pass it on in order, and the model is told what changed', async (t) => {
+test('a before_tool rewrite runs instead, hooks pass it on in order, see it once more, and the model is told what changed', async (t) => {
   const dirs = layout(t);
-  const twoSaw = join(dirs.root, 'two-saw.json');
+  const twoSaw = join(dirs.root, 'two-saw.jsonl');
   const afterSaw = join(dirs.root, 'after-saw.json');
   writeJson(join(dirs.home, 'hooks.json'), {
     hooks: {
@@ -1080,7 +1080,8 @@ test('a before_tool rewrite runs instead, hooks pass it on in order, and the mod
           command: answering(
             dirs.root,
             'one',
-            "answer = { updated_input: { file_path: 'b.txt', content: 'one' } };",
+            // A rewrite that comes back unchanged when the hook sees it again
+            "if (input.tool_input.file_path === 'a.txt') answer = { updated_input: { file_path: 'b.txt', content: 'one' } };",
           ),
           tools: 'write_file',
         },
@@ -1089,8 +1090,9 @@ test('a before_tool rewrite runs instead, hooks pass it on in order, and the mod
           command: answering(
             dirs.root,
             'two',
-            `writeFileSync(${JSON.stringify(twoSaw)}, JSON.stringify(input.tool_input));
-answer = { decision: 'allow', updated_input: { ...input.tool_input, content: input.tool_input.content + ' two' } };`,
+            `appendFileSync(${JSON.stringify(twoSaw)}, JSON.stringify(input.tool_input) + '\\n');
+const content = input.tool_input.content.endsWith(' two') ? input.tool_input.content : input.tool_input.content + ' two';
+answer = { decision: 'allow', updated_input: { ...input.tool_input, content } };`,
           ),
           tools: 'write_file',
         },
@@ -1130,11 +1132,17 @@ answer = { decision: 'allow', updated_input: { ...input.tool_input, content: inp
   assert.deepEqual(run.asked, []);
   assert.equal(readFileSync(join(dirs.workspace, 'b.txt'), 'utf8'), 'one two');
   assert.throws(() => readFileSync(join(dirs.workspace, 'a.txt')));
-  // The second hook got the first one's rewrite; after_tool gets what ran
-  assert.deepEqual(JSON.parse(readFileSync(twoSaw, 'utf8')), {
-    file_path: 'b.txt',
-    content: 'one',
-  });
+  // The second hook got the first one's rewrite, then, with every hook, the rewrite that runs; after_tool gets it
+  assert.deepEqual(
+    readFileSync(twoSaw, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line)),
+    [
+      { file_path: 'b.txt', content: 'one' },
+      { file_path: 'b.txt', content: 'one two' },
+    ],
+  );
   assert.deepEqual(JSON.parse(readFileSync(afterSaw, 'utf8')), {
     file_path: 'b.txt',
     content: 'one two',
@@ -1430,6 +1438,194 @@ test('a rewrite that brings in a secret always shows the card, and handing the i
   assert.doesNotMatch(firstToolResult(same), /Hook changed/);
   assert.ok(
     !same.harness.messages.some((message) => message.hook?.kind === 'rewrote'),
+  );
+});
+
+test('every before_tool hook judges the rewrite: a path guard sees it, an earlier allow does not carry, and a rewrite must be stable', async (t) => {
+  const dirs = layout(t);
+  const hooksFile = join(dirs.home, 'hooks.json');
+  const write = (file_path: string) =>
+    assistant('', [
+      { id: 'w', name: 'write_file', args: { file_path, content: 'x' } },
+    ]);
+  const mover = (to: string) => ({
+    name: 'mover',
+    command: answering(
+      dirs.root,
+      `mover-${to.replace(/\W/g, '-')}`,
+      `if (input.tool_input.file_path.startsWith('src/')) answer = { updated_input: { ...input.tool_input, file_path: ${JSON.stringify(to)} } };`,
+    ),
+  });
+
+  // A guard on config/ ran on the call as sent, before the rewrite: it sees the rewrite too, and denies it
+  writeJson(hooksFile, {
+    hooks: {
+      before_tool: [
+        {
+          name: 'guard',
+          paths: 'config/**',
+          command: answering(
+            dirs.root,
+            'guard',
+            "answer = { decision: 'deny', reason: 'config is protected' };",
+          ),
+        },
+        mover('config/prod.yml'),
+      ],
+    },
+  });
+  const guarded = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    replies: [write('src/a.txt'), assistant('done')],
+  });
+  // The model learns what the rewrite was, and that it was denied
+  assert.equal(
+    firstToolResult(guarded),
+    `Hook changed this call's input (mover):\nfile_path = "config/prod.yml"\n\nHook denied this call: config is protected`,
+  );
+  assert.throws(() => readFileSync(join(dirs.workspace, 'config', 'prod.yml')));
+
+  // An allow for src/ does not carry to the rewrite under docs/: the card asks
+  writeJson(hooksFile, {
+    hooks: {
+      before_tool: [
+        {
+          name: 'src ok',
+          paths: 'src/**',
+          command: answering(
+            dirs.root,
+            'src-ok',
+            "answer = { decision: 'allow' };",
+          ),
+        },
+        mover('docs/b.txt'),
+      ],
+    },
+  });
+  const moved = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'manual',
+    replies: [write('src/a.txt'), assistant('done')],
+    approve: () => 'reject',
+  });
+  assert.deepEqual(moved.asked, ['write_file']);
+  assert.throws(() => readFileSync(join(dirs.workspace, 'docs', 'b.txt')));
+
+  // A hook that changes its own rewrite again stops the call
+  writeJson(hooksFile, {
+    hooks: {
+      before_tool: [
+        {
+          name: 'grow',
+          command: answering(
+            dirs.root,
+            'grow',
+            "answer = { decision: 'allow', updated_input: { ...input.tool_input, content: input.tool_input.content + '!' } };",
+          ),
+        },
+      ],
+    },
+  });
+  const unstable = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    replies: [write('a.txt'), assistant('done')],
+  });
+  assert.match(
+    firstToolResult(unstable),
+    /^Hook changed this call's input \(grow\):\ncontent = "x!"\n\nHook grow changed the rewrite again when shown it, so the call does not run/,
+  );
+  assert.throws(() => readFileSync(join(dirs.workspace, 'a.txt')));
+});
+
+test('a rewrite keeps the secret values of what no hook changed, and a new key order is no rewrite', async (t) => {
+  const dirs = layout(t);
+  const hooksFile = join(dirs.home, 'hooks.json');
+  // write_file takes %NAME% as written: the value the model wrote must survive a hook that saw its name
+  writeJson(hooksFile, {
+    hooks: {
+      before_tool: [
+        {
+          name: 'rename',
+          command: answering(
+            dirs.root,
+            'rename',
+            "if (input.tool_input.file_path === 'a.conf') answer = { updated_input: { ...input.tool_input, file_path: 'b.conf' } };",
+          ),
+        },
+      ],
+    },
+  });
+  const kept = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    secrets: { API_KEY: 'sk-synthetic-123' },
+    replies: [
+      assistant('', [
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'a.conf', content: 'KEY=sk-synthetic-123' },
+        },
+      ]),
+      assistant('done'),
+    ],
+  });
+  assert.equal(
+    readFileSync(join(dirs.workspace, 'b.conf'), 'utf8'),
+    'KEY=sk-synthetic-123',
+  );
+  assert.match(
+    firstToolResult(kept),
+    /^Hook changed this call's input \(rename\):\nfile_path = "b\.conf"\n\n/,
+  );
+
+  // The same input in another key order changes nothing: no notice, no line
+  writeJson(hooksFile, {
+    hooks: {
+      before_tool: [
+        {
+          name: 'shuffle',
+          command: answering(
+            dirs.root,
+            'shuffle',
+            'answer = { updated_input: Object.fromEntries(Object.entries(input.tool_input).reverse()) };',
+          ),
+        },
+      ],
+    },
+  });
+  const shuffled = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    replies: [
+      assistant('', [
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'c.txt', content: 'x' },
+        },
+      ]),
+      assistant('done'),
+    ],
+  });
+  assert.equal(readFileSync(join(dirs.workspace, 'c.txt'), 'utf8'), 'x');
+  assert.doesNotMatch(firstToolResult(shuffled), /Hook changed/);
+  assert.ok(
+    !shuffled.harness.messages.some(
+      (message) => message.hook?.kind === 'rewrote',
+    ),
   );
 });
 
