@@ -3,6 +3,7 @@
 // code where the Hub offers it. This only finds the Hub's MCP endpoint from what a person typed, and writes, or removes,
 // that entry. No address is built in: there is none until a person types one.
 import type { CircleSettings } from './settings.js';
+import { mcpServer } from './mcp_config.js';
 
 /** The name of the MCP server entry the Hub extension keeps. */
 export const HUB_SERVER = 'Hub';
@@ -138,7 +139,7 @@ export async function findHub(
 
 /** The Hub entry's endpoint in `settings`, if there is one. */
 export function hubEndpoint(settings: CircleSettings): string | undefined {
-  const url = settings.mcp_servers.find((row) => row.name === HUB_SERVER)?.url;
+  const url = mcpServer(settings.mcpServers, HUB_SERVER)?.url;
   return typeof url === 'string' && url ? url : undefined;
 }
 
@@ -148,29 +149,24 @@ export function hubEndpoint(settings: CircleSettings): string | undefined {
  */
 export const HUB_PLACEHOLDERS = { url: 'HUB_URL', token: 'HUB_TOKEN' } as const;
 
-/** The MCP entry of a Hub at this endpoint: the one the desktop's Hub page and the terminal's `/hub` save. */
+/** The MCP entry of a Hub at this endpoint, saved under HUB_SERVER: the one the desktop's Hub page and `/hub` save. */
 export function hubEntry(endpoint: string): Record<string, unknown> {
   return {
-    name: HUB_SERVER,
+    type: 'http',
     url: endpoint,
-    transport: 'streamable_http',
     enabled: true,
     placeholders: { ...HUB_PLACEHOLDERS },
   };
 }
 /**
- * Puts the Hub entry for `endpoint` into `settings` (as saveSettingsChange changes them), keeping that entry's id when
- * there was one, and keeps the extension on.
+ * Puts the Hub entry for `endpoint` into `settings` (as saveSettingsChange changes them), under HUB_SERVER in
+ * `mcpServers`, and keeps the extension on.
  */
 export function addHub(settings: CircleSettings, endpoint: string): void {
-  const before = settings.mcp_servers.find((row) => row.name === HUB_SERVER);
-  settings.mcp_servers = [
-    ...settings.mcp_servers.filter((row) => row.name !== HUB_SERVER),
-    {
-      ...(typeof before?.id === 'string' ? { id: before.id } : {}),
-      ...hubEntry(endpoint),
-    },
-  ];
+  settings.mcpServers = {
+    ...settings.mcpServers,
+    [HUB_SERVER]: hubEntry(endpoint),
+  };
   settings.extensions = {
     ...settings.extensions,
     hub: { ...settings.extensions.hub, enabled: true },
@@ -179,9 +175,8 @@ export function addHub(settings: CircleSettings, endpoint: string): void {
 
 /** Takes the Hub entry out of `settings`. */
 export function removeHub(settings: CircleSettings): void {
-  settings.mcp_servers = settings.mcp_servers.filter(
-    (row) => row.name !== HUB_SERVER,
-  );
+  const { [HUB_SERVER]: _hub, ...rest } = settings.mcpServers;
+  settings.mcpServers = rest;
 }
 
 /**
@@ -191,11 +186,11 @@ export function removeHub(settings: CircleSettings): void {
  */
 export function keepHubPlaceholders(settings: CircleSettings): boolean {
   if (settings.extensions.hub?.enabled !== true) return false;
-  let changed = false;
-  settings.mcp_servers = settings.mcp_servers.map((row) => {
-    if (row.name !== HUB_SERVER || row.placeholders !== undefined) return row;
-    changed = true;
-    return { ...row, placeholders: { ...HUB_PLACEHOLDERS } };
-  });
-  return changed;
+  const hub = mcpServer(settings.mcpServers, HUB_SERVER);
+  if (!hub || hub.placeholders !== undefined) return false;
+  settings.mcpServers = {
+    ...settings.mcpServers,
+    [HUB_SERVER]: { ...hub, placeholders: { ...HUB_PLACEHOLDERS } },
+  };
+  return true;
 }

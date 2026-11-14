@@ -178,31 +178,29 @@ test("the Hub's IP address alone finds it at the Hub's port, the first address i
   assert.equal(await found, 'http://192.0.2.10:7420/mcp');
 });
 
-test('the Hub entry is added with the extension on, keeps its id when replaced, and is removed alone', () => {
+test('the Hub entry is added under its name in mcpServers with the extension on, replaces the one before, and is removed alone', () => {
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    { name: 'other', command: 'synthetic', transport: 'stdio' },
-    { id: 'kept-id', name: HUB_SERVER, url: 'http://old.example.test/mcp' },
-  ];
+  settings.mcpServers = {
+    other: { type: 'stdio', command: 'synthetic' },
+    [HUB_SERVER]: { type: 'sse', url: 'http://old.example.test/mcp' },
+  };
   addHub(settings, 'https://hub.example.test/mcp');
-  assert.deepEqual(settings.mcp_servers, [
-    { name: 'other', command: 'synthetic', transport: 'stdio' },
-    {
-      id: 'kept-id',
-      name: HUB_SERVER,
+  assert.deepEqual(settings.mcpServers, {
+    other: { type: 'stdio', command: 'synthetic' },
+    [HUB_SERVER]: {
+      type: 'http',
       url: 'https://hub.example.test/mcp',
-      transport: 'streamable_http',
       enabled: true,
       // The names a Hub's skills write for the Hub's endpoint and token
       placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
     },
-  ]);
+  });
   assert.equal(settings.extensions.hub?.enabled, true);
   assert.equal(hubEndpoint(settings), 'https://hub.example.test/mcp');
   removeHub(settings);
-  assert.deepEqual(settings.mcp_servers, [
-    { name: 'other', command: 'synthetic', transport: 'stdio' },
-  ]);
+  assert.deepEqual(settings.mcpServers, {
+    other: { type: 'stdio', command: 'synthetic' },
+  });
   assert.equal(hubEndpoint(settings), undefined);
 });
 
@@ -261,29 +259,29 @@ test('signing out revokes the tokens at the revocation endpoint and forgets them
 
 test('a Hub entry from before the entry named its placeholders gets them while the extension is on, and one that names its own keeps them', () => {
   const settings = defaultSettings();
-  const legacy = {
-    name: HUB_SERVER,
-    url: 'http://192.0.2.10:7420/mcp',
-    transport: 'streamable_http',
+  const legacy = { type: 'http', url: 'http://192.0.2.10:7420/mcp' };
+  settings.mcpServers = {
+    other: { type: 'sse', url: 'http://192.0.2.20/mcp' },
+    [HUB_SERVER]: { ...legacy },
   };
-  settings.mcp_servers = [
-    { name: 'other', url: 'http://192.0.2.20/mcp' },
-    { ...legacy },
-  ];
   // The extension off: the entry is not the extension's to change
   assert.equal(keepHubPlaceholders(settings), false);
-  assert.deepEqual(settings.mcp_servers.slice()[1], legacy);
+  assert.deepEqual(settings.mcpServers[HUB_SERVER], legacy);
   settings.extensions = { ...settings.extensions, hub: { enabled: true } };
   assert.equal(keepHubPlaceholders(settings), true);
-  assert.deepEqual(settings.mcp_servers.slice(), [
-    { name: 'other', url: 'http://192.0.2.20/mcp' },
-    { ...legacy, placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' } },
-  ]);
+  assert.deepEqual(settings.mcpServers, {
+    other: { type: 'sse', url: 'http://192.0.2.20/mcp' },
+    [HUB_SERVER]: {
+      ...legacy,
+      placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
+    },
+  });
   // Done once: nothing more to change
   assert.equal(keepHubPlaceholders(settings), false);
-  settings.mcp_servers[1] = { ...legacy, placeholders: { url: 'MY_HUB' } };
+  (settings.mcpServers as Record<string, Record<string, unknown>>)[HUB_SERVER] =
+    { ...legacy, placeholders: { url: 'MY_HUB' } };
   assert.equal(keepHubPlaceholders(settings), false);
-  assert.deepEqual(settings.mcp_servers.slice()[1]?.placeholders, {
+  assert.deepEqual(settings.mcpServers[HUB_SERVER]?.placeholders, {
     url: 'MY_HUB',
   });
 });

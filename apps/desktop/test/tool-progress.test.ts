@@ -51,9 +51,7 @@ test("a running MCP call's row carries the server's latest progress until its re
     },
   });
   const settings = trustFolder(defaultSettings(), workspace);
-  settings.mcp_servers = [
-    { name: 'files', url: stub.url, transport: 'streamable_http' },
-  ];
+  settings.mcpServers = { files: { url: stub.url, type: 'http' } };
   saveSettings(settings, home);
   const model = new ScriptedModel([
     {

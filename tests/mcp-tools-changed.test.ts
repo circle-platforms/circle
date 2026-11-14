@@ -38,9 +38,7 @@ async function world(
   mkdirSync(workspace);
   const stub = await mcpStub(t, options);
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    { name: 'hub', url: stub.url, transport: 'streamable_http' },
-  ];
+  settings.mcpServers = { hub: { url: stub.url, type: 'http' } };
   const model = new ScriptedModel(replies);
   const runtime = new AgentRuntime({
     home,

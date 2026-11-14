@@ -7,6 +7,7 @@ import {
 } from '../mcp_loader.js';
 import { settingsPath } from '../paths.js';
 import { McpLoginRequired } from '../mcp_auth.js';
+import { mcpServer } from '../mcp_config.js';
 import {
   saveSettingsChange,
   loadSettings,
@@ -141,11 +142,18 @@ export class KnowledgeConnection {
     return this.http.resolve(signal);
   }
   connections(): { name: string; origin: string }[] {
-    return buildMcpConnections(this.settings().mcp_servers)
+    return buildMcpConnections(this.settings().mcpServers)
       .connections.filter(
-        (c) => !!c.url && ['streamable_http', 'sse'].includes(c.transport),
+        (c) => !!c.url && ['http', 'sse'].includes(c.transport),
       )
-      .map((c) => ({ name: c.name, origin: new URL(c.url!).origin }));
+      .flatMap((c) => {
+        try {
+          return [{ name: c.name, origin: new URL(c.url!).origin }];
+        } catch {
+          // An address that is a reference to fill in is not offered
+          return [];
+        }
+      });
   }
   /** What selecting a connection means, from local records: no request is sent before the person selects it. */
   preview(name: string): {
@@ -165,7 +173,7 @@ export class KnowledgeConnection {
   }
   private port(name: string): McpBearerConnection {
     const connection = buildMcpConnections(
-      this.settings().mcp_servers,
+      this.settings().mcpServers,
     ).connections.find((c) => c.name === name);
     if (!connection) throw Error('selected MCP connection unavailable');
     return backgroundMcpConnection(this.home, connection, this.secrets);
@@ -176,8 +184,8 @@ export class KnowledgeConnection {
     return (
       global.knowledge_sync.server === name &&
       global.knowledge_sync.binding === binding &&
-      JSON.stringify(global.mcp_servers.find((c) => c.name === name)) ===
-        JSON.stringify(this.settings().mcp_servers.find((c) => c.name === name))
+      JSON.stringify(mcpServer(global.mcpServers, name)) ===
+        JSON.stringify(mcpServer(this.settings().mcpServers, name))
     );
   }
   async configure(): Promise<void> {
@@ -201,15 +209,14 @@ export class KnowledgeConnection {
   }
   private install(name: string, port: McpBearerConnection): void {
     const selectedConfig = JSON.stringify(
-      this.settings().mcp_servers.find((c) => c.name === name),
+      mcpServer(this.settings().mcpServers, name),
     );
     const assertCurrent = (): void => {
       port.assertActive();
       const saved = loadSettings(this.home);
       const selection = this.settings().knowledge_sync;
       if (
-        JSON.stringify(saved.mcp_servers.find((c) => c.name === name)) !==
-          selectedConfig ||
+        JSON.stringify(mcpServer(saved.mcpServers, name)) !== selectedConfig ||
         (selection.server === name &&
           selection.binding === port.binding &&
           (saved.knowledge_sync.server !== name ||
@@ -243,10 +250,8 @@ export class KnowledgeConnection {
   async select(name: string, approvedBinding: string): Promise<void> {
     if (
       existsSync(settingsPath(this.home)) &&
-      JSON.stringify(
-        loadSettings(this.home).mcp_servers.find((c) => c.name === name),
-      ) !==
-        JSON.stringify(this.settings().mcp_servers.find((c) => c.name === name))
+      JSON.stringify(mcpServer(loadSettings(this.home).mcpServers, name)) !==
+        JSON.stringify(mcpServer(this.settings().mcpServers, name))
     )
       throw Error('MCP settings changed; reload before selecting');
     const port = this.port(name);

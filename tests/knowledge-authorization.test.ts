@@ -13,7 +13,7 @@ import {
 } from '../src/knowledge/connection.js';
 import { defaultSettings, saveSettings } from '../src/settings.js';
 import { AuthorizedServer } from './fixtures/knowledge-sync/authorized-server.js';
-import { scratch, cleanup, until } from './helpers.js';
+import { scratch, cleanup, until, serversOf } from './helpers.js';
 import { KnowledgeService } from '../src/knowledge/service.js';
 
 const signal = new AbortController().signal;
@@ -25,7 +25,7 @@ async function world(t: Parameters<typeof scratch>[0]) {
   const provider = await server.seed(home);
   const connection = {
     name: 'selected',
-    transport: 'streamable_http' as const,
+    transport: 'http' as const,
     url: server.origin + '/mcp',
   };
   const manager = new McpManager(
@@ -51,7 +51,7 @@ test('MCP and sync share one rotating refresh and preserve their opaque grant id
     before = keptFor(w.home, w.connection.url).grant_id,
     port = backgroundMcpConnection(w.home, w.connection, () => ({}));
   await Promise.all([
-    w.manager.load([w.connection], new Set()),
+    w.manager.load(serversOf(w.connection), new Set()),
     mcpSyncHttp(port).request('state', {
       schema: 'personal-sync-state@1',
       signal,
@@ -108,7 +108,7 @@ test('refresh failure pauses sync without registration, authorization redirects 
       return true;
     },
   );
-  await w.manager.load([w.connection], new Set());
+  await w.manager.load(serversOf(w.connection), new Set());
   assert.equal(w.manager.status[0]!.authorize, undefined);
   assert.ok(w.manager.status[0]!.error);
   assert.equal(
@@ -143,9 +143,9 @@ test('direct Bearer replacement invalidates only its selected profile and never 
   let secret = 'synthetic-first-bearer';
   const connection = {
     name: 'direct',
-    transport: 'streamable_http' as const,
+    transport: 'http' as const,
     url: 'https://example.test/mcp',
-    headers: { authorization: 'Bearer ${secret:SYNC_TOKEN}' },
+    headers: { authorization: 'Bearer ${SYNC_TOKEN}' },
   };
   const first = backgroundMcpConnection(home, connection, () => ({
     SYNC_TOKEN: secret,
@@ -176,12 +176,13 @@ test('direct Bearer replacement invalidates only its selected profile and never 
 
 test('only the explicitly selected connection syncs and changing its grant requires a new person selection', async (t) => {
   const w = await world(t);
-  await w.manager.load([w.connection], new Set());
+  await w.manager.load(serversOf(w.connection), new Set());
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    w.connection,
-    { name: 'unselected', url: 'https://unselected.invalid/mcp' },
-  ];
+  settings.mcpServers = serversOf(w.connection, {
+    name: 'unselected',
+    transport: 'sse',
+    url: 'https://unselected.invalid/mcp',
+  });
   saveSettings(settings, w.home);
   const host = new KnowledgeConnection(
     w.home,
@@ -281,9 +282,9 @@ test('canceling one refresh waiter keeps the other alive, while canceling the so
 
 test('explicit MCP reauthorization uses PKCE, changes the binding, and leaves the old local queue paused until another person selection', async (t) => {
   const w = await world(t);
-  await w.manager.load([w.connection], new Set());
+  await w.manager.load(serversOf(w.connection), new Set());
   const settings = defaultSettings();
-  settings.mcp_servers = [w.connection];
+  settings.mcpServers = serversOf(w.connection);
   saveSettings(settings, w.home);
   const host = new KnowledgeConnection(
     w.home,
@@ -300,7 +301,7 @@ test('explicit MCP reauthorization uses PKCE, changes the binding, and leaves th
     const response = await fetch(url);
     assert.equal(response.status, 200);
   };
-  await w.manager.load([w.connection], new Set());
+  await w.manager.load(serversOf(w.connection), new Set());
   await until(() => w.manager.status[0]?.error === '');
   const fresh = host.preview('selected');
   assert.notEqual(fresh.binding, preview.binding);
@@ -357,9 +358,9 @@ test('expired saved tokens refresh before sync dispatch and an issuer or resourc
 
 test('a persistent 401 keeps the exact pending operation and an explicit same-grant retry resumes it', async (t) => {
   const w = await world(t);
-  await w.manager.load([w.connection], new Set());
+  await w.manager.load(serversOf(w.connection), new Set());
   const settings = defaultSettings();
-  settings.mcp_servers = [w.connection];
+  settings.mcpServers = serversOf(w.connection);
   saveSettings(settings, w.home);
   const host = new KnowledgeConnection(
     w.home,
@@ -399,9 +400,9 @@ test('a persistent 401 keeps the exact pending operation and an explicit same-gr
 
 test('a configuration changed by another process stops the old client until settings are reloaded', async (t) => {
   const w = await world(t);
-  await w.manager.load([w.connection], new Set());
+  await w.manager.load(serversOf(w.connection), new Set());
   const settings = defaultSettings();
-  settings.mcp_servers = [w.connection];
+  settings.mcpServers = serversOf(w.connection);
   saveSettings(settings, w.home);
   const host = new KnowledgeConnection(
     w.home,
@@ -414,7 +415,10 @@ test('a configuration changed by another process stops the old client until sett
   await host.synchronize();
   const external = {
     ...settings,
-    mcp_servers: [{ ...w.connection, url: 'https://different.invalid/mcp' }],
+    mcpServers: serversOf({
+      ...w.connection,
+      url: 'https://different.invalid/mcp',
+    }),
   };
   saveSettings(external, w.home);
   // The old client must not reach the server again, whether or not a filesystem

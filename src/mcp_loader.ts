@@ -66,20 +66,39 @@ import {
 import { VERSION } from './version.js';
 import { formatJcs } from './knowledge/canonical.js';
 import { replaceLongest } from './secrets.js';
+import {
+  environmentThenSecrets,
+  expandReferences,
+  mcpType,
+  WITHHELD_VARIABLES,
+  type McpEntry,
+  type McpScope,
+  type McpServerConfig,
+  type McpType,
+} from './mcp_config.js';
+import { runHeadersHelper } from './mcp_headers_helper.js';
 export { replaceLongest };
 
 export interface McpConnection {
   name: string;
-  transport: 'stdio' | 'sse' | 'streamable_http' | 'websocket';
+  transport: McpType;
+  /** Where its entry is written: your settings (the default), this project's in them, or the project's `.mcp.json`. */
+  scope?: McpScope;
+  /** The folder a `headersHelper` runs in: the workspace when none is given. */
+  folder?: string;
   command?: string;
   args?: string[];
   env?: Record<string, string>;
   url?: string;
   /**
-   * Sent with every request to a server reached by URL; `${env:NAME}` and `${secret:NAME}`
-   * are filled in on connect.
+   * Sent with every request to a server reached by URL; `${VAR}` and `${VAR:-default}` are filled in on connect, from
+   * the environment and then the saved secrets.
    */
   headers?: Record<string, string>;
+  /** A command whose standard output, a JSON object, gives more headers when the server is connected. */
+  headersHelper?: string;
+  /** Whether a project's or a local `headersHelper` may run: the folder is trusted. */
+  trusted?: boolean;
   /**
    * Configured headers of the names Circle sets itself (`Circle-Session-Id`, `traceparent`),
    * as written: never sent, and their values never filled in.
@@ -92,6 +111,8 @@ export interface McpConnection {
   trustAnnotations?: boolean;
   /** The largest file a file parameter of the server's tools takes, in bytes. */
   maxFileBytes?: number;
+  /** The most a tool call may take, in milliseconds, from the entry's `timeout`. */
+  timeout?: number;
 }
 /** The largest file a file parameter takes unless the server's entry says otherwise. */
 export const MAX_FILE_BYTES = 32 * 1024 * 1024;
@@ -108,6 +129,12 @@ export interface McpStatus {
   authorize?: string;
   /** During a device sign-in, the code to type on that page. */
   code?: string;
+  /** Where its entry is written. */
+  scope?: McpScope;
+  /** What in its entry may not be what was meant, such as a `${VAR}` that is not set; never a value. */
+  warnings?: string[];
+  /** A server of the project's `.mcp.json` that waits for the person's approval, or that the person declined. */
+  approval?: 'pending' | 'declined';
 }
 /** What a server shows while its sign-in is under way; a reload meanwhile shows the same. */
 interface SignInShown {
@@ -267,46 +294,102 @@ export interface McpConnections {
   // Entries that are not started, with the reason (`/mcp` lists them)
   skipped: McpStatus[];
 }
+/** What a server's row shows of its connection: its command line or its address, as written. */
+export function connectionText(connection: {
+  command?: string;
+  args?: string[];
+  url?: string;
+}): string {
+  return connection.command
+    ? [connection.command, ...(connection.args ?? [])].join(' ')
+    : (connection.url ?? '');
+}
+const strings = (value: unknown): Record<string, string> | undefined =>
+  isRecord(value)
+    ? Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [key, String(item)]),
+      )
+    : undefined;
+/**
+ * The connections the configured servers make, and why the others are not made. `servers` is an `mcpServers` object,
+ * taken as your own, or the entries of every place a run reads (mcp_config.ts mcpServersForRun).
+ */
 export function buildMcpConnections(
-  servers: Record<string, unknown>[],
+  servers: Record<string, McpServerConfig> | McpEntry[],
+  options: { trusted?: boolean } = {},
 ): McpConnections {
-  const connections = new Map<string, McpConnection>();
+  const entries: McpEntry[] = Array.isArray(servers)
+    ? servers
+    : Object.entries(servers).map(([name, config]) => ({
+        name,
+        scope: 'user' as const,
+        config,
+        folder: '',
+      }));
+  const connections: McpConnection[] = [];
   const skipped: McpStatus[] = [];
-  for (const [index, item] of servers.entries()) {
+  for (const { name, scope, config: item, folder } of entries) {
     if (!isRecord(item)) continue;
-    const name = String(item.name || item.id || `mcp${index}`);
-    let connection: McpConnection | undefined;
-    if (item.command) {
-      const args =
-        item.args === undefined
-          ? []
-          : Array.isArray(item.args)
-            ? item.args.map(String)
-            : [String(item.args)];
-      const env = isRecord(item.env)
-        ? Object.fromEntries(
-            Object.entries(item.env).map(([key, value]) => [
-              key,
-              String(value),
-            ]),
-          )
-        : undefined;
+    const shown = connectionText({
+      command: typeof item.command === 'string' ? item.command : undefined,
+      args: Array.isArray(item.args) ? item.args.map(String) : undefined,
+      url: typeof item.url === 'string' ? item.url : undefined,
+    });
+    const skip = (error: string): void => {
+      skipped.push({ name, connection: shown, tools: [], error, scope });
+    };
+    if (item.enabled === false) {
+      skip('disabled');
+      continue;
+    }
+    const type = mcpType(item);
+    if (item.type === 'sdk') {
+      skip(
+        `declares type "sdk", which only an application that embeds Circle can register`,
+      );
+      continue;
+    }
+    if (!type) {
+      skip(
+        `its type ${JSON.stringify(item.type)} is not one of stdio, http, sse and ws`,
+      );
+      continue;
+    }
+    if (type === 'stdio' && item.type === undefined && item.url !== undefined) {
+      skip(
+        'has a "url" but no "type"; add "type": "http" (or "sse" / "ws") to this entry',
+      );
+      continue;
+    }
+    let connection: McpConnection;
+    if (type === 'stdio') {
+      if (typeof item.command !== 'string' || !item.command.trim()) {
+        skip('a stdio server needs a "command"');
+        continue;
+      }
       connection = {
         name,
         transport: 'stdio',
-        command: String(item.command),
-        args,
-        env,
+        scope,
+        folder,
+        command: item.command,
+        args:
+          item.args === undefined
+            ? []
+            : Array.isArray(item.args)
+              ? item.args.map(String)
+              : [String(item.args)],
+        ...(strings(item.env) ? { env: strings(item.env) } : {}),
       };
-    } else if (item.url) {
-      const raw = String(item.transport || 'sse').toLowerCase();
-      const transport = ['sse', 'streamable_http', 'websocket'].includes(raw)
-        ? (raw as McpConnection['transport'])
-        : 'sse';
-      connection = { name, transport, url: String(item.url) };
+    } else {
+      if (typeof item.url !== 'string' || !item.url.trim()) {
+        skip('not configured: the entry has no url');
+        continue;
+      }
+      connection = { name, transport: type, scope, folder, url: item.url };
       if (isRecord(item.headers)) {
-        // Circle's own are left out here, before anything is filled in: a secret named in
-        // a header that is not sent is not needed
+        // Circle's own are left out here, before anything is filled in: a variable named in a header that is not sent
+        // is not needed
         const headers: Record<string, string> = {};
         const notSent: string[] = [];
         for (const [key, value] of Object.entries(item.headers))
@@ -315,58 +398,35 @@ export function buildMcpConnections(
         connection.headers = headers;
         if (notSent.length) connection.notSent = notSent;
       }
+      if (typeof item.headersHelper === 'string' && item.headersHelper.trim()) {
+        connection.headersHelper = item.headersHelper;
+        connection.trusted = scope === 'user' || options.trusted === true;
+      }
     }
-    if (!connection) continue;
     // Only true or no value trusts what the server says of its tools
     if (item.trust_annotations !== undefined && item.trust_annotations !== true)
       connection.trustAnnotations = false;
+    // Below a second the entry's limit is not read, as the documented format has it
+    if (typeof item.timeout === 'number' && item.timeout >= 1000)
+      connection.timeout = item.timeout;
     // A limit that cannot be read is not replaced by the default: the server does not start
     const limit = item.max_file_bytes;
     if (
       limit !== undefined &&
-      item.enabled !== false &&
       (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1)
     ) {
-      connections.delete(name);
-      skipped.push({
-        name,
-        connection: connection.command || connection.url || '',
-        tools: [],
-        error: 'max_file_bytes must be a whole number of bytes, 1 or more',
-      });
+      skip('max_file_bytes must be a whole number of bytes, 1 or more');
       continue;
     }
     if (typeof limit === 'number') connection.maxFileBytes = limit;
-    if (item.enabled === false) {
-      // A disabled later entry still overrides an earlier server with the same
-      // name. Never construct a transport or expose tools for either entry.
-      connections.delete(name);
-      skipped.push({
-        name,
-        connection: connection.command || connection.url || '',
-        tools: [],
-        error: 'disabled',
-      });
-      continue;
-    }
-    // The later of two servers with one name is used; the earlier is reported.
-    const earlier = connections.get(name);
-    if (earlier) {
-      connections.delete(name);
-      skipped.push({
-        name,
-        connection: earlier.command || earlier.url || '',
-        tools: [],
-        error: `another MCP server is also named '${name}'; the later one is used`,
-      });
-    }
-    connections.set(name, connection);
+    connections.push(connection);
   }
-  return { connections: [...connections.values()], skipped };
+  return { connections, skipped };
 }
-// Header values as sent: each `${env:NAME}` replaced by that variable of Circle's own
-// environment and each `${secret:NAME}` by that saved secret, so a token need not be written
-// into settings.json. An error names the header and the variable or secret, never a value.
+/**
+ * Header values as sent: each `${VAR}` and `${VAR:-default}` filled in from Circle's own environment, then from the
+ * saved secrets, so a token need not be written into settings. A reference to nothing set stays as written.
+ */
 export function resolveHeaders(
   headers: Record<string, string> = {},
   env: NodeJS.ProcessEnv = process.env,
@@ -380,49 +440,101 @@ export function resolveHeaders(
  */
 const credentialHeader = (name: string): boolean =>
   /^(?:proxy-)?authorization$/i.test(name) || secretLookingName(name);
+/** A connection's values with their references filled in, and what the server must not be seen to say back. */
+interface Filled {
+  headers: Record<string, string>;
+  /**
+   * Each secret value put in, with what is shown in its place: `%NAME%` for a saved secret, as everywhere a secret's
+   * value is hidden, and the reference as written for an environment variable whose name, or whose header's, looks
+   * secret. Any other value is no secret, and hiding it would only change what the server says wherever it stands.
+   */
+  filled: Map<string, string>;
+  /** References to nothing set, by where they are; never a value. */
+  missing: string[];
+}
 function fillHeaders(
   headers: Record<string, string> = {},
   env: NodeJS.ProcessEnv,
   secrets: Record<string, string>,
-): { headers: Record<string, string>; filled: Map<string, string> } {
+): Filled {
   const resolved: Record<string, string> = {};
-  // Each secret value put in, with what is shown in its place: `%NAME%` for a saved secret, as
-  // everywhere a secret's value is hidden, and the reference as written for an environment
-  // variable whose name, or whose header's, looks secret. Any other value is no secret, and
-  // hiding it would only change what the server says wherever the same text stands.
   const filled = new Map<string, string>();
+  const missing: string[] = [];
+  const lookup = environmentThenSecrets(env, secrets);
   for (const [name, template] of Object.entries(headers)) {
     if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))
       throw new Error(`invalid header name '${name}'`);
-    const value = template.replace(
-      /\$\{(env|secret):([A-Za-z_][A-Za-z0-9_]*)\}/g,
-      (reference: string, kind: string, variable: string) => {
-        // Only a value set as text: `constructor` and the other names every object has are
-        // neither variables nor secrets
-        const value =
-          kind === 'env'
-            ? env[variable]
-            : Object.hasOwn(secrets, variable)
-              ? secrets[variable]
-              : undefined;
-        const found = typeof value === 'string' ? value : '';
-        if (!found)
-          throw new Error(
-            kind === 'env'
-              ? `header ${name} needs the environment variable ${variable}, which is not set`
-              : `header ${name} needs the secret ${variable}, which is not saved; save it with /secrets ${variable}`,
-          );
-        if (kind === 'secret') filled.set(found, `%${variable}%`);
-        else if (secretLookingName(variable) || credentialHeader(name))
-          filled.set(found, reference);
-        return found;
-      },
+    const expanded = expandReferences(template, lookup, (variable) =>
+      WITHHELD_VARIABLES.has(variable),
     );
-    if (/[\r\n\0]/.test(value))
+    for (const variable of expanded.missing)
+      missing.push(`headers.${name} names \${${variable}}, which is not set`);
+    for (const used of expanded.used)
+      if (!used.value) continue;
+      else if (used.from === 'secret') filled.set(used.value, `%${used.name}%`);
+      else if (secretLookingName(used.name) || credentialHeader(name))
+        filled.set(used.value, `\${${used.name}}`);
+    if (/[\r\n\0]/.test(expanded.text))
       throw new Error(`header ${name} has a line break or NUL in its value`);
-    resolved[name] = value;
+    resolved[name] = expanded.text;
   }
-  return { headers: resolved, filled };
+  return { headers: resolved, filled, missing };
+}
+/** What a connection is started or reached with: its references filled in. */
+interface Resolved extends Filled {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+}
+function resolveConnection(
+  connection: McpConnection,
+  env: NodeJS.ProcessEnv,
+  secrets: Record<string, string>,
+): Resolved {
+  const lookup = environmentThenSecrets(env, secrets);
+  const missing: string[] = [];
+  const filled = new Map<string, string>();
+  const one = (text: string, where: string, remote = false): string => {
+    const expanded = expandReferences(text, lookup, (variable) =>
+      remote ? WITHHELD_VARIABLES.has(variable) : false,
+    );
+    for (const variable of expanded.missing)
+      missing.push(`${where} names \${${variable}}, which is not set`);
+    for (const used of expanded.used)
+      if (used.value && used.from === 'secret')
+        filled.set(used.value, `%${used.name}%`);
+    return expanded.text;
+  };
+  if (connection.transport === 'stdio')
+    return {
+      headers: {},
+      filled,
+      missing,
+      command: one(connection.command!, 'command'),
+      args: (connection.args ?? []).map((arg, index) =>
+        one(arg, `args[${index}]`),
+      ),
+      ...(connection.env
+        ? {
+            env: Object.fromEntries(
+              Object.entries(connection.env).map(([key, value]) => [
+                key,
+                one(value, `env.${key}`),
+              ]),
+            ),
+          }
+        : {}),
+    };
+  const url = one(connection.url!, 'url', true);
+  const headers = fillHeaders(connection.headers, env, secrets);
+  for (const [value, shown] of headers.filled) filled.set(value, shown);
+  return {
+    headers: headers.headers,
+    filled,
+    missing: [...missing, ...headers.missing],
+    url,
+  };
 }
 function hideFilled(filled: Map<string, string>): (text: string) => string {
   return (text) => replaceLongest(text, filled);
@@ -574,42 +686,40 @@ async function answerIn(
 }
 function transportFor(
   connection: McpConnection,
+  resolved: Resolved,
   workspace: string,
-  headers: Record<string, string>,
   fetch: FetchLike,
   authProvider?: McpAuthProvider,
 ): Transport {
   if (connection.transport === 'stdio')
     return new StdioClientTransport({
-      command: connection.command!,
-      args: connection.args ?? [],
+      command: resolved.command!,
+      args: resolved.args ?? [],
       cwd: workspace,
       env: {
         ...(shellEnvironment() as Record<string, string>),
-        ...connection.env,
+        CIRCLE_PROJECT_DIR: workspace,
+        ...resolved.env,
       },
       stderr: 'pipe',
     });
-  const url = new URL(connection.url!);
+  const url = new URL(resolved.url!);
   const protocols =
-    connection.transport === 'websocket'
-      ? ['ws:', 'wss:']
-      : ['http:', 'https:'];
+    connection.transport === 'ws' ? ['ws:', 'wss:'] : ['http:', 'https:'];
   if (!protocols.includes(url.protocol) || url.username || url.password)
     throw new Error('invalid MCP server URL');
+  const headers = resolved.headers;
   const requestInit = Object.keys(headers).length ? { headers } : undefined;
-  if (connection.transport === 'streamable_http')
+  if (connection.transport === 'http')
     return new StreamableHTTPClientTransport(url, {
       requestInit,
       fetch: authProvider ? authProvider.authorizedFetch(fetch) : fetch,
       ...(authProvider ? { authProvider } : {}),
     });
-  if (connection.transport === 'websocket') {
-    if (requestInit)
-      throw new Error('a websocket server cannot be sent headers');
+  if (connection.transport === 'ws') {
+    if (requestInit) throw new Error('a ws server cannot be sent headers yet');
     return new WebSocketClientTransport(url);
   }
-  // A `url` entry without a known transport is reached over HTTP with server-sent events
   return new SSEClientTransport(url, {
     requestInit,
     fetch: authProvider ? authProvider.authorizedFetch(fetch) : fetch,
@@ -923,6 +1033,8 @@ interface Connected {
   name: string;
   client: Client;
   connection: McpConnection;
+  /** The address it was reached at, its references filled in. */
+  url?: string;
   instructions?: string;
   /** False once the connection ended, closed by Circle or by the server. */
   open: boolean;
@@ -1410,33 +1522,54 @@ export class McpManager {
         : { run: (args, context) => call(args, context) }),
     };
   }
+  /**
+   * Connects the configured servers, side by side, and offers their tools. `servers` is an `mcpServers` object, taken
+   * as your own, or the entries a run reads (mcp_config.ts). `waiting` lists servers that are not connected for a
+   * reason of the run's, such as a `.mcp.json` server that waits for approval.
+   */
   async load(
-    servers: Record<string, unknown>[],
+    servers: Record<string, McpServerConfig> | McpEntry[],
     reserved = new Set<string>(),
     signal?: AbortSignal,
+    options: { waiting?: McpStatus[]; trusted?: boolean } = {},
   ): Promise<void> {
     const connected: Connected[] = [];
     const tools: Tool[] = [];
     const status: McpStatus[] = [];
     const hinted = new Map<string, ToolHint>();
     try {
-      const { connections, skipped } = buildMcpConnections(servers);
-      status.push(...skipped);
+      const { connections, skipped } = buildMcpConnections(servers, {
+        trusted: options.trusted,
+      });
+      status.push(...skipped, ...(options.waiting ?? []));
       this.reserved = reserved;
-      for (const connection of connections) {
-        signal?.throwIfAborted();
-        const outcome = await this.connectServer(
-          connection,
-          reserved,
-          (name) => tools.some((tool) => tool.name === name),
-          signal,
+      signal?.throwIfAborted();
+      const outcomes = await Promise.allSettled(
+        connections.map((connection) =>
+          this.connectServer(connection, reserved, () => false, signal),
+        ),
+      );
+      // In the order they are configured: of two servers whose tools would have one name, the earlier keeps it
+      for (const outcome of outcomes) {
+        if (outcome.status === 'rejected') continue;
+        const { state, server } = outcome.value;
+        status.push(state);
+        if (!server) continue;
+        const clash = outcome.value.tools.find((tool) =>
+          tools.some((have) => have.name === tool.name),
         );
-        status.push(outcome.state);
-        if (!outcome.server) continue;
-        connected.push(outcome.server);
-        tools.push(...outcome.tools);
-        for (const [name, hint] of outcome.said) hinted.set(name, hint);
+        if (clash) {
+          state.error = `tool '${clash.name}' already exists`;
+          state.tools = [];
+          await McpManager.disconnect([server]);
+          continue;
+        }
+        connected.push(server);
+        tools.push(...outcome.value.tools);
+        for (const [name, hint] of outcome.value.said) hinted.set(name, hint);
       }
+      const failed = outcomes.find((outcome) => outcome.status === 'rejected');
+      if (failed) throw failed.reason;
       signal?.throwIfAborted();
       const previous = this.servers;
       this.servers = connected;
@@ -1469,9 +1602,10 @@ export class McpManager {
     const headerNames = Object.keys(connection.headers ?? {});
     const state: McpStatus = {
       name: connection.name,
-      connection: connection.command || connection.url || '',
+      connection: connectionText(connection),
       tools: [],
       error: '',
+      scope: connection.scope,
       ...(headerNames.length ? { headers: headerNames } : {}),
       ...(connection.notSent ? { notSent: connection.notSent } : {}),
     };
@@ -1503,17 +1637,13 @@ export class McpManager {
     // What the server sends back names a header's secret, never its value
     let hide = (text: string): string => text;
     try {
-      const filled = fillHeaders(
-        connection.headers,
-        process.env,
-        this.services.secrets?.() ?? {},
-      );
+      const filled = await this.resolved(connection, state, combined);
       hide = hideFilled(filled.filled);
-      provider = await this.authProvider(connection);
+      provider = await this.authProvider(connection, filled);
       transport = transportFor(
         connection,
+        filled,
         this.workspace,
-        filled.headers,
         requestFetch(this.services.sessionId),
         provider,
       );
@@ -1538,6 +1668,7 @@ export class McpManager {
         name: connection.name,
         client,
         connection,
+        ...(filled.url ? { url: filled.url } : {}),
         instructions: serverInstructions(client.getInstructions(), hide),
         open: true,
       };
@@ -1584,18 +1715,71 @@ export class McpManager {
    */
   private async authProvider(
     connection: McpConnection,
+    resolved: Resolved,
   ): Promise<McpAuthProvider | undefined> {
     const home = this.services.home;
     if (
       !home ||
-      !connection.url ||
-      (connection.transport !== 'streamable_http' &&
-        connection.transport !== 'sse') ||
-      Object.keys(connection.headers ?? {}).some(credentialHeader)
+      !resolved.url ||
+      (connection.transport !== 'http' && connection.transport !== 'sse') ||
+      Object.keys(resolved.headers).some(credentialHeader)
     )
       return undefined;
-    const server = new URL(connection.url).href;
+    const server = new URL(resolved.url).href;
     return new McpAuthProvider(home, server, await redirectPort(home, server));
+  }
+  /**
+   * A connection's values as it is made now: its references filled in from the environment and the saved secrets, and
+   * the headers its `headersHelper` prints over its own. What is not as meant is in the server's warnings.
+   */
+  private async resolved(
+    connection: McpConnection,
+    state: McpStatus,
+    signal: AbortSignal,
+  ): Promise<Resolved> {
+    const resolved = resolveConnection(
+      connection,
+      process.env,
+      this.services.secrets?.() ?? {},
+    );
+    const warnings = [...resolved.missing];
+    if (connection.headersHelper) {
+      if (!connection.trusted)
+        warnings.push(
+          'headersHelper not run: the folder is not trusted, so the server is reached with its own headers only',
+        );
+      else {
+        const given = await runHeadersHelper(connection.headersHelper, {
+          folder: connection.folder || this.workspace,
+          server: connection.name,
+          url: connectionText(connection),
+          own: connection.scope !== 'project',
+          signal,
+        });
+        for (const [name, value] of Object.entries(given)) {
+          if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))
+            throw new Error(
+              `headersHelper gave an invalid header name '${name}'`,
+            );
+          if (/[\r\n\0]/.test(value))
+            throw new Error(
+              `headersHelper gave header ${name} a line break or NUL in its value`,
+            );
+          if (OWN_HEADERS.has(name.toLowerCase())) continue;
+          // Its values are never shown: a server that says one back reads as its header's name
+          if (value && credentialHeader(name))
+            resolved.filled.set(value, `<${name} from headersHelper>`);
+          const same = Object.keys(resolved.headers).find(
+            (key) => key.toLowerCase() === name.toLowerCase(),
+          );
+          if (same) delete resolved.headers[same];
+          resolved.headers[name] = value;
+        }
+      }
+    }
+    if (warnings.length) state.warnings = warnings;
+    else delete state.warnings;
+    return resolved;
   }
   /**
    * The sign-in of a server that answered 401. When its authorization server offers the device code (RFC 8628), Circle
@@ -1682,8 +1866,8 @@ export class McpManager {
       const code = await redirect.code;
       const exchange = transportFor(
         connection,
+        { headers: {}, filled: new Map(), missing: [], url: provider.server },
         this.workspace,
-        {},
         requestFetch(this.services.sessionId),
         provider,
       ) as StreamableHTTPClientTransport | SSEClientTransport;
@@ -2039,10 +2223,13 @@ export class McpManager {
    */
   async reloadServer(
     name: string,
-    entries: Record<string, unknown>[],
+    entries: Record<string, McpServerConfig> | McpEntry[],
+    options: { waiting?: McpStatus[]; trusted?: boolean } = {},
   ): Promise<void> {
-    // The whole list, so a server named by its id or its place is named as when it connected
-    const { connections, skipped } = buildMcpConnections(entries);
+    const { connections, skipped } = buildMcpConnections(entries, {
+      trusted: options.trusted,
+    });
+    skipped.push(...(options.waiting ?? []));
     const connection = connections.find((item) => item.name === name);
     if (
       !connection &&
@@ -2179,11 +2366,8 @@ export class McpManager {
         if (/^Bearer /i.test(value))
           filled.set(value.slice(7), '[MCP credential omitted]');
       }
-    if (this.services.home && server.connection.url) {
-      const auth = keptFor(
-        this.services.home,
-        new URL(server.connection.url).href,
-      );
+    if (this.services.home && server.url) {
+      const auth = keptFor(this.services.home, new URL(server.url).href);
       for (const value of [
         auth.tokens?.access_token,
         auth.tokens?.refresh_token,
@@ -2202,18 +2386,45 @@ export class McpManager {
       .filter((server) => server.open && server.instructions)
       .map((server) => ({ server: server.name, text: server.instructions! }));
   }
+  /** What moving the configuration into the current format did, said in /mcp until the next start. */
+  notes: string[] = [];
   describe(): string {
-    if (!this.status.length)
-      return 'No MCP servers. Add mcp_servers to settings.json.';
-    return (
-      `MCP servers (${this.status.length}):\n` +
-      this.status
-        .map(
-          (server) =>
-            `  · ${server.name}  ${server.connection}${server.headers?.length ? '\n    headers: ' + server.headers.join(', ') : ''}${server.notSent?.length ? '\n    not sent, Circle sets them: ' + server.notSent.join(', ') : ''}${server.authorize ? '\n    ' + server.error + ': ' + server.authorize : server.error === 'disabled' ? '\n    disabled' : server.error === TOOLS_NOT_LISTED_AGAIN ? '\n    ' + server.tools.join(', ') + '\n    ' + server.error : server.error ? '\n    failed: ' + server.error : '\n    ' + server.tools.join(', ')}`,
-        )
-        .join('\n')
-    );
+    if (!this.status.length && !this.notes.length)
+      return 'No MCP servers. Add them to mcpServers in settings.json, or to .mcp.json in the project.';
+    const where = (server: McpStatus): string =>
+      server.scope === 'project'
+        ? ' (.mcp.json)'
+        : server.scope === 'local'
+          ? ' (this project)'
+          : '';
+    const state = (server: McpStatus): string =>
+      server.approval === 'pending'
+        ? `\n    waits for your approval: /mcp reconnect ${server.name} asks for it`
+        : server.approval === 'declined'
+          ? `\n    declined for this project: /mcp reconnect ${server.name} asks again`
+          : server.authorize
+            ? '\n    ' + server.error + ': ' + server.authorize
+            : server.error === 'disabled'
+              ? '\n    disabled'
+              : server.error === TOOLS_NOT_LISTED_AGAIN
+                ? '\n    ' + server.tools.join(', ') + '\n    ' + server.error
+                : server.error
+                  ? '\n    failed: ' + server.error
+                  : '\n    ' + server.tools.join(', ');
+    return [
+      ...this.notes.map((note) => `moved: ${note}`),
+      ...(this.status.length
+        ? [
+            `MCP servers (${this.status.length}):\n` +
+              this.status
+                .map(
+                  (server) =>
+                    `  · ${server.name}${where(server)}  ${server.connection}${server.headers?.length ? '\n    headers: ' + server.headers.join(', ') : ''}${server.notSent?.length ? '\n    not sent, Circle sets them: ' + server.notSent.join(', ') : ''}${server.warnings?.length ? '\n    warning: ' + server.warnings.join('; ') : ''}${state(server)}`,
+                )
+                .join('\n'),
+          ]
+        : []),
+    ].join('\n');
   }
   /** What the server of a tool, by its name here, says of it, when trusted with it. */
   hint(tool: string): ToolHint | undefined {
@@ -2243,12 +2454,11 @@ export function backgroundMcpConnection(
   connection: McpConnection,
   secrets: () => Record<string, string>,
 ): McpBearerConnection {
-  if (
-    !connection.url ||
-    !['streamable_http', 'sse'].includes(connection.transport)
-  )
+  if (!connection.url || !['http', 'sse'].includes(connection.transport))
     throw new Error('select an HTTP MCP connection');
-  const server = new URL(connection.url).href;
+  const server = new URL(
+    resolveConnection(connection, process.env, secrets()).url!,
+  ).href;
   const directKey =
     server + '#circle-direct-' + encodeURIComponent(connection.name);
   const current = (initialize = false) => {
@@ -2261,6 +2471,12 @@ export function backgroundMcpConnection(
       ([name]) => name.toLowerCase() === 'authorization',
     )?.[1];
     if (credential !== undefined) {
+      // A reference to nothing set stays as written: it is no token
+      const unset = /\$\{([A-Za-z_][A-Za-z0-9_]*)/.exec(credential)?.[1];
+      if (unset)
+        throw new Error(
+          `the Authorization header names \${${unset}}, which is not set; save it with /secrets ${unset}`,
+        );
       const match = /^Bearer ([^\s]+)$/i.exec(credential);
       if (!match) throw new McpLoginRequired();
       const grant = initialize

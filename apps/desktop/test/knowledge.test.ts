@@ -33,19 +33,23 @@ async function world(t: TestContext, remote = false) {
     server = remote ? new AuthorizedServer(join(root, 'peer')) : undefined;
   if (server) {
     await server.start();
-    settings.mcp_servers = [
-      {
-        name: 'selected',
+    settings.mcpServers = {
+      selected: {
         url: server.origin + '/mcp',
-        transport: 'streamable_http',
+        type: 'http',
         headers: { authorization: 'Bearer ' + server.token },
       },
-    ];
+    };
     settings.knowledge_sync = {
       server: 'selected',
       binding: backgroundMcpConnection(
         home,
-        settings.mcp_servers[0] as any,
+        {
+          name: 'selected',
+          transport: 'http',
+          url: server.origin + '/mcp',
+          headers: { authorization: 'Bearer ' + server.token },
+        } as any,
         () => ({}),
       ).binding,
     };

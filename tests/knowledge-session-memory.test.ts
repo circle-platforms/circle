@@ -16,7 +16,7 @@ import {
 import { forgetAuthorization } from '../src/mcp_auth.js';
 import { requestBudget } from '../src/request_budget.js';
 import { AuthorizedServer } from './fixtures/knowledge-sync/authorized-server.js';
-import { scratch, cleanup, until } from './helpers.js';
+import { scratch, cleanup, until, serversOf } from './helpers.js';
 const signal = new AbortController().signal;
 const answer = () => ({
   message: {
@@ -71,10 +71,10 @@ async function world(
     await server.seed(home);
     const connection = {
       name: 'preferences',
-      transport: 'streamable_http' as const,
+      transport: 'http' as const,
       url: server.origin + '/mcp',
     };
-    settings.mcp_servers = [connection];
+    settings.mcpServers = serversOf(connection);
     settings.knowledge_sync = {
       server: connection.name,
       binding: backgroundMcpConnection(home, connection, () => ({})).binding,

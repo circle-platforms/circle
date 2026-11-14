@@ -257,13 +257,12 @@ test('MCP image and embedded PDF results become attachments without base64 in te
   const root = scratch(t);
   const manager = new McpManager(root);
   cleanup(t, () => manager.close());
-  await manager.load([
-    {
-      name: 'fixture',
+  await manager.load({
+    fixture: {
       command: process.execPath,
       args: [resolve('tests/fixtures/mcp-server.ts')],
     },
-  ]);
+  });
   const attachments: MediaAttachment[] = [];
   const text = await manager.tools
     .find((tool) => tool.name === 'fixture_media')!

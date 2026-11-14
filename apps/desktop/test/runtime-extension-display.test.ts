@@ -20,14 +20,13 @@ test('extension append is a display notice, never assistant history or later mod
   const ext = join(workspace, '.circle/extensions/display');
   await mkdir(ext, { recursive: true });
   const settings = trustFolder(defaultSettings(), workspace);
-  settings.mcp_servers = [
-    {
-      name: 'disabled-fixture',
+  settings.mcpServers = {
+    'disabled-fixture': {
       command: process.execPath,
       args: ['-e', 'throw Error("must not start")'],
       enabled: false,
     },
-  ];
+  };
   saveSettings(settings, home);
   const marker = 'display-only-fixture-1871';
   await writeFile(

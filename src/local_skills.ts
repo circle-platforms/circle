@@ -16,6 +16,12 @@ import { dirname, join, relative, sep } from 'node:path';
 import { isRecord, type CircleSettings } from './settings.js';
 import { McpLoginRequired } from './mcp_auth.js';
 import { backgroundMcpConnection, buildMcpConnections } from './mcp_loader.js';
+import {
+  environmentThenSecrets,
+  expandReferences,
+  mcpServer,
+  WITHHELD_VARIABLES,
+} from './mcp_config.js';
 import { serverBaseUrl } from './server_resolution.js';
 import { expandVariables, redactSecrets } from './secrets.js';
 import { assertNoCaseCollisions, isSafePackPath } from './pack_files.js';
@@ -88,22 +94,20 @@ export async function resolveServer(
   options: { home: string; signal?: AbortSignal },
 ): Promise<{ url: string; token: string } | { problem: string; fix: string }> {
   const shown = name.slice(0, 64);
-  const entries = settings.mcp_servers.filter(isRecord);
-  const entry = entries.find((server) => server.name === name);
+  const entry = mcpServer(settings.mcpServers, name);
   if (entry === undefined) {
-    const named = entries
-      .map((server) => server.name)
-      .filter((value): value is string => typeof value === 'string')
-      .map((value) => value.slice(0, 64));
+    const named = Object.keys(settings.mcpServers).map((value) =>
+      value.slice(0, 64),
+    );
     return {
       problem:
         `没有名为 ${shown} 的 MCP 服务器条目` +
         (named.length ? `（已有：${named.join('、')}）` : ''),
-      fix: '用已有的条目名；没有的服务器先连接它：桌面版在 设置 → 扩展 或 设置 → MCP 服务器，终端里在 mcp_servers 里配置',
+      fix: '用已有的条目名；没有的服务器先连接它：桌面版在 设置 → 扩展 或 设置 → MCP 服务器，终端里在 settings.json 的 mcpServers 里配置',
     };
   }
-  // As the MCP connections are made: a disabled entry, or an earlier one of the same name, is not used
-  const { connections, skipped } = buildMcpConnections(settings.mcp_servers);
+  // As the MCP connections are made: a disabled entry is not used
+  const { connections, skipped } = buildMcpConnections(settings.mcpServers);
   const connection = connections.find((candidate) => candidate.name === name);
   if (connection === undefined) {
     const why = skipped.find((row) => row.name === name)?.error;
@@ -114,13 +118,19 @@ export async function resolveServer(
           fix: '照上面说的改好这个条目后再试',
         };
   }
-  if (!['streamable_http', 'sse'].includes(connection.transport))
+  if (!['http', 'sse'].includes(connection.transport))
     return {
       problem: `MCP 服务器条目 ${shown} 不是经 HTTP 连接的服务器`,
       fix: '本地工具只从 HTTP 的 MCP 服务器安装',
     };
-  // The address of the entry whose token is sent: with two entries of one name, the one connected
-  const url = connection.url ?? '';
+  // The address of the entry whose token is sent, its references filled in
+  const url = connection.url
+    ? expandReferences(
+        connection.url,
+        environmentThenSecrets(process.env, secrets),
+        (variable) => WITHHELD_VARIABLES.has(variable),
+      ).text
+    : '';
   if (url.length === 0)
     return {
       problem: `MCP 服务器条目 ${shown} 没有 url`,
@@ -141,7 +151,7 @@ export async function resolveServer(
     if (error instanceof McpLoginRequired)
       return {
         problem: `MCP 服务器条目 ${shown} 还没有登录，也没有 Bearer 令牌`,
-        fix: `先登录这个服务器：${SIGN_IN}；用令牌连接的服务器在它的 Authorization 头里写 Bearer \${secret:<名字>}，并用 /secrets <名字> 保存令牌`,
+        fix: `先登录这个服务器：${SIGN_IN}；用令牌连接的服务器在它的 Authorization 头里写 Bearer \${<名字>}，并用 /secrets <名字> 保存令牌`,
       };
     return {
       problem: `MCP 服务器条目 ${shown} 的令牌用不了：${error instanceof Error ? error.message : String(error)}`,
@@ -338,7 +348,7 @@ export async function installPack(options: {
   if (base.length === 0 || base === '/local-tools')
     throw new LocalSkillsError(
       '没有服务器地址',
-      '在 mcp_servers 里给这个服务器条目写 url',
+      '在 mcpServers 里给这个服务器条目写 url',
     );
 
   const manifestBytes = await fetchBytes(

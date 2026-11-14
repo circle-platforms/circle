@@ -234,13 +234,7 @@ test('a server that asks for a sign-in is signed in through the browser, and the
   });
   cleanup(t, () => manager.close());
   const connected = change.next();
-  await manager.load([
-    {
-      name: 'remote',
-      url: `${server.origin}/mcp`,
-      transport: 'streamable_http',
-    },
-  ]);
+  await manager.load({ remote: { url: `${server.origin}/mcp`, type: 'http' } });
   // The start is not held up: the server waits for its sign-in, its page named in /mcp.
   assert.equal(manager.status[0]!.error, SIGN_IN_WAITING);
   assert.match(
@@ -293,26 +287,14 @@ test('a server that asks for a sign-in is signed in through the browser, and the
     openUrl: browser(opened),
   });
   cleanup(t, () => again.close());
-  await again.load([
-    {
-      name: 'remote',
-      url: `${server.origin}/mcp`,
-      transport: 'streamable_http',
-    },
-  ]);
+  await again.load({ remote: { url: `${server.origin}/mcp`, type: 'http' } });
   assert.equal(again.status[0]!.error, '', again.describe());
   assert.equal(opened.length, 1, 'no second sign-in');
 
   // A revoked token signs in again.
   server.valid.clear();
   const reconnected = change.next();
-  await manager.load([
-    {
-      name: 'remote',
-      url: `${server.origin}/mcp`,
-      transport: 'streamable_http',
-    },
-  ]);
+  await manager.load({ remote: { url: `${server.origin}/mcp`, type: 'http' } });
   assert.equal(manager.status[0]!.error, SIGN_IN_WAITING);
   await reconnected;
   assert.equal(manager.status[0]!.error, '', manager.describe());
@@ -329,14 +311,13 @@ test('a credential header, or no home to keep a sign-in in, leaves the 401 a pla
     secrets: () => ({ HUB: 'not-a-valid-token' }),
   });
   cleanup(t, () => withHeader.close());
-  await withHeader.load([
-    {
-      name: 'remote',
+  await withHeader.load({
+    remote: {
       url: `${server.origin}/mcp`,
-      transport: 'streamable_http',
-      headers: { Authorization: 'Bearer ${secret:HUB}' },
+      type: 'http',
+      headers: { Authorization: 'Bearer ${HUB}' },
     },
-  ]);
+  });
   assert.notEqual(withHeader.status[0]!.error, '');
   assert.notEqual(withHeader.status[0]!.error, SIGN_IN_WAITING);
   assert.equal(withHeader.status[0]!.authorize, undefined);
@@ -345,13 +326,9 @@ test('a credential header, or no home to keep a sign-in in, leaves the 401 a pla
     openUrl: browser(opened),
   });
   cleanup(t, () => homeless.close());
-  await homeless.load([
-    {
-      name: 'remote',
-      url: `${server.origin}/mcp`,
-      transport: 'streamable_http',
-    },
-  ]);
+  await homeless.load({
+    remote: { url: `${server.origin}/mcp`, type: 'http' },
+  });
   assert.notEqual(homeless.status[0]!.error, '');
   assert.equal(homeless.status[0]!.authorize, undefined);
   assert.deepEqual(opened, [], 'no browser opened');
@@ -368,13 +345,9 @@ test('a refused sign-in says so; closing the manager stops a sign-in under way',
   });
   cleanup(t, () => manager.close());
   const failed = change.next();
-  await manager.load([
-    {
-      name: 'remote',
-      url: `${refusing.origin}/mcp`,
-      transport: 'streamable_http',
-    },
-  ]);
+  await manager.load({
+    remote: { url: `${refusing.origin}/mcp`, type: 'http' },
+  });
   await failed;
   assert.equal(
     manager.status[0]!.error,
@@ -388,13 +361,7 @@ test('a refused sign-in says so; closing the manager stops a sign-in under way',
     home,
     openUrl: async () => {},
   });
-  await idle.load([
-    {
-      name: 'remote',
-      url: `${server.origin}/mcp`,
-      transport: 'streamable_http',
-    },
-  ]);
+  await idle.load({ remote: { url: `${server.origin}/mcp`, type: 'http' } });
   assert.equal(idle.status[0]!.error, SIGN_IN_WAITING);
   const port = keptFor(home, `${server.origin}/mcp`).port!;
   await idle.close();
@@ -466,13 +433,7 @@ test('a server whose authorization server offers the device code shows a code, a
   });
   cleanup(t, () => manager.close());
   const shown = change.next();
-  await manager.load([
-    {
-      name: 'remote',
-      url: `${server.origin}/mcp`,
-      transport: 'streamable_http',
-    },
-  ]);
+  await manager.load({ remote: { url: `${server.origin}/mcp`, type: 'http' } });
   await shown;
   const waiting = manager.status[0]!;
   assert.equal(waiting.error, 'enter the code BCDF-GHJK on the sign-in page');
@@ -543,13 +504,7 @@ test('a server that gives no device code is signed in through the browser instea
   });
   cleanup(t, () => manager.close());
   const connected = change.next();
-  await manager.load([
-    {
-      name: 'remote',
-      url: `${server.origin}/mcp`,
-      transport: 'streamable_http',
-    },
-  ]);
+  await manager.load({ remote: { url: `${server.origin}/mcp`, type: 'http' } });
   await connected;
   assert.equal(server.devices.length, 1, 'it asked for a code first');
   assert.equal(
@@ -573,13 +528,7 @@ test('a device sign-in refused on the page says so and leaves no code shown', as
   });
   cleanup(t, () => manager.close());
   const shown = change.next();
-  await manager.load([
-    {
-      name: 'remote',
-      url: `${server.origin}/mcp`,
-      transport: 'streamable_http',
-    },
-  ]);
+  await manager.load({ remote: { url: `${server.origin}/mcp`, type: 'http' } });
   await shown;
   const failed = change.next();
   await failed;

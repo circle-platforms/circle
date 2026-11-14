@@ -8,65 +8,105 @@ Circle can load tools from [Model Context Protocol](https://modelcontextprotocol
 
 ## Add a server
 
-Add it to `mcp_servers` in [`settings.json`](settings.md) in the data folder, then run `/reload` or `/mcp reload`. A project's `.circle/settings.json` cannot add servers.
+Servers are written as `mcpServers`, an object of servers by name, as other MCP clients write them. Three places hold it:
+
+| Where | For | Shared |
+| ----- | --- | ------ |
+| `mcpServers` in [`settings.json`](settings.md) in the data folder | you, in every project | no |
+| `projects["<folder>"].mcpServers` in the same `settings.json` | you, in that project only | no |
+| `.mcp.json` at the project's root | everyone who opens the project | yes, through version control |
+
+When one name is in more than one place, the entry of the project in your `settings.json` is used, else the project's `.mcp.json`, else yours; the whole entry is taken from that place, its fields are not merged. Run `/reload` or `/mcp reconnect <name>` after you change one. A project's `.circle/settings.json` cannot add servers.
 
 A server started as a program on your machine:
 
 ```json
-"mcp_servers": [
-  {
-    "name": "memory",
+"mcpServers": {
+  "memory": {
+    "type": "stdio",
     "command": "npx",
     "args": ["-y", "@modelcontextprotocol/server-memory"],
     "env": { "SOME_VAR": "value" }
   }
-]
+}
 ```
 
 A server reached over the network:
 
 ```json
-"mcp_servers": [
-  { "name": "docs", "url": "https://example.com/mcp", "transport": "streamable_http" }
-]
+"mcpServers": {
+  "docs": { "type": "http", "url": "https://example.com/mcp" }
+}
 ```
 
-| Field                    | Meaning                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                   | Prefix for the server's tools. Any name works: characters other than letters, digits, `_` and `-` become `_` in tool names, and a tool name over 64 characters is shortened with a short hash. Falls back to `id`, then `mcp0`, `mcp1`, … When two servers have the same name the later one is used, and `/mcp` lists the earlier one with the reason.                                                         |
-| `command`, `args`, `env` | Start the server as a program (stdio), in the workspace.                                                                                                                                                                                                                                                                                                                                                       |
-| `url`, `transport`       | Connect to a server at that address. `transport` says how: `streamable_http` (Streamable HTTP, MCP's current HTTP transport), `sse` (the older HTTP with server-sent events, which the MCP SDK marks deprecated) or `websocket`. Without `transport`, or with any other value, Circle uses `sse`, so give `"transport": "streamable_http"` for a Streamable HTTP server.                                       |
-| `headers`                | Headers sent with every request to a `url` server over `sse` or `streamable_http`, such as `{ "Authorization": "Bearer ${secret:DOCS_TOKEN}" }`. A value can name a saved secret or an environment variable; see [Tokens in headers](#tokens-in-headers). A `websocket` server cannot be sent headers.                                                                                                         |
-| `trust_annotations`      | `true` (the default): what the server says of each tool decides how its calls are approved. `false`: it is ignored, and every tool of that server asks. See [Security](#security).                                                                                                                                                                                                                             |
-| `max_file_bytes`         | The largest file a [file parameter](#files-a-tool-takes) of the server's tools sends, in bytes: 33554432 (32 MiB) unless set. A value that is not a whole number of bytes, 1 or more, stops that server, and `/mcp` says why.                                                                                                                                                                                  |
-| `placeholders`           | Names under which an entry reached over HTTP gives tool calls its address and token as `%NAME%` placeholders: `url` names a plain variable holding the endpoint, `token` a secret holding the Bearer token its connection sends (its `Authorization` header's, or else the one its sign-in keeps), such as `{ "url": "DOCS_URL", "token": "DOCS_TOKEN" }`. A kept token with an expiry is given only until it expires: the placeholder does not refresh it, the connection does when it next reaches the server (one of its tools, or `/mcp reload`), and until then the name stays as written. See [Secrets by name](security.md#secrets-by-name). |
+| Field | Meaning |
+| ----- | ------- |
+| the name | The key of the entry. Its tools are offered to the model under it: characters other than letters, digits, `_` and `-` become `_` in tool names, and a tool name over 64 characters is shortened with a short hash. |
+| `type` | `stdio` (a program, the default when there is no `type`), `http` (Streamable HTTP, MCP's current HTTP transport; `streamable-http` is read as `http`), `sse` (the older HTTP with server-sent events, which the MCP SDK marks deprecated) or `ws` (WebSocket). An entry with a `url` and no `type` is not connected, and `/mcp` says to add one, since without a `type` it is read as a program. |
+| `command`, `args`, `env` | Start the server as a program (stdio), in the workspace. It also gets `CIRCLE_PROJECT_DIR`, the workspace. |
+| `url` | The address of an `http`, `sse` or `ws` server. It may not carry a user name or password; use `headers` instead. An entry whose `url` is empty is listed as not configured. |
+| `headers` | Headers sent with every request to an `http` or `sse` server, such as `{ "Authorization": "Bearer ${DOCS_TOKEN}" }`. See [Variables in an entry](#variables-in-an-entry). A `ws` server cannot be sent headers yet (see [known issues](known-issues.md#subagents-and-tools)). |
+| `headersHelper` | A command run in a shell when Circle connects the server, which prints a JSON object of header names and values; see [Headers from a command](#headers-from-a-command). |
+| `enabled` | Only Circle reads it: `false` keeps the server's entry without connecting it. The desktop's MCP page switches it. |
+| `max_file_bytes` | Only Circle reads it: the largest file a [file parameter](#files-a-tool-takes) of the server's tools sends, in bytes: 33554432 (32 MiB) unless set. A value that is not a whole number of bytes, 1 or more, stops that server, and `/mcp` says why. |
+| `trust_annotations` | Only Circle reads it: `true` (the default): what the server says of each tool decides how its calls are approved. `false`: it is ignored, and every tool of that server asks. See [Security](#security). |
+| `placeholders` | Only Circle reads it, and only in your own `mcpServers`: names under which an entry reached over HTTP gives tool calls its address and token as `%NAME%` placeholders: `url` names a plain variable holding the endpoint, `token` a secret holding the Bearer token its connection sends (its `Authorization` header's, or else the one its sign-in keeps), such as `{ "url": "DOCS_URL", "token": "DOCS_TOKEN" }`. A kept token with an expiry is given only until it expires: the placeholder does not refresh it, the connection does when it next reaches the server (one of its tools, or `/mcp reconnect`), and until then the name stays as written. See [Secrets by name](security.md#secrets-by-name). |
 
-An entry with neither `command` nor `url` is skipped. A URL may not carry a user name or password; use `headers` instead.
-
-```json
-"mcp_servers": [
-  {
-    "name": "docs",
-    "url": "https://example.com/mcp",
-    "transport": "streamable_http",
-    "headers": { "Authorization": "Bearer ${secret:DOCS_TOKEN}" }
-  }
-]
-```
+An entry of a `type` Circle does not know, or `"type": "sdk"`, is listed by `/mcp` with the reason and not connected.
 
 A program started for a server gets your environment without the variables whose names look secret (`KEY`, `TOKEN`, `SECRET`, `PASSWORD` and the like; see [The shell environment](security.md#the-shell-environment)), plus the `env` you give it. Put a key the server needs in `env`.
 
-### Tokens in headers
+### The project's .mcp.json
 
-A header value can name a saved [secret](security.md#secrets-by-name) as `${secret:NAME}` (save one with `/secrets NAME`, or in the desktop settings under **variables & secrets** → **secrets**), and a variable of the environment Circle was started in as `${env:NAME}`, so a token need not be written in `settings.json`. Circle puts the values in when it connects: a secret saved or changed later is used from the next `/mcp reload`. A secret that is not saved, a variable that is not set, a header name that is not a valid token, or a value with a line break stops that server before any request, and `/mcp` names the header and the secret or variable, never a value.
+A project shares servers in `.mcp.json` at its root, in the same format:
 
-`/mcp` lists the names of the headers a server is sent, not their values. Where a server's answer, error, instructions or tool description quotes a secret value Circle put in, Circle shows its reference in its place: `%NAME%` for a saved secret, and `${env:NAME}` for an environment variable whose name looks secret, by the rule of [the shell environment](security.md#the-shell-environment) (`KEY`, `TOKEN`, `SECRET`, `PASSWORD` and the like), or that goes into `Authorization`, `Proxy-Authorization` or a header whose name looks secret by the same rule, such as `X-Api-Key`. That holds in what the model reads, in the conversation, and in the server's status that `/mcp` and the desktop show. Such a value is replaced wherever it stands, also inside a longer word or number, as a secret's value is in other tool output (see [Known issues](known-issues.md#desktop-application)). Any other environment variable's value, such as a region or an API version, is no secret and is not replaced, and neither is a value written into `settings.json` as it is, without a reference. Where a server quotes a file it was sent and a secret value lies inside that file's encoding, the model reads the file's path, size and digest, not the encoding.
+```json
+{
+  "mcpServers": {
+    "shared-server": { "type": "http", "url": "https://example.com/mcp" }
+  }
+}
+```
+
+Circle reads it only in a [trusted folder](security.md#trusted-folders). Since anyone who can change the repository can change it, a server in it connects in an interactive session (the full-screen interface and the desktop application) only once you approved it: Circle asks in the question panel which of the file's servers the project may use, and keeps your answer for the project in your `settings.json`, as `enabledMcpjsonServers` and `disabledMcpjsonServers` under `projects["<folder>"]`. Until you answer, `/mcp` lists such a server as waiting for your approval; closing the panel decides nothing, and `/mcp reconnect <name>` asks again, also for a server you declined. `enableAllProjectMcpServers: true`, and `enabledMcpjsonServers` or `disabledMcpjsonServers` at the top of your `settings.json`, answer for every project. In [print mode, line mode](cli.md#print-mode) and [RPC mode](rpc.md), where no one can be asked, the file's servers connect unless you declined them.
+
+### Variables in an entry
+
+A server's `command`, `args`, `env`, `url` and `headers` can name a value as `${NAME}`, or as `${NAME:-default}`:
+
+- `${NAME}` is the variable `NAME` of the environment Circle was started in, or else the [secret](security.md#secrets-by-name) saved as `NAME` (save one with `/secrets NAME`, or in the desktop settings under **variables & secrets** → **secrets**), so a token need not be written into a file.
+- `${NAME:-default}` is the same, or `default` when neither is set. A variable set to the empty string is set.
+- A name that is neither, without a default, stays as written, and `/mcp` warns which field names it, as `warning: headers.Authorization names ${DOCS_TOKEN}, which is not set`.
+
+A remote server's `url` and `headers` never get the credentials of Circle's own model connection or a common provider's from the environment, whatever an entry names: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_BEARER_TOKEN_BEDROCK`, `AZURE_OPENAI_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `HTTP_PROXY`, `HTTPS_PROXY` and `NPM_TOKEN` read as empty there, and a default is not used. To give a server such a value, save it as a secret under a name of your own.
+
+Circle puts the values in each time it connects: a secret saved or changed later is used from the next `/mcp reconnect`. A header name that is not a valid token, or a value with a line break, stops that server before any request, and `/mcp` names the header, never a value. `/mcp` shows a server's command line or address as written, with its references, not their values.
+
+`/mcp` lists the names of the headers a server is sent, not their values. Where a server's answer, error, instructions or tool description quotes a secret value Circle put in, Circle shows its reference in its place: `%NAME%` for a saved secret, and `${NAME}` for an environment variable whose name looks secret, by the rule of [the shell environment](security.md#the-shell-environment) (`KEY`, `TOKEN`, `SECRET`, `PASSWORD` and the like), or that goes into `Authorization`, `Proxy-Authorization` or a header whose name looks secret by the same rule, such as `X-Api-Key`. That holds in what the model reads, in the conversation, and in the server's status that `/mcp` and the desktop show. Such a value is replaced wherever it stands, also inside a longer word or number, as a secret's value is in other tool output (see [Known issues](known-issues.md#desktop-application)). Any other environment variable's value, such as a region or an API version, is no secret and is not replaced, and neither is a value written into an entry as it is, without a reference. Where a server quotes a file it was sent and a secret value lies inside that file's encoding, the model reads the file's path, size and digest, not the encoding.
+
+### Headers from a command
+
+`headersHelper` is a command for headers made at connection time, such as a short-lived token:
+
+```json
+"internal-api": {
+  "type": "http",
+  "url": "https://mcp.internal.example.com",
+  "headersHelper": "/opt/bin/get-mcp-auth-headers.sh"
+}
+```
+
+Circle runs it in a shell each time it connects the server, and stops it after 10 seconds. It must print a JSON object of header names and text values, which are sent over the entry's own `headers` of the same names. It runs in the project's folder for a server of `.mcp.json` or of the project in your `settings.json`, and in the data folder for yours, and gets `CIRCLE_MCP_SERVER_NAME` and `CIRCLE_MCP_SERVER_URL`. A helper of `.mcp.json` gets your environment without the variables whose names look secret, since you did not write it. A helper of a project's server runs only in a trusted folder; in another, the server is reached with its own `headers` and `/mcp` says the helper was not run. Its values are never shown: where the server quotes one back, its header's name stands in its place.
+
+### Moved from mcp_servers
+
+Releases before this one kept servers in `mcp_servers`, a list in `settings.json`. The first time a release with `mcpServers` starts, it moves the list into `mcpServers`, keeps a copy of the file as it was as `settings.json.mcp_servers.migrated` beside it, and does not read the list again; `/mcp` says what it did until Circle is started again. An entry is named by its `name`, else its `id`; its `transport` becomes `type` (`streamable_http` is `http`, `websocket` is `ws`, and any other or none `sse`, as it was read); `${env:NAME}` and `${secret:NAME}` in its headers become `${NAME}`, which reads the environment first and then the saved secrets; and `enabled`, `max_file_bytes`, `trust_annotations` and `placeholders` stay. Of two entries with one name the later stays, as it was the one connected; an entry with neither a command nor a url is left out, as it was never connected. A file still in the old format that Circle saves for another reason is moved first, in the same way.
 
 ### Signing in to a server
 
-A server reached by `url` over `streamable_http` or `sse` that answers that it needs a sign-in, by the MCP authorization (OAuth 2.1 with PKCE), is signed in to in the system browser, or in the desktop application in its browser panel beside the conversation, also when the sign-in starts before the window has loaded. Circle finds the server's sign-in service from its answer, registers itself there as `Circle on <this computer's name>`, and opens the sign-in page; `/mcp` shows `waiting for sign-in in the browser` with the page's address, in case no browser opens. Other servers connect meanwhile. The browser comes back to Circle on a `127.0.0.1` address; Circle checks that it brings back the state of this sign-in, exchanges the code for tokens, connects the server and offers its tools. If no sign-in comes back within ten minutes, or the server refuses it, `/mcp` says why.
+A server reached by `url` over `http` or `sse` that answers that it needs a sign-in, by the MCP authorization (OAuth 2.1 with PKCE), is signed in to in the system browser, or in the desktop application in its browser panel beside the conversation, also when the sign-in starts before the window has loaded. Circle finds the server's sign-in service from its answer, registers itself there as `Circle on <this computer's name>`, and opens the sign-in page; `/mcp` shows `waiting for sign-in in the browser` with the page's address, in case no browser opens. Other servers connect meanwhile. The browser comes back to Circle on a `127.0.0.1` address; Circle checks that it brings back the state of this sign-in, exchanges the code for tokens, connects the server and offers its tools. If no sign-in comes back within ten minutes, or the server refuses it, `/mcp` says why.
 
-A server whose authorization server offers the device code (RFC 8628: a `device_authorization_endpoint` and the grant `urn:ietf:params:oauth:grant-type:device_code` in its metadata) is signed in to by code instead, so nothing has to come back to this machine. Circle registers asking for that grant too, asks the server for a code, and `/mcp` shows `enter the code XXXX-XXXX on the sign-in page:` with the page, which opens as the browser sign-in's does, with the code filled in when the server gives such an address. Circle then asks the server at the interval it names, five seconds longer after each `slow_down`, until a person approved or refused the code on that page, for at most the code's lifetime and never more than 30 minutes. A server that gives no code is signed in to in the browser. A refused or expired code shows as `sign-in failed: …`; `/mcp reload` starts a new sign-in.
+A server whose authorization server offers the device code (RFC 8628: a `device_authorization_endpoint` and the grant `urn:ietf:params:oauth:grant-type:device_code` in its metadata) is signed in to by code instead, so nothing has to come back to this machine. Circle registers asking for that grant too, asks the server for a code, and `/mcp` shows `enter the code XXXX-XXXX on the sign-in page:` with the page, which opens as the browser sign-in's does, with the code filled in when the server gives such an address. Circle then asks the server at the interval it names, five seconds longer after each `slow_down`, until a person approved or refused the code on that page, for at most the code's lifetime and never more than 30 minutes. A server that gives no code is signed in to in the browser. A refused or expired code shows as `sign-in failed: …`; `/mcp reconnect` starts a new sign-in.
 
 The registration and the tokens are kept per server in `mcp-auth.json` in Circle's home, readable by you only, so the next start connects without a sign-in. A server that stops taking its token is signed in to again at the next connection. An entry whose `headers` send a credential, such as `Authorization` or a header whose name looks secret, is never signed in to: its header is used as written.
 
@@ -80,7 +120,7 @@ Circle speaks MCP up to the 2025-11-25 revision, the newest its MCP library can 
 
 A server can tell its clients how to use its tools, in the instructions it sends when Circle connects. Circle adds them to the model's system prompt in a section of their own for each server, headed "Instructions from MCP server <name>", which says they are the server's words and not yours: where they differ from what you ask, from your or the project's instructions, or from the rest of the prompt, those come first. Circle takes the first 8 KiB of each server's instructions and marks where it cut, keeps line breaks and tabs, takes out other control characters and the bidirectional-text controls, and writes each `<` in them as `&lt;` (and says so in the section), so no tag in them can end the section or pass for a part of the prompt. A server that is not connected, or sent none, has no section. They are read again on every connect, so `/mcp reload` brings changed instructions in. When a program Circle started for a server exits, its section leaves the prompt from the next turn, and `/mcp` says the connection ended, until a call to one of its tools or `/mcp reload` starts it again (see [When a call's connection fails](#when-a-calls-connection-fails)). A server reached over the network is not watched between requests: its section stays until the servers are reloaded.
 
-Every request to a `streamable_http` or `sse` server carries a `Circle-Session-Id` header with the id of the Circle session at that moment, which changes when you start or switch sessions (as RPC `new_session` does). The requests of a tool call carry the conversation's session, also when a subagent made the call, and then a `Circle-Agent-Id` header with the subagent's own session: the values the call's hooks get as `session_id` and `agent_id`. The requests of each tool call, the cancellation `esc` sends included, also carry a W3C `traceparent` header, `00-<trace id>-<parent id>-01`, with a new random trace id for every call. A server can use them to group what one session did and to tell calls apart in its logs. Circle sets all three itself: a configured header of any of these names, in any letter case, is not sent and its value is not filled in, so a secret or variable it names need not exist, and `/mcp` lists it as not sent. A `websocket` server and a program started for a server get none of them. Circle has sent `Circle-Session-Id` and `traceparent` since 1.13.0; an install of 1.12.0 or older sends neither, headless runs included.
+Every request to an `http` or `sse` server carries a `Circle-Session-Id` header with the id of the Circle session at that moment, which changes when you start or switch sessions (as RPC `new_session` does). The requests of a tool call carry the conversation's session, also when a subagent made the call, and then a `Circle-Agent-Id` header with the subagent's own session: the values the call's hooks get as `session_id` and `agent_id`. The requests of each tool call, the cancellation `esc` sends included, also carry a W3C `traceparent` header, `00-<trace id>-<parent id>-01`, with a new random trace id for every call. A server can use them to group what one session did and to tell calls apart in its logs. Circle sets all three itself: a configured header of any of these names, in any letter case, is not sent and its value is not filled in, so a secret or variable it names need not exist, and `/mcp` lists it as not sent. A `ws` server and a program started for a server get none of them. Circle has sent `Circle-Session-Id` and `traceparent` since 1.13.0; an install of 1.12.0 or older sends neither, headless runs included.
 
 A tool call has no time limit, so a tool that waits for a login or a long job can take as long as it needs. `esc` sends the server a cancellation; what the server does with it is up to the server. Images and PDFs a tool returns go to the model as attachments.
 

@@ -39,9 +39,7 @@ async function manager(t: TestContext, options: Parameters<typeof mcpStub>[1]) {
   const stub = await mcpStub(t, options);
   const mcp = new McpManager(realpathSync.native(scratch(t)));
   t.after(() => mcp.close());
-  await mcp.load([
-    { name: 'hub', url: stub.url, transport: 'streamable_http' },
-  ]);
+  await mcp.load({ hub: { url: stub.url, type: 'http' } });
   assert.equal(mcp.status[0]?.error, '', mcp.describe());
   const listings = () =>
     stub.requests.filter((request) => request.message?.method === 'tools/list')
@@ -179,9 +177,7 @@ test('the model reads the whole result in its next request, and no error', async
     call: () => UPGRADED,
   });
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    { name: 'hub', url: stub.url, transport: 'streamable_http' },
-  ];
+  settings.mcpServers = { hub: { url: stub.url, type: 'http' } };
   const replies: Partial<ModelResponse>[] = [
     {
       message: {

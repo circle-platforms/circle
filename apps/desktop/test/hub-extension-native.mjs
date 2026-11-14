@@ -91,7 +91,11 @@ try {
   });
   assert.equal(await toggle.isChecked(), false, 'the extension ships off');
   assert.equal(await card.getByRole('textbox').count(), 0);
-  assert.equal((await saved()).mcp_servers.length, 0, 'no address is built in');
+  assert.equal(
+    Object.keys((await saved()).mcpServers).length,
+    0,
+    'no address is built in',
+  );
   await toggle.check();
   const address = card.getByRole('textbox', {
     name: 'hub IP address',
@@ -109,15 +113,14 @@ try {
     async () => (await hub())?.signIn?.code === 'BCDF-GHJK',
     'the Hub entry waiting with its code',
   );
-  assert.deepEqual((await saved()).mcp_servers, [
-    {
-      name: 'Hub',
+  assert.deepEqual((await saved()).mcpServers, {
+    Hub: {
+      type: 'http',
       url: peer.origin + '/mcp',
-      transport: 'streamable_http',
       enabled: true,
       placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
     },
-  ]);
+  });
   // The Hub's page for the code opened beside the conversation
   const sessionId = (await state()).activeSessionId;
   await waitFor(async () => {
@@ -185,7 +188,7 @@ try {
   await waitFor(async () => {
     const row = await hub();
     return (
-      (await saved()).mcp_servers[0]?.enabled === false &&
+      (await saved()).mcpServers.Hub?.enabled === false &&
       row?.status === 'not connected' &&
       row.tools.length === 0
     );
@@ -199,7 +202,7 @@ try {
   await waitFor(async () => {
     const row = await hub();
     return (
-      (await saved()).mcp_servers[0]?.enabled === true &&
+      (await saved()).mcpServers.Hub?.enabled === true &&
       row?.status === 'connected' &&
       row.tools.length === 2
     );
@@ -220,7 +223,7 @@ try {
   await route('/page/extensions?plugin=hub');
   await card.getByRole('button', { name: 'disconnect', exact: true }).click();
   await waitFor(async () => !(await hub()), 'the Hub entry removed');
-  assert.equal((await saved()).mcp_servers.length, 0);
+  assert.equal(Object.keys((await saved()).mcpServers).length, 0);
   assert.ok(peer.revocations.length >= 1, 'the sign-in was revoked at the Hub');
   await address.waitFor();
   checks.push(

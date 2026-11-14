@@ -18,9 +18,7 @@ async function connected(
 ): Promise<McpManager> {
   const manager = new McpManager(scratch(t));
   cleanup(t, () => manager.close());
-  await manager.load([
-    { name: 'files', url: stub.url, transport: 'streamable_http', ...entry },
-  ]);
+  await manager.load({ files: { url: stub.url, type: 'http', ...entry } });
   assert.equal(manager.tools.length, 2, manager.status[0]?.error);
   return manager;
 }

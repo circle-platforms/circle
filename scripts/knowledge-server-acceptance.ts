@@ -200,13 +200,10 @@ try {
   await mkdir(home);
   await mkdir(workspace);
   const settings = trustFolder(defaultSettings(), workspace);
-  settings.mcp_servers = [
-    {
-      name: 'Synthetic isolated sync server',
-      url: hub.mcpUrl,
-      transport: 'streamable_http',
-    },
-  ];
+  const serverName = 'Synthetic isolated sync server';
+  settings.mcpServers = {
+    [serverName]: { type: 'http', url: hub.mcpUrl },
+  };
   saveSettings(settings, home);
   runtime = new AgentRuntime({
     home,
@@ -224,9 +221,7 @@ try {
   await until(
     () =>
       !!keptFor(home, hub.mcpUrl).tokens?.access_token &&
-      runtime!.mcp.status.some(
-        (s) => s.name === settings.mcp_servers[0]!.name && !s.error,
-      ),
+      runtime!.mcp.status.some((s) => s.name === serverName && !s.error),
     'real OAuth connection',
   );
   assert.equal(authorizationPages, 1);
@@ -234,7 +229,7 @@ try {
   const connection = await desktop.execute(runtime, {
     op: 'prepare',
     action: 'connect',
-    server: settings.mcp_servers[0]!.name,
+    server: serverName,
   });
   await desktop.execute(runtime, {
     op: 'confirm',
@@ -543,7 +538,7 @@ try {
   const reselect = await desktop.execute(runtime, {
     op: 'prepare',
     action: 'connect',
-    server: settings.mcp_servers[0]!.name,
+    server: serverName,
   });
   await desktop.execute(runtime, {
     op: 'confirm',

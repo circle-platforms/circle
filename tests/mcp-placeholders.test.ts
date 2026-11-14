@@ -35,14 +35,12 @@ function signIn(
 test('an entry gives its endpoint and the token of its sign-in under the names it gives, and nothing it does not name', (t) => {
   const home = scratch(t);
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    { name: 'docs', url: endpoint, transport: 'streamable_http' },
-  ];
+  settings.mcpServers = { docs: { url: endpoint, type: 'http' } };
   signIn(home, { access_token: 'signed-in-token', token_type: 'Bearer' });
   // Signed in, but it names nothing: nothing is given
   assert.deepEqual(mcpPlaceholders(home, settings, nothingSaved), none);
-  settings.mcp_servers[0] = {
-    ...settings.mcp_servers[0],
+  settings.mcpServers.docs = {
+    ...settings.mcpServers.docs,
     placeholders: { url: 'DOCS_URL', token: 'DOCS_TOKEN' },
   };
   assert.deepEqual(mcpPlaceholders(home, settings, nothingSaved), {
@@ -81,15 +79,14 @@ test("an entry's Authorization header is the token it gives, and a name the pers
   const home = scratch(t);
   signIn(home, { access_token: 'signed-in-token', token_type: 'Bearer' });
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    {
-      name: 'docs',
+  settings.mcpServers = {
+    docs: {
       url: endpoint,
-      transport: 'streamable_http',
-      headers: { Authorization: 'Bearer ${secret:DOCS_SAVED}' },
+      type: 'http',
+      headers: { Authorization: 'Bearer ${DOCS_SAVED}' },
       placeholders: { url: 'DOCS_URL', token: 'DOCS_TOKEN' },
     },
-  ];
+  };
   assert.deepEqual(
     mcpPlaceholders(home, settings, {
       variables: {},
@@ -111,8 +108,8 @@ test("an entry's Authorization header is the token it gives, and a name the pers
     }),
     none,
   );
-  settings.mcp_servers[0] = {
-    ...settings.mcp_servers[0],
+  settings.mcpServers.docs = {
+    ...settings.mcpServers.docs,
     headers: {},
     placeholders: { url: 'docs_url', token: 7 },
   };
@@ -124,26 +121,15 @@ test('an entry that is off, not reached over HTTP, or the second to claim a name
   signIn(home, { access_token: 'signed-in-token', token_type: 'Bearer' });
   const placeholders = { url: 'DOCS_URL', token: 'DOCS_TOKEN' };
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    {
-      name: 'docs',
-      url: endpoint,
-      transport: 'streamable_http',
-      enabled: false,
-      placeholders,
-    },
-    { name: 'local', command: 'synthetic', transport: 'stdio', placeholders },
-  ];
+  settings.mcpServers = {
+    docs: { url: endpoint, type: 'http', enabled: false, placeholders },
+    local: { command: 'synthetic', type: 'stdio', placeholders },
+  };
   assert.deepEqual(mcpPlaceholders(home, settings, nothingSaved), none);
-  settings.mcp_servers = [
-    { name: 'docs', url: endpoint, transport: 'streamable_http', placeholders },
-    {
-      name: 'other',
-      url: 'http://192.0.2.20/mcp',
-      transport: 'streamable_http',
-      placeholders,
-    },
-  ];
+  settings.mcpServers = {
+    docs: { url: endpoint, type: 'http', placeholders },
+    other: { url: 'http://192.0.2.20/mcp', type: 'http', placeholders },
+  };
   assert.deepEqual(mcpPlaceholders(home, settings, nothingSaved), {
     variables: { DOCS_URL: endpoint },
     secrets: { DOCS_TOKEN: 'signed-in-token' },
@@ -158,14 +144,13 @@ test('a run keeps what it read only while nothing it came from changed: a secret
   mkdirSync(home);
   mkdirSync(workspace);
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    {
-      name: 'docs',
+  settings.mcpServers = {
+    docs: {
       url: endpoint,
-      transport: 'streamable_http',
+      type: 'http',
       placeholders: { url: 'DOCS_URL', token: 'DOCS_TOKEN' },
     },
-  ];
+  };
   signIn(
     home,
     { access_token: 'short-lived', token_type: 'Bearer' },

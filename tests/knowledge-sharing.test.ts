@@ -18,7 +18,7 @@ import {
   AuthorizedServer,
   unsignedUploadRefusal,
 } from './fixtures/knowledge-sync/authorized-server.js';
-import { scratch, cleanup } from './helpers.js';
+import { scratch, cleanup, serversOf } from './helpers.js';
 const signal = new AbortController().signal;
 async function world(
   t: Parameters<typeof scratch>[0],
@@ -40,11 +40,11 @@ async function world(
   const connection = {
     name: 'selected',
     url: server.origin + '/mcp',
-    transport: 'streamable_http' as const,
+    transport: 'http' as const,
     headers: { authorization: 'Bearer ' + server.token },
   };
   const settings = trustFolder(defaultSettings(), workspace);
-  settings.mcp_servers = [connection];
+  settings.mcpServers = serversOf(connection);
   settings.knowledge_sync = {
     server: 'selected',
     binding: backgroundMcpConnection(home, connection, () => ({})).binding,

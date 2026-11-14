@@ -11,10 +11,11 @@ import type { Message } from '../src/types.js';
 
 const FIXTURE = resolve('tests/fixtures/mcp-server.ts');
 const server = (name: string, env?: Record<string, string>) => ({
-  name,
-  command: process.execPath,
-  args: [FIXTURE],
-  ...(env ? { env } : {}),
+  [name]: {
+    command: process.execPath,
+    args: [FIXTURE],
+    ...(env ? { env } : {}),
+  },
 });
 const assistant = (
   text: string,
@@ -31,7 +32,7 @@ test('an MCP server named with a dot and a space starts, and the model gets and 
   const workspace = join(root, 'workspace');
   mkdirSync(workspace);
   const settings = defaultSettings();
-  settings.mcp_servers = [server('lab tools.v2')];
+  settings.mcpServers = server('lab tools.v2');
   const model = new ScriptedModel([
     {
       message: assistant('', [
@@ -83,33 +84,26 @@ test('MCP tool names stay <server>_<tool> when valid and stay distinct when shor
   assert.match(one, /^[A-Za-z0-9_-]+$/);
 });
 
-test('two MCP servers with one name, or names that become one prefix, are reported and the rest load', async (t) => {
+test('two MCP servers whose names become one prefix are reported, the earlier keeps its tools and the rest load', async (t) => {
   const root = scratch(t);
   const manager = new McpManager(root);
   cleanup(t, () => manager.close());
-  await manager.load([
-    server('twin', { TEST_SUPPLIED: 'earlier' }),
-    server('twin', { TEST_SUPPLIED: 'later' }),
-    server('a.b'),
-    server('a b'),
-  ]);
-  const twins = manager.status.filter((entry) => entry.name === 'twin');
-  assert.equal(twins.length, 2);
-  assert.match(
-    twins.find((entry) => entry.error)!.error,
-    /also named 'twin'; the later one is used/,
-  );
+  await manager.load({
+    ...server('twin', { TEST_SUPPLIED: 'only' }),
+    ...server('a.b'),
+    ...server('a b'),
+  });
   const output = await manager.tools
     .find((tool) => tool.name === 'twin_environment')!
     .run({}, { signal: new AbortController().signal, sessionId: 'one' });
-  assert.equal(JSON.parse(output).supplied, 'later');
+  assert.equal(JSON.parse(output).supplied, 'only');
   assert.equal(manager.status.find((entry) => entry.name === 'a.b')!.error, '');
   assert.match(
     manager.status.find((entry) => entry.name === 'a b')!.error,
     /tool 'a_b_\w+' already exists/,
   );
   assert.ok(manager.tools.some((tool) => tool.name === 'a_b_environment'));
-  assert.match(manager.describe(), /failed: another MCP server/);
+  assert.match(manager.describe(), /failed: tool 'a_b_\w+' already exists/);
 });
 
 // Starts the fixture's login.wait, lets `seconds` pass on a mocked clock, and says whether
@@ -155,7 +149,7 @@ test('an MCP tool call is not stopped at 30 seconds, nor at the SDK default of 6
   const root = scratch(t);
   const manager = new McpManager(root);
   cleanup(t, () => manager.close());
-  await manager.load([server('fixture')]);
+  await manager.load(server('fixture'));
   assert.equal(manager.status[0]?.error, '');
   t.mock.timers.enable({ apis: ['setTimeout'] });
   try {
@@ -172,7 +166,7 @@ test('a call timeout given to the MCP manager still stops a call on the same moc
   const root = scratch(t);
   const manager = new McpManager(root, 30_000, 30_000);
   cleanup(t, () => manager.close());
-  await manager.load([server('fixture')]);
+  await manager.load(server('fixture'));
   t.mock.timers.enable({ apis: ['setTimeout'] });
   try {
     const wait = await waitThrough(t, manager, root, [30.001]);
@@ -189,7 +183,7 @@ test('disabled MCP cannot register or write after reload, a new session, or rest
   const workspace = join(root, 'workspace');
   mkdirSync(workspace);
   const settings = defaultSettings();
-  settings.mcp_servers = [server('fixture')];
+  settings.mcpServers = server('fixture');
   const receipt = join(workspace, 'forbidden-receipt');
   const replies = () => [
     {
@@ -216,7 +210,9 @@ test('disabled MCP cannot register or write after reload, a new session, or rest
   assert.ok(
     runtime.mcp.tools.some((tool) => tool.name === 'fixture_write_receipt'),
   );
-  settings.mcp_servers = [{ ...server('fixture'), enabled: false }];
+  settings.mcpServers = {
+    fixture: { ...server('fixture').fixture, enabled: false },
+  };
   saveSettings(settings, join(root, 'home'));
   await runtime.reloadIntegrations();
   for (const fresh of [false, true]) {
@@ -253,24 +249,22 @@ test('disabled MCP cannot register or write after reload, a new session, or rest
   );
 });
 
-test('disabled MCP starts no transport, including a later disabled duplicate', async (t) => {
+test('disabled MCP starts no transport', async (t) => {
   const root = scratch(t);
   const started = join(root, 'must-not-start');
   const manager = new McpManager(root, 500);
   cleanup(t, () => manager.close());
   const command = {
-    name: 'disabled',
     command: process.execPath,
     args: [
       '-e',
       `require('node:fs').writeFileSync(${JSON.stringify(started)}, 'started')`,
     ],
   };
-  await manager.load([
-    command,
-    { ...command, enabled: false },
-    { name: 'remote', url: 'http://127.0.0.1:1', enabled: false },
-  ]);
+  await manager.load({
+    disabled: { ...command, enabled: false },
+    remote: { type: 'http', url: 'http://127.0.0.1:1', enabled: false },
+  });
   assert.equal(existsSync(started), false);
   assert.equal(manager.tools.length, 0);
   assert.deepEqual(

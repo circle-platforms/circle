@@ -75,18 +75,25 @@ peer.sharedDocuments = [
 ];
 const settings = trustFolder(defaultSettings(), workspace);
 settings.theme = 'dark';
-settings.mcp_servers = [
-  {
-    name: 'Synthetic workspace',
+settings.mcpServers = {
+  'Synthetic workspace': {
     url: peer.origin + '/mcp',
-    transport: 'streamable_http',
+    type: 'http',
     headers: { authorization: 'Bearer ' + peer.token },
   },
-];
+};
 settings.knowledge_sync = {
-  server: settings.mcp_servers[0].name,
-  binding: backgroundMcpConnection(home, settings.mcp_servers[0], () => ({}))
-    .binding,
+  server: 'Synthetic workspace',
+  binding: backgroundMcpConnection(
+    home,
+    {
+      name: 'Synthetic workspace',
+      transport: 'http',
+      url: peer.origin + '/mcp',
+      headers: { authorization: 'Bearer ' + peer.token },
+    },
+    () => ({}),
+  ).binding,
 };
 saveSettings(settings, home);
 const service = new KnowledgeService(home);

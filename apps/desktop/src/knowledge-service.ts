@@ -139,7 +139,7 @@ export class DesktopKnowledge {
       ...loadCredentials(runtime.options.home),
       ...loadSecrets(runtime.options.home),
     });
-    for (const c of buildMcpConnections(runtime.options.settings.mcp_servers)
+    for (const c of buildMcpConnections(runtime.options.settings.mcpServers)
       .connections) {
       let headers: Record<string, string> = {};
       try {
@@ -1348,7 +1348,7 @@ export class DesktopKnowledge {
       if (p.op === 'login') {
         this.editable(runtime);
         const configured = buildMcpConnections(
-          runtime.options.settings.mcp_servers,
+          runtime.options.settings.mcpServers,
         ).connections.find((c) => c.name === runtime.knowledge.status().server);
         if (!configured?.url) return fail('knowledge-select-connection');
         if (

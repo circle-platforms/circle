@@ -374,7 +374,7 @@ export async function knowledgeCommand(
   if (verb === 'login') {
     const name = connection.status().server,
       configured = buildMcpConnections(
-        host.runtime.options.settings.mcp_servers,
+        host.runtime.options.settings.mcpServers,
       ).connections.find((c) => c.name === name);
     if (!configured?.url) throw Error('select an HTTP MCP connection first');
     if (

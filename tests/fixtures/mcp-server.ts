@@ -98,6 +98,8 @@ for await (const line of input) {
               pid: process.pid,
               ambient: process.env.OPENAI_API_KEY,
               supplied: process.env.TEST_SUPPLIED,
+              project: process.env.CIRCLE_PROJECT_DIR,
+              args: process.argv.slice(2),
             }),
           },
         ],

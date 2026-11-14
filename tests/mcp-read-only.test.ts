@@ -57,9 +57,7 @@ async function setup(t: TestContext, hooks?: unknown) {
   writeFileSync(join(workspace, 'secret-notes.txt'), 'the launch code is 0000');
   const stub = await mcpStub(t, { tools: TOOLS });
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    { name: 'files-server', url: stub.url, transport: 'streamable_http' },
-  ];
+  settings.mcpServers = { 'files-server': { url: stub.url, type: 'http' } };
   const replies: Partial<ModelResponse>[] = [];
   const asked: ToolCall[] = [];
   const answers: ApprovalDecision[] = [];

@@ -206,6 +206,28 @@ import {
   type WorkspaceServiceRequest,
 } from './workspace-protocol';
 import { formatMcpArguments, parseMcpArguments } from './mcp-arguments';
+import { mcpServer, mcpType } from '../../../src/mcp_config.js';
+
+/** The transports the MCP servers page names, as the entry's type. */
+const TYPE_OF_PAGE_TRANSPORT: Record<string, string> = {
+  stdio: 'stdio',
+  sse: 'sse',
+  streamable_http: 'http',
+  websocket: 'ws',
+};
+/** An entry's type as the MCP servers page names its transport. */
+function pageTransport(
+  entry: Record<string, unknown>,
+): 'stdio' | 'sse' | 'streamable_http' | 'websocket' {
+  const type = mcpType(entry);
+  return type === 'http'
+    ? 'streamable_http'
+    : type === 'ws'
+      ? 'websocket'
+      : type === 'sse'
+        ? 'sse'
+        : 'stdio';
+}
 import { PlanCompletionTracker } from '../../../src/plan_state.js';
 import { nextAgentActivity } from '../../../src/session_activity.js';
 import { formatElapsed, type TurnUsage } from '../../../src/tui/status_rows.js';
@@ -3624,18 +3646,19 @@ export class RuntimeController {
               ),
             ]
           : [],
-      mcp: savedSettings.mcp_servers.map((spec, i) => {
+      // Your own servers (settings.json's mcpServers), each under its name
+      mcp: Object.entries(savedSettings.mcpServers).map(([name, spec]) => {
         const applied = inspecting
           ? undefined
-          : settings.mcp_servers.find((row) => row.name === spec.name);
+          : mcpServer(settings.mcpServers, name);
         const pendingReload = JSON.stringify(applied) !== JSON.stringify(spec);
         const status = inspecting
           ? undefined
-          : runtime.mcp.status.find((row) => row.name === spec.name);
+          : runtime.mcp.status.find((row) => row.name === name);
         return {
-          id: String(spec.id ?? spec.name ?? i),
-          name: String(spec.name ?? `server ${i + 1}`),
-          transport: String(spec.transport ?? 'stdio') as 'stdio',
+          id: name,
+          name,
+          transport: pageTransport(spec),
           command: String(spec.command ?? ''),
           args: Array.isArray(spec.args) ? formatMcpArguments(spec.args) : '',
           url: String(spec.url ?? ''),
@@ -6200,31 +6223,52 @@ export class RuntimeController {
           }
           if (p.mcp !== undefined) {
             if (!Array.isArray(p.mcp)) throw Error('invalid MCP settings');
-            settings.mcp_servers = p.mcp.map((entry) => {
+            // Written as mcpServers, by name: a row renamed on the page keeps what its entry had besides
+            const servers: Record<string, Record<string, unknown>> = {};
+            for (const entry of p.mcp) {
               if (!entry || typeof entry !== 'object')
                 throw Error('invalid MCP server');
               const row = entry as Record<string, unknown>;
               const transport = text(row.transport, 'transport', 50);
-              if (
-                !['stdio', 'sse', 'streamable_http', 'websocket'].includes(
-                  transport,
-                )
-              )
-                throw Error('invalid transport');
-              return {
-                ...settings.mcp_servers.find(
-                  (saved) =>
-                    saved.name === row.name || (row.id && saved.id === row.id),
-                ),
-                id: text(row.id ?? row.name, 'server id', 200),
-                name: text(row.name, 'server name', 100),
-                transport,
-                command: text(row.command ?? '', 'command', 4000),
-                args: parseMcpArguments(text(row.args ?? '', 'args', 4000)),
-                url: text(row.url ?? '', 'url', 4000),
-                enabled: flag(row.enabled),
+              const type = TYPE_OF_PAGE_TRANSPORT[transport];
+              if (!type) throw Error('invalid transport');
+              const name = text(row.name, 'server name', 100);
+              if (name === '__proto__') throw Error('invalid server name');
+              const before =
+                mcpServer(settings.mcpServers, name) ??
+                (typeof row.id === 'string'
+                  ? mcpServer(settings.mcpServers, row.id)
+                  : undefined) ??
+                {};
+              const {
+                command: _command,
+                args: _args,
+                url: _url,
+                type: _type,
+                enabled: _enabled,
+                ...kept
+              } = before;
+              const command = text(row.command ?? '', 'command', 4000);
+              const url = text(row.url ?? '', 'url', 4000);
+              servers[name] = {
+                ...kept,
+                type,
+                ...(type === 'stdio'
+                  ? {
+                      command,
+                      args: parseMcpArguments(
+                        text(row.args ?? '', 'args', 4000),
+                      ),
+                    }
+                  : { url }),
+                ...(flag(row.enabled) ? {} : { enabled: false }),
               };
-            });
+            }
+            // The Hub's entry is the Hub page's, which the servers page does not list
+            const hub = mcpServer(settings.mcpServers, HUB_SERVER);
+            if (hub && !Object.hasOwn(servers, HUB_SERVER))
+              servers[HUB_SERVER] = hub;
+            settings.mcpServers = servers;
           }
           if (p.extensions !== undefined) {
             if (!Array.isArray(p.extensions)) throw Error('invalid extensions');
@@ -6241,12 +6285,14 @@ export class RuntimeController {
             // Hub that is off is not connected anywhere (the MCP servers page does not list that entry)
             const hub = settings.extensions.hub?.enabled === true;
             if (hub !== hubBefore) {
-              settings.mcp_servers = settings.mcp_servers.map((row) => {
-                if (row.name !== HUB_SERVER || (row.enabled !== false) === hub)
-                  return row;
+              const entry = mcpServer(settings.mcpServers, HUB_SERVER);
+              if (entry && (entry.enabled !== false) !== hub) {
                 hubSwitched = true;
-                return { ...row, enabled: hub };
-              });
+                settings.mcpServers = {
+                  ...settings.mcpServers,
+                  [HUB_SERVER]: { ...entry, enabled: hub },
+                };
+              }
               // Switched on, an entry connected with an earlier version gets the placeholders a Hub's skills use
               if (keepHubPlaceholders(settings)) hubSwitched = true;
             }

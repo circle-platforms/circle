@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { entryOf } from './helpers.js';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
@@ -44,7 +45,10 @@ function settingsWith(server: Record<string, unknown>): CircleSettings {
     auth: {},
     trusted_folders: [],
     theme: 'auto',
-    mcp_servers: [server],
+    // The server under its name, its transport as the entry's type: over HTTP unless it says otherwise
+    mcpServers: {
+      [String(server.name)]: { type: 'http', ...entryOf(server) },
+    },
     variables: {},
   } as unknown as CircleSettings;
 }
@@ -151,7 +155,7 @@ test("resolveServer takes the entry's Authorization header, else the token its s
     const settings = settingsWith({
       name: 'example',
       url: 'http://127.0.0.1:9000/mcp',
-      headers: { Authorization: 'Bearer ${secret:EXAMPLE_TOKEN}' },
+      headers: { Authorization: 'Bearer ${EXAMPLE_TOKEN}' },
     });
     assert.deepEqual(
       await resolveServer(settings, { EXAMPLE_TOKEN: 'saved' }, 'example', {
@@ -172,7 +176,7 @@ test("resolveServer takes the entry's Authorization header, else the token its s
     const hub = settingsWith({
       name: 'Hub',
       url: 'http://127.0.0.1:9002/mcp',
-      transport: 'streamable_http',
+      transport: 'http',
       enabled: true,
     });
     const missing = await resolveServer(hub, {}, 'Hub', { home });
@@ -191,21 +195,23 @@ test("resolveServer takes the entry's Authorization header, else the token its s
       url: 'http://127.0.0.1:9002/mcp',
       token: 'signed-in-token',
     });
-    // Two entries of one name: the address and the token are both the one connected, the later
-    const twice = settingsWith({
-      name: 'twice',
-      url: 'http://127.0.0.1:9003/mcp',
-      headers: { authorization: 'Bearer first-token' },
-    });
-    twice.mcp_servers.push({
-      name: 'twice',
-      url: 'http://127.0.0.1:9004/mcp',
-      headers: { authorization: 'Bearer second-token' },
-    });
-    assert.deepEqual(await resolveServer(twice, {}, 'twice', { home }), {
-      url: 'http://127.0.0.1:9004/mcp',
-      token: 'second-token',
-    });
+    // An address that names a variable is the one the connection reaches: the variable's value
+    process.env.CIRCLE_TEST_SKILLS_PORT = '9004';
+    try {
+      const named = settingsWith({
+        name: 'named',
+        url: 'http://127.0.0.1:${CIRCLE_TEST_SKILLS_PORT}/mcp',
+        headers: { authorization: 'Bearer ${NAMED_TOKEN}' },
+      });
+      assert.deepEqual(
+        await resolveServer(named, { NAMED_TOKEN: 'second-token' }, 'named', {
+          home,
+        }),
+        { url: 'http://127.0.0.1:9004/mcp', token: 'second-token' },
+      );
+    } finally {
+      delete process.env.CIRCLE_TEST_SKILLS_PORT;
+    }
     // An unknown name lists the entries there are
     const unknown = await resolveServer(
       settings,
@@ -226,7 +232,7 @@ test("resolveServer takes the entry's Authorization header, else the token its s
       settingsWith({
         name: 'Hub',
         url: 'http://127.0.0.1:9002/mcp',
-        transport: 'streamable_http',
+        transport: 'http',
         enabled: false,
       }),
       {},
@@ -239,7 +245,7 @@ test("resolveServer takes the entry's Authorization header, else the token its s
       settingsWith({
         name: 'Hub',
         url: 'http://127.0.0.1:9002/mcp',
-        transport: 'streamable_http',
+        transport: 'http',
         max_file_bytes: 0,
       }),
       {},

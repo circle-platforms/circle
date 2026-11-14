@@ -85,7 +85,17 @@ import {
   SESSION_MEMORY_BYTES,
   type SessionMemory,
 } from './knowledge/session-memory.js';
-import { McpManager, mcpToolName } from './mcp_loader.js';
+import {
+  connectionText,
+  McpManager,
+  mcpToolName,
+  type McpStatus,
+} from './mcp_loader.js';
+import {
+  mcpServersForRun,
+  recordMcpjsonChoice,
+  type McpEntry,
+} from './mcp_config.js';
 import { ExtensionHost, type SubagentSpec } from './extensions.js';
 import {
   discoverSubagents,
@@ -97,8 +107,10 @@ import { abortable } from './watch.js';
 import {
   isFolderTrusted,
   isReady,
+  isRecord,
   loadSettings,
   loadCredentials,
+  migrateMcpSettings,
   withConnectionLock,
   saveSettingsChange,
   settingsForRun,
@@ -901,6 +913,14 @@ export class AgentRuntime {
         this.options.onMcpStatus?.();
       },
     });
+    // MCP servers written in the list format before this one move into mcpServers once, the file kept beside
+    try {
+      this.mcp.notes = migrateMcpSettings(this.options.home);
+    } catch (error) {
+      this.mcp.notes = [
+        `mcp_servers in settings.json could not be moved into mcpServers: ${error instanceof Error ? error.message : String(error)}`,
+      ];
+    }
     this.knowledge = new KnowledgeConnection(
       this.options.home,
       () => this.options.settings,
@@ -2232,7 +2252,7 @@ export class AgentRuntime {
         this.scheduleToolRefresh();
       },
       openUrl: this.options.openUrl,
-      saveMcpServer: (entry) => this.saveMcpServer(entry),
+      saveMcpServer: (name, entry) => this.saveMcpServer(name, entry),
       settings: this.options.settings.extensions,
       reservedTools: new Set([...BUILTIN_TOOL_NAMES, ...reservedTools]),
       reservedCommands: new Set([
@@ -2610,7 +2630,7 @@ export class AgentRuntime {
     const key = [
       stamp(secretsPath(home)),
       stamp(mcpAuthPath(home)),
-      JSON.stringify(this.options.settings.mcp_servers),
+      JSON.stringify(this.options.settings.mcpServers),
       JSON.stringify(variables),
     ].join('\n');
     if (this.values?.key === key && Date.now() < this.values.until)
@@ -2805,11 +2825,14 @@ export class AgentRuntime {
     if (!this.integrationsReady) {
       this.integrationsReady = (async () => {
         const base = this.coreTools;
+        const servers = this.mcpServers();
         await this.mcp.load(
-          this.options.settings.mcp_servers,
+          servers.entries,
           new Set(base.map((tool) => tool.name)),
           active,
+          { waiting: servers.waiting, trusted: servers.trusted },
         );
+        this.askForProjectServers(servers.pending);
         const host = this.extensionHost(
           new Set([...base, ...this.mcp.tools].map((tool) => tool.name)),
         );
@@ -3474,6 +3497,7 @@ export class AgentRuntime {
    * saved, while a turn runs.
    */
   async saveMcpServer(
+    name: string,
     entry: Record<string, unknown>,
   ): Promise<import('./extensions.js').McpServerState> {
     if (this.ownershipError) throw this.ownershipError;
@@ -3482,16 +3506,8 @@ export class AgentRuntime {
       throw new Error(
         'a turn is running: nothing was saved; try again after it',
       );
-    const name = String(entry.name);
     saveSettingsChange(this.options.home, (settings) => {
-      const before = settings.mcp_servers.find((row) => row.name === name);
-      settings.mcp_servers = [
-        ...settings.mcp_servers.filter((row) => row.name !== name),
-        {
-          ...(typeof before?.id === 'string' ? { id: before.id } : {}),
-          ...entry,
-        },
-      ];
+      settings.mcpServers = { ...settings.mcpServers, [name]: entry };
     });
     await this.reloadMcpServer(name);
     const row = this.mcp.status.find((item) => item.name === name);
@@ -3508,19 +3524,190 @@ export class AgentRuntime {
       ...(row?.authorize && row.code ? { code: row.code } : {}),
     };
   }
+  /**
+   * The servers this run reads: yours, yours for this project, and the project's `.mcp.json` in a trusted folder,
+   * whose servers wait for your approval in a session that can ask. `waiting` are the rows of those not connected.
+   */
+  private mcpServers(settings = this.options.settings): {
+    entries: McpEntry[];
+    pending: McpEntry[];
+    waiting: McpStatus[];
+    trusted: boolean;
+  } {
+    const trusted = isFolderTrusted(settings, this.options.workspace);
+    const found = mcpServersForRun({
+      home: this.options.home,
+      workspace: this.options.workspace,
+      settings,
+      trusted,
+      interactive: this.mcpInteractive,
+    });
+    const row = (entry: McpEntry, approval: 'pending' | 'declined') => ({
+      name: entry.name,
+      connection: connectionText({
+        command:
+          typeof entry.config.command === 'string'
+            ? entry.config.command
+            : undefined,
+        args: Array.isArray(entry.config.args)
+          ? entry.config.args.map(String)
+          : undefined,
+        url:
+          typeof entry.config.url === 'string' ? entry.config.url : undefined,
+      }),
+      tools: [],
+      error: '',
+      scope: 'project' as const,
+      approval,
+    });
+    // A name a server of yours connects under is not shown again as waiting
+    const used = new Set(found.entries.map((entry) => entry.name));
+    return {
+      entries: found.entries,
+      pending: found.pending.filter((entry) => !used.has(entry.name)),
+      waiting: [
+        ...found.pending
+          .filter((entry) => !used.has(entry.name))
+          .map((entry) => row(entry, 'pending')),
+        ...found.declined
+          .filter((entry) => !used.has(entry.name))
+          .map((entry) => row(entry, 'declined')),
+      ],
+      trusted,
+    };
+  }
+  /** Whether a server of the project's `.mcp.json` asks for the person's approval before it connects. */
+  private get mcpInteractive(): boolean {
+    return Boolean(this.options.question) && !this.options.headless;
+  }
+  private askingForServers?: Promise<void>;
+  /**
+   * Asks, in the question panel, which servers of the project's `.mcp.json` this project may use, and connects those
+   * approved. The answer is kept in settings.json for this project; closing the panel decides nothing.
+   */
+  private askForProjectServers(pending: McpEntry[], again = false): void {
+    if (!pending.length || !this.options.question) return;
+    if (this.askingForServers && !again) return;
+    const signal = this.integrationLifetime.signal;
+    const asked = (async () => {
+      const lines = pending.map(
+        (entry) =>
+          `· ${entry.name}: ${connectionText({
+            command:
+              typeof entry.config.command === 'string'
+                ? entry.config.command
+                : undefined,
+            args: Array.isArray(entry.config.args)
+              ? entry.config.args.map(String)
+              : undefined,
+            url:
+              typeof entry.config.url === 'string'
+                ? entry.config.url
+                : undefined,
+          })}`,
+      );
+      const reply = await this.options.question!(
+        {
+          questions: [
+            {
+              question: `This project's .mcp.json adds MCP servers. A server you approve is started or reached with your rights, and its tools are offered to the model:\n${lines.join('\n')}\nWhich may this project use?`,
+              header: '.mcp.json',
+              options: pending.map((entry) => ({
+                label: entry.name,
+                description: `use ${entry.name} in this project`,
+              })),
+              multiple: true,
+              custom: false,
+            },
+          ],
+        },
+        signal,
+      );
+      let answers: unknown;
+      try {
+        answers = JSON.parse(reply);
+      } catch {
+        return;
+      }
+      const values = Array.isArray(answers)
+        ? answers
+        : isRecord(answers) && Array.isArray(answers.answers)
+          ? answers.answers
+          : undefined;
+      // Closed without an answer: nothing is decided, and /mcp reconnect asks again
+      if (!values) return;
+      const first = values[0];
+      const chosen = new Set(
+        (Array.isArray(first) ? first : first === undefined ? [] : [first]).map(
+          String,
+        ),
+      );
+      const approved = pending
+        .filter((entry) => chosen.has(entry.name))
+        .map((entry) => entry.name);
+      const declined = pending
+        .filter((entry) => !chosen.has(entry.name))
+        .map((entry) => entry.name);
+      saveSettingsChange(this.options.home, (settings) =>
+        recordMcpjsonChoice(
+          settings,
+          this.options.workspace,
+          approved,
+          declined,
+        ),
+      );
+      if (signal.aborted || this.closing) return;
+      const settings = this.options.settings;
+      recordMcpjsonChoice(settings, this.options.workspace, approved, declined);
+      for (const name of [...approved, ...declined]) {
+        const servers = this.mcpServers(settings);
+        await this.mcp.reloadServer(name, servers.entries, {
+          waiting: servers.waiting,
+          trusted: servers.trusted,
+        });
+      }
+      this.toolsStale = true;
+      this.scheduleToolRefresh();
+    })()
+      .catch(() => {})
+      .finally(() => {
+        if (this.askingForServers === asked) this.askingForServers = undefined;
+      });
+    this.askingForServers = asked;
+  }
   async reloadMcpServer(name: string): Promise<void> {
     if (this.ownershipError) throw this.ownershipError;
     if (this.closing || this.deleting) throw new Error('session is closing');
     if (this.busy) throw new Error('reload after the current turn');
     // Only the servers are read again: the rest of the settings is /reload's, with what depends on it
-    const servers = settingsForRun(
+    const settings = settingsForRun(
       this.options.home,
       this.options.workspace,
       this.options.modelOverride,
-    ).settings.mcp_servers;
+    ).settings;
     await this.integrationsReady;
-    await this.mcp.reloadServer(name, servers);
-    this.options.settings.mcp_servers = servers;
+    const servers = this.mcpServers(settings);
+    // A server of the project's .mcp.json that waits, or was declined, is asked about again
+    const waiting = servers.waiting.find((row) => row.name === name);
+    if (waiting) {
+      const entry = mcpServersForRun({
+        home: this.options.home,
+        workspace: this.options.workspace,
+        settings,
+        trusted: servers.trusted,
+        interactive: true,
+      }).pending.find((item) => item.name === name);
+      if (entry && this.mcpInteractive) {
+        this.askForProjectServers([entry], true);
+        return;
+      }
+    }
+    await this.mcp.reloadServer(name, servers.entries, {
+      waiting: servers.waiting,
+      trusted: servers.trusted,
+    });
+    this.options.settings.mcpServers = settings.mcpServers;
+    this.options.settings.projects = settings.projects;
     this.harness.tools = this.withIntegrationTools(
       this.coreTools.filter((tool) => tool.name !== 'wait_jobs'),
     );

@@ -74,9 +74,7 @@ test("a tool's resource link reads as what it is, and the model reads what it po
     },
   });
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    { name: 'http-server', url: stub.url, transport: 'streamable_http' },
-  ];
+  settings.mcpServers = { 'http-server': { url: stub.url, type: 'http' } };
   const model = new ScriptedModel([
     call('http-server_export_report'),
     call('read_mcp_resource', {
@@ -130,9 +128,7 @@ test('a server that declares no resources offers no resource tools', async (t) =
   });
   const manager = new McpManager(scratch(t));
   cleanup(t, () => manager.close());
-  await manager.load([
-    { name: 'plain', url: stub.url, transport: 'streamable_http' },
-  ]);
+  await manager.load({ plain: { url: stub.url, type: 'http' } });
   assert.deepEqual(manager.resourceTools, []);
 });
 
@@ -144,9 +140,7 @@ test("the resource tools ask, as the server's tools do, while a server that offe
   const effects = async (entry: Record<string, unknown>) => {
     const manager = new McpManager(scratch(t));
     cleanup(t, () => manager.close());
-    await manager.load([
-      { name: 'docs', url: stub.url, transport: 'streamable_http', ...entry },
-    ]);
+    await manager.load({ docs: { url: stub.url, type: 'http', ...entry } });
     return manager.resourceTools.map((tool) => [tool.name, tool.effect]);
   };
   assert.deepEqual(await effects({}), [

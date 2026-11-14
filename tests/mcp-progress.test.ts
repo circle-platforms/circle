@@ -58,9 +58,7 @@ test("a server's progress notices show on the call's row while it runs, and the 
         : undefined,
   });
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    { name: 'files', url: stub.url, transport: 'streamable_http' },
-  ];
+  settings.mcpServers = { files: { url: stub.url, type: 'http' } };
   const runtime = new AgentRuntime({
     home,
     workspace,
@@ -175,9 +173,7 @@ async function taskServer(
 async function manager(t: Parameters<typeof scratch>[0], stub: McpStub) {
   const loaded = new McpManager(scratch(t));
   cleanup(t, () => loaded.close());
-  await loaded.load([
-    { name: 'ci', url: stub.url, transport: 'streamable_http' },
-  ]);
+  await loaded.load({ ci: { url: stub.url, type: 'http' } });
   return loaded;
 }
 const methods = (stub: McpStub) =>

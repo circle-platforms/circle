@@ -72,14 +72,13 @@ async function setup(
   }
   const stub = await mcpStub(t, { tools: TOOLS });
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    {
-      name: 'files-server',
+  settings.mcpServers = {
+    'files-server': {
       url: stub.url,
-      transport: 'streamable_http',
+      type: 'http',
       ...(trust === undefined ? {} : { trust_annotations: trust }),
     },
-  ];
+  };
   const replies: Partial<ModelResponse>[] = [];
   const model = new ScriptedModel(replies);
   // The cards the person was shown, and the answers given to them
@@ -116,11 +115,16 @@ async function setup(
 
 test('trust_annotations trusts a server only when it is left out or true', () => {
   const { connections } = buildMcpConnections(
-    [undefined, true, false, 'false', 0].map((trust, index) => ({
-      name: `s${index}`,
-      url: 'http://127.0.0.1:1/mcp',
-      ...(trust === undefined ? {} : { trust_annotations: trust }),
-    })),
+    Object.fromEntries(
+      [undefined, true, false, 'false', 0].map((trust, index) => [
+        `s${index}`,
+        {
+          type: 'http',
+          url: 'http://127.0.0.1:1/mcp',
+          ...(trust === undefined ? {} : { trust_annotations: trust }),
+        },
+      ]),
+    ),
   );
   assert.deepEqual(
     connections.map((connection) => connection.trustAnnotations !== false),

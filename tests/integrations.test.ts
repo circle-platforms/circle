@@ -44,14 +44,13 @@ test('MCP stdio uses explicit server environment, preserves text errors, and clo
   const previous = process.env.OPENAI_API_KEY;
   process.env.OPENAI_API_KEY = 'ambient-secret';
   try {
-    await manager.load([
-      {
-        name: 'fixture',
+    await manager.load({
+      fixture: {
         command: process.execPath,
         args: [resolve('tests/fixtures/mcp-server.ts')],
         env: { TEST_SUPPLIED: 'explicit' },
       },
-    ]);
+    });
   } finally {
     if (previous === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previous;
@@ -82,13 +81,12 @@ test('MCP cancellation sends a real notification that stops a delayed side effec
   const root = scratch(t);
   const manager = new McpManager(root);
   cleanup(t, () => manager.close());
-  await manager.load([
-    {
-      name: 'fixture',
+  await manager.load({
+    fixture: {
       command: process.execPath,
       args: [resolve('tests/fixtures/mcp-server.ts')],
     },
-  ]);
+  });
   const controller = new AbortController();
   const path = join(root, 'should-not-exist');
   const call = manager.tools
@@ -107,13 +105,12 @@ test('runtime gates an actual MCP tool in plan mode and later executes the same 
   mkdirSync(workspace);
   const path = join(workspace, 'actual-receipt');
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    {
-      name: 'fixture',
+  settings.mcpServers = {
+    fixture: {
       command: process.execPath,
       args: [resolve('tests/fixtures/mcp-server.ts')],
     },
-  ];
+  };
   const call = (id: string) =>
     assistant('', [{ id, name: 'fixture_write_receipt', args: { path } }]);
   const model = new ScriptedModel([

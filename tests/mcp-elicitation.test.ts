@@ -54,9 +54,7 @@ async function ordered(
     ...(ask ? { ask } : {}),
   });
   cleanup(t, () => manager.close());
-  await manager.load([
-    { name: 'shop', url: stub.url, transport: 'streamable_http' },
-  ]);
+  await manager.load({ shop: { url: stub.url, type: 'http' } });
   const text = String(
     await manager.tools[0]!.run(
       {},
@@ -168,9 +166,7 @@ test('esc on the call closes the panel of a question the server sent on a stream
     },
   });
   cleanup(t, () => manager.close());
-  await manager.load([
-    { name: 'shop', url: stub.url, transport: 'streamable_http' },
-  ]);
+  await manager.load({ shop: { url: stub.url, type: 'http' } });
   const controller = new AbortController();
   const running = manager.tools[0]!.run(
     {},
@@ -209,9 +205,7 @@ test("in a conversation the server's question goes to the question panel, and it
     requestedSchema: { type: 'object', properties: {} },
   });
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    { name: 'shop', url: stub.url, transport: 'streamable_http' },
-  ];
+  settings.mcpServers = { shop: { url: stub.url, type: 'http' } };
   const reply = (calls: Message['tool_calls'] = [], text = '') =>
     ({
       message: {

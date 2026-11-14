@@ -88,14 +88,9 @@ async function setup(
   mkdirSync(join(workspace, 'data'), { recursive: true });
   const stub = await mcpStub(t, { tools: [UPLOAD], call: echo });
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    {
-      name: 'files-server',
-      url: stub.url,
-      transport: 'streamable_http',
-      ...options.entry,
-    },
-  ];
+  settings.mcpServers = {
+    'files-server': { url: stub.url, type: 'http', ...options.entry },
+  };
   const replies: Partial<ModelResponse>[] = [];
   const model = new ScriptedModel(replies);
   const asked: ToolCall[] = [];
@@ -177,13 +172,14 @@ test('a base64 property is a file parameter, shown to the model as a local path 
 });
 
 test('max_file_bytes is 32 MiB unless given, and a value that is not a whole number of bytes stops the server', () => {
-  const { connections, skipped } = buildMcpConnections([
-    { name: 'plain', url: 'http://127.0.0.1:1/mcp' },
-    { name: 'small', url: 'http://127.0.0.1:1/mcp', max_file_bytes: 16 },
-    { name: 'words', url: 'http://127.0.0.1:1/mcp', max_file_bytes: '1MB' },
-    { name: 'zero', url: 'http://127.0.0.1:1/mcp', max_file_bytes: 0 },
-    { name: 'part', url: 'http://127.0.0.1:1/mcp', max_file_bytes: 1.5 },
-  ]);
+  const url = 'http://127.0.0.1:1/mcp';
+  const { connections, skipped } = buildMcpConnections({
+    plain: { type: 'http', url },
+    small: { type: 'http', url, max_file_bytes: 16 },
+    words: { type: 'http', url, max_file_bytes: '1MB' },
+    zero: { type: 'http', url, max_file_bytes: 0 },
+    part: { type: 'http', url, max_file_bytes: 1.5 },
+  });
   assert.equal(MAX_FILE_BYTES, 32 * 1024 * 1024);
   assert.deepEqual(
     connections.map((connection) => [connection.name, connection.maxFileBytes]),
@@ -375,14 +371,13 @@ test('an echoed file is shown by its label even when a hidden header value is in
     secrets: () => ({ FILES_TOKEN: token }),
   });
   cleanup(t, () => manager.close());
-  await manager.load([
-    {
-      name: 'files-server',
+  await manager.load({
+    'files-server': {
       url: stub.url,
-      transport: 'streamable_http',
-      headers: { Authorization: 'Bearer ${secret:FILES_TOKEN}' },
+      type: 'http',
+      headers: { Authorization: 'Bearer ${FILES_TOKEN}' },
     },
-  ]);
+  });
   assert.equal(manager.status[0]!.error, '', manager.describe());
   const context = { sessionId: 'one', signal: new AbortController().signal };
   const tool = (name: string) =>

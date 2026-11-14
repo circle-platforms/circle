@@ -1012,7 +1012,12 @@ async function mcp(host: CommandHost, args: string): Promise<void> {
   const [verb = '', ...rest] = args.trim().split(/\s+/);
   const server = rest.join(' ');
   // One server again; the others and their programs stay as they are (#559)
-  if (['reload', 'refresh', 'connect'].includes(verb.toLowerCase()) && server) {
+  if (
+    ['reconnect', 'reload', 'refresh', 'connect'].includes(
+      verb.toLowerCase(),
+    ) &&
+    server
+  ) {
     if (runtime.busy) {
       host.flash('Busy · reload MCP after the current turn');
       return;
@@ -1025,9 +1030,11 @@ async function mcp(host: CommandHost, args: string): Promise<void> {
     }
     const row = runtime.mcp.status.find((item) => item.name === server);
     host.notice(
-      row?.error
-        ? `MCP ${server} reloaded · ${row.error}`
-        : `MCP ${server} reloaded · ${row?.tools.length ?? 0} tools`,
+      row?.approval
+        ? `MCP ${server} · .mcp.json · answer in the question panel`
+        : row?.error
+          ? `MCP ${server} reloaded · ${row.error}`
+          : `MCP ${server} reloaded · ${row?.tools.length ?? 0} tools`,
     );
     return;
   }
@@ -1593,7 +1600,7 @@ function settingsList(host: CommandHost, focusKey?: string): void {
     {
       key: 'mcp',
       label: 'mcp servers',
-      meta: `${host.settings.mcp_servers.length} · /mcp`,
+      meta: `${Object.keys(host.settings.mcpServers).length} · /mcp`,
     },
     { key: 'home', label: 'data folder', meta: shortPath(host.home) },
   ];

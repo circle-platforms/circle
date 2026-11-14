@@ -572,15 +572,14 @@ test("an MCP entry's endpoint and sign-in token are the placeholders it names: a
   const settings = trustFolder(defaultSettings(), root);
   // The entry the Hub extension keeps: no header, its sign-in is in mcp-auth.json, and it names the placeholders a
   // Hub's skills write
-  settings.mcp_servers = [
-    {
-      name: 'Hub',
+  settings.mcpServers = {
+    Hub: {
       url: hub,
-      transport: 'streamable_http',
+      type: 'http',
       enabled: true,
       placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
     },
-  ];
+  };
   const runtime = new AgentRuntime({
     workspace: root,
     home: root,
@@ -611,9 +610,9 @@ test("an MCP entry's endpoint and sign-in token are the placeholders it names: a
   saveSecret(root, 'HUB_TOKEN', 'kept-by-the-person');
   assert.equal(runtime.runSecrets().HUB_TOKEN, 'kept-by-the-person');
   // An entry that names no placeholders gives neither
-  runtime.options.settings.mcp_servers = [
-    { name: 'Hub', url: hub, transport: 'streamable_http', enabled: true },
-  ];
+  runtime.options.settings.mcpServers = {
+    Hub: { url: hub, type: 'http', enabled: true },
+  };
   assert.equal(runtime.runVariables().HUB_URL, undefined);
 });
 

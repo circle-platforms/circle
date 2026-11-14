@@ -156,14 +156,13 @@ async function fixture(t: Parameters<typeof scratch>[0]): Promise<Fixture> {
   settings.auth.model = 'scripted';
   // The token comes from the environment of the run, as a program that starts
   // Circle for a server hands it over; settings.json names only the variable.
-  settings.mcp_servers = [
-    {
-      name: 'files-server',
-      transport: 'streamable_http',
+  settings.mcpServers = {
+    'files-server': {
+      type: 'http',
       url: stub.url,
-      headers: { Authorization: 'Bearer ${env:FILES_SERVER_TOKEN}' },
+      headers: { Authorization: 'Bearer ${FILES_SERVER_TOKEN}' },
     },
-  ];
+  };
   saveSettings(settings, home);
   saveCredentials({ api_key: 'model-key' }, home);
   // An extension of your own, which loads unless it is turned off.
