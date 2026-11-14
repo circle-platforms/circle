@@ -80,6 +80,11 @@ export interface HookDefinition {
   /** Set when the hook ships with a skill. It runs only after that skill is loaded. */
   skill?: string;
   /**
+   * The folder of that skill, which holds its `hooks.json` beside `SKILL.md`, symlinks resolved: the folder the
+   * model is told when the skill loads. The hook gets it as `CIRCLE_SKILL_DIR` and `skill_dir` (#540).
+   */
+  skillDir?: string;
+  /**
    * after_tool only: the hook also gets a PNG of the page the conversation's browser shows, as a file, which never
    * reaches the model (#502). Off unless the hooks file says `"screenshot": true`.
    */
@@ -573,7 +578,7 @@ function readHookFile(
         source,
         sourceLabel,
         file,
-        ...(skill ? { skill } : {}),
+        ...(skill ? { skill, skillDir: dirname(file) } : {}),
         ...(entry.screenshot === true ? { screenshot: true } : {}),
       });
     });
@@ -970,6 +975,23 @@ function hookEnvironment(secrets: Record<string, string>): NodeJS.ProcessEnv {
   );
 }
 
+/** The variable a skill's hook finds that skill's folder by. */
+export const SKILL_DIR_VARIABLE = 'CIRCLE_SKILL_DIR';
+
+/**
+ * The command as the system shell gets it. `cmd.exe` reads `%NAME%`, not `${NAME}`, so on Windows the
+ * `${CIRCLE_SKILL_DIR}` a hooks file writes for every system becomes `%CIRCLE_SKILL_DIR%`. Either way the shell
+ * takes the value from the environment: the folder's name never becomes part of the command's text.
+ */
+export function hookShellCommand(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return platform === 'win32'
+    ? command.replaceAll(`\${${SKILL_DIR_VARIABLE}}`, `%${SKILL_DIR_VARIABLE}%`)
+    : command;
+}
+
 function runHookCommand(
   command: string,
   cwd: string,
@@ -977,6 +999,8 @@ function runHookCommand(
   timeoutMs: number,
   signal: AbortSignal | undefined,
   secrets: Record<string, string> = {},
+  /** Set for this hook only. An undefined value removes the variable. */
+  extraEnv: Record<string, string | undefined> = {},
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
     let stdout = '';
@@ -990,9 +1014,9 @@ function runHookCommand(
     };
     let child;
     try {
-      child = spawn(command, {
+      child = spawn(hookShellCommand(command), {
         cwd,
-        env: hookEnvironment(secrets),
+        env: { ...hookEnvironment(secrets), ...extraEnv },
         shell: true,
         detached: process.platform !== 'win32',
         windowsHide: true,
@@ -1294,6 +1318,7 @@ export class HookRunner {
         tool_output: redactHookValue(request.toolOutput, secrets),
         tool_status: request.toolStatus,
         permission_reason: redactHookValue(request.permissionReason, secrets),
+        ...(hook.skillDir ? { skill_dir: hook.skillDir } : {}),
         ...(file ? { files: [file] } : {}),
         ...(request.event === 'before_stop'
           ? { stop_attempt: (this.blocks.get(hook.id) ?? 0) + 1 }
@@ -1309,6 +1334,8 @@ export class HookRunner {
           hook.timeoutMs,
           request.signal ?? new AbortController().signal,
           secrets,
+          // Only a skill's hook has its folder; no other hook inherits one from Circle's own environment
+          { [SKILL_DIR_VARIABLE]: hook.skillDir },
         );
       } catch (error) {
         command = {

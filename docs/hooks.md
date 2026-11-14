@@ -148,6 +148,8 @@ Circle writes one JSON object to standard input:
 
 A hook with `"screenshot": true` also gets `"files": [{ "kind": "screenshot", "path": "…", "mime_type": "image/png", "sha256": "…", "size": 12345 }]`, when there is a page to capture (see below).
 
+A hook that ships with a skill also gets `"skill_dir": "/path/to/the/skill"`, the folder of its `SKILL.md`. See [A skill can ship hooks](#a-skill-can-ship-hooks).
+
 `tool_input` is the arguments after variables are filled in, with one exception: a saved secret's value is written back as `%NAME%` everywhere it appears in the arguments, the paths, the tool output, and the hook's environment. The hook runs as you, but it does not receive the secret. `paths` are canonical (symlinks resolved through `canonicalPath`). `tool_output` and `tool_status` are set for `after_tool`. `permission_reason` is set for `permission_request`. `stop_attempt` is set for `before_stop` and starts at 1.
 
 ### A screenshot for the hook
@@ -204,5 +206,13 @@ Each run appends one JSON line to `hooks.log` in the data folder. The fields are
 A skill folder may contain `hooks.json` beside `SKILL.md`. Installing the skill does not run those commands. They run only after this session loads that skill, with `/skill` or with the model's `skill` tool, and they stop applying when you switch, import or start another session. A project skill's hooks still require the folder to be trusted, and approval of that file's bytes, the same way as `.circle/hooks.json`. Until then they are not loaded. Settings names the skill and, until it is loaded, that the hook is waiting.
 
 A `session_start` hook in the skill runs with the session when the skill was loaded first, and runs once when the skill is loaded later. The other events apply to tool calls after that moment.
+
+A skill's hook runs in the workspace, like any other hook, so a script the skill bundles is not found by a relative path. The hook gets the skill's folder, the one the model is told when the skill loads, symlinks resolved: as the environment variable `CIRCLE_SKILL_DIR`, and as `skill_dir` in its JSON. Write the variable with braces and in double quotes, so one command works on every system and in a folder whose name has a space:
+
+```json
+{ "hooks": { "after_tool": [{ "name": "log", "command": "node \"${CIRCLE_SKILL_DIR}/scripts/log.mjs\"" }] } }
+```
+
+`/bin/sh` reads `${CIRCLE_SKILL_DIR}` from the environment. On Windows Circle changes `${CIRCLE_SKILL_DIR}` in the command to `%CIRCLE_SKILL_DIR%` for `cmd.exe`, which reads it from the environment in turn, and Node takes the forward slashes. Either way the folder's name is not written into the command. Other hooks do not have the variable, even when Circle itself was started with one. Approval still covers only the bytes of `hooks.json`, wherever the skill is installed.
 
 This is optional. A skill with no `hooks.json` is unchanged, and Circle still does not run other scripts bundled in the skill.

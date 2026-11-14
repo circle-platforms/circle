@@ -16,6 +16,7 @@ import {
   approveHookFile,
   hookNoticeText,
   loadHooks,
+  hookShellCommand,
   matchHookPath,
   resolveHookCommand,
   type HookDefinition,
@@ -1457,6 +1458,102 @@ test('a skill hook runs only after that skill is loaded in this session', async 
   assert.equal(
     runtime.hookListing().find((item) => item.hook.skill === 'lint')?.active,
     false,
+  );
+});
+
+test('a skill hook finds its skill folder by CIRCLE_SKILL_DIR and skill_dir, and no other hook has one', async (t) => {
+  const dirs = layout(t);
+  // Installed outside the project, under a folder with a space, as `npx skills add` or a copy would put it
+  const userHome = join(dirs.root, 'user home');
+  const skill = join(userHome, '.agents', 'skills', 'example-skill');
+  mkdirSync(join(skill, 'scripts'), { recursive: true });
+  writeFileSync(
+    join(skill, 'SKILL.md'),
+    '---\nname: example-skill\ndescription: Logs each tool call.\n---\n\nLog.\n',
+  );
+  const recorder = (marker: string) => `
+import { readFileSync, writeFileSync } from 'node:fs';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+writeFileSync(${JSON.stringify(marker)}, JSON.stringify({
+  env: process.env.CIRCLE_SKILL_DIR ?? null,
+  skill_dir: input.skill_dir ?? null,
+  cwd: process.cwd(),
+}));
+`;
+  const skillMarker = join(dirs.root, 'skill-hook.json');
+  const userMarker = join(dirs.root, 'user-hook.json');
+  writeFileSync(join(skill, 'scripts', 'log.mjs'), recorder(skillMarker));
+  // Written once for every system: Circle turns `${CIRCLE_SKILL_DIR}` into `%CIRCLE_SKILL_DIR%` for cmd.exe
+  writeJson(join(skill, 'hooks.json'), {
+    hooks: {
+      after_tool: [
+        {
+          name: 'log',
+          command: `${JSON.stringify(process.execPath)} "\${CIRCLE_SKILL_DIR}/scripts/log.mjs"`,
+          tools: 'read_file',
+        },
+      ],
+    },
+  });
+  const userScript = join(dirs.root, 'user-hook.mjs');
+  writeFileSync(userScript, recorder(userMarker));
+  writeJson(join(dirs.home, 'hooks.json'), {
+    hooks: {
+      after_tool: [
+        { name: 'mine', command: nodeCommand(userScript), tools: 'read_file' },
+      ],
+    },
+  });
+  writeFileSync(join(dirs.workspace, 'note.txt'), 'hello');
+  // A value Circle itself was started with must not reach a hook that is not a skill's
+  const inherited = process.env.CIRCLE_SKILL_DIR;
+  process.env.CIRCLE_SKILL_DIR = join(dirs.root, 'inherited');
+  t.after(() => {
+    if (inherited === undefined) delete process.env.CIRCLE_SKILL_DIR;
+    else process.env.CIRCLE_SKILL_DIR = inherited;
+  });
+  const runtime = new AgentRuntime({
+    workspace: dirs.workspace,
+    home: dirs.home,
+    userHome,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      {
+        message: assistant('', [
+          { id: 'r', name: 'read_file', args: { file_path: 'note.txt' } },
+        ]),
+      },
+      { message: assistant('done') },
+    ]),
+    headless: true,
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.activateSkillHooks('example-skill');
+  await runtime.harness.run('read the note');
+  const seen = JSON.parse(readFileSync(skillMarker, 'utf8'));
+  assert.equal(seen.env, realpathSync(skill));
+  assert.equal(seen.skill_dir, realpathSync(skill));
+  // The working directory stays the workspace
+  assert.equal(realpathSync(seen.cwd), dirs.workspace);
+  assert.deepEqual(
+    { ...JSON.parse(readFileSync(userMarker, 'utf8')), cwd: undefined },
+    { env: null, skill_dir: null, cwd: undefined },
+  );
+});
+
+test('only cmd.exe gets the skill folder variable rewritten, to %CIRCLE_SKILL_DIR%', () => {
+  const command =
+    'node "${CIRCLE_SKILL_DIR}/scripts/a.mjs" "${CIRCLE_SKILL_DIR}"';
+  assert.equal(
+    hookShellCommand(command, 'win32'),
+    'node "%CIRCLE_SKILL_DIR%/scripts/a.mjs" "%CIRCLE_SKILL_DIR%"',
+  );
+  assert.equal(hookShellCommand(command, 'linux'), command);
+  assert.equal(hookShellCommand(command, 'darwin'), command);
+  // Another variable, and the form without braces, are the shell's own business
+  assert.equal(
+    hookShellCommand('echo ${HOME} $CIRCLE_SKILL_DIR', 'win32'),
+    'echo ${HOME} $CIRCLE_SKILL_DIR',
   );
 });
 
