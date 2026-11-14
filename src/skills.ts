@@ -37,7 +37,8 @@ export function parseFrontmatter(text: string): {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     if (!line.trim() || line.trimStart().startsWith('#')) continue;
-    const entry = line.match(/^([^:]+):\s*(.*)$/);
+    // Only a key at the start of a line: an indented one belongs to the value above it, such as a hook's `name`
+    const entry = line.match(/^([^:\s][^:]*):\s*(.*)$/);
     if (!entry) continue;
     const key = entry[1]!.trim().toLowerCase();
     let value = entry[2]!.trim();
