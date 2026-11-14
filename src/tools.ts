@@ -77,6 +77,7 @@ export interface ToolHooks {
     name: string,
     signal?: AbortSignal,
     reference?: string,
+    context?: ToolContext,
   ) => Promise<string>;
   compact?: (hint: string, context: ToolContext) => Promise<string>;
   /**
@@ -91,7 +92,11 @@ export interface ToolHooks {
     variables: () => Record<string, string>;
     root?: string;
     /** The typed tool offered for this script of a pack, when its skill is loaded and the pack declares it. */
-    typed?: (pack: string, script: string) => string | undefined;
+    typed?: (
+      pack: string,
+      script: string,
+      sessionId?: string,
+    ) => string | undefined;
   };
   /** Offer `screenshot`; tests give it their own runner. */
   screenshot?: Omit<ScreenshotOptions, 'app' | 'target'>;
@@ -620,6 +625,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         const typed = localSkills.typed?.(
           string(args, 'pack'),
           string(args, 'script'),
+          context.sessionId,
         );
         if (typed)
           throw new Error(
@@ -859,6 +865,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
           string(args, 'name'),
           context.signal,
           args.reference as string | undefined,
+          context,
         ),
     );
   if (hooks.compact)

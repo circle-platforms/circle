@@ -583,3 +583,92 @@ test('SKILL.md names its own folder with ${CIRCLE_SKILL_DIR}', (t) => {
   );
   assert.doesNotMatch(body, /\$\{CIRCLE_SKILL_DIR\}/);
 });
+
+test("a subagent that loads a pack's skill can call the pack's tools from its next request; explore is told it has none", async (t) => {
+  const root = realpathSync(scratch(t));
+  const home = join(root, 'home');
+  const userHome = join(root, 'user');
+  const workspace = join(root, 'project');
+  mkdirSync(home);
+  mkdirSync(workspace);
+  const packs = join(userHome, '.agents', 'skills');
+  mkdirSync(packs, { recursive: true });
+  const marker = join(root, 'ran');
+  installPack(packs, 'example-pack', {
+    'SKILL.md':
+      '---\nname: example-pack\ndescription: Converts text files.\n---\n\nUse the convert tool.\n',
+    'tools.json': JSON.stringify({
+      version: 1,
+      tools: [{ ...CONVERT, env: {} }],
+    }),
+    'tools/convert.mjs': `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(marker)}, process.argv.slice(2).join(' '));\nconsole.log('converted');\n`,
+  });
+  const say = (calls: Message['tool_calls'], text = '') => ({
+    message: {
+      id: crypto.randomUUID(),
+      role: 'assistant' as const,
+      content: text,
+      tool_calls: calls,
+    },
+  });
+  const model = new ScriptedModel([
+    say([
+      {
+        id: 'worker',
+        name: 'task',
+        args: {
+          description: 'convert a.txt',
+          subagent_type: 'general-purpose',
+        },
+      },
+    ]),
+    // The subagent loads the skill, then calls the tool it brings
+    say([{ id: 'load', name: 'skill', args: { name: 'example-pack' } }]),
+    say([
+      {
+        id: 'convert',
+        name: 'example-pack_convert',
+        args: { in: 'a.txt', format: 'pdf' },
+      },
+    ]),
+    say([], 'converted a.txt'),
+    say([
+      {
+        id: 'looker',
+        name: 'task',
+        args: { description: 'look around', subagent_type: 'explore' },
+      },
+    ]),
+    say([{ id: 'peek', name: 'skill', args: { name: 'example-pack' } }]),
+    say([], 'looked'),
+    say([], 'done'),
+  ]);
+  const runtime = new AgentRuntime({
+    workspace,
+    home,
+    userHome,
+    localSkillsRoot: packs,
+    settings: defaultSettings(),
+    model,
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.initialize();
+  runtime.policy.setYolo(runtime.session.id, true);
+  await runtime.harness.run('convert a.txt, then look around');
+  // The subagent's call ran the script
+  assert.equal(readFileSync(marker, 'utf8'), '--in a.txt --format pdf');
+  const toolResult = (id: string) =>
+    model.requests
+      .flatMap((request) => request.messages)
+      .find((message) => message.tool_call_id === id)?.content ?? '';
+  assert.match(
+    String(toolResult('load')),
+    /offered to you from the next request: example-pack_convert/,
+  );
+  assert.match(String(toolResult('convert')), /converted/);
+  // explore reads and looks only: it is told the tools are not its own
+  assert.match(
+    String(toolResult('peek')),
+    /declares tools this subagent does not have: example-pack_convert/,
+  );
+});

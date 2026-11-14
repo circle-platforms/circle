@@ -929,12 +929,20 @@ export class AgentRuntime {
           : {}),
         // Paths in a pack differ in more than case (its manifest refuses others), and a case-blind disk opens
         // `tools/Convert.mjs` as `tools/convert.mjs`
-        typed: (pack, script) =>
-          this.packTools.find(
+        // Only a script whose typed tool the caller has is sent to it
+        typed: (pack, script, sessionId) => {
+          const name = this.packTools.find(
             (item) =>
               item.pack === pack &&
               item.script.toLowerCase() === script.toLowerCase(),
-          )?.tool.name,
+          )?.tool.name;
+          const tools =
+            (sessionId && this.childHarnesses.get(sessionId)?.harness.tools) ||
+            this.harness.tools;
+          return name && tools.some((tool) => tool.name === name)
+            ? name
+            : undefined;
+        },
       },
       screenshot:
         this.options.screenshot === false
@@ -944,7 +952,7 @@ export class AgentRuntime {
         this.todos = todos;
         this.bus.emit('todo_list', { payload: { todos } });
       },
-      skill: async (name, signal, reference) => {
+      skill: async (name, signal, reference, context) => {
         // A skill that cannot be read is not loaded: nothing of it starts
         const body = loadSkillBody(
           name,
@@ -952,7 +960,11 @@ export class AgentRuntime {
           reference,
           this.sandbox.credentialFiles,
         );
-        const tools = await this.activateSkillHooks(name, signal);
+        const tools = await this.activateSkillHooks(
+          name,
+          signal,
+          context?.sessionId,
+        );
         return tools ? `${body}\n\n${tools}` : body;
       },
       question: async (args, context) =>
@@ -1105,17 +1117,19 @@ export class AgentRuntime {
             parent_run_id: parentSessionId,
           });
         });
-        const childTools = (custom?.tools ?? this.allTools).filter(
-          (tool) =>
-            tool.subagents !== false &&
-            tool.name !== 'task' &&
-            tool.name !== 'compact_conversation' &&
-            tool.name !== 'plan_enter' &&
-            tool.name !== 'plan_exit' &&
-            (name !== 'explore' ||
-              custom !== undefined ||
-              EXPLORE_TOOLS.has(tool.name)),
-        );
+        // The tools this subagent may have: now, and those a skill it loads adds later
+        const allows = (tool: Tool): boolean =>
+          tool.subagents !== false &&
+          tool.name !== 'task' &&
+          tool.name !== 'compact_conversation' &&
+          tool.name !== 'plan_enter' &&
+          tool.name !== 'plan_exit' &&
+          (name !== 'explore' ||
+            custom !== undefined ||
+            EXPLORE_TOOLS.has(tool.name)) &&
+          (!custom?.tools ||
+            custom.tools.some((item) => item.name === tool.name));
+        const childTools = (custom?.tools ?? this.allTools).filter(allows);
         const jobTools = buildTools(this.sandbox, {
           fileMutations: this.options.fileMutations,
           captures: this.captures,
@@ -1283,6 +1297,8 @@ export class AgentRuntime {
             void child.cancel();
           };
           signal.addEventListener('abort', abort, { once: true });
+          // While it runs, a skill it loads can add its pack's tools to it
+          this.childHarnesses.set(session.id, { harness: child, allows });
           try {
             signal.throwIfAborted();
             // subagent_start hooks (#557): what they say back is in its system prompt from its first request on
@@ -1297,6 +1313,7 @@ export class AgentRuntime {
             signal.removeEventListener('abort', abort);
             await this.jobs.stopOwned(backgroundJob?.id ?? session.id);
             this.childJobOwners.delete(session.id);
+            this.childHarnesses.delete(session.id);
           }
         };
         if (args.background === true) {
@@ -2264,7 +2281,52 @@ export class AgentRuntime {
   async activateSkillHooks(
     name: string,
     signal?: AbortSignal,
+    sessionId?: string,
   ): Promise<string> {
+    const note = await this.armSkill(name, signal);
+    // A subagent that loads it gets the pack's tools it may have, from its next request
+    const child = sessionId ? this.childHarnesses.get(sessionId) : undefined;
+    return child ? this.offerPackTools(name, child, note) : note;
+  }
+  /** The subagents at work, by their session: the harness and the tools each may have. */
+  private childHarnesses = new Map<
+    string,
+    { harness: Harness; allows: (tool: Tool) => boolean }
+  >();
+  /** Adds the tools of a loaded skill's pack to a subagent, and says which it got and which it may not have. */
+  private offerPackTools(
+    name: string,
+    child: { harness: Harness; allows: (tool: Tool) => boolean },
+    note: string,
+  ): string {
+    const skill = this.skills.find(
+      (item) => item.name.toLowerCase() === name.trim().toLowerCase(),
+    );
+    const pack = skill ? basename(dirname(skill.path)) : undefined;
+    const declared = this.packTools.filter((item) => item.pack === pack);
+    if (!declared.length) return note;
+    const allowed = declared.filter((item) => child.allows(item.tool));
+    const have = new Set(child.harness.tools.map((tool) => tool.name));
+    child.harness.tools = [
+      ...child.harness.tools,
+      ...allowed
+        .filter((item) => !have.has(item.tool.name))
+        .map((item) => item.tool),
+    ];
+    const withheld = declared.filter((item) => !child.allows(item.tool));
+    return [
+      allowed.length
+        ? `Tools the pack ${pack} declares, offered to you from the next request: ${allowed.map((item) => `${item.tool.name} (${item.script})`).join(', ')}. Each checks its input before the script starts; call it rather than skill_run for that script.`
+        : '',
+      withheld.length
+        ? `The pack ${pack} declares tools this subagent does not have: ${withheld.map((item) => item.tool.name).join(', ')}.`
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+  /** Arms a skill for the session once: its pack's tools, its subagents and its hooks. */
+  private async armSkill(name: string, signal?: AbortSignal): Promise<string> {
     const key = name.trim().toLowerCase();
     if (!key) return '';
     // Loaded again: the model is told again which tools it has, in case that part of the conversation is gone
