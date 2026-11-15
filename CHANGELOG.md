@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+## 1.18.0 - 2026-11-15
+
 ### Added
 - **Workflows.** A workflow script can run many subagents in a declared order — `agent`, `parallel` and `pipeline` — as a background job, from `.circle/workflows/`, a pack, or written in the call; `/workflows` lists the runs. (#570)
 - **Subagents within subagents.** A subagent can start its own subagents, within a depth and a running limit, and a built-in `plan` subagent does read-only research. (#567)
