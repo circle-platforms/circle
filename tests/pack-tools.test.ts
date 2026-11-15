@@ -479,8 +479,10 @@ setInterval(() => {}, 1000);
 test('a declared script given a timeout is ended then, together with what it started', async (t) => {
   const file = join(realpathSync(scratch(t)), 'pids.json');
   const { call } = await loadedTool(t, WAITS(file));
-  const result = await call({ timeout: 1 }, new AbortController().signal);
-  assert.match(String(result), /Command ended: timeout/);
+  await assert.rejects(
+    () => call({ timeout: 1 }, new AbortController().signal),
+    /Command ended: timeout[\s\S]*Exit code: [1-9]\d*/,
+  );
   const pids = JSON.parse(readFileSync(file, 'utf8')) as number[];
   for (const pid of pids) await until(() => !alive(pid), { timeout: 10_000 });
 });

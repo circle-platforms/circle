@@ -72,11 +72,35 @@ test('versioned read windows exactly match streaming windows for every source-li
           [0, 0],
           [4, 3],
           [50, 10],
-        ])
+        ]) {
           assert.equal(
             readTextContentWindow(content, offset!, limit!),
             await readTextWindow(path, offset!, limit!, signal),
           );
+          for (const [charOffset, charLimit] of [
+            [0, 500],
+            [1900, 300],
+            [2500, 100],
+          ])
+            assert.equal(
+              readTextContentWindow(
+                content,
+                offset!,
+                limit!,
+                charOffset!,
+                charLimit!,
+              ),
+              await readTextWindow(
+                path,
+                offset!,
+                limit!,
+                signal,
+                false,
+                charOffset!,
+                charLimit!,
+              ),
+            );
+        }
       }
     }
   }
@@ -174,3 +198,60 @@ for (const mode of ['read-only', 'credential'] as const) {
     runtime.store.requireBalancedTools(runtime.harness.messages);
   });
 }
+
+test('native write_file marks written files read for subsequent edit_file', async (t) => {
+  const workspace = realpathSync(scratch(t));
+  const disk = new Map<string, string>();
+  const existing = join(workspace, 'existing.txt');
+  writeFileSync(existing, 'before\n');
+  disk.set(existing, 'before\n');
+  let rev = 1;
+  const revisions = new Map<string, string>([[existing, 'r1']]);
+  const backend: FileMutations = {
+    async read(path) {
+      const content = disk.get(path) ?? null;
+      return {
+        path,
+        content,
+        revision: content === null ? null : (revisions.get(path) ?? null),
+      };
+    },
+    async apply(changes) {
+      for (const change of changes) {
+        if (change.content === null) {
+          disk.delete(change.path);
+          revisions.delete(change.path);
+        } else {
+          disk.set(change.path, change.content);
+          revisions.set(change.path, `r${++rev}`);
+        }
+      }
+    },
+  };
+  const tools = buildTools(new Sandbox(workspace), { fileMutations: backend });
+  const byName = new Map(tools.map((entry) => [entry.name, entry]));
+  const context = { signal: new AbortController().signal, sessionId: 'native' };
+
+  await byName
+    .get('write_file')!
+    .run({ file_path: 'fresh.txt', content: 'one\n' }, context);
+  await byName
+    .get('edit_file')!
+    .run(
+      { file_path: 'fresh.txt', old_string: 'one', new_string: 'two' },
+      context,
+    );
+  assert.equal(disk.get(join(workspace, 'fresh.txt')), 'two\n');
+
+  await byName
+    .get('write_file')!
+    .run({ file_path: 'existing.txt', content: 'after\n' }, context);
+  assert.equal(disk.get(existing), 'after\n');
+  await byName
+    .get('edit_file')!
+    .run(
+      { file_path: 'existing.txt', old_string: 'after', new_string: 'edited' },
+      context,
+    );
+  assert.equal(disk.get(existing), 'edited\n');
+});
