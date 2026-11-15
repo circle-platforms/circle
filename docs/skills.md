@@ -26,7 +26,7 @@ Add entries under `## Unreleased`, newest first, one line each ...
 - Give it a `name` and a `description`. Without a `name`, or with one that is not lowercase letters, digits and hyphens, the folder name is used; without a `description`, the model sees only `Skill from <folder>`.
 - The name should match the folder name.
 - The description is what Circle reads to decide whether the skill applies, so say **what it does and when to use it**. Descriptions are cut at 1,024 characters.
-- Put scripts, templates and references next to `SKILL.md` and mention them in the text by relative path. When the skill is loaded, the model is told the skill's folder, so it can find them. Circle never runs bundled scripts by itself. A `hooks.json` next to `SKILL.md` is optional and is the exception: after this session loads the skill, Circle runs those commands at the hook events. See [Hooks](hooks.md#a-skill-can-ship-hooks). An installed pack can also define subagents in an `agents` folder, offered as `<pack>:<name>` from the start of a session. See [A pack can ship subagents](agents.md#a-pack-can-ship-subagents).
+- Put scripts, templates and references next to `SKILL.md` and mention them in the text by relative path. When the skill is loaded, the model is told the skill's folder, so it can find them. Circle never runs bundled scripts by itself. Hooks in the `SKILL.md` frontmatter are the exception: after this session loads the skill, Circle runs those commands at the hook events. See [Skills and packs](hooks.md#skills-and-packs). An installed pack can also define subagents in an `agents` folder, offered as `<pack>:<name>` from the start of a session. See [A pack can ship subagents](agents.md#a-pack-can-ship-subagents).
 
 A skill is a folder below the skills folder, `skills/changelog/SKILL.md`, or one level deeper inside a folder that has no `SKILL.md` of its own, `skills/team/changelog/SKILL.md`.
 
@@ -110,7 +110,7 @@ For a skill only you use, copy it into `~/.circle/skills/<name>/`.
 
 ## A skill can ship hooks
 
-`hooks.json` in the skill folder does not run just because the skill is installed. Those commands run only after this session loads the skill, with `/skill` or the `skill` tool, and only for that session. A project skill's hooks also wait until the folder is trusted and that file's bytes are approved. A skill without that file is unchanged. A skill's `hooks.json` supports per-platform commands the same way as any other hooks file. Its hooks run in the workspace and find the skill's own scripts through `CIRCLE_SKILL_DIR` (or `skill_dir` in their JSON), written as `node "${CIRCLE_SKILL_DIR}/scripts/log.mjs"`. See [Hooks](hooks.md#a-skill-can-ship-hooks).
+A skill's hooks are `hooks:` in its `SKILL.md` frontmatter. They do not run because the skill is installed: they start when this session loads the skill, with `/skill` or the `skill` tool, and run for the rest of it. A project skill's hooks also wait until the folder is trusted. An installed pack can also have `hooks/hooks.json`, which runs in every session while it is installed. Their hooks run in the workspace and find the skill's own scripts through `${CIRCLE_SKILL_DIR}`, best as `"command": "node", "args": ["${CIRCLE_SKILL_DIR}/scripts/log.mjs"]`. See [Skills and packs](hooks.md#skills-and-packs).
 
 ## Local tools from an MCP server
 

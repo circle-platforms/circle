@@ -465,7 +465,8 @@ test('a background subagent job shows its step as a tool row does, not the raw c
   const root = scratch(t);
   let seen: string | undefined;
   let runtime!: AgentRuntime;
-  const model = new ScriptedModel([
+  // The conversation and its background subagent ask at the same time: each gets its own replies, whoever asks first
+  const parent = [
     reply('', [
       {
         id: 'bg',
@@ -477,6 +478,11 @@ test('a background subagent job shows its step as a tool row does, not the raw c
         },
       },
     ]),
+    reply('Started.'),
+  ];
+  const child: (
+    ReturnType<typeof reply> | (() => Promise<ReturnType<typeof reply>>)
+  )[] = [
     reply('', [
       {
         id: 'w',
@@ -488,8 +494,19 @@ test('a background subagent job shows its step as a tool row does, not the raw c
       seen = runtime.jobs.list()[0]?.detail;
       return reply('wrote it');
     },
-    reply('Started.'),
-  ]);
+  ];
+  const model = new ScriptedModel(
+    Array.from({ length: 4 }, () => async (request: ModelRequest) => {
+      const fromChild = request.messages.some(
+        (message) =>
+          message.role === 'user' && message.content === 'write the notes',
+      );
+      const next = (fromChild ? child : parent).shift()!;
+      return (
+        typeof next === 'function' ? await next() : next
+      ) as ModelResponse;
+    }),
+  );
   runtime = new AgentRuntime({
     workspace: root,
     home: root,

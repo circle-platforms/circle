@@ -83,6 +83,20 @@ export interface ContextOptions {
     model: string,
     usage: Usage,
   ) => import('./pricing.js').PriceReceipt;
+  /** Hooks around a compaction: before it, which can stop it or add to what the summary keeps, and after it. */
+  compactHooks?: {
+    before: (
+      sessionId: string,
+      trigger: 'manual' | 'auto',
+      hint: string,
+      signal: AbortSignal,
+    ) => Promise<{ blocked?: string; instructions: string }>;
+    after: (
+      sessionId: string,
+      trigger: 'manual' | 'auto',
+      summary: string,
+    ) => Promise<void>;
+  };
 }
 export function messageTokens(messages: Message[]): number {
   return messageTokenEstimate(messages);
@@ -345,13 +359,36 @@ export class ContextManager {
     }
     return projected;
   }
-  compact(
+  async compact(
     sessionId: string,
     model: ChatModel,
     signal: AbortSignal,
     hint = '',
     frame: CompactionFrame = {},
   ): Promise<string> {
-    return this.compactor.compact(sessionId, model, signal, hint, frame);
+    const hooks = this.options.compactHooks;
+    if (!hooks)
+      return this.compactor.compact(sessionId, model, signal, hint, frame);
+    const trigger =
+      frame.hookTrigger ??
+      (frame.trigger === 'auto' || frame.trigger === 'overflow'
+        ? 'auto'
+        : 'manual');
+    // A blocked compaction does not happen: a request that needed the room then fails as it would have
+    const before = await hooks.before(sessionId, trigger, hint, signal);
+    if (before.blocked !== undefined)
+      return `Compaction blocked by a hook: ${before.blocked}`;
+    const prior = this.store.contextState(sessionId).summary?.cutoffMessageId;
+    const result = await this.compactor.compact(
+      sessionId,
+      model,
+      signal,
+      [hint, before.instructions].filter(Boolean).join('\n\n'),
+      frame,
+    );
+    const summary = this.store.contextState(sessionId).summary;
+    if (summary && summary.cutoffMessageId !== prior)
+      await hooks.after(sessionId, trigger, summary.text);
+    return result;
   }
 }

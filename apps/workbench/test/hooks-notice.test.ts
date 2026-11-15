@@ -32,10 +32,38 @@ test('a hook notice in zh-CN is Chinese and keeps the hook reason and tool name'
       formatHookNotice({ kind: 'untrusted' }),
       '项目钩子需要先信任文件夹',
     );
-    // The files stay as written; the words say how to be asked again.
+    // A notice from a conversation before hooks ran on folder trust stays readable
     assert.equal(
-      formatHookNotice({ kind: 'changed', name: '.circle/hooks.json' }),
-      '项目钩子需要批准 · .circle/hooks.json · 新对话会再问一次',
+      formatHookNotice({
+        kind: 'changed',
+        name: '.circle/hooks.json',
+      } as unknown as Parameters<typeof formatHookNotice>[0]),
+      '项目钩子需要批准 · .circle/hooks.json',
+    );
+    // Circle's own failure words in Chinese, what the program wrote as it wrote it
+    assert.equal(
+      formatHookNotice({
+        kind: 'failed',
+        name: 'lint',
+        reason: 'timed out after 2s',
+      }),
+      '钩子失败 · lint · 钩子运行 2 秒后超时',
+    );
+    assert.equal(
+      formatHookNotice({ kind: 'failed', reason: 'exited 1: boom' }),
+      '钩子失败 · 钩子退出码 1: boom',
+    );
+    assert.equal(
+      formatHookNotice({ kind: 'blocked', tool: 'prompt', reason: 'not that' }),
+      '钩子拦下了这条消息 · not that',
+    );
+    assert.equal(
+      formatHookNotice({ kind: 'stopped', reason: 'all done' }),
+      '钩子结束了这一轮 · all done',
+    );
+    assert.equal(
+      formatHookNotice({ kind: 'message', name: 'audit', reason: 'logged' }),
+      '钩子 audit · logged',
     );
     assert.equal(
       formatHookNotice({

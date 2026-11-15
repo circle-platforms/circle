@@ -1,23 +1,19 @@
-// Deterministic hooks: shell commands Circle runs at fixed points. A decision
-// from a hook overrides the approval mode. A hard refusal from the approval
-// policy (sudo, or a command that names a credential file) and read-only mode
-// are decided before any hook runs, and a hook cannot undo them. A file tool
-// still refuses a credential file when it runs, after the hooks.
-import { spawn } from 'node:child_process';
+// Hooks: commands Circle runs at fixed points of a session. The matching hooks of an event run side by side; each gets
+// the event as JSON on standard input and answers with its exit code and standard output. A hook that fails lets the
+// action go ahead unless it says `onFailure: "block"`. A hard refusal from the approval policy and read-only mode are
+// decided before any hook runs, and no hook can undo them.
+import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   appendFileSync,
   existsSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import {
   basename,
-  dirname,
   isAbsolute,
   join,
   posix,
@@ -25,211 +21,65 @@ import {
   sep,
   win32,
 } from 'node:path';
-import { canonicalPath, ensureHome } from './paths.js';
+import { StringDecoder } from 'node:string_decoder';
+import { commandSegments } from './approvals.js';
+import { matchPattern } from './file_patterns.js';
+import { verifyInstalled } from './local_skills.js';
+import { canonicalPath } from './paths.js';
+import { killProcessTree } from './process_group.js';
 import { redactSecrets } from './secrets.js';
 import {
   identityEnvironment,
   isHostAbsolutePath,
   shellEnvironment,
 } from './sandbox.js';
-import { killProcessTree } from './process_group.js';
-import { discoverSkills } from './skills.js';
-import { isRecord, withPrivateJsonLock, writePrivateJson } from './settings.js';
+import { isRecord } from './settings.js';
+import {
+  NO_MATCHER,
+  TOOL_EVENTS,
+  matcherMatches,
+  type HookDefinition,
+  type HookEvent,
+  type LoadedHooks,
+} from './hook_config.js';
 
-export const HOOK_EVENTS = [
-  'before_tool',
-  'after_tool',
-  'before_stop',
-  'session_start',
-  'permission_request',
-  'user_prompt',
-  'subagent_start',
-] as const;
-/** Events about no tool: every hook of the event runs, whatever its `tools` and `paths` say. */
-const NO_TOOL = new Set<HookEvent>([
-  'session_start',
-  'before_stop',
-  'user_prompt',
-  'subagent_start',
-]);
-export type HookEvent = (typeof HOOK_EVENTS)[number];
-export type HookSource = 'user' | 'project' | 'skill';
-export type HookDecision = 'allow' | 'deny' | 'ask';
+export {
+  HOOK_EVENTS,
+  TOOL_EVENTS,
+  compileMatcher,
+  loadHooks,
+  parseCondition,
+  parseHooks,
+  skillFrontmatterHooks,
+  type HookDefinition,
+  type HookEvent,
+  type HookLoadError,
+  type HookSource,
+  type LoadedHooks,
+} from './hook_config.js';
+export { HOOK_ALLOWED_LINE, HOOK_CHANGED_LINE } from './hook_display.js';
 
-/** Shown in the transcript. The hook's own reason is kept as it wrote it. */
+/** Shown in the transcript. The hook's own words are kept as it wrote them. */
 export interface HookNotice {
   kind:
     | 'denied'
     | 'asked'
     | 'allowed'
     | 'output'
+    | 'message'
     | 'blocked'
+    | 'stopped'
     | 'limit'
     | 'failed'
     | 'active'
-    | 'untrusted'
-    | 'changed';
+    | 'untrusted';
   tool?: string;
   name?: string;
   reason?: string;
-  /** What the person reads in place of `reason`: the hook's `user_message`. It never reaches the model. */
+  /** What the person reads in place of `reason`: the hook's `systemMessage`. It never reaches the model. */
   message?: string;
   count?: number;
 }
-
-export interface HookDefinition {
-  id: string;
-  event: HookEvent;
-  name: string;
-  command: string;
-  timeoutMs: number;
-  loopLimit: number;
-  /** '*' matches every tool. Tool events only; other events ignore it. */
-  tools: '*' | string[];
-  /** Empty matches every path. A tool call with no path does not match. */
-  paths: string[];
-  source: HookSource;
-  sourceLabel: string;
-  file: string;
-  /** Set when the hook ships with a skill. It runs only after that skill is loaded. */
-  skill?: string;
-  /**
-   * The folder of that skill, which holds its `hooks.json` beside `SKILL.md`, symlinks resolved: the folder the
-   * model is told when the skill loads. The hook gets it as `CIRCLE_SKILL_DIR` and `skill_dir` (#540).
-   */
-  skillDir?: string;
-  /**
-   * after_tool only: the hook also gets a PNG of the page the conversation's browser shows, as a file, which never
-   * reaches the model (#502). Off unless the hooks file says `"screenshot": true`.
-   */
-  screenshot?: boolean;
-}
-
-export interface HookLoadError {
-  file: string;
-  message: string;
-}
-
-export interface LoadedHooks {
-  hooks: HookDefinition[];
-  errors: HookLoadError[];
-  /** A project hooks file exists and this folder is not trusted, so it did not load. */
-  projectIgnored: boolean;
-  /**
-   * Project hook files that did not load because these bytes were never approved:
-   * a new file, or one that changed since you approved it.
-   */
-  projectChanged: HookChange[];
-}
-
-/** A hook as an approval card lists it, against the version approved last. */
-export interface HookPreview {
-  name: string;
-  event: HookEvent;
-  command: string;
-  /** The hook also gets a screenshot of the browser's page. */
-  screenshot?: boolean;
-  mark: 'new' | 'changed' | 'unchanged' | 'removed';
-}
-
-/**
- * A project hooks file waiting for approval. Everything here comes from one read of
- * the file: the digest that an approval records, the rows a card lists and the
- * hooks that load once it is approved.
- */
-export interface HookChange {
-  file: string;
-  /** SHA-256 of the bytes that were read. */
-  digest: string;
-  hooks: HookPreview[];
-  definitions: HookDefinition[];
-  /** A problem in those bytes, reported once they load. */
-  error?: HookLoadError;
-}
-
-export interface HookOutcome {
-  hook: HookDefinition;
-  exitCode: number | null;
-  timedOut: boolean;
-  stdout: string;
-  stderr: string;
-  decision: HookDecision | 'none';
-  reason: string;
-  /** `user_message`: for the person, in place of the reason. Empty when the hook gave none. */
-  userMessage: string;
-  /** before_tool only: the input the call runs with instead (`updated_input`). Never set with a deny. */
-  updatedInput?: Record<string, unknown>;
-  context: string;
-  durationMs: number;
-  failed: boolean;
-}
-
-export interface HookBatch {
-  decision: HookDecision | 'none';
-  reason: string;
-  /** The `user_message` of the hooks that decided, joined as their reasons are. */
-  userMessage: string;
-  /**
-   * before_tool: the input after every hook that rewrote it, in order, each given the one before. Unset when a
-   * hook denied, which voids every rewrite.
-   */
-  updatedInput?: Record<string, unknown>;
-  /** The hooks whose rewrite that is, in the order they ran. */
-  changedBy: string[];
-  context: string;
-  outcomes: HookOutcome[];
-  notices: HookNotice[];
-}
-
-export interface HookRunRequest {
-  event: HookEvent;
-  /** The conversation's session. In a subagent, `agent` names the agent the call came from. */
-  sessionId: string;
-  agent?: { id: string; type: string };
-  cwd: string;
-  toolName?: string;
-  toolInput?: Record<string, unknown>;
-  /** Paths the tool named, before canonicalization. */
-  paths?: string[];
-  toolOutput?: string;
-  toolStatus?: 'success' | 'error';
-  permissionReason?: string;
-  /** user_prompt: the person's message, as written (#557). */
-  prompt?: string;
-  /** subagent_start: the task the subagent was given. */
-  description?: string;
-  /** Saved secrets. Their values are written as %NAME% before the hook sees them. */
-  secrets?: Record<string, string>;
-  /** Run only these hook ids. Used when a skill is loaded after the session started. */
-  onlyIds?: string[];
-  /**
-   * A PNG of the page the conversation's browser shows, taken when a hook that runs asks for one (`screenshot`), at
-   * most once per event; undefined when no page is open. It must not start a browser.
-   */
-  screenshot?: (signal: AbortSignal) => Promise<Buffer | undefined>;
-  signal?: AbortSignal;
-}
-/** A file a hook gets beside its JSON, named in the JSON's `files`. */
-export interface HookFile {
-  kind: 'screenshot';
-  path: string;
-  mime_type: 'image/png';
-  sha256: string;
-  size: number;
-}
-
-const DEFAULT_TIMEOUT_MS = 30_000;
-const MAX_TIMEOUT_MS = 600_000;
-const DEFAULT_LOOP_LIMIT = 5;
-const MAX_LOOP_LIMIT = 20;
-const MAX_OUTPUT = 100_000;
-const MAX_HOOKS = 100;
-
-const GATING = new Set<HookEvent>([
-  'before_tool',
-  'permission_request',
-  'before_stop',
-]);
 
 export function hookNoticeText(notice: HookNotice): string {
   const reason = notice.reason?.replace(/\s+/g, ' ').trim();
@@ -242,9 +92,12 @@ export function hookNoticeText(notice: HookNotice): string {
     case 'allowed':
       return `hook allowed ${notice.tool ?? 'tool'}${tail}`;
     case 'output':
+    case 'message':
       return `hook ${notice.name ?? 'hook'}${tail}`;
     case 'blocked':
-      return `hook blocked stop${tail}`;
+      return `hook blocked ${notice.tool ?? 'stop'}${tail}`;
+    case 'stopped':
+      return `hook stopped the turn${tail}`;
     case 'limit':
       return `hook stop limit${notice.name ? ` · ${notice.name}` : ''}`;
     case 'failed':
@@ -252,18 +105,14 @@ export function hookNoticeText(notice: HookNotice): string {
     case 'active':
       return `hooks active${notice.count !== undefined ? ` · ${notice.count}` : ''}${tail}`;
     case 'untrusted':
-      return 'project hooks need trust';
-    case 'changed':
-      return `project hooks need approval${notice.name ? ` · ${notice.name}` : ''}`;
+      return 'project hooks need a trusted folder';
   }
 }
 
 /** The line a tool result starts with when a hook decided. The model reads the English. */
 export const HOOK_DENIED_LINE = 'Hook denied this call:';
 export const HOOK_ASKED_LINE = 'Hook asked before this call:';
-export { HOOK_ALLOWED_LINE } from './hook_display.js';
 export const HOOK_OUTPUT_LINE = 'Hook output';
-export { HOOK_CHANGED_LINE } from './hook_display.js';
 
 export function hookDeniedMessage(reason: string): string {
   return `${HOOK_DENIED_LINE} ${reason}`;
@@ -346,11 +195,9 @@ function underWorkspace(file: string, workspace: string): string | undefined {
 }
 
 /**
- * Whether a tool path matches a glob. The file and an absolute pattern are
- * canonicalized first, so a symlink and its target match the same glob.
- * Relative globs match the path relative to the workspace. `*` stays inside
- * one segment; `**` crosses segments. Matching is case-sensitive except on
- * Windows.
+ * Whether a tool path matches a glob. The file and an absolute pattern are canonicalized first, so a symlink and its
+ * target match the same glob. Relative globs match the path relative to the workspace. `*` stays inside one
+ * segment; `**` crosses segments. Matching is case-sensitive except on Windows.
  */
 export function matchHookPath(
   filePath: string,
@@ -408,587 +255,6 @@ export function matchHookPath(
   return globRegExp(glob).test(target);
 }
 
-function toolMatches(hook: HookDefinition, tool: string | undefined): boolean {
-  if (NO_TOOL.has(hook.event)) return true;
-  if (!tool) return hook.tools === '*';
-  if (hook.tools === '*') return true;
-  return hook.tools.includes(tool);
-}
-
-function pathsMatch(
-  hook: HookDefinition,
-  paths: string[] | undefined,
-  options: HookPathOptions,
-): boolean {
-  if (NO_TOOL.has(hook.event)) return true;
-  if (!hook.paths.length) return true;
-  if (!paths?.length) return false;
-  return paths.some((file) =>
-    hook.paths.some((pattern) => matchHookPath(file, pattern, options)),
-  );
-}
-
-function clampTimeout(value: unknown): number {
-  const number = typeof value === 'number' ? value : DEFAULT_TIMEOUT_MS;
-  if (!Number.isFinite(number)) return DEFAULT_TIMEOUT_MS;
-  return Math.min(MAX_TIMEOUT_MS, Math.max(100, Math.floor(number)));
-}
-
-function clampLoop(value: unknown): number {
-  const number = typeof value === 'number' ? value : DEFAULT_LOOP_LIMIT;
-  if (!Number.isFinite(number)) return DEFAULT_LOOP_LIMIT;
-  return Math.min(MAX_LOOP_LIMIT, Math.max(1, Math.floor(number)));
-}
-
-function hookName(value: unknown, command: string): string {
-  const named = typeof value === 'string' ? value.trim() : '';
-  const text = (named || command.trim()).replace(/\s+/g, ' ');
-  return text.slice(0, 80) || 'hook';
-}
-
-function toolMatcher(value: unknown): '*' | string[] {
-  if (value === undefined || value === '*' || value === '') return '*';
-  const parts = Array.isArray(value)
-    ? value
-    : typeof value === 'string'
-      ? value.split(/[|,]/)
-      : [];
-  const names = parts
-    .map((part) => String(part).trim())
-    .filter((part) => part && part !== '*');
-  return names.length ? names : '*';
-}
-
-function pathMatcher(value: unknown): string[] {
-  if (value === undefined) return [];
-  const parts = Array.isArray(value) ? value : [value];
-  return parts
-    .filter((part): part is string => typeof part === 'string')
-    .map((part) => part.trim())
-    .filter(Boolean);
-}
-
-/**
- * The command an entry runs on a platform: the entry's platform command when
- * present, the plain command otherwise. `platform` is a `process.platform`
- * value; anything without a platform field falls back to the plain command.
- * Callers validate the platform fields first; a non-string override here
- * simply does not replace the command.
- */
-export function resolveHookCommand(
-  entry: {
-    command: string;
-    command_windows?: unknown;
-    command_darwin?: unknown;
-    command_linux?: unknown;
-  },
-  platform: string,
-): string {
-  const field =
-    platform === 'win32'
-      ? 'command_windows'
-      : platform === 'darwin'
-        ? 'command_darwin'
-        : platform === 'linux'
-          ? 'command_linux'
-          : undefined;
-  const override = field ? entry[field] : undefined;
-  return typeof override === 'string' && override.trim()
-    ? override
-    : entry.command;
-}
-
-function readHookFile(
-  file: string,
-  source: HookSource,
-  sourceLabel: string,
-  skill?: string,
-  /** The bytes already read, so a digest and the hooks it covers are one read. */
-  bytes?: Buffer,
-): { hooks: HookDefinition[]; error?: HookLoadError } {
-  let raw: unknown;
-  try {
-    raw = JSON.parse((bytes ?? readFileSync(file)).toString('utf8'));
-  } catch (error) {
-    return {
-      hooks: [],
-      error: {
-        file,
-        message: `hooks could not be read: ${error instanceof Error ? error.message : String(error)}`,
-      },
-    };
-  }
-  if (!isRecord(raw))
-    return {
-      hooks: [],
-      error: { file, message: 'hooks file must be a JSON object' },
-    };
-  if (raw.version !== undefined && raw.version !== 1)
-    return {
-      hooks: [],
-      error: {
-        file,
-        message: `hooks version ${String(raw.version)} is not supported`,
-      },
-    };
-  const events = isRecord(raw.hooks) ? raw.hooks : {};
-  const hooks: HookDefinition[] = [];
-  const problems: string[] = [];
-  let dropped = false;
-  for (const event of HOOK_EVENTS) {
-    const list = events[event];
-    if (list === undefined) continue;
-    if (!Array.isArray(list)) {
-      problems.push(`${event} must be a list`);
-      continue;
-    }
-    list.forEach((entry, index) => {
-      if (hooks.length >= MAX_HOOKS) {
-        dropped = true;
-        return;
-      }
-      if (
-        !isRecord(entry) ||
-        typeof entry.command !== 'string' ||
-        !entry.command.trim()
-      ) {
-        problems.push(`${event}[${index}] needs a command`);
-        return;
-      }
-      if (entry.command.length > 4000 || entry.command.includes('\0')) {
-        problems.push(`${event}[${index}] command is not usable`);
-        return;
-      }
-      const badField = (
-        ['command_windows', 'command_darwin', 'command_linux'] as const
-      ).find((field) => {
-        const override = entry[field];
-        return (
-          override !== undefined &&
-          (typeof override !== 'string' ||
-            !override.trim() ||
-            override.length > 4000 ||
-            override.includes('\0'))
-        );
-      });
-      if (badField) {
-        problems.push(`${event}[${index}] ${badField} is not usable`);
-        return;
-      }
-      if (
-        entry.screenshot !== undefined &&
-        (typeof entry.screenshot !== 'boolean' ||
-          (entry.screenshot && event !== 'after_tool'))
-      ) {
-        problems.push(
-          `${event}[${index}] screenshot must be true or false, and only after_tool takes it`,
-        );
-        return;
-      }
-      const command = resolveHookCommand(
-        {
-          command: entry.command,
-          command_windows: entry.command_windows,
-          command_darwin: entry.command_darwin,
-          command_linux: entry.command_linux,
-        },
-        process.platform,
-      );
-      hooks.push({
-        id: `${source}:${file}:${event}:${index}`,
-        event,
-        name: hookName(entry.name, command),
-        command,
-        timeoutMs: clampTimeout(entry.timeout_ms),
-        loopLimit: clampLoop(entry.loop_limit),
-        tools: toolMatcher(entry.tools ?? entry.matcher),
-        paths: pathMatcher(entry.paths),
-        source,
-        sourceLabel,
-        file,
-        ...(skill ? { skill, skillDir: dirname(file) } : {}),
-        ...(entry.screenshot === true ? { screenshot: true } : {}),
-      });
-    });
-  }
-  if (dropped) problems.push('at most 100 hooks are loaded');
-  for (const key of Object.keys(events))
-    if (!(HOOK_EVENTS as readonly string[]).includes(key))
-      problems.push(`unknown hook event ${key}`);
-  return {
-    hooks,
-    ...(problems.length
-      ? { error: { file, message: problems.join('; ') } }
-      : {}),
-  };
-}
-
-function fileExists(path: string): boolean {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
-}
-
-function hookTrustPath(home: string): string {
-  return join(home, 'hook-trust.json');
-}
-
-interface ApprovedHook {
-  name: string;
-  event: string;
-  command: string;
-  screenshot?: boolean;
-}
-
-/** One approved version of a project hooks file: its digest and the hooks it held. */
-interface HookTrustEntry {
-  digest: string;
-  hooks: ApprovedHook[];
-}
-
-function approvedHooks(value: unknown): ApprovedHook[] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const hooks: ApprovedHook[] = [];
-  for (const item of value) {
-    if (
-      !isRecord(item) ||
-      typeof item.name !== 'string' ||
-      typeof item.event !== 'string' ||
-      typeof item.command !== 'string'
-    )
-      return undefined;
-    hooks.push({
-      name: item.name,
-      event: item.event,
-      command: item.command,
-      ...(item.screenshot === true ? { screenshot: true } : {}),
-    });
-  }
-  return hooks;
-}
-
-/** Approved versions, keyed by the file's canonical path. Anything else in the file is not an approval. */
-function readHookTrust(home: string): Record<string, HookTrustEntry> {
-  let value: unknown;
-  try {
-    value = JSON.parse(readFileSync(hookTrustPath(home), 'utf8'));
-  } catch {
-    return {};
-  }
-  if (!isRecord(value) || value.version !== 1 || !isRecord(value.files))
-    return {};
-  const files: Record<string, HookTrustEntry> = {};
-  for (const [path, stored] of Object.entries(value.files)) {
-    if (!isRecord(stored) || typeof stored.digest !== 'string') continue;
-    if (!/^[a-f0-9]{64}$/.test(stored.digest)) continue;
-    const hooks = approvedHooks(stored.hooks);
-    if (hooks) files[path] = { digest: stored.digest, hooks };
-  }
-  return files;
-}
-
-/** The digest approved for this file, if any. */
-export function approvedHookDigest(
-  home: string,
-  file: string,
-): string | undefined {
-  return readHookTrust(home)[canonicalPath(file)]?.digest;
-}
-
-function previewHooks(
-  current: HookDefinition[],
-  previous: HookTrustEntry | undefined,
-): HookPreview[] {
-  const rows = current.map((hook) => ({
-    name: hook.name,
-    event: hook.event,
-    command: hook.command,
-    ...(hook.screenshot ? { screenshot: true } : {}),
-  }));
-  if (!previous) return rows.map((hook) => ({ ...hook, mark: 'new' as const }));
-  const used = new Set<number>();
-  const marked = rows.map((hook): HookPreview => {
-    const exact = previous.hooks.findIndex(
-      (item, index) =>
-        !used.has(index) &&
-        item.event === hook.event &&
-        item.name === hook.name &&
-        item.command === hook.command &&
-        !!item.screenshot === !!hook.screenshot,
-    );
-    if (exact >= 0) {
-      used.add(exact);
-      return { ...hook, mark: 'unchanged' };
-    }
-    const sameName = previous.hooks.findIndex(
-      (item, index) =>
-        !used.has(index) &&
-        item.event === hook.event &&
-        item.name === hook.name,
-    );
-    if (sameName >= 0) used.add(sameName);
-    return { ...hook, mark: sameName >= 0 ? 'changed' : 'new' };
-  });
-  const removed = previous.hooks
-    .filter((_, index) => !used.has(index))
-    .map((hook): HookPreview => ({
-      name: hook.name,
-      event: hook.event as HookEvent,
-      command: hook.command,
-      ...(hook.screenshot ? { screenshot: true } : {}),
-      mark: 'removed',
-    }));
-  return [...marked, ...removed];
-}
-
-/**
- * Remember that these bytes of a project hooks file are approved: the digest and the
- * hooks of the read the person saw, never a second read of the file.
- */
-export function approveHookFile(home: string, change: HookChange): void {
-  const path = hookTrustPath(ensureHome(home));
-  withPrivateJsonLock(path, () => {
-    const files: Record<string, HookTrustEntry> = readHookTrust(home);
-    files[canonicalPath(change.file)] = {
-      digest: change.digest,
-      hooks: change.definitions.map((hook) => ({
-        name: hook.name,
-        event: hook.event,
-        command: hook.command,
-        ...(hook.screenshot ? { screenshot: true } : {}),
-      })),
-    };
-    writePrivateJson(path, { version: 1, files });
-  });
-}
-
-export function loadHooks(options: {
-  workspace: string;
-  home: string;
-  trusted: boolean;
-  userHome?: string;
-}): LoadedHooks {
-  const hooks: HookDefinition[] = [];
-  const errors: HookLoadError[] = [];
-  const approved = readHookTrust(options.home);
-  const projectChanged: HookChange[] = [];
-  let projectIgnored = false;
-  const take = (
-    file: string,
-    source: HookSource,
-    label: string,
-    skill?: string,
-  ) => {
-    if (!fileExists(file)) return;
-    const read = readHookFile(file, source, label, skill);
-    hooks.push(...read.hooks);
-    if (read.error) errors.push(read.error);
-  };
-  // A project file runs only when the folder is trusted and these bytes were approved.
-  // The digest, the hooks that load and what an approval card lists are one read.
-  const considerProject = (
-    file: string,
-    source: HookSource,
-    label: string,
-    skill?: string,
-  ) => {
-    if (!fileExists(file)) return;
-    if (!options.trusted) {
-      projectIgnored = true;
-      return;
-    }
-    let bytes: Buffer;
-    try {
-      bytes = readFileSync(file);
-    } catch (error) {
-      errors.push({
-        file,
-        message: `hooks could not be read: ${error instanceof Error ? error.message : String(error)}`,
-      });
-      return;
-    }
-    const digest = createHash('sha256').update(bytes).digest('hex');
-    const read = readHookFile(file, source, label, skill, bytes);
-    const previous = approved[canonicalPath(file)];
-    // Nothing in it would run, so there is nothing to approve.
-    if (previous?.digest === digest || !read.hooks.length) {
-      hooks.push(...read.hooks);
-      if (read.error) errors.push(read.error);
-      return;
-    }
-    projectChanged.push({
-      file,
-      digest,
-      hooks: previewHooks(read.hooks, previous),
-      definitions: read.hooks,
-      ...(read.error ? { error: read.error } : {}),
-    });
-  };
-  take(join(options.home, 'hooks.json'), 'user', 'user');
-  considerProject(
-    join(options.workspace, '.circle', 'hooks.json'),
-    'project',
-    'project',
-  );
-  let skills: ReturnType<typeof discoverSkills> = [];
-  try {
-    skills = discoverSkills(options.workspace, options.home, options.userHome);
-  } catch {
-    skills = [];
-  }
-  for (const skill of skills) {
-    // Personal manifests do not carry hooks; a locally added sidecar is not an installation approval.
-    if (skill.source_label === 'Personal pack') continue;
-    const projectSkill = skill.source_label.startsWith('Project');
-    const file = join(dirname(skill.path), 'hooks.json');
-    if (!fileExists(file)) continue;
-    if (projectSkill)
-      considerProject(file, 'skill', `skill:${skill.name}`, skill.name);
-    else take(file, 'skill', `skill:${skill.name}`, skill.name);
-  }
-  return { hooks, errors, projectIgnored, projectChanged };
-}
-
-function textField(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-/** Empty output is no opinion. Any other non-object is not hook JSON. */
-function hookStdout(stdout: string): {
-  parsed?: Record<string, unknown>;
-  invalid: boolean;
-  text: string;
-} {
-  const text = stdout.trim();
-  if (!text) return { invalid: false, text: '' };
-  try {
-    const value = JSON.parse(text) as unknown;
-    if (isRecord(value)) return { parsed: value, invalid: false, text };
-    return { invalid: true, text };
-  } catch {
-    return { invalid: true, text };
-  }
-}
-
-function interpretOutput(
-  event: HookEvent,
-  exitCode: number | null,
-  stdout: string,
-  stderr: string,
-  timedOut: boolean,
-  spawnError?: string,
-): Pick<
-  HookOutcome,
-  'decision' | 'reason' | 'userMessage' | 'updatedInput' | 'context' | 'failed'
-> {
-  const gating = GATING.has(event);
-  // A gating failure denies. Anywhere else it is only a notice: the tool
-  // result and the session keep going, and the error text is not fed back.
-  const fail = (reason: string) =>
-    gating
-      ? {
-          decision: 'deny' as const,
-          reason,
-          userMessage: '',
-          context: '',
-          failed: true,
-        }
-      : {
-          decision: 'none' as const,
-          reason,
-          userMessage: '',
-          context: '',
-          failed: true,
-        };
-  if (timedOut) return fail('hook timed out');
-  if (spawnError) return fail(spawnError);
-  const { parsed, invalid, text } = hookStdout(stdout);
-  const named = textField(parsed?.decision);
-  const decision = (['allow', 'deny', 'ask'] as const).find(
-    (item) => item === named,
-  );
-  const reason = textField(parsed?.reason) || stderr.trim().slice(0, 2000);
-  // What the person reads in place of the reason. The model never gets it.
-  const userMessage = textField(parsed?.user_message).slice(0, 2000);
-  // Plain text is the hook's own message. A JSON object is not, unless it
-  // named a reason: the raw object must not become the denial text.
-  const message = reason || (parsed ? '' : text.slice(0, MAX_OUTPUT));
-  const context =
-    textField(parsed?.context) ||
-    textField(parsed?.additional_context) ||
-    (parsed || invalid ? '' : text.slice(0, MAX_OUTPUT));
-  if (exitCode === 2) {
-    if (!gating) return fail(message || 'hook exited 2');
-    return {
-      decision: 'deny',
-      reason: message || 'hook denied',
-      userMessage,
-      context: '',
-      failed: false,
-    };
-  }
-  if (exitCode !== 0)
-    return fail(message || `hook exited ${exitCode ?? 'unknown'}`);
-  if (invalid) {
-    if (gating) return fail('hook output is not JSON');
-    return {
-      decision: 'none',
-      reason: '',
-      userMessage: '',
-      context: text.slice(0, MAX_OUTPUT),
-      failed: false,
-    };
-  }
-  // A rewrite is a before_tool answer: the whole input the call runs with instead. A deny voids it; anything but
-  // an object is no input, so the call does not run.
-  const rewrite = event === 'before_tool' ? parsed?.updated_input : undefined;
-  if (rewrite !== undefined && !isRecord(rewrite))
-    return fail('hook updated_input is not a JSON object');
-  const updatedInput =
-    rewrite && decision !== 'deny' ? { updatedInput: rewrite } : {};
-  if (gating && decision) {
-    if (event === 'before_stop' && decision === 'ask')
-      return {
-        decision: 'deny',
-        reason: reason || context || 'hook blocked stop',
-        userMessage,
-        context: '',
-        failed: false,
-      };
-    return {
-      decision,
-      reason: reason || (decision === 'deny' ? 'hook denied' : ''),
-      userMessage,
-      ...updatedInput,
-      context: '',
-      failed: false,
-    };
-  }
-  return {
-    decision: 'none',
-    reason: '',
-    userMessage,
-    ...updatedInput,
-    context,
-    failed: false,
-  };
-}
-
-function clip(text: string): string {
-  if (text.length <= MAX_OUTPUT) return text;
-  return `${text.slice(0, MAX_OUTPUT)}\n… hook output truncated`;
-}
-
-interface CommandResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-  timedOut: boolean;
-  error?: string;
-}
-
 /** JSON with every object's keys in order: two values that differ only in key order are the same input. */
 export function canonicalJson(value: unknown): string {
   const sorted = (item: unknown): unknown =>
@@ -1023,43 +289,536 @@ export function redactHookValue(
   return value;
 }
 
-function hookEnvironment(secrets: Record<string, string>): NodeJS.ProcessEnv {
-  const env = shellEnvironment();
-  if (!Object.keys(secrets).length) return env;
-  return Object.fromEntries(
-    Object.entries(env).map(([name, value]) => [
-      name,
-      value === undefined ? undefined : redactSecrets(value, secrets),
-    ]),
-  );
+/** The variables a hook finds its project, and a pack's or a skill's hook its folders, by. */
+export const PROJECT_DIR_VARIABLE = 'CIRCLE_PROJECT_DIR';
+export const SKILL_DIR_VARIABLE = 'CIRCLE_SKILL_DIR';
+export const SKILL_DATA_VARIABLE = 'CIRCLE_SKILL_DATA';
+const PLACEHOLDERS = [
+  PROJECT_DIR_VARIABLE,
+  SKILL_DIR_VARIABLE,
+  SKILL_DATA_VARIABLE,
+] as const;
+
+/** The permission mode a hook is told, in the words hooks elsewhere use. */
+export function hookPermissionMode(
+  mode: string | undefined,
+  readOnly = false,
+): string | undefined {
+  if (readOnly || mode === 'plan') return 'plan';
+  if (mode === 'manual') return 'default';
+  if (mode === 'accept-edits') return 'acceptEdits';
+  if (mode === 'auto') return 'bypassPermissions';
+  return undefined;
 }
 
-/** The variable a skill's hook finds that skill's folder by. */
-export const SKILL_DIR_VARIABLE = 'CIRCLE_SKILL_DIR';
+/** How many times in a row Stop hooks can send a turn back to work. */
+export function stopHookCap(env: NodeJS.ProcessEnv = process.env): number {
+  const value = Number(env.CIRCLE_STOP_HOOK_BLOCK_CAP);
+  return Number.isInteger(value) && value > 0 ? value : 8;
+}
+
+function defaultTimeoutMs(event: HookEvent): number {
+  if (event === 'UserPromptSubmit') return 30_000;
+  if (event === 'SessionEnd') {
+    const value = Number(process.env.CIRCLE_SESSIONEND_HOOKS_TIMEOUT_MS);
+    return Number.isFinite(value) && value > 0 ? value : 1_500;
+  }
+  return 600_000;
+}
+
+const MAX_OUTPUT = 100_000;
+/** A hook's text for the model or the person, each string on its own. */
+const MAX_TEXT = 10_000;
+
+function clip(text: string, limit = MAX_OUTPUT): string {
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit)}\n… hook output truncated`;
+}
+
+function firstLine(text: string): string {
+  return (
+    text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean) ?? ''
+  ).slice(0, 500);
+}
+
+/** A file a hook gets beside its JSON, named in the JSON's `files`. */
+export interface HookFile {
+  kind: 'screenshot';
+  path: string;
+  mime_type: 'image/png';
+  sha256: string;
+  size: number;
+}
+
+export interface HookRunRequest {
+  event: HookEvent;
+  /** The conversation's session. In a subagent, `agent` names the agent the call came from. */
+  sessionId: string;
+  agent?: { id: string; type: string };
+  cwd: string;
+  /** `default`, `acceptEdits`, `plan` or `bypassPermissions`. */
+  permissionMode?: string;
+  /** What the matcher of an event that is not about a tool is tested against: a source, a reason, a type. */
+  matchValue?: string;
+  toolName?: string;
+  toolInput?: Record<string, unknown>;
+  toolUseId?: string;
+  /** Paths the tool named, before canonicalization. */
+  paths?: string[];
+  /** The event's own fields, under the names hooks get them. */
+  fields?: Record<string, unknown>;
+  /** Saved secrets. Their values are written as %NAME% before the hook sees them. */
+  secrets?: Record<string, string>;
+  /** Run only these hook ids. Used when a skill is loaded after the session started. */
+  onlyIds?: string[];
+  /** A PNG of the page the conversation's browser shows, taken once, when a hook that runs asks for one. */
+  screenshot?: (signal: AbortSignal) => Promise<Buffer | undefined>;
+  signal?: AbortSignal;
+}
+
+/** What a hook's JSON said, in one shape for every event. */
+export interface HookAnswer {
+  continue?: boolean;
+  stopReason?: string;
+  systemMessage?: string;
+  /** Top-level `decision: "block"`. */
+  block?: boolean;
+  reason?: string;
+  permissionDecision?: 'allow' | 'deny' | 'ask' | 'defer';
+  permissionDecisionReason?: string;
+  updatedInput?: Record<string, unknown>;
+  additionalContext?: string;
+  /** PermissionRequest's `decision`. */
+  permission?: {
+    behavior: 'allow' | 'deny';
+    updatedInput?: Record<string, unknown>;
+    message?: string;
+    interrupt?: boolean;
+  };
+  updatedToolOutput?: unknown;
+  sessionTitle?: string;
+  suppressOriginalPrompt?: boolean;
+}
+
+export interface HookOutcome {
+  hook: HookDefinition;
+  exitCode: number | null;
+  timedOut: boolean;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  /** Did not start, timed out, exited other than 0 or 2 without a JSON answer, or answered with unreadable output. */
+  failed: boolean;
+  /** Why it failed, in a line. */
+  cause: string;
+  /** Exit 2, or a failure of a hook that blocks on failure. */
+  blocking: boolean;
+  /** What a blocking exit says: its standard error. */
+  blockText: string;
+  answer?: HookAnswer;
+  /** Exit 0 with text that is not a JSON object. */
+  plain: string;
+  /** It answered with fields of the format before this one. */
+  legacy: boolean;
+  /** Stopped with the turn (esc), before it answered. */
+  stopped: boolean;
+}
+
+export interface HookBatch {
+  outcomes: HookOutcome[];
+  notices: HookNotice[];
+  /** PreToolUse and PermissionRequest: what the hooks decided about the call. */
+  decision: 'allow' | 'deny' | 'ask' | 'none';
+  /** The reasons of the hooks that decided or blocked, one per line. */
+  reason: string;
+  /** What the hooks said to the person (`systemMessage`), one per line. */
+  userMessage: string;
+  /** UserPromptSubmit, Stop, SubagentStop, PreCompact and the tool results: a hook blocked. */
+  blocked: boolean;
+  /** The input the call runs with instead. */
+  updatedInput?: Record<string, unknown>;
+  /** The hooks whose rewrite that is. */
+  changedBy: string[];
+  /** Hooks that each rewrote the call differently: it does not run in any of their forms. */
+  conflict: string[];
+  /** For the model: every `additionalContext`, and the plain output of the events whose plain output it reads. */
+  context: string;
+  /** A hook said `continue: false`: the turn ends. */
+  stop?: { reason: string };
+  updatedToolOutput?: string;
+  sessionTitle?: string;
+  suppressOriginalPrompt: boolean;
+  /** PermissionRequest: a deny that also ends the turn. */
+  interrupt: boolean;
+}
+
+/** Events whose plain standard output reaches the model. */
+const PLAIN_FOR_MODEL = new Set<HookEvent>([
+  'UserPromptSubmit',
+  'SessionStart',
+  'PreCompact',
+]);
+/** Whether a hook's plain output reaches the model: the format before this one fed it back after a tool too. */
+function plainForModel(event: HookEvent, hook: HookDefinition): boolean {
+  return (
+    PLAIN_FOR_MODEL.has(event) ||
+    (hook.legacy === true &&
+      (event === 'PostToolUse' || event === 'SubagentStart'))
+  );
+}
+/** Events whose `systemMessage` and `continue` are not used. */
+const QUIET = new Set<HookEvent>([
+  'Notification',
+  'PreCompact',
+  'PostCompact',
+  'SessionEnd',
+]);
+/** Events a blocking exit stops. */
+const CAN_BLOCK = new Set<HookEvent>([
+  'PreToolUse',
+  'UserPromptSubmit',
+  'Stop',
+  'SubagentStop',
+  'PreCompact',
+]);
+/** Events that read a top-level `decision: "block"`. */
+const BLOCK_FIELD = new Set<HookEvent>([
+  'UserPromptSubmit',
+  'PostToolUse',
+  'PostToolUseFailure',
+  'Stop',
+  'SubagentStop',
+  'PreCompact',
+]);
+
+type Reading =
+  | { answer?: HookAnswer; plain: string; legacy: boolean; invalid?: never }
+  | { invalid: string };
+
+function readText(
+  value: Record<string, unknown>,
+  key: string,
+): string | undefined | null {
+  const item = value[key];
+  if (item === undefined || item === null) return undefined;
+  return typeof item === 'string' ? item : null;
+}
+
+/** A hook's JSON, checked: a field of the wrong type makes the whole answer unreadable. */
+export function readHookAnswer(
+  event: HookEvent,
+  value: Record<string, unknown>,
+): { answer: HookAnswer; legacy: boolean } | { invalid: string } {
+  const answer: HookAnswer = {};
+  let legacy = false;
+  const text = (
+    from: Record<string, unknown>,
+    key: string,
+    where = key,
+  ): string | undefined => {
+    const read = readText(from, key);
+    if (read === null) throw new Error(`${where} must be text`);
+    return read;
+  };
+  try {
+    if (value.continue != null) {
+      if (typeof value.continue !== 'boolean')
+        throw new Error('continue must be true or false');
+      answer.continue = value.continue;
+    }
+    answer.stopReason = text(value, 'stopReason');
+    answer.systemMessage = text(value, 'systemMessage');
+    if (
+      value.suppressOutput != null &&
+      typeof value.suppressOutput !== 'boolean'
+    )
+      throw new Error('suppressOutput must be true or false');
+    text(value, 'terminalSequence');
+    answer.reason = text(value, 'reason');
+    const specific = value.hookSpecificOutput;
+    if (specific != null) {
+      if (!isRecord(specific))
+        throw new Error('hookSpecificOutput must be an object');
+      if (specific.hookEventName !== event)
+        throw new Error(`hookSpecificOutput.hookEventName must be "${event}"`);
+      answer.additionalContext = text(
+        specific,
+        'additionalContext',
+        'hookSpecificOutput.additionalContext',
+      );
+      if (event === 'PreToolUse') {
+        const decision = specific.permissionDecision;
+        if (decision != null) {
+          if (
+            decision !== 'allow' &&
+            decision !== 'deny' &&
+            decision !== 'ask' &&
+            decision !== 'defer'
+          )
+            throw new Error(
+              'permissionDecision must be "allow", "deny", "ask" or "defer"',
+            );
+          answer.permissionDecision = decision;
+        }
+        answer.permissionDecisionReason = text(
+          specific,
+          'permissionDecisionReason',
+          'hookSpecificOutput.permissionDecisionReason',
+        );
+        if (specific.updatedInput != null) {
+          if (!isRecord(specific.updatedInput))
+            throw new Error('updatedInput must be an object');
+          answer.updatedInput = specific.updatedInput;
+        }
+      }
+      if (event === 'PermissionRequest' && specific.decision != null) {
+        const decision = specific.decision;
+        if (
+          !isRecord(decision) ||
+          (decision.behavior !== 'allow' && decision.behavior !== 'deny')
+        )
+          throw new Error(
+            'decision must be an object whose behavior is "allow" or "deny"',
+          );
+        if (
+          decision.updatedInput !== undefined &&
+          !isRecord(decision.updatedInput)
+        )
+          throw new Error('decision.updatedInput must be an object');
+        if (
+          decision.interrupt !== undefined &&
+          typeof decision.interrupt !== 'boolean'
+        )
+          throw new Error('decision.interrupt must be true or false');
+        const message = text(decision, 'message', 'decision.message');
+        answer.permission = {
+          behavior: decision.behavior,
+          ...(isRecord(decision.updatedInput)
+            ? { updatedInput: decision.updatedInput }
+            : {}),
+          ...(message ? { message } : {}),
+          ...(decision.interrupt === true ? { interrupt: true } : {}),
+        };
+      }
+      if (event === 'PostToolUse') {
+        if (specific.updatedToolOutput !== undefined)
+          answer.updatedToolOutput = specific.updatedToolOutput;
+        else if (specific.updatedMCPToolOutput !== undefined)
+          answer.updatedToolOutput = specific.updatedMCPToolOutput;
+      }
+      if (event === 'UserPromptSubmit' || event === 'SessionStart')
+        answer.sessionTitle = text(
+          specific,
+          'sessionTitle',
+          'hookSpecificOutput.sessionTitle',
+        );
+      if (event === 'UserPromptSubmit') {
+        if (
+          specific.suppressOriginalPrompt !== undefined &&
+          typeof specific.suppressOriginalPrompt !== 'boolean'
+        )
+          throw new Error('suppressOriginalPrompt must be true or false');
+        answer.suppressOriginalPrompt =
+          specific.suppressOriginalPrompt === true;
+      }
+    }
+    const decision = value.decision;
+    if (decision != null) {
+      if (typeof decision !== 'string')
+        throw new Error('decision must be text');
+      if (event === 'PreToolUse' || event === 'PermissionRequest') {
+        // The top-level form these events used before `hookSpecificOutput`
+        const mapped =
+          decision === 'allow' || decision === 'approve'
+            ? 'allow'
+            : decision === 'deny' || decision === 'block'
+              ? 'deny'
+              : decision === 'ask'
+                ? 'ask'
+                : undefined;
+        if (!mapped)
+          throw new Error('decision must be "allow", "deny" or "ask"');
+        legacy = true;
+        if (event === 'PreToolUse') {
+          answer.permissionDecision ??= mapped;
+          answer.permissionDecisionReason ??= answer.reason;
+        } else if (!answer.permission && mapped !== 'ask')
+          answer.permission = {
+            behavior: mapped,
+            ...(answer.reason ? { message: answer.reason } : {}),
+          };
+      } else if (decision === 'block') answer.block = true;
+      else if (decision === 'deny' || decision === 'ask') {
+        legacy = true;
+        if (event === 'Stop' || event === 'SubagentStop') answer.block = true;
+      } else if (decision === 'allow') legacy = true;
+      else throw new Error('decision must be "block"');
+    }
+    // Fields of the format before this one, read so a hook not yet rewritten does not lose its effect
+    if (value.updated_input !== undefined) {
+      legacy = true;
+      if (!isRecord(value.updated_input))
+        throw new Error('updated_input must be an object');
+      if (event === 'PreToolUse') answer.updatedInput ??= value.updated_input;
+    }
+    for (const key of ['context', 'additional_context']) {
+      const old = text(value, key);
+      if (old === undefined) continue;
+      legacy = true;
+      answer.additionalContext ??= old;
+    }
+    const message = text(value, 'user_message');
+    if (message !== undefined) {
+      legacy = true;
+      answer.systemMessage ??= message;
+    }
+  } catch (error) {
+    return { invalid: error instanceof Error ? error.message : String(error) };
+  }
+  for (const key of Object.keys(answer) as (keyof HookAnswer)[])
+    if (answer[key] === undefined) delete answer[key];
+  return { answer, legacy };
+}
+
+function readOutput(event: HookEvent, stdout: string): Reading {
+  const text = stdout.trim();
+  if (!text) return { plain: '', legacy: false };
+  if (!text.startsWith('{')) return { plain: text, legacy: false };
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch (error) {
+    return {
+      invalid: `output is not JSON: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+  if (!isRecord(value)) return { invalid: 'output is not a JSON object' };
+  const read = readHookAnswer(event, value);
+  if ('invalid' in read) return { invalid: read.invalid };
+  return { answer: read.answer, plain: '', legacy: read.legacy };
+}
+
+interface CommandResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  error?: string;
+  /** The hook's process ended and something it started kept its output open: what was read may be cut. */
+  suspect?: boolean;
+}
+
+/** How long a hook's output is read after its own process ends. */
+const CLOSE_GRACE_MS = 10_000;
+/** The longest a timer can wait. */
+const MAX_TIMER_MS = 2_147_483_647;
+
+/** The program a hook starts and its arguments. */
+export interface HookLaunch {
+  file: string;
+  args: string[];
+  /** PowerShell runs a hook written for a shell because Git Bash was not found. */
+  fallback?: boolean;
+  /** cmd.exe takes its command line as written. */
+  verbatim?: boolean;
+}
+
+/** Git Bash on Windows: never the bash.exe in System32, which is WSL's. */
+function gitBash(env: NodeJS.ProcessEnv): string | undefined {
+  const named = env.CIRCLE_GIT_BASH_PATH;
+  if (named && existsSync(named)) return named;
+  const folders = (env.PATH ?? env.Path ?? '').split(';').filter(Boolean);
+  for (const folder of folders) {
+    if (!existsSync(win32.join(folder, 'git.exe'))) continue;
+    for (const candidate of [
+      win32.join(folder, '..', 'bin', 'bash.exe'),
+      win32.join(folder, '..', '..', 'bin', 'bash.exe'),
+      win32.join(folder, 'bash.exe'),
+    ])
+      if (existsSync(candidate) && !/\\system32\\/i.test(candidate))
+        return candidate;
+  }
+  for (const base of [env.ProgramFiles, env['ProgramFiles(x86)']]) {
+    if (!base) continue;
+    const candidate = win32.join(base, 'Git', 'bin', 'bash.exe');
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+function powershell(env: NodeJS.ProcessEnv): string {
+  const folders = (env.PATH ?? env.Path ?? '').split(';').filter(Boolean);
+  return folders.some((folder) => existsSync(win32.join(folder, 'pwsh.exe')))
+    ? 'pwsh.exe'
+    : 'powershell.exe';
+}
 
 /**
- * The command as the system shell gets it. `cmd.exe` reads `%NAME%`, not `${NAME}`, so on Windows the
- * `${CIRCLE_SKILL_DIR}` a hooks file writes for every system becomes `%CIRCLE_SKILL_DIR%`. Either way the shell
- * takes the value from the environment: the folder's name never becomes part of the command's text.
+ * How a hook starts. With `args`, its command is the program, run without a shell, and the placeholders are put in
+ * as plain text. Without, its command goes to a shell: `sh -c` on macOS and Linux, Git Bash on Windows, or PowerShell
+ * when Git Bash is not there or the hook asks for it. PowerShell reads a placeholder from the environment as
+ * `${env:NAME}`; the other shells read `${NAME}` from the environment as it is.
  */
-export function hookShellCommand(
-  command: string,
+export function hookLaunch(
+  hook: Pick<HookDefinition, 'command' | 'args' | 'shell' | 'legacy'>,
+  env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
-): string {
-  return platform === 'win32'
-    ? command.replaceAll(`\${${SKILL_DIR_VARIABLE}}`, `%${SKILL_DIR_VARIABLE}%`)
-    : command;
+): HookLaunch {
+  if (hook.args) {
+    const put = (text: string) =>
+      PLACEHOLDERS.reduce(
+        (result, name) => result.replaceAll(`\${${name}}`, env[name] ?? ''),
+        text,
+      );
+    return { file: put(hook.command), args: hook.args.map(put) };
+  }
+  if (platform !== 'win32')
+    return { file: '/bin/sh', args: ['-c', hook.command] };
+  // A hook moved from the format before this one keeps the shell it was written for: cmd.exe
+  if (hook.legacy && !hook.shell) {
+    const line = PLACEHOLDERS.reduce(
+      (result, name) => result.replaceAll(`\${${name}}`, `%${name}%`),
+      hook.command,
+    );
+    return {
+      file: env.ComSpec ?? env.COMSPEC ?? 'cmd.exe',
+      args: ['/d', '/s', '/c', `"${line}"`],
+      verbatim: true,
+    };
+  }
+  const bash = hook.shell === 'powershell' ? undefined : gitBash(env);
+  if (bash) return { file: bash, args: ['-c', hook.command] };
+  // A program's exit code is the hook's: PowerShell would otherwise give 1 for any failure
+  const script =
+    PLACEHOLDERS.reduce(
+      (result, name) => result.replaceAll(`\${${name}}`, `\${env:${name}}`),
+      hook.command,
+    ) + '\nif ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }';
+  return {
+    file: powershell(env),
+    args: [
+      '-NoProfile',
+      '-NonInteractive',
+      '-EncodedCommand',
+      Buffer.from(script, 'utf16le').toString('base64'),
+    ],
+    ...(hook.shell === 'powershell' ? {} : { fallback: true }),
+  };
 }
 
 function runHookCommand(
-  command: string,
+  launch: HookLaunch,
   cwd: string,
   stdin: string,
   timeoutMs: number,
   signal: AbortSignal | undefined,
-  secrets: Record<string, string> = {},
-  /** Set for this hook only. An undefined value removes the variable. */
-  extraEnv: Record<string, string | undefined> = {},
+  env: NodeJS.ProcessEnv,
+  /** A background hook: its process is kept so the session can end it. */
+  track?: (child: ChildProcess, done: boolean) => void,
+  closeGraceMs = CLOSE_GRACE_MS,
 ): Promise<CommandResult> {
   return new Promise((resolve) => {
     let stdout = '';
@@ -1071,14 +830,15 @@ function runHookCommand(
       settled = true;
       resolve(result);
     };
-    let child;
+    let child: ChildProcess;
     try {
-      child = spawn(hookShellCommand(command), {
+      child = spawn(launch.file, launch.args, {
         cwd,
-        env: { ...hookEnvironment(secrets), ...extraEnv },
-        shell: true,
+        env,
+        shell: false,
         detached: process.platform !== 'win32',
         windowsHide: true,
+        ...(launch.verbatim ? { windowsVerbatimArguments: true } : {}),
         stdio: ['pipe', 'pipe', 'pipe'],
       });
     } catch (error) {
@@ -1091,15 +851,20 @@ function runHookCommand(
       });
       return;
     }
+    track?.(child, false);
+    const decoders = {
+      out: new StringDecoder('utf8'),
+      err: new StringDecoder('utf8'),
+    };
     const take = (into: 'out' | 'err') => (chunk: Buffer) => {
-      const next = chunk.toString('utf8');
+      const next = decoders[into].write(chunk);
       if (into === 'out') stdout = clip(stdout + next);
       else stderr = clip(stderr + next);
     };
     child.stdout?.on('data', take('out'));
     child.stderr?.on('data', take('err'));
-    // A command that exits without reading its input closes the pipe. The
-    // write then fails asynchronously with EPIPE, which must not crash Circle.
+    // A command that exits without reading its input closes the pipe. The write then fails asynchronously with
+    // EPIPE, which must not crash Circle.
     child.stdin?.on('error', () => {});
     try {
       child.stdin?.end(stdin);
@@ -1117,15 +882,44 @@ function runHookCommand(
     const stop = (timeout: boolean) => {
       timedOut = timedOut || timeout;
       kill(false);
-      escalation = setTimeout(() => kill(true), 500);
+      escalation ??= setTimeout(() => kill(true), 500);
     };
-    const timer = setTimeout(() => stop(true), timeoutMs);
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(() => stop(true), Math.min(timeoutMs, MAX_TIMER_MS))
+        : undefined;
+    let quiet: NodeJS.Timeout | undefined;
     const onAbort = () => stop(false);
-    signal?.addEventListener('abort', onAbort, { once: true });
-    child.once('error', (error) => {
-      clearTimeout(timer);
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
+    const done = () => {
+      if (timer) clearTimeout(timer);
       if (escalation) clearTimeout(escalation);
+      if (quiet) clearTimeout(quiet);
       signal?.removeEventListener('abort', onAbort);
+      track?.(child, true);
+    };
+    // Something the hook started in the background can hold its output open after it has ended: read a little
+    // longer, then stop waiting, and say the output may be cut
+    child.once('exit', (code) => {
+      quiet = setTimeout(() => {
+        done();
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        finish({
+          stdout: clip(stdout + decoders.out.end()),
+          stderr: clip(stderr + decoders.err.end()),
+          exitCode: code,
+          timedOut,
+          suspect: true,
+          error:
+            'stdio went quiet after the hook exited, refusing to honor the suspect capture',
+        });
+      }, closeGraceMs);
+      quiet.unref?.();
+    });
+    child.once('error', (error) => {
+      done();
       finish({
         stdout,
         stderr,
@@ -1135,94 +929,474 @@ function runHookCommand(
       });
     });
     child.once('close', (code) => {
-      clearTimeout(timer);
-      if (escalation) clearTimeout(escalation);
-      signal?.removeEventListener('abort', onAbort);
+      done();
+      stdout = clip(stdout + decoders.out.end());
+      stderr = clip(stderr + decoders.err.end());
       void Promise.resolve(windowsKill).finally(() =>
         finish({
           stdout,
           stderr,
           exitCode: code,
           timedOut,
-          ...(signal?.aborted ? { error: 'hook stopped' } : {}),
+          ...(signal?.aborted && !timedOut ? { error: 'hook stopped' } : {}),
         }),
       );
     });
   });
 }
 
-function noticeFor(
-  outcome: HookOutcome,
-  tool?: string,
-): HookNotice | undefined {
-  const base = {
-    tool,
-    name: outcome.hook.name,
-    reason: outcome.reason,
-    ...(outcome.userMessage ? { message: outcome.userMessage } : {}),
+/** Events that judged a call, or the end of a turn, in the format before this one: a failure there stopped it. */
+const LEGACY_GATING = new Set<HookEvent>([
+  'PreToolUse',
+  'PermissionRequest',
+  'Stop',
+]);
+
+/** What one run of a hook comes to. Exported for tests of the rules no other system here can show. */
+export function interpretHookRun(
+  hook: HookDefinition,
+  event: HookEvent,
+  result: CommandResult,
+  aborted: boolean,
+  /** PowerShell stood in for a missing Git Bash. */
+  fallback = false,
+): Omit<
+  HookOutcome,
+  'hook' | 'exitCode' | 'timedOut' | 'stdout' | 'stderr' | 'durationMs'
+> {
+  const none = {
+    failed: false,
+    cause: '',
+    blocking: false,
+    blockText: '',
+    plain: '',
+    legacy: false,
+    stopped: false,
   };
-  if (outcome.decision === 'deny' && outcome.hook.event !== 'before_stop')
-    return { kind: 'denied', ...base };
-  if (outcome.decision === 'ask') return { kind: 'asked', ...base };
-  if (outcome.decision === 'allow') return { kind: 'allowed', ...base };
-  if (outcome.failed)
+  if (aborted && !result.timedOut) return { ...none, stopped: true };
+  const gate = event === 'PreToolUse' || event === 'PermissionRequest';
+  // Without Git Bash, a guard written for a shell runs in PowerShell: only 0 and 2 are its verdicts, and anything
+  // else blocks unless the hook says the call goes on
+  const strict = fallback && gate && hook.onFailure !== 'continue';
+  const legacy = hook.legacy === true && LEGACY_GATING.has(event);
+  // A failure lets the action go ahead, unless the hook says it blocks on failure. Stop hooks and background hooks
+  // cannot: Circle would only send the model back to work on a hook it cannot repair.
+  const failure = (cause: string, suspect = false) => {
+    const why =
+      hook.onFailure === 'block'
+        ? 'onFailure is "block"'
+        : strict
+          ? "Git Bash wasn't found, so only exit code 0 or 2 counts as this hook's verdict"
+          : legacy
+            ? 'it was a gating hook in the format before this one'
+            : 'its output cannot be trusted';
+    const blocks =
+      !hook.async &&
+      ((hook.onFailure === 'block' &&
+        event !== 'Stop' &&
+        event !== 'SubagentStop') ||
+        strict ||
+        legacy ||
+        (suspect && gate));
     return {
-      kind: 'failed',
-      tool,
-      name: outcome.hook.name,
-      reason: outcome.reason,
+      ...none,
+      failed: true,
+      cause,
+      blocking: blocks,
+      blockText: blocks
+        ? `hook ${hook.name} ${result.timedOut ? 'timed out' : 'failed'}; blocking because ${why}: ${cause}`
+        : '',
     };
-  if (outcome.context && outcome.hook.event !== 'before_tool')
+  };
+  if (result.suspect) return failure(result.error ?? 'output was cut', true);
+  if (result.timedOut)
+    return failure(
+      `timed out after ${Math.round((hook.timeout ?? defaultTimeoutMs(event) / 1000) * 10) / 10}s`,
+    );
+  if (result.error) return failure(result.error);
+  const reading = readOutput(event, result.stdout);
+  if (result.exitCode === 2)
     return {
-      kind: 'output',
-      ...base,
-      reason: outcome.context.split('\n')[0]?.slice(0, 200),
+      ...none,
+      blocking: true,
+      blockText: result.stderr.trim() || 'hook exited 2',
+      ...(reading.invalid === undefined && reading.answer
+        ? { answer: reading.answer, legacy: reading.legacy }
+        : {}),
     };
-  return undefined;
+  if (result.exitCode === 0) {
+    if (reading.invalid !== undefined) return failure(reading.invalid);
+    // A gating hook of the format before this one that printed text and no JSON refused
+    if (legacy && reading.plain)
+      return {
+        ...none,
+        blocking: true,
+        blockText: 'hook output is not JSON',
+      };
+    return {
+      ...none,
+      ...(reading.answer ? { answer: reading.answer } : {}),
+      plain: reading.plain,
+      legacy: reading.legacy,
+    };
+  }
+  // Another exit with a JSON answer: the answer decides, unless the hook blocks on failure
+  if (
+    reading.invalid === undefined &&
+    reading.answer &&
+    hook.onFailure !== 'block' &&
+    !strict &&
+    !legacy
+  )
+    return { ...none, answer: reading.answer, legacy: reading.legacy };
+  const why = firstLine(result.stderr);
+  return failure(
+    `exited ${result.exitCode ?? 'unknown'}${why ? `: ${why}` : ''}`,
+  );
 }
 
-function strictest(outcomes: HookOutcome[]): {
-  decision: HookDecision | 'none';
-  reason: string;
-  userMessage: string;
-} {
-  const joined = (decided: HookOutcome[], field: 'reason' | 'userMessage') =>
-    decided
-      .map((item) => item[field])
+function capText(text: string | undefined): string {
+  if (!text) return '';
+  return text.length > MAX_TEXT
+    ? `${text.slice(0, MAX_TEXT)}\n… hook output truncated`
+    : text;
+}
+
+/** What the hooks of one event come to together. */
+export function combineOutcomes(
+  event: HookEvent,
+  outcomes: HookOutcome[],
+  input: Record<string, unknown> | undefined,
+  secrets: Record<string, string>,
+  toolName?: string,
+): HookBatch {
+  const ran = outcomes.filter((item) => !item.stopped);
+  const notices: HookNotice[] = [];
+  const reasons: string[] = [];
+  const messages: string[] = [];
+  const contexts: string[] = [];
+  let blocked = false;
+  let stop: HookBatch['stop'];
+  let interrupt = false;
+  let suppressOriginalPrompt = false;
+  let sessionTitle: string | undefined;
+  let updatedToolOutput: string | undefined;
+  type Decided = {
+    decision: 'allow' | 'deny' | 'ask';
+    reason: string;
+    message: string;
+    outcome: HookOutcome;
+  };
+  const decided: Decided[] = [];
+  for (const outcome of ran) {
+    const { hook, answer } = outcome;
+    if (outcome.failed && !outcome.blocking)
+      notices.push({
+        kind: 'failed',
+        ...(toolName ? { tool: toolName } : {}),
+        name: hook.name,
+        reason: outcome.cause,
+      });
+    const message = QUIET.has(event) ? '' : capText(answer?.systemMessage);
+    if (event === 'PreToolUse') {
+      if (outcome.blocking)
+        decided.push({
+          decision: 'deny',
+          reason:
+            answer?.permissionDecision === 'deny'
+              ? answer.permissionDecisionReason || outcome.blockText
+              : outcome.blockText,
+          message,
+          outcome,
+        });
+      else if (answer?.permissionDecision === 'defer')
+        notices.push({
+          kind: 'message',
+          name: hook.name,
+          reason:
+            'asked to defer this call; Circle cannot defer a call, so it goes on as usual',
+        });
+      else if (answer?.permissionDecision)
+        decided.push({
+          decision: answer.permissionDecision,
+          reason:
+            answer.permissionDecisionReason ||
+            (answer.permissionDecision === 'deny' ? 'hook denied' : ''),
+          message,
+          outcome,
+        });
+    } else if (event === 'PermissionRequest') {
+      // A blocking exit does not answer a permission request; a failure of a hook that blocks on failure denies it
+      if (outcome.blocking && (outcome.failed || outcome.hook.legacy))
+        decided.push({
+          decision: 'deny',
+          reason: outcome.blockText,
+          message,
+          outcome,
+        });
+      else if (answer?.permission) {
+        decided.push({
+          decision: answer.permission.behavior,
+          reason:
+            answer.permission.message ||
+            (answer.permission.behavior === 'deny' ? 'hook denied' : ''),
+          message,
+          outcome,
+        });
+        if (
+          answer.permission.behavior === 'deny' &&
+          answer.permission.interrupt
+        )
+          interrupt = true;
+      }
+    } else {
+      const blocks =
+        (outcome.blocking && CAN_BLOCK.has(event)) ||
+        (answer?.block === true && BLOCK_FIELD.has(event));
+      if (blocks) {
+        blocked = true;
+        reasons.push(
+          capText(
+            answer?.block && answer.reason
+              ? answer.reason
+              : outcome.blockText || answer?.reason || 'hook blocked',
+          ),
+        );
+        if (answer?.suppressOriginalPrompt) suppressOriginalPrompt = true;
+      } else if (
+        outcome.blocking &&
+        (event === 'PostToolUse' || event === 'PostToolUseFailure')
+      ) {
+        // The tool already ran: what the hook wrote to standard error is shown to the model beside the result
+        blocked = true;
+        reasons.push(capText(outcome.blockText));
+      } else if (outcome.blocking)
+        // An event nothing can stop: the person sees what the hook said
+        notices.push({
+          kind: 'message',
+          name: hook.name,
+          reason: firstLine(outcome.blockText),
+        });
+    }
+    if (answer?.additionalContext && answer.permissionDecision !== 'defer')
+      contexts.push(capText(answer.additionalContext));
+    if (outcome.plain && plainForModel(event, hook))
+      contexts.push(capText(outcome.plain));
+    if (message) {
+      messages.push(message);
+      notices.push({ kind: 'message', name: hook.name, reason: message });
+    }
+    if (!QUIET.has(event) && answer?.continue === false && !stop)
+      stop = { reason: capText(answer.stopReason) };
+    if (answer?.sessionTitle?.trim()) sessionTitle = answer.sessionTitle.trim();
+    if (event === 'PostToolUse' && answer?.updatedToolOutput !== undefined) {
+      if (typeof answer.updatedToolOutput !== 'string')
+        notices.push({
+          kind: 'failed',
+          name: hook.name,
+          reason: 'updatedToolOutput must be text here; the result is kept',
+        });
+      else updatedToolOutput ??= answer.updatedToolOutput;
+    }
+  }
+  let decision: HookBatch['decision'] = 'none';
+  let reason = reasons.filter(Boolean).join('\n');
+  let userMessage = messages.join('\n');
+  for (const candidate of ['deny', 'ask', 'allow'] as const) {
+    const these = decided.filter((item) => item.decision === candidate);
+    if (!these.length) continue;
+    decision = candidate;
+    reason = these
+      .map((item) => item.reason)
       .filter(Boolean)
       .join('\n');
-  for (const decision of ['deny', 'ask', 'allow'] as const) {
-    const decided = outcomes.filter((item) => item.decision === decision);
-    if (decided.length)
-      return {
-        decision,
-        reason: joined(decided, 'reason'),
-        userMessage: joined(decided, 'userMessage'),
-      };
+    const said = these.map((item) => item.message).filter(Boolean);
+    if (said.length) userMessage = said.join('\n');
+    break;
   }
-  return { decision: 'none', reason: '', userMessage: '' };
+  for (const item of decided) {
+    const base = {
+      ...(toolName ? { tool: toolName } : {}),
+      name: item.outcome.hook.name,
+      reason: item.reason,
+      ...(item.message ? { message: item.message } : {}),
+    };
+    if (item.decision === 'deny') notices.push({ kind: 'denied', ...base });
+    else if (item.decision === 'ask') notices.push({ kind: 'asked', ...base });
+    else notices.push({ kind: 'allowed', ...base });
+  }
+  // A rewrite stands only beside a decision that lets the call run. Hooks that rewrite it differently leave no form
+  // the call can run in.
+  const changedBy: string[] = [];
+  const conflict: string[] = [];
+  let updatedInput: Record<string, unknown> | undefined;
+  if (
+    (event === 'PreToolUse' && decision !== 'deny') ||
+    (event === 'PermissionRequest' && decision === 'allow')
+  ) {
+    const given = canonicalJson(redactHookValue(input, secrets));
+    const rewrites = new Map<
+      string,
+      { value: Record<string, unknown>; names: string[] }
+    >();
+    for (const outcome of ran) {
+      const value =
+        event === 'PreToolUse'
+          ? outcome.answer?.permissionDecision === 'deny' ||
+            outcome.answer?.permissionDecision === 'defer'
+            ? undefined
+            : outcome.answer?.updatedInput
+          : outcome.answer?.permission?.behavior === 'allow'
+            ? outcome.answer.permission.updatedInput
+            : undefined;
+      if (!value) continue;
+      const key = canonicalJson(value);
+      // Handing back the input it was given, in any key order, is no rewrite
+      if (key === given) continue;
+      const entry = rewrites.get(key) ?? { value, names: [] };
+      entry.names.push(outcome.hook.name);
+      rewrites.set(key, entry);
+    }
+    if (rewrites.size > 1)
+      conflict.push(...[...rewrites.values()].flatMap((item) => item.names));
+    else if (rewrites.size === 1) {
+      const [only] = rewrites.values();
+      updatedInput = only!.value;
+      changedBy.push(...only!.names);
+    }
+  }
+  // The screen names each hook whose words went to the model, with their first line
+  for (const outcome of ran) {
+    const context =
+      (outcome.answer?.permissionDecision !== 'defer' &&
+        outcome.answer?.additionalContext) ||
+      (plainForModel(event, outcome.hook) ? outcome.plain : '');
+    if (context)
+      notices.push({
+        kind: 'output',
+        name: outcome.hook.name,
+        reason: context.split('\n')[0]?.slice(0, 200),
+      });
+  }
+  if (stop) notices.push({ kind: 'stopped', reason: stop.reason });
+  return {
+    outcomes,
+    notices,
+    decision,
+    reason,
+    userMessage,
+    blocked,
+    ...(updatedInput ? { updatedInput } : {}),
+    changedBy,
+    conflict,
+    context: contexts.filter(Boolean).join('\n\n'),
+    ...(stop ? { stop } : {}),
+    ...(updatedToolOutput !== undefined ? { updatedToolOutput } : {}),
+    ...(sessionTitle ? { sessionTitle } : {}),
+    suppressOriginalPrompt,
+    interrupt,
+  };
 }
 
+/** Whether a hook's `if` lets it run for this call. */
+function conditionMatches(
+  hook: HookDefinition,
+  request: HookRunRequest,
+  pathOptions: HookPathOptions,
+): boolean {
+  const condition = hook.condition;
+  if (!condition) return true;
+  // Only tool events read `if`: elsewhere a hook that has one never runs
+  if (!TOOL_EVENTS.has(request.event)) return false;
+  if (condition.tool !== request.toolName) return false;
+  const pattern = condition.pattern;
+  if (!pattern) return true;
+  const platform = pathOptions.platform ?? process.platform;
+  if (request.toolName === 'execute') {
+    const command =
+      typeof request.toolInput?.command === 'string'
+        ? request.toolInput.command
+        : '';
+    // What runs inside a substitution cannot be told: the hook runs
+    if (/\$\(|`/.test(command)) return true;
+    const read = commandSegments(command, platform);
+    if (!read?.segments.length || read.uncertain) return true;
+    return read.segments.some((segment) =>
+      matchPattern(pattern, segment, platform === 'win32'),
+    );
+  }
+  if (request.paths?.length)
+    return request.paths.some((file) =>
+      matchHookPath(file, pattern, pathOptions),
+    );
+  // Nothing in the call to hold the pattern against: the hook runs
+  return true;
+}
+
+/** The same handler from several settings files runs once. A pack's or a skill's copy stays its own. */
+function dedupeKey(hook: HookDefinition): string {
+  const what = JSON.stringify([hook.command, hook.args ?? null, hook.shell]);
+  return hook.source === 'pack' || hook.source === 'skill'
+    ? `${hook.sourceLabel}:${what}`
+    : `settings:${what}`;
+}
+
+export interface HookRunnerOptions {
+  workspace: string;
+  home: string;
+  platform?: NodeJS.Platform;
+  canonicalize?: (path: string) => string;
+  /** Tests run a command their own way. */
+  run?: typeof runHookCommand;
+  /** Checks an installed pack's files before its hooks first run; a problem keeps them off. */
+  verifyPack?: (directory: string) => Promise<string | undefined>;
+  /** How long a hook's output is read after its own process ends. Tests shorten it. */
+  closeGraceMs?: number;
+}
+
+/** The names the format before this one gave the events. */
+const OLD_NAMES: Partial<Record<HookEvent, string>> = {
+  PreToolUse: 'before_tool',
+  PostToolUse: 'after_tool',
+  Stop: 'before_stop',
+  SessionStart: 'session_start',
+  PermissionRequest: 'permission_request',
+  UserPromptSubmit: 'user_prompt',
+  SubagentStart: 'subagent_start',
+};
+
 export class HookRunner {
-  /** How many times each before_stop hook has blocked this session. */
-  private blocks = new Map<string, number>();
-  private limited = new Set<string>();
   /** Skills loaded in this session. Their hooks stay off until then. */
   private armed = new Set<string>();
+  /** `once` hooks that have run. */
+  private spent = new Set<string>();
+  /** Each pack's check, run once. */
+  private packChecks = new Map<string, Promise<string | undefined>>();
+  /** Hooks already told of for answering in the old format. */
+  private toldLegacy = new Set<string>();
+  /** How many times each Stop hook of the format before this one has blocked, and those past their limit. */
+  private stopBlocks = new Map<string, number>();
+  private limited = new Set<string>();
+  /** Background hooks still running, ended with the session. */
+  private background = new Set<ChildProcess>();
+  /** What background hooks said, for the next request of the conversation or subagent that started them. */
+  private delivered: {
+    name: string;
+    context: string;
+    message: string;
+    sessionId: string;
+    agentId?: string;
+  }[] = [];
   constructor(
     readonly loaded: LoadedHooks,
-    private readonly options: {
-      workspace: string;
-      home: string;
-      platform?: NodeJS.Platform;
-      canonicalize?: (path: string) => string;
-      /** Tests can run a command without a shell. */
-      run?: typeof runHookCommand;
-    },
+    private readonly options: HookRunnerOptions,
   ) {}
 
   private armedHook(hook: HookDefinition): boolean {
-    return hook.source !== 'skill' || this.armed.has(hook.skill ?? '');
+    return (
+      (hook.source !== 'skill' || this.armed.has(hook.skill ?? '')) &&
+      !this.spent.has(hook.id)
+    );
   }
 
   /** Hooks that can run now. A skill hook is absent until that skill is loaded. */
@@ -1230,33 +1404,21 @@ export class HookRunner {
     return this.loaded.hooks.filter((hook) => this.armedHook(hook));
   }
 
-  /**
-   * Load a file that was waiting for approval: the hooks of the read that the
-   * approval was for, not the file as it is now. False when it is not waiting.
-   */
-  approve(change: HookChange): boolean {
-    const index = this.loaded.projectChanged.findIndex(
-      (item) => item.file === change.file && item.digest === change.digest,
-    );
-    if (index < 0) return false;
-    const [waiting] = this.loaded.projectChanged.splice(index, 1);
-    this.loaded.hooks.push(...waiting!.definitions);
-    if (waiting!.error) this.loaded.errors.push(waiting!.error);
-    return true;
+  /** Whether any hook of the event can run now. */
+  has(event: HookEvent): boolean {
+    return this.active().some((hook) => hook.event === event);
   }
 
   /** Every configured hook, including a skill hook this session has not loaded. */
-  listing(): { hook: HookDefinition; active: boolean }[] {
+  listing(): { hook: HookDefinition; active: boolean; spent: boolean }[] {
     return this.loaded.hooks.map((hook) => ({
       hook,
       active: this.armedHook(hook),
+      spent: this.spent.has(hook.id),
     }));
   }
 
-  /**
-   * Arm one skill's hooks for this session. The first call returns those hooks;
-   * loading the same skill again does not.
-   */
+  /** Arm one skill's hooks for this session. The first call returns those hooks; loading it again does not. */
   activateSkill(name: string): HookDefinition[] {
     const key = name.trim().toLowerCase();
     if (!key || this.armed.has(key)) return [];
@@ -1266,9 +1428,128 @@ export class HookRunner {
     );
   }
 
+  /** What background hooks started by this conversation (or this subagent of it) said since the last call. */
+  takeDelivered(
+    sessionId: string,
+    agentId?: string,
+  ): { name: string; context: string; message: string }[] {
+    const mine = (item: (typeof this.delivered)[number]) =>
+      item.sessionId === sessionId && item.agentId === agentId;
+    const taken = this.delivered.filter(mine);
+    this.delivered = this.delivered.filter((item) => !mine(item));
+    return taken;
+  }
+
+  /** Ends the background hooks still running. */
+  close(): void {
+    for (const child of this.background) void killProcessTree(child, true);
+    this.background.clear();
+  }
+
+  private checkPack(hook: HookDefinition): Promise<string | undefined> {
+    const directory = hook.skillDir!;
+    let check = this.packChecks.get(directory);
+    if (!check) {
+      const verify =
+        this.options.verifyPack ??
+        (async (folder: string) => {
+          try {
+            await verifyInstalled(folder);
+            return undefined;
+          } catch (error) {
+            return error instanceof Error ? error.message : String(error);
+          }
+        });
+      check = verify(directory);
+      this.packChecks.set(directory, check);
+    }
+    return check;
+  }
+
   async run(request: HookRunRequest): Promise<HookBatch> {
-    // The page's picture, for the hooks that ask for it: taken once, in a folder of its own, removed when the event's
-    // hooks have all finished
+    const pathOptions: HookPathOptions = {
+      workspace: this.options.workspace,
+      platform: this.options.platform,
+      canonicalize: this.options.canonicalize,
+    };
+    const value = TOOL_EVENTS.has(request.event)
+      ? request.toolName
+      : request.matchValue;
+    const seen = new Set<string>();
+    let chosen = this.loaded.hooks.filter((hook) => {
+      if (request.onlyIds && !request.onlyIds.includes(hook.id)) return false;
+      if (!this.armedHook(hook) || hook.event !== request.event) return false;
+      if (
+        !NO_MATCHER.has(request.event) &&
+        !matcherMatches(hook.matcher, value)
+      )
+        return false;
+      if (!conditionMatches(hook, request, pathOptions)) return false;
+      const key = dedupeKey(hook);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const notices: HookNotice[] = [];
+    // A pack whose files do not check out runs none of its hooks
+    const packs = [
+      ...new Set(chosen.filter((hook) => hook.pack).map((hook) => hook.pack!)),
+    ];
+    const unchecked: HookOutcome[] = [];
+    for (const pack of packs) {
+      const problem = await this.checkPack(
+        chosen.find((hook) => hook.pack === pack)!,
+      );
+      if (!problem) continue;
+      // A guard that blocks on failure blocks: a pack that does not check out has failed it
+      for (const hook of chosen.filter((item) => item.pack === pack))
+        if (
+          hook.onFailure === 'block' &&
+          !hook.async &&
+          request.event !== 'Stop' &&
+          request.event !== 'SubagentStop'
+        )
+          unchecked.push({
+            hook,
+            exitCode: null,
+            timedOut: false,
+            stdout: '',
+            stderr: '',
+            durationMs: 0,
+            failed: true,
+            cause: problem,
+            blocking: true,
+            blockText: `hook ${hook.name} failed; blocking because onFailure is "block": pack ${pack}: ${problem}`,
+            plain: '',
+            legacy: false,
+            stopped: false,
+          });
+      chosen = chosen.filter((hook) => hook.pack !== pack);
+      notices.push({ kind: 'failed', name: `pack ${pack}`, reason: problem });
+    }
+    // A Stop hook of the format before this one stops blocking after its limit for the session
+    if (request.event === 'Stop' || request.event === 'SubagentStop')
+      chosen = chosen.filter((hook) => {
+        if (!hook.legacy) return true;
+        const limit = hook.loopLimit ?? 5;
+        if ((this.stopBlocks.get(hook.id) ?? 0) < limit) return true;
+        if (!this.limited.has(hook.id)) {
+          this.limited.add(hook.id);
+          notices.push({ kind: 'limit', name: hook.name });
+        }
+        return false;
+      });
+    if (!chosen.length) {
+      const batch = combineOutcomes(
+        request.event,
+        unchecked,
+        request.toolInput,
+        request.secrets ?? {},
+        request.toolName,
+      );
+      batch.notices.unshift(...notices);
+      return batch;
+    }
     let folder: string | undefined;
     let taken: Promise<HookFile | undefined> | undefined;
     const screenshot = () =>
@@ -1296,117 +1577,148 @@ export class HookRunner {
         };
       })());
     try {
-      return await this.runHooks(request, screenshot);
+      const outcomes = [
+        ...unchecked,
+        ...(await this.runChosen(request, chosen, screenshot, pathOptions)),
+      ];
+      for (const outcome of outcomes)
+        if (
+          outcome.hook.legacy &&
+          (request.event === 'Stop' || request.event === 'SubagentStop') &&
+          (outcome.blocking || outcome.answer?.block)
+        )
+          this.stopBlocks.set(
+            outcome.hook.id,
+            (this.stopBlocks.get(outcome.hook.id) ?? 0) + 1,
+          );
+      const batch = combineOutcomes(
+        request.event,
+        outcomes,
+        request.toolInput,
+        request.secrets ?? {},
+        request.toolName,
+      );
+      batch.notices.unshift(...notices);
+      for (const outcome of outcomes)
+        if (outcome.legacy && !this.toldLegacy.has(outcome.hook.id)) {
+          this.toldLegacy.add(outcome.hook.id);
+          batch.notices.push({
+            kind: 'message',
+            name: outcome.hook.name,
+            reason:
+              'answers in the hook format before this one; it still counts, and the hooks docs show the current fields',
+          });
+        }
+      return batch;
     } finally {
       if (folder) rmSync(folder, { recursive: true, force: true });
     }
   }
 
-  private async runHooks(
+  private async runChosen(
     request: HookRunRequest,
+    chosen: HookDefinition[],
     screenshot: () => Promise<HookFile | undefined>,
-  ): Promise<HookBatch> {
-    const pathOptions: HookPathOptions = {
-      workspace: this.options.workspace,
-      platform: this.options.platform,
-      canonicalize: this.options.canonicalize,
-    };
-    const outcomes: HookOutcome[] = [];
-    const notices: HookNotice[] = [];
+    pathOptions: HookPathOptions,
+  ): Promise<HookOutcome[]> {
+    const platform = this.options.platform ?? process.platform;
     const secrets = request.secrets ?? {};
-    // A before_tool hook that rewrites the input hands the next hook its rewrite. Which hooks run was settled by
-    // the call as the model sent it.
-    let input = request.toolInput;
-    const changedBy: string[] = [];
-    for (const hook of this.loaded.hooks) {
-      if (request.onlyIds && !request.onlyIds.includes(hook.id)) continue;
-      if (!this.armedHook(hook)) continue;
-      if (hook.event !== request.event) continue;
-      if (!toolMatches(hook, request.toolName)) continue;
-      if (!pathsMatch(hook, request.paths, pathOptions)) continue;
-      if (request.event === 'before_stop') {
-        const blocked = this.blocks.get(hook.id) ?? 0;
-        if (blocked >= hook.loopLimit) {
-          if (!this.limited.has(hook.id)) {
-            this.limited.add(hook.id);
-            notices.push({ kind: 'limit', name: hook.name });
-          }
-          continue;
-        }
+    const canonicalPaths = (request.paths ?? []).map((file) => {
+      try {
+        const absolute = isHostAbsolutePath(file, platform)
+          ? file
+          : pathApi(platform).resolve(request.cwd, file);
+        return (pathOptions.canonicalize ?? canonicalPath)(absolute);
+      } catch {
+        return file;
       }
-      const started = Date.now();
-      const canonicalPaths = (request.paths ?? []).map((file) => {
-        try {
-          const absolute = isHostAbsolutePath(
-            file,
-            this.options.platform ?? process.platform,
+    });
+    // SessionEnd hooks share a short budget, which a hook's own longer timeout raises up to a minute
+    const budget =
+      request.event === 'SessionEnd'
+        ? Math.min(
+            60_000,
+            Math.max(
+              defaultTimeoutMs('SessionEnd'),
+              ...chosen.map((hook) => (hook.timeout ?? 0) * 1000),
+            ),
           )
-            ? file
-            : pathApi(this.options.platform ?? process.platform).resolve(
-                request.cwd,
-                file,
-              );
-          return (this.options.canonicalize ?? canonicalPath)(absolute);
-        } catch {
-          return file;
-        }
-      });
+        : undefined;
+    const deadline = budget ? new AbortController() : undefined;
+    const budgetTimer = deadline
+      ? setTimeout(() => deadline.abort(), budget)
+      : undefined;
+    const signal =
+      deadline && request.signal
+        ? AbortSignal.any([deadline.signal, request.signal])
+        : (deadline?.signal ?? request.signal);
+    const base = {
+      session_id: request.sessionId,
+      cwd: request.cwd,
+      ...(request.permissionMode
+        ? { permission_mode: request.permissionMode }
+        : {}),
+      hook_event_name: request.event,
+      ...(request.agent
+        ? { agent_id: request.agent.id, agent_type: request.agent.type }
+        : {}),
+    };
+    const eventFields = redactHookValue(
+      {
+        ...(TOOL_EVENTS.has(request.event)
+          ? {
+              tool_name: request.toolName,
+              tool_input: request.toolInput ?? {},
+              ...(request.toolUseId && request.event !== 'PermissionRequest'
+                ? { tool_use_id: request.toolUseId }
+                : {}),
+              paths: canonicalPaths,
+            }
+          : {}),
+        ...(request.fields ?? {}),
+      },
+      secrets,
+    ) as Record<string, unknown>;
+    const start = async (hook: HookDefinition): Promise<HookOutcome> => {
+      const started = Date.now();
       const file =
-        hook.screenshot && request.event === 'after_tool'
+        hook.screenshot && request.event === 'PostToolUse'
           ? await screenshot()
           : undefined;
       const stdin = JSON.stringify({
-        event: request.event,
-        session_id: request.sessionId,
-        cwd: request.cwd,
-        hook: hook.name,
-        ...(request.agent
-          ? { agent_id: request.agent.id, agent_type: request.agent.type }
-          : {}),
-        source: hook.source,
-        source_label: hook.sourceLabel,
-        tool_name: request.toolName,
-        tool_input: redactHookValue(input, secrets),
-        paths: redactHookValue(canonicalPaths, secrets),
-        tool_output: redactHookValue(request.toolOutput, secrets),
-        tool_status: request.toolStatus,
-        permission_reason: redactHookValue(request.permissionReason, secrets),
-        ...(request.event === 'user_prompt'
-          ? { prompt: redactHookValue(request.prompt ?? '', secrets) }
-          : {}),
-        ...(request.event === 'subagent_start'
-          ? {
-              description: redactHookValue(request.description ?? '', secrets),
-            }
-          : {}),
+        ...base,
+        ...eventFields,
         ...(hook.skillDir ? { skill_dir: hook.skillDir } : {}),
         ...(file ? { files: [file] } : {}),
-        ...(request.event === 'before_stop'
-          ? { stop_attempt: (this.blocks.get(hook.id) ?? 0) + 1 }
-          : {}),
+        ...(hook.legacy ? this.legacyFields(hook, request, eventFields) : {}),
       });
+      const env = this.environment(hook, request, secrets);
+      const timeoutMs = hook.async
+        ? 0
+        : hook.timeout !== undefined
+          ? Math.min(hook.timeout * 1000, MAX_TIMER_MS)
+          : defaultTimeoutMs(request.event);
+      const launch = hookLaunch(hook, env, platform);
       const run = this.options.run ?? runHookCommand;
-      let command: CommandResult;
+      let result: CommandResult;
       try {
-        command = await run(
-          hook.command,
+        result = await run(
+          launch,
           request.cwd,
           stdin,
-          hook.timeoutMs,
-          request.signal ?? new AbortController().signal,
-          secrets,
-          // Only a skill's hook has its folder; no other hook inherits one from Circle's own environment. Every hook
-          // knows whose call it judges, as the call's own processes do (#551).
-          {
-            [SKILL_DIR_VARIABLE]: hook.skillDir,
-            ...identityEnvironment({
-              sessionId: request.sessionId,
-              ...(request.agent ? { agentId: request.agent.id } : {}),
-            }),
-          },
+          timeoutMs,
+          hook.async ? undefined : signal,
+          env,
+          hook.async
+            ? (child, done) => {
+                if (done) this.background.delete(child);
+                else this.background.add(child);
+              }
+            : undefined,
+          this.options.closeGraceMs,
         );
       } catch (error) {
-        command = {
+        result = {
           stdout: '',
           stderr: '',
           exitCode: null,
@@ -1414,78 +1726,100 @@ export class HookRunner {
           error: error instanceof Error ? error.message : String(error),
         };
       }
-      if (request.signal?.aborted && !command.timedOut) {
-        outcomes.push({
-          hook,
-          exitCode: command.exitCode,
-          timedOut: false,
-          stdout: command.stdout,
-          stderr: command.stderr,
-          decision: 'none',
-          reason: 'hook stopped',
-          userMessage: '',
-          context: '',
-          durationMs: Date.now() - started,
-          failed: false,
-        });
-        break;
-      }
-      const interpreted = interpretOutput(
-        request.event,
-        command.exitCode,
-        command.stdout,
-        command.stderr,
-        command.timedOut,
-        command.error,
-      );
       const outcome: HookOutcome = {
         hook,
-        exitCode: command.exitCode,
-        timedOut: command.timedOut,
-        stdout: command.stdout,
-        stderr: command.stderr,
-        ...interpreted,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+        stdout: result.stdout,
+        stderr: result.stderr,
         durationMs: Date.now() - started,
+        ...interpretHookRun(
+          hook,
+          request.event,
+          result,
+          !hook.async && !!signal?.aborted,
+          launch.fallback === true,
+        ),
       };
-      outcomes.push(outcome);
-      // Handing back the input it was given, in any key order, is no rewrite
-      if (
-        outcome.updatedInput &&
-        canonicalJson(outcome.updatedInput) !==
-          canonicalJson(redactHookValue(input, secrets))
-      ) {
-        input = outcome.updatedInput;
-        changedBy.push(hook.name);
-      }
       this.log(request, outcome, secrets);
-      if (
-        request.event === 'before_stop' &&
-        outcome.decision === 'deny' &&
-        !request.signal?.aborted
-      )
-        this.blocks.set(hook.id, (this.blocks.get(hook.id) ?? 0) + 1);
-      const notice = noticeFor(outcome, request.toolName);
-      if (notice) notices.push(notice);
-    }
-    const decision = strictest(GATING.has(request.event) ? outcomes : []);
-    const context = outcomes
-      .map((item) => item.context)
-      .filter(Boolean)
-      .join('\n\n');
-    // A deny voids every rewrite: the call does not run in any form. Whether a rewrite changes what runs is the
-    // harness's to tell, once it has checked it.
-    const rewritten =
-      request.event === 'before_tool' &&
-      decision.decision !== 'deny' &&
-      changedBy.length > 0;
-    return {
-      ...decision,
-      ...(rewritten ? { updatedInput: input } : {}),
-      changedBy: rewritten ? changedBy : [],
-      context,
-      outcomes,
-      notices,
+      // `once`: gone after a run that did not fail, block or time out
+      if (hook.once && !outcome.failed && !outcome.blocking && !outcome.stopped)
+        this.spent.add(hook.id);
+      return outcome;
     };
+    try {
+      const background = chosen.filter((hook) => hook.async);
+      for (const hook of background)
+        void start(hook).then((outcome) => {
+          const context = outcome.answer?.additionalContext ?? '';
+          const message = outcome.answer?.systemMessage ?? '';
+          if (context || message)
+            this.delivered.push({
+              name: hook.name,
+              context: capText(context),
+              message: capText(message),
+              sessionId: request.sessionId,
+              ...(request.agent ? { agentId: request.agent.id } : {}),
+            });
+        });
+      return await Promise.all(
+        chosen.filter((hook) => !hook.async).map((hook) => start(hook)),
+      );
+    } finally {
+      if (budgetTimer) clearTimeout(budgetTimer);
+    }
+  }
+
+  /** The input fields a hook moved from the format before this one was written for. */
+  private legacyFields(
+    hook: HookDefinition,
+    request: HookRunRequest,
+    fields: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      event: OLD_NAMES[request.event] ?? request.event,
+      hook: hook.name,
+      source: hook.source === 'local' ? 'project' : hook.source,
+      source_label: hook.source === 'local' ? 'project' : hook.sourceLabel,
+      ...(request.event === 'PostToolUse'
+        ? { tool_output: fields.tool_response, tool_status: 'success' }
+        : {}),
+      ...(request.event === 'Stop' || request.event === 'SubagentStop'
+        ? { stop_attempt: (this.stopBlocks.get(hook.id) ?? 0) + 1 }
+        : {}),
+    };
+  }
+
+  private environment(
+    hook: HookDefinition,
+    request: HookRunRequest,
+    secrets: Record<string, string>,
+  ): NodeJS.ProcessEnv {
+    const env = shellEnvironment();
+    const shown = Object.keys(secrets).length
+      ? Object.fromEntries(
+          Object.entries(env).map(([name, value]) => [
+            name,
+            value === undefined ? undefined : redactSecrets(value, secrets),
+          ]),
+        )
+      : env;
+    // Only a pack's or a skill's hook has their folders; no other hook inherits one from Circle's own environment.
+    // Every hook knows whose call it judges, as the call's own processes do.
+    const extra: Record<string, string | undefined> = {
+      [PROJECT_DIR_VARIABLE]: this.options.workspace,
+      [SKILL_DIR_VARIABLE]: hook.skillDir,
+      [SKILL_DATA_VARIABLE]: hook.skillData,
+      ...identityEnvironment({
+        sessionId: request.sessionId,
+        ...(request.agent ? { agentId: request.agent.id } : {}),
+      }),
+    };
+    const result: NodeJS.ProcessEnv = { ...shown };
+    for (const [name, value] of Object.entries(extra))
+      if (value === undefined) delete result[name];
+      else result[name] = value;
+    return result;
   }
 
   private log(
@@ -1493,6 +1827,12 @@ export class HookRunner {
     outcome: HookOutcome,
     secrets: Record<string, string>,
   ): void {
+    const answer = outcome.answer;
+    const decision = outcome.blocking
+      ? 'block'
+      : (answer?.permissionDecision ??
+        answer?.permission?.behavior ??
+        (answer?.block ? 'block' : 'none'));
     const line = {
       ts: new Date().toISOString(),
       session_id: request.sessionId,
@@ -1501,14 +1841,23 @@ export class HookRunner {
       source: outcome.hook.source,
       source_label: outcome.hook.sourceLabel,
       name: outcome.hook.name,
-      command: outcome.hook.command,
+      command: [outcome.hook.command, ...(outcome.hook.args ?? [])].join(' '),
       tool: request.toolName,
       exit_code: outcome.exitCode,
-      decision: outcome.decision,
+      decision,
       timed_out: outcome.timedOut,
       failed: outcome.failed,
       duration_ms: outcome.durationMs,
-      reason: outcome.reason.slice(0, 500),
+      reason: (
+        outcome.cause ||
+        outcome.blockText ||
+        answer?.reason ||
+        ''
+      ).slice(0, 500),
+      // Plain output that no one else reads is kept here
+      ...(outcome.plain && !PLAIN_FOR_MODEL.has(request.event)
+        ? { output: outcome.plain.slice(0, 2000) }
+        : {}),
     };
     try {
       if (!existsSync(this.options.home)) return;

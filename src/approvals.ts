@@ -213,6 +213,69 @@ function segments(tokens: string[]): string[][] {
   }
   return out.filter((words) => words.length);
 }
+/** Shell words that start a segment without being its command. */
+const SHELL_KEYWORDS = new Set([
+  'then',
+  'do',
+  'else',
+  'elif',
+  'if',
+  'while',
+  'until',
+  '!',
+  '{',
+  '(',
+]);
+/** Programs that run a command handed to them, which a line's words do not show. */
+const RUNS_OTHERS = new Set([
+  'sh',
+  'bash',
+  'zsh',
+  'dash',
+  'ksh',
+  'fish',
+  'pwsh',
+  'powershell',
+  'cmd',
+  'eval',
+  'sudo',
+  'doas',
+  'su',
+  'parallel',
+  'watch',
+  'ssh',
+]);
+/**
+ * The commands a command line runs, one per segment between `&&`, `;`, `|` and the like: each without the shell
+ * words, variable assignments and wrappers (`time`, `env`, `xargs`, …) it starts with, and its program by name
+ * (`/usr/bin/git push` is `git push`). `uncertain` says some segment hands a command to another program, so what
+ * the line runs cannot be told from its words. Null when the line cannot be split into words.
+ */
+export function commandSegments(
+  command: string,
+  platform: string = process.platform,
+): { segments: string[]; uncertain: boolean } | null {
+  const tokens = commandTokens(command, platform);
+  if (!tokens) return null;
+  let uncertain = false;
+  const found = segments(tokens)
+    .map((words) => {
+      let i = 0;
+      while (i < words.length && SHELL_KEYWORDS.has(words[i]!)) i++;
+      const rest = unwrap(words.slice(i), platform);
+      if (!rest.length) return '';
+      const head = program(rest[0]!, platform);
+      if (
+        RUNS_OTHERS.has(head) ||
+        (head === 'find' &&
+          rest.some((word) => /^-(exec|execdir|ok|okdir)$/.test(word)))
+      )
+        uncertain = true;
+      return [head, ...rest.slice(1)].join(' ');
+    })
+    .filter(Boolean);
+  return { segments: found, uncertain };
+}
 function flag(args: string[], short: string, long: string): boolean {
   return args
     .slice(0, args.includes('--') ? args.indexOf('--') : undefined)

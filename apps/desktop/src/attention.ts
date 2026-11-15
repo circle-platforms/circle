@@ -29,8 +29,7 @@ export function attention(
     if (seen.has(item.id)) continue;
     seen.add(item.id);
     const detail = item.command ?? item.target ?? '';
-    // A hooks file waiting for approval names the file, as an approval names its tool.
-    const approval = item.kind === 'approval' || item.kind === 'hooks';
+    const approval = item.kind === 'approval';
     notices.push({
       title: approval
         ? text('Circle needs your approval')

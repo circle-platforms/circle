@@ -357,6 +357,7 @@ export interface Interaction {
   origin?: { jobId?: string; name?: string; agent?: string };
   id: string;
   sessionId: string;
+  /** `hooks` is a hooks file's approval card, recorded in conversations from before hooks ran on folder trust. */
   kind: 'approval' | 'question' | 'secret' | 'plan-exit' | 'hooks';
   title: string;
   tool?: string;
@@ -371,18 +372,6 @@ export interface Interaction {
   reason?: string;
   /** A hook asked for this approval. The reason is the hook's own words. */
   hookReason?: string;
-  /**
-   * A project hooks file waiting for approval (`hooks`): each hook in the version
-   * that was read, against the one approved last. `target` is the file.
-   */
-  hooks?: {
-    name: string;
-    event: string;
-    command: string;
-    /** The hook also gets a screenshot of the page the browser shows. */
-    screenshot?: boolean;
-    mark: 'new' | 'changed' | 'unchanged' | 'removed';
-  }[];
   choices?: string[];
   multiple?: boolean;
   status: 'pending' | 'recorded';
@@ -495,22 +484,27 @@ export interface Settings {
   keybindings: Record<string, string | string[]>;
   /** Hooks the connected runtime would run. Empty when none are configured. */
   hooks?: HookSetting[];
-  /** A project hooks file is present and the folder is not trusted. */
-  projectHooksIgnored?: boolean;
-  /** Project hooks files that do not run until this version is approved. */
-  projectHooksWaiting?: string[];
+  /** The project has hooks and the folder is not trusted, so they do not run. */
+  hooksUntrusted?: boolean;
+  /** `disableAllHooks` is set. */
+  hooksDisabled?: boolean;
 }
 export interface HookSetting {
-  source: 'user' | 'project' | 'skill';
+  source: 'user' | 'project' | 'local' | 'pack' | 'skill';
   event: string;
   name: string;
   command: string;
-  tools: string;
-  paths: string;
-  /** The skill that ships this hook. It runs only after that skill is loaded. */
+  /** As written; empty matches everything. */
+  matcher: string;
+  /** The hook's `if`, a rule its call must match. */
+  condition?: string;
+  /** The pack or skill that ships this hook. A skill's hook runs only after that skill is loaded. */
+  pack?: string;
   skill?: string;
-  /** after_tool: the hook also gets a screenshot of the browser's page. */
+  /** PostToolUse: the hook also gets a screenshot of the browser's page. */
   screenshot?: boolean;
+  /** The action does not go ahead when the hook fails. */
+  blocksOnFailure?: boolean;
   /** False for a skill hook this session has not loaded. Omitted means running. */
   active?: boolean;
 }

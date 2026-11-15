@@ -2474,59 +2474,53 @@ async function clone(host: CommandHost): Promise<void> {
 }
 
 function hooks(host: CommandHost): void {
-  const {
-    hooks: rows,
-    projectIgnored,
-    projectChanged,
-  } = host.runtime.listHooks();
+  const { hooks: rows, untrusted, disabled, errors } = host.runtime.listHooks();
   const width = noticeColumns();
   const line = (row: (typeof rows)[number], waiting: boolean): string => {
     const hook = row.hook;
-    const state = waiting
-      ? `waiting for /skill ${hook.skill ?? hook.name}`
-      : 'trusted';
-    return wrapHang(
-      `  ${hook.name} · ${hook.sourceLabel} · ${hook.event}${hook.screenshot ? ' · with screenshot' : ''} · ${hook.command} · ${state}`,
-      width,
-      2,
-    ).join('\n');
+    const state = row.spent
+      ? 'ran once'
+      : waiting
+        ? `waiting for /skill ${hook.skill ?? hook.name}`
+        : '';
+    const parts = [
+      hook.name,
+      hook.sourceLabel,
+      hook.matcherText ? `${hook.event}(${hook.matcherText})` : hook.event,
+      ...(hook.condition ? [`if ${hook.condition.text}`] : []),
+      ...(hook.screenshot ? ['with screenshot'] : []),
+      ...(hook.async ? ['in the background'] : []),
+      ...(hook.onFailure === 'block' ? ['blocks on failure'] : []),
+      [hook.command, ...(hook.args ?? [])].join(' '),
+      ...(state ? [state] : []),
+    ];
+    return wrapHang(`  ${parts.join(' · ')}`, width, 2).join('\n');
   };
-  const running = rows.filter((row) => row.active);
-  const waiting = rows.filter((row) => !row.active);
+  const running = rows.filter((row) => row.active || row.spent);
+  const waiting = rows.filter((row) => !row.active && !row.spent);
   const lines: string[] = [];
-  if (projectIgnored) lines.push('project hooks need trust', '');
-  if (projectChanged.length) {
-    lines.push('project hooks need approval', '');
-    for (const change of projectChanged)
-      lines.push(
-        wrapHang(
-          `  ${hookFileShown(change.file, host.workspace)} · needs approval`,
-          width,
-          2,
-        ).join('\n'),
-      );
+  if (disabled) lines.push('hooks are off: disableAllHooks is set', '');
+  if (untrusted) lines.push('project hooks need a trusted folder', '');
+  for (const error of errors)
     lines.push(
       wrapHang(
-        '  Circle asks when a turn starts. After skip, /reload asks again.',
+        `  ${hookFileShown(error.file, host.workspace)} · ${error.message}`,
         width,
         2,
       ).join('\n'),
-      '',
     );
-  }
-  if (!rows.length && !projectChanged.length) {
+  if (errors.length) lines.push('');
+  if (!rows.length) {
     lines.push('No hooks configured.');
     host.notice(lines.join('\n'));
     return;
   }
-  if (rows.length) {
-    lines.push('Hooks:', '');
-    if (running.length) lines.push(...running.map((row) => line(row, false)));
-    if (waiting.length) {
-      if (running.length) lines.push('');
-      lines.push('Skill hooks waiting for load:', '');
-      lines.push(...waiting.map((row) => line(row, true)));
-    }
+  lines.push('Hooks:', '');
+  if (running.length) lines.push(...running.map((row) => line(row, false)));
+  if (waiting.length) {
+    if (running.length) lines.push('');
+    lines.push('Skill hooks waiting for load:', '');
+    lines.push(...waiting.map((row) => line(row, true)));
   }
   host.notice(lines.join('\n'));
 }

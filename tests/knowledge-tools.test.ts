@@ -51,19 +51,31 @@ for (const mode of ['manual', 'accept-edits', 'auto'] as const)
         policy,
         system: 'synthetic',
         tools: knowledgeTools(service),
+        // Every hook allows the call
         hooks: {
           loaded: {
-            projectChanged: [],
-            projectIgnored: false,
             hooks: [],
             errors: [],
+            untrusted: false,
+            disabled: false,
+            notes: [],
           },
           active: () => [],
+          has: (event: string) =>
+            event === 'PreToolUse' || event === 'PermissionRequest',
+          takeDelivered: () => [],
           run: async () => ({
             decision: 'allow',
+            reason: '',
+            userMessage: '',
+            blocked: false,
+            changedBy: [],
+            conflict: [],
             notices: [],
             outcomes: [],
             context: '',
+            suppressOriginalPrompt: false,
+            interrupt: false,
           }),
         } as never,
         approve: async (c) => {

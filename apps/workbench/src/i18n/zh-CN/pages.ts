@@ -48,10 +48,13 @@ export const pages: Record<string, string> = {
     '钩子运行已配置的终端命令。拒绝优先于所有审批模式，包括自动模式。',
   'Project hooks are not running until this folder is trusted.':
     '在信任此文件夹之前，项目钩子不会运行。',
-  '{file} does not run until you approve this version. Circle asks when a conversation starts its next turn.':
-    '批准这个版本之前，{file} 不会运行。对话开始下一个回合时，Circle 会询问。',
-  'A skill hook runs after that skill is loaded in this session.':
-    '技能自带的钩子在本次会话加载该技能之后才运行。',
+  'Hooks are off: disableAllHooks is set.':
+    '钩子已关闭：设置了 disableAllHooks。',
+  'Hooks are written under hooks in settings.json, in a pack, or in a skill. A skill hook runs after that skill is loaded in this session.':
+    '钩子写在 settings.json 的 hooks 下、包里或技能里。技能自带的钩子在本次会话加载该技能之后才运行。',
+  'project, local': '项目（本地）',
+  pack: '包',
+  'blocks on failure': '出错时拦下',
   'waits for the skill': '等待加载技能中',
   'search settings': '搜索设置',
   'settings sections': '设置分组',

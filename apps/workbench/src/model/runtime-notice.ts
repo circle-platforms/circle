@@ -3,19 +3,40 @@ import type { HookNotice } from '../../../../src/hooks';
 import type { Message, WorkbenchSnapshot } from './types';
 import { t } from '../i18n';
 
-/** Circle's own failure words. A reason the hook wrote stays as it wrote it. */
+/** Circle's own failure words. What a hook or a program wrote stays as it was written. */
 function hookReason(reason: string | undefined): string {
   const text = reason?.trim() ?? '';
   if (!text) return '';
+  // The words of the format before this one, in conversations from then
   if (text === 'hook timed out') return t('hook timed out');
   if (text === 'hook output is not JSON') return t('hook output is not JSON');
-  const exited = /^hook exited (\d+)$/.exec(text);
-  if (exited?.[1]) return t('hook exited {code}', { code: exited[1] });
+  const old = /^hook exited (\d+)$/.exec(text);
+  if (old?.[1]) return t('hook exited {code}', { code: old[1] });
+  const timed = /^timed out after ([\d.]+)s$/.exec(text);
+  if (timed?.[1])
+    return t('hook timed out after {seconds}s', { seconds: timed[1] });
+  const exited = /^exited (\S+?)(?:: (.*))?$/s.exec(text);
+  if (exited?.[1])
+    return (
+      t('hook exited {code}', { code: exited[1] }) +
+      (exited[2] ? `: ${exited[2]}` : '')
+    );
+  const unreadable = /^output is not JSON(?:: (.*))?$/s.exec(text);
+  if (unreadable)
+    return (
+      t('hook output is not JSON') + (unreadable[1] ? `: ${unreadable[1]}` : '')
+    );
   return text;
 }
 
 /** The transcript line for a hook. The hook's own reason is not translated. */
 export function formatHookNotice(notice: HookNotice): string {
+  // A project hooks file's approval card, skipped in a conversation from before hooks ran on folder trust
+  if ((notice as { kind: string }).kind === 'changed')
+    return (
+      t('project hooks need approval') +
+      (notice.name ? ` · ${notice.name}` : '')
+    );
   // What the hook wrote for the person (`user_message`) goes in place of its reason
   const reason = hookReason(notice.message || notice.reason);
   const tail = reason ? ` · ${reason}` : '';
@@ -29,9 +50,18 @@ export function formatHookNotice(notice: HookNotice): string {
         t('hook allowed {tool}', { tool: notice.tool ?? t('tool') }) + tail
       );
     case 'output':
+    case 'message':
       return t('hook {name}', { name: notice.name ?? t('hook') }) + tail;
     case 'blocked':
-      return t('hook blocked stop') + tail;
+      return (
+        (notice.tool === 'prompt'
+          ? t('hook blocked the message')
+          : notice.tool === 'compaction'
+            ? t('hook blocked the compaction')
+            : t('hook blocked stop')) + tail
+      );
+    case 'stopped':
+      return t('hook stopped the turn') + tail;
     case 'limit':
       return (
         t('hook stop limit reached') + (notice.name ? ` · ${notice.name}` : '')
@@ -41,14 +71,11 @@ export function formatHookNotice(notice: HookNotice): string {
     case 'active':
       return t('hooks active · {count}', { count: notice.count ?? 0 }) + tail;
     case 'untrusted':
-      return t('project hooks need trust');
-    case 'changed':
-      // `name` is the files, as written. The card was skipped in this conversation.
-      return (
-        t('project hooks need approval') +
-        (notice.name ? ` · ${notice.name}` : '') +
-        ` · ${t('a new conversation asks again')}`
-      );
+      return t('project hooks need a trusted folder');
+    default:
+      // A notice of a kind this window does not know yet, such as a project hooks file's approval in an older
+      // conversation: its own words, as stored
+      return notice.name ?? notice.reason ?? t('hook');
   }
 }
 /** Translate only a persisted host-authored enum; identical content stays content. */

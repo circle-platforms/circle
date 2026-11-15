@@ -234,7 +234,9 @@ export function HooksSection() {
       )}
     >
       <p className="panel-note">
-        {t('A skill hook runs after that skill is loaded in this session.')}
+        {t(
+          'Hooks are written under hooks in settings.json, in a pack, or in a skill. A skill hook runs after that skill is loaded in this session.',
+        )}
       </p>
       <div className="setting-row">
         <Switch
@@ -247,26 +249,23 @@ export function HooksSection() {
           }
         />
       </div>
-      {settings.projectHooksIgnored && (
+      {settings.hooksDisabled && (
+        <p className="panel-note">
+          {t('Hooks are off: disableAllHooks is set.')}
+        </p>
+      )}
+      {settings.hooksUntrusted && (
         <p className="panel-note">
           {t('Project hooks are not running until this folder is trusted.')}
         </p>
       )}
-      {(settings.projectHooksWaiting ?? []).map((file) => (
-        <p className="panel-note" key={file}>
-          {t(
-            '{file} does not run until you approve this version. Circle asks when a conversation starts its next turn.',
-            { file },
-          )}
-        </p>
-      ))}
       {(settings.hooks ?? []).length === 0 ? (
         <p className="panel-note">{t('no hooks')}</p>
       ) : (
         settings.hooks!.map((hook) => (
           <div
             className="setting-row"
-            key={`${hook.source}:${hook.event}:${hook.name}:${hook.command}`}
+            key={`${hook.source}:${hook.event}:${hook.matcher}:${hook.name}:${hook.command}`}
           >
             <span>
               {hook.name}
@@ -275,11 +274,17 @@ export function HooksSection() {
                   ? t('user')
                   : hook.source === 'project'
                     ? t('project')
-                    : `${t('skill')}${hook.skill ? ` ${hook.skill}` : ''}`}
+                    : hook.source === 'local'
+                      ? t('project, local')
+                      : hook.source === 'pack'
+                        ? `${t('pack')}${hook.pack ? ` ${hook.pack}` : ''}`
+                        : `${t('skill')}${hook.skill ? ` ${hook.skill}` : ''}`}
                 {' · '}
                 {hook.event}
+                {hook.matcher ? ` · ${hook.matcher}` : ''}
+                {hook.condition ? ` · ${hook.condition}` : ''}
                 {hook.screenshot ? ` · ${t('with screenshot')}` : ''}
-                {hook.tools !== '*' ? ` · ${hook.tools}` : ''}
+                {hook.blocksOnFailure ? ` · ${t('blocks on failure')}` : ''}
                 {hook.active === false ? ` · ${t('waits for the skill')}` : ''}
               </small>
             </span>

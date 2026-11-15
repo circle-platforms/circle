@@ -163,13 +163,14 @@ test("hook path globs see the path an MCP tool's file parameter names, whatever 
     script,
     "process.stderr.write('names a secret file');\nprocess.exit(2);\n",
   );
+  // The hook's `if` names the MCP tool and a glob, and is held against the path its parameter names
   const { asked, call, received } = await setup(t, {
     hooks: {
       before_tool: [
         {
           name: 'no secrets',
           command: `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`,
-          tools: '*',
+          tools: 'files-server_read_document',
           paths: ['**/*secret*'],
         },
       ],

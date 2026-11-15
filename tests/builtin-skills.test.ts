@@ -659,3 +659,11 @@ for (const name of names.filter(
     );
   });
 }
+
+test("only a key at the start of a frontmatter line is read: a nested one, such as a hook's name, does not change the skill's", () => {
+  const { meta } = parseFrontmatter(
+    '---\nname: kit\ndescription: A kit\nhooks:\n  PreToolUse:\n    - hooks:\n        - type: command\n          command: check\n          name: checker\n          description: nested\n---\nBody.\n',
+  );
+  assert.equal(meta.name, 'kit');
+  assert.equal(meta.description, 'A kit');
+});

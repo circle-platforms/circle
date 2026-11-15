@@ -20,7 +20,7 @@ Today the model decides everything a skill says about order:
 What #558 asks for:
 
 1. One declaration of the phases in order, the subagent of each phase, how many per item, how many more tries after a failure, and where to stop and ask the person. The same declaration run twice with a scripted model gives the same phases, the same number of subagents and the same stops.
-2. A call outside the declaration is refused on the path a `before_tool` deny takes, and the reason names the place in the declaration.
+2. A call outside the declaration is refused on the path a `PreToolUse` deny takes, and the reason names the place in the declaration.
 3. The docs say which comes first: the declaration or the model's own choice.
 
 ## What others do
@@ -45,7 +45,7 @@ export default async function ({ items }, { agent, ask, parallel }) {
 }
 ```
 
-- **Order and counts** are the script's. A subagent runs through the same path `task` takes: its approvals, its hooks (`subagent_start`, `before_tool`) and its definition (`agents/*.md`, [Subagents](../agents.md)).
+- **Order and counts** are the script's. A subagent runs through the same path `task` takes: its approvals, its hooks (`SubagentStart`, `PreToolUse`) and its definition (`agents/*.md`, [Subagents](../agents.md)).
 - **A stop** is `ask()`, the question panel of the `question` tool. Unlike Claude Code, a workflow can stop and ask midway.
 - **Further tries** are `retries`, judged by a `check` command or by the subagent's result being an error.
 - **Before it starts**, the person sees the phases and approves them, like a project hooks file.
@@ -69,7 +69,7 @@ A declaration says what may happen, and the model still makes each call. Circle 
 
 - **Where it lives.** It sits in `.circle/orchestration.json`, approved like a project hooks file, or as `orchestration.json` in a skill's folder, armed when the session loads the skill, as the skill's hooks and subagents are.
 - **What is counted.** `task` gets an optional `item` argument, and Circle counts the calls of each phase and item.
-- **The guard** sits beside the hooks, on the same path as a `before_tool` deny (#543's `reason` and `user_message`). It refuses:
+- **The guard** sits beside the hooks, on the same path as a `PreToolUse` deny (a hook's `permissionDecisionReason` and `systemMessage`). It refuses:
   - a phase started before the one before it has every item done: `fix comes after survey (.circle/orchestration.json, phases[0])`;
   - a second subagent for one item;
   - a try past `retries`;

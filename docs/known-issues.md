@@ -40,12 +40,18 @@ These are gaps to know about before you trust Circle with a repository or a mach
 
 - **`/yolo` also skips the questions Circle always asks**, such as `rm -rf` and force-push.
 - **An `allowed_commands` pattern skips them too** for the commands it matches: `git *` covers a force-push, and patterns match text, not what a command reaches. Keep them narrow.
-- **Custom commands can run shell snippets without asking**, and a trusted folder's commands, skills, hooks and instruction files apply at once. Read a repository's `.circle/`, `.opencode/`, `.pi/`, `.claude/` and `.agents/` folders, including `hooks.json`, before you trust it.
+- **Custom commands can run shell snippets without asking**, and a trusted folder's commands, skills, hooks and instruction files apply at once. Read a repository's `.circle/`, `.opencode/`, `.pi/`, `.claude/` and `.agents/` folders, including the `hooks` in `.circle/settings.json` and its skills' frontmatter, before you trust it.
 - **The credential-file check reads names, not contents.** File tools and commands refuse the listed names, but `ls` and `glob` show them, and a command that reaches a file without naming it (a script, a variable, a copy under another name) is not refused.
 - **A secret can be written to any path the model names.** Check the file on the card before you enter the value.
 - **An extension that is removed leaves its secrets and data behind.** Its entry in `settings.json`, `extension_secrets/<name>.secrets.json` and `extension_data/<name>/` in the data folder stay, and nothing in Circle lists or deletes them; a token there stays valid until you revoke it at its service. See [Extensions](extensions.md#where-extensions-live).
 
 ## Subagents and tools
+
+- **A hook that fails lets the action go ahead** unless it sets `"onFailure": "block"`. A hook moved from the format before this one that guarded a call (`before_tool`, `permission_request`) gets it; one written now has to say so.
+- **A `PermissionRequest` allow that rewrites the call is not applied**: the card asks you. `updatedPermissions` is ignored.
+- **Hooks get no `transcript_path`**: Circle keeps sessions in a database. `Stop` and `SubagentStop` give the last answer as `last_assistant_message`.
+- **Only `command` hooks run.** `http`, `mcp_tool`, `prompt` and `agent` hooks, `asyncRewake`, and the `Elicitation` and `ElicitationResult` events are reported and skipped.
+- **An installed pack with hooks in the format before this one** (`hooks.json` beside `SKILL.md`) runs none of them until the pack moves them to `hooks/hooks.json` or its frontmatter; Circle does not change an installed pack's files.
 
 - **Tool calls other than `task` in one reply run one after another.** Only `task` calls next to each other run together, and each other call asks for its approval when its turn comes. To run subagents side by side, the model can start them with `background: true`.
 - **The diff on an `edit_file` card assumes its text appears once.** When the text to replace appears more than once, the card shows the change at the first place, but the tool refuses such an edit unless it replaces every one. The model is told and usually tries again with more context.

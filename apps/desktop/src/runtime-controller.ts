@@ -48,7 +48,6 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { basename, join, relative, isAbsolute, sep } from 'node:path';
 import { AgentRuntime, type InteractionContext } from '../../../src/runtime.js';
 import { TOOLS_NOT_LISTED_AGAIN } from '../../../src/mcp_loader.js';
-import type { HookChange } from '../../../src/hooks.js';
 import { defaultRunOptions } from '../../../src/run_options.js';
 import type { Extension, ExtensionCommand } from '../../../src/extensions.js';
 import { SessionRuntimeManager } from '../../../src/session_manager.js';
@@ -2593,17 +2592,6 @@ export class RuntimeController {
               ? { ...origin, name: task.spec.id, agent: runtime.session.id }
               : origin,
           ),
-        // A project hooks file that was never approved, or changed since: a card in
-        // the conversation when a turn starts. Until it is approved those hooks do not run.
-        approveHooks: (change, signal) =>
-          this.approveHooks(
-            runtime,
-            change,
-            signal,
-            task
-              ? { name: task.spec.id, agent: runtime.session.id }
-              : undefined,
-          ),
         githubConnection: this.githubBackend(
           workspace,
           () => runtime.session.id,
@@ -3749,17 +3737,17 @@ export class RuntimeController {
           source: hook.source,
           event: hook.event,
           name: hook.name,
-          command: hook.command,
-          tools: hook.tools === '*' ? '*' : hook.tools.join(', '),
-          paths: hook.paths.join(', '),
+          command: [hook.command, ...(hook.args ?? [])].join(' '),
+          matcher: hook.matcherText,
+          ...(hook.condition ? { condition: hook.condition.text } : {}),
+          ...(hook.pack ? { pack: hook.pack } : {}),
           ...(hook.skill ? { skill: hook.skill } : {}),
           ...(hook.screenshot ? { screenshot: true } : {}),
+          ...(hook.onFailure === 'block' ? { blocksOnFailure: true } : {}),
           active,
         })),
-        projectHooksIgnored: runtime.hookCatalog.projectIgnored,
-        projectHooksWaiting: runtime.hookCatalog.projectChanged.map(
-          (change) => change.file,
-        ),
+        hooksUntrusted: runtime.hookCatalog.untrusted,
+        hooksDisabled: runtime.hookCatalog.disabled,
       },
     };
   }
@@ -4530,26 +4518,6 @@ export class RuntimeController {
       }
     }
     return JSON.stringify(answers);
-  }
-  private async approveHooks(
-    runtime: AgentRuntime,
-    change: HookChange,
-    signal: AbortSignal,
-    origin?: InteractionContext,
-  ): Promise<boolean> {
-    const answer = await this.wait(
-      runtime,
-      {
-        kind: 'hooks',
-        title: 'project hooks need approval',
-        target: change.file,
-        hooks: change.hooks.map((hook) => ({ ...hook })),
-        choices: ['approve', 'skip'],
-      },
-      signal,
-      origin,
-    );
-    return answer === 'approve';
   }
   private async secret(
     runtime: AgentRuntime,
@@ -6354,11 +6322,6 @@ export class RuntimeController {
           !answer.startsWith('reject: ')
         )
           throw Error('invalid approval decision');
-        if (
-          pending.row.kind === 'hooks' &&
-          !pending.row.choices?.includes(answer)
-        )
-          throw Error('invalid hooks decision');
         if (pending.secret)
           await submitAnswer(this.home, pending.secret.id, answer);
         this.pending.delete(id);

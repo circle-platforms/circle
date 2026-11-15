@@ -180,13 +180,14 @@ test('/hooks lists what is configured and what a skill has not loaded', async (t
   await app.submit('/hooks');
   const text = app.state.notices.at(-1) ?? '';
   assert.match(text, /Hooks:/);
-  assert.match(text, /hello · user · session_start · true · trusted/);
+  // Moved into your settings and the skill's frontmatter, in the current format
+  assert.match(text, /hello · user · SessionStart · true/);
   assert.match(text, /Skill hooks waiting for load:/);
   assert.match(
     text,
-    /later · skill:demo · after_tool · echo hi · waiting for \/skill demo/,
+    /later · skill:demo · PostToolUse · echo hi · waiting for \/skill demo/,
   );
-  assert.match(text, /project hooks need trust/);
+  assert.match(text, /project hooks need a trusted folder/);
   await app.submit('/help');
   assert.match(app.state.notices.at(-1)!, /\/hooks\s+List hooks/);
 });
