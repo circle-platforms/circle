@@ -15,7 +15,7 @@ import {
 } from '../src/ink/theme.js';
 import { renderScreen } from '../src/tui/render.js';
 import { stripAnsi } from '../src/ink/string_width.js';
-import { scratch, cleanup, until } from './helpers.js';
+import { scratch, cleanup, until, serversOf } from './helpers.js';
 import { AuthorizedServer } from './fixtures/knowledge-sync/authorized-server.js';
 const signal = new AbortController().signal;
 async function session(t: Parameters<typeof scratch>[0]) {
@@ -214,11 +214,11 @@ test('sync connection and destructive mode changes require exact person approval
   await server.seed(w.home);
   const config = {
     name: 'chosen',
-    transport: 'streamable_http',
+    transport: 'http',
     url: server.origin + '/mcp',
   };
-  w.runtime.options.settings.mcp_servers = [config];
-  w.settings.mcp_servers = [config];
+  w.runtime.options.settings.mcpServers = serversOf(config);
+  w.settings.mcpServers = serversOf(config);
   saveSettings(w.settings, w.home);
   const selecting = w.app.submit('/knowledge connect chosen');
   await until(() => !!w.ui.state.dialog);
@@ -350,14 +350,13 @@ test('structured terminal edits preserve Markdown whitespace and refuse a missin
 
 test('a direct Bearer connection offers credential replacement rather than claiming an OAuth login', async (t) => {
   const w = await session(t);
-  w.runtime.options.settings.mcp_servers = [
-    {
-      name: 'direct',
+  w.runtime.options.settings.mcpServers = {
+    direct: {
       url: 'http://127.0.0.1:9/mcp',
-      transport: 'streamable_http',
+      type: 'http',
       headers: { authorization: 'Bearer synthetic-direct-token' },
     },
-  ];
+  };
   w.runtime.options.settings.knowledge_sync = {
     server: 'direct',
     binding: 'a'.repeat(64),
@@ -379,11 +378,11 @@ test('connecting an account that never synced on this device says so, from local
   await server.seed(w.home);
   const config = {
     name: '团队服务器',
-    transport: 'streamable_http',
+    transport: 'http',
     url: server.origin + '/mcp',
   };
-  w.runtime.options.settings.mcp_servers = [config];
-  w.settings.mcp_servers = [config];
+  w.runtime.options.settings.mcpServers = serversOf(config);
+  w.settings.mcpServers = serversOf(config);
   saveSettings(w.settings, w.home);
   const first = /first sync on this device/;
   const before = server.peer.calls.length;
@@ -412,11 +411,11 @@ test('the terminal says synced and local, asks with named cards and leaves a not
   await server.seed(w.home);
   const config = {
     name: '团队服务器',
-    transport: 'streamable_http',
+    transport: 'http',
     url: server.origin + '/mcp',
   };
-  w.runtime.options.settings.mcp_servers = [config];
-  w.settings.mcp_servers = [config];
+  w.runtime.options.settings.mcpServers = serversOf(config);
+  w.settings.mcpServers = serversOf(config);
   saveSettings(w.settings, w.home);
   const notices = () => w.ui.state.notices as string[];
   const selecting = w.app.submit('/knowledge connect 团队服务器');

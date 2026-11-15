@@ -37,29 +37,40 @@ test('a trace context is version 00, sampled, with a new trace and parent id eac
   assert.equal(seen.size, 50);
 });
 
-test('a url server without a transport is reached over SSE', () => {
-  const { connections } = buildMcpConnections([
-    { name: 'plain', url: 'http://127.0.0.1:1/sse' },
-    { name: 'unknown', url: 'http://127.0.0.1:1/sse', transport: 'grpc' },
-  ]);
+test('a url server without a type, or with a type Circle does not know, is not connected and says why', () => {
+  const { connections, skipped } = buildMcpConnections({
+    plain: { url: 'http://127.0.0.1:1/sse' },
+    unknown: { type: 'grpc', url: 'http://127.0.0.1:1/sse' },
+    alias: { type: 'streamable-http', url: 'http://127.0.0.1:1/mcp' },
+  });
   assert.deepEqual(
-    connections.map((connection) => connection.transport),
-    ['sse', 'sse'],
+    connections.map((connection) => [connection.name, connection.transport]),
+    [['alias', 'http']],
+  );
+  assert.deepEqual(
+    skipped.map((row) => [row.name, row.error]),
+    [
+      [
+        'plain',
+        'has a "url" but no "type"; add "type": "http" (or "sse" / "ws") to this entry',
+      ],
+      ['unknown', 'its type "grpc" is not one of stdio, http, sse and ws'],
+    ],
   );
 });
 
 test("a configured header of Circle's own names is left out before its value is filled in, and /mcp says it is not sent", async (t) => {
-  const { connections } = buildMcpConnections([
-    {
-      name: 'files-server',
+  const { connections } = buildMcpConnections({
+    'files-server': {
+      type: 'http',
       url: 'http://127.0.0.1:1/mcp',
       headers: {
-        'CIRCLE-SESSION-ID': '${secret:NOT_SAVED}',
-        TraceParent: '${env:CIRCLE_TEST_NOT_SET}',
+        'CIRCLE-SESSION-ID': '${NOT_SAVED}',
+        TraceParent: '${CIRCLE_TEST_NOT_SET}',
         'X-Team': 'lab',
       },
     },
-  ]);
+  });
   assert.deepEqual(connections[0]!.headers, { 'X-Team': 'lab' });
   assert.deepEqual(connections[0]!.notSent, [
     'CIRCLE-SESSION-ID',
@@ -71,18 +82,17 @@ test("a configured header of Circle's own names is left out before its value is 
   });
   const manager = new McpManager(scratch(t));
   cleanup(t, () => manager.close());
-  await manager.load([
-    {
-      name: 'files-server',
+  await manager.load({
+    'files-server': {
       url: stub.url,
-      transport: 'streamable_http',
+      type: 'http',
       headers: {
-        'circle-session-id': '${secret:NOT_SAVED}',
+        'circle-session-id': '${NOT_SAVED}',
         traceparent: 'configured',
         'X-Team': 'lab',
       },
     },
-  ]);
+  });
   assert.equal(manager.status[0]!.error, '', manager.describe());
   assert.ok(stub.requests.length > 0);
   for (const request of stub.requests) {
@@ -94,14 +104,13 @@ test("a configured header of Circle's own names is left out before its value is 
     /\n {4}headers: X-Team\n {4}not sent, Circle sets them: circle-session-id, traceparent\n/,
   );
   // Only those names: a server with no other header lists none
-  await manager.load([
-    {
-      name: 'files-server',
+  await manager.load({
+    'files-server': {
       url: stub.url,
-      transport: 'streamable_http',
+      type: 'http',
       headers: { traceparent: 'configured' },
     },
-  ]);
+  });
   assert.doesNotMatch(manager.describe(), /headers:/);
   assert.match(manager.describe(), /not sent, Circle sets them: traceparent/);
 });
@@ -114,21 +123,19 @@ test('every request to an HTTP or SSE server carries the session of that moment,
     tools: [{ name: 'echo', inputSchema: { type: 'object', properties: {} } }],
   });
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    {
-      name: 'http-server',
+  settings.mcpServers = {
+    'http-server': {
       url: stub.url,
-      transport: 'streamable_http',
-      // Circle's own headers: configured ones of the same names are never sent
+      type: 'http', // Circle's own headers: configured ones of the same names are never sent
       headers: { 'Circle-Session-Id': 'configured', traceparent: 'configured' },
     },
-    { name: 'sse-server', url: stub.sseUrl },
-  ];
+    'sse-server': { type: 'sse', url: stub.sseUrl },
+  };
   const calls = () =>
     reply('', [
-      { id: crypto.randomUUID(), name: 'http-server_echo', args: {} },
-      { id: crypto.randomUUID(), name: 'sse-server_echo', args: {} },
-      { id: crypto.randomUUID(), name: 'http-server_echo', args: {} },
+      { id: crypto.randomUUID(), name: 'mcp__http-server__echo', args: {} },
+      { id: crypto.randomUUID(), name: 'mcp__sse-server__echo', args: {} },
+      { id: crypto.randomUUID(), name: 'mcp__http-server__echo', args: {} },
     ]);
   const runtime = new AgentRuntime({
     home: join(root, 'home'),
@@ -190,9 +197,7 @@ test("the cancellation sent for an interrupted tool call carries that call's tra
   cleanup(t, () => answer?.());
   const manager = new McpManager(scratch(t));
   cleanup(t, () => manager.close());
-  await manager.load([
-    { name: 'http-server', url: stub.url, transport: 'streamable_http' },
-  ]);
+  await manager.load({ 'http-server': { url: stub.url, type: 'http' } });
   const controller = new AbortController();
   const running = manager.tools[0]!.run(
     {},

@@ -1,5 +1,5 @@
 import type { ExtensionAPI, McpServerState } from '../../extensions.js';
-import { findHub, hubEntry } from '../../hub_connection.js';
+import { findHub, HUB_SERVER, hubEntry } from '../../hub_connection.js';
 // The Hub extension: given a Hub's address, it finds the Hub's MCP endpoint and saves the MCP entry named Hub
 // (src/hub_connection.ts), in the desktop from its page and in the terminal from /hub. The sign-in is the MCP
 // authorization of any server. No Hub address is built in.
@@ -14,7 +14,7 @@ function stateLine(state: McpServerState, endpoint: string): string {
       "Use the invite code from the Hub's administrator, or sign in to the Hub's console in that browser first. /mcp shows the Hub's tools once you have signed in.",
     ].join('\n');
   if (state.state === 'failed')
-    return `Hub saved: ${endpoint}, but it could not connect: ${state.error ?? 'no reason given'}. Fix that, then /mcp reload ${state.name}.`;
+    return `Hub saved: ${endpoint}, but it could not connect: ${state.error ?? 'no reason given'}. Fix that, then /mcp reconnect ${state.name}.`;
   return `Hub connected: ${endpoint} · ${state.tools} tools.`;
 }
 
@@ -38,7 +38,10 @@ export function register(api: ExtensionAPI) {
         return;
       }
       context.append(
-        stateLine(await api.saveMcpServer(hubEntry(endpoint)), endpoint),
+        stateLine(
+          await api.saveMcpServer(HUB_SERVER, hubEntry(endpoint)),
+          endpoint,
+        ),
       );
     },
   );

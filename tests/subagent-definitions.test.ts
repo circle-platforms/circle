@@ -332,9 +332,7 @@ test('mcpServers gives a subagent the tools of a configured server beside its ow
     tools: [{ name: 'echo', inputSchema: { type: 'object', properties: {} } }],
   });
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    { name: 'stub', url: stub.url, transport: 'streamable_http' },
-  ];
+  settings.mcpServers = { stub: { type: 'http', url: stub.url } };
   const agents = join(paths.home, 'agents');
   agent(agents, 'reader', 'tools: read_file\nmcpServers: [stub]\n');
   agent(agents, 'lost', 'mcpServers: [nowhere]\n');
@@ -345,7 +343,7 @@ test('mcpServers gives a subagent the tools of a configured server beside its ow
   const runtime = runtimeFor(t, paths, model, { settings });
   await runtime.initialize();
   await runtime.harness.run('go');
-  assert.deepEqual(toolsOf(model, 'read it'), ['read_file', 'stub_echo']);
+  assert.deepEqual(toolsOf(model, 'read it'), ['read_file', 'mcp__stub__echo']);
   const { agents: listed, problems } = runtime.inspectSubagents();
   assert.deepEqual(listed.find((item) => item.name === 'reader')?.mcpServers, [
     'stub',
@@ -541,9 +539,7 @@ test("the mcp__ forms find a server's tools by the server's name, whatever its t
     ],
   });
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    { name: 'stub', url: stub.url, transport: 'streamable_http' },
-  ];
+  settings.mcpServers = { stub: { type: 'http', url: stub.url } };
   const agents = join(paths.home, 'agents');
   agent(agents, 'local-only', 'disallowedTools: mcp__stub\n');
   agent(agents, 'no-mcp', 'disallowedTools: mcp__*\n');
@@ -569,15 +565,15 @@ test("the mcp__ forms find a server's tools by the server's name, whatever its t
   await runtime.initialize();
   await runtime.harness.run('go');
   const stubTools = (key: string) =>
-    toolsOf(model, key).filter((name) => name.startsWith('stub_'));
+    toolsOf(model, key).filter((name) => name.startsWith('mcp__stub__'));
   assert.deepEqual(stubTools('local only'), []);
   assert.deepEqual(stubTools('no mcp'), []);
-  assert.deepEqual(stubTools('no echo'), ['stub_ping']);
+  assert.deepEqual(stubTools('no echo'), ['mcp__stub__ping']);
   assert.ok(toolsOf(model, 'local only').includes('read_file'));
   assert.deepEqual(toolsOf(model, 'only stub'), [
     'read_file',
-    'stub_echo',
-    'stub_ping',
+    'mcp__stub__echo',
+    'mcp__stub__ping',
   ]);
   assert.ok(
     runtime

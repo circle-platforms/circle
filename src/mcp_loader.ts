@@ -3,8 +3,14 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import {
+  SSEClientTransport,
+  SseError,
+} from '@modelcontextprotocol/sdk/client/sse.js';
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPError,
+} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import {
@@ -28,7 +34,6 @@ import type {
   FetchLike,
   Transport,
 } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { ToolHint } from './approvals.js';
 import type {
   Tool,
   ToolContext,
@@ -66,32 +71,52 @@ import {
 import { VERSION } from './version.js';
 import { formatJcs } from './knowledge/canonical.js';
 import { replaceLongest } from './secrets.js';
+import { tokenLen } from './middleware/tool_result_prune.js';
+import type { Job, JobOwner } from './jobs.js';
+import type { ElicitationAnswer } from './hooks.js';
+import {
+  environmentThenSecrets,
+  expandReferences,
+  mcpToolName,
+  mcpType,
+  WITHHELD_VARIABLES,
+  type McpEntry,
+  type McpScope,
+  type McpServerConfig,
+  type McpType,
+} from './mcp_config.js';
+import { runHeadersHelper } from './mcp_headers_helper.js';
 export { replaceLongest };
 
 export interface McpConnection {
   name: string;
-  transport: 'stdio' | 'sse' | 'streamable_http' | 'websocket';
+  transport: McpType;
+  /** Where its entry is written: your settings (the default), this project's in them, or the project's `.mcp.json`. */
+  scope?: McpScope;
+  /** The folder a `headersHelper` runs in: the workspace when none is given. */
+  folder?: string;
   command?: string;
   args?: string[];
   env?: Record<string, string>;
   url?: string;
   /**
-   * Sent with every request to a server reached by URL; `${env:NAME}` and `${secret:NAME}`
-   * are filled in on connect.
+   * Sent with every request to a server reached by URL; `${VAR}` and `${VAR:-default}` are filled in on connect, from
+   * the environment and then the saved secrets.
    */
   headers?: Record<string, string>;
+  /** A command whose standard output, a JSON object, gives more headers when the server is connected. */
+  headersHelper?: string;
+  /** Whether a project's or a local `headersHelper` may run: the folder is trusted. */
+  trusted?: boolean;
   /**
    * Configured headers of the names Circle sets itself (`Circle-Session-Id`, `traceparent`),
    * as written: never sent, and their values never filled in.
    */
   notSent?: string[];
-  /**
-   * False: the server's tool annotations are not read, and every tool asks as an unknown one
-   * does. Default true.
-   */
-  trustAnnotations?: boolean;
   /** The largest file a file parameter of the server's tools takes, in bytes. */
   maxFileBytes?: number;
+  /** The most a tool call may take, in milliseconds, from the entry's `timeout`. */
+  timeout?: number;
 }
 /** The largest file a file parameter takes unless the server's entry says otherwise. */
 export const MAX_FILE_BYTES = 32 * 1024 * 1024;
@@ -108,6 +133,12 @@ export interface McpStatus {
   authorize?: string;
   /** During a device sign-in, the code to type on that page. */
   code?: string;
+  /** Where its entry is written. */
+  scope?: McpScope;
+  /** What in its entry may not be what was meant, such as a `${VAR}` that is not set; never a value. */
+  warnings?: string[];
+  /** A server of the project's `.mcp.json` that waits for the person's approval, or that the person declined. */
+  approval?: 'pending' | 'declined';
 }
 /** What a server shows while its sign-in is under way; a reload meanwhile shows the same. */
 interface SignInShown {
@@ -152,7 +183,64 @@ export interface McpServices {
    * (#556). Without it such a request is cancelled.
    */
   ask?: (args: Record<string, unknown>, signal: AbortSignal) => Promise<string>;
+  /**
+   * Someone is there to reconnect a server: a program that exits is marked failed until `/mcp reconnect`, rather than
+   * started again by the next call.
+   */
+  interactive?: boolean;
+  /**
+   * Starts a background job for a call that runs on after its turn (jobs.ts startCall). Without it, or outside an
+   * interactive session, a call runs where it was made until it ends.
+   */
+  background?: (
+    title: string,
+    owner: JobOwner,
+    run: (signal: AbortSignal, log: (text: string) => void) => Promise<string>,
+  ) => Job;
+  /** Keeps a result too large to give the model in a file, and gives the path the model reads it by. */
+  saveResult?: (text: string, tool: string) => string;
+  /**
+   * The Elicitation hooks, which may answer a server's question in the person's place, and the ElicitationResult
+   * hooks, which may change or block the person's answer before the server gets it. Nothing: the hooks leave it.
+   */
+  elicitationHooks?: {
+    before(
+      request: ElicitationRequest,
+      signal: AbortSignal,
+    ): Promise<ElicitationAnswer | undefined>;
+    after(
+      request: ElicitationRequest,
+      answer: ElicitationAnswer,
+      signal: AbortSignal,
+    ): Promise<ElicitationAnswer | undefined>;
+  };
 }
+/** A server's question in the middle of a call, as its hooks are told of it. */
+export interface ElicitationRequest {
+  server: string;
+  mode: 'form' | 'url';
+  message: string;
+  url?: string;
+  elicitationId?: string;
+  requestedSchema?: unknown;
+}
+/** How long a call of the conversation runs before it goes on as a background job. */
+export const AUTO_BACKGROUND_MS = 120_000;
+/** A result longer than this many characters, or than MAX_RESULT_TOKENS, is kept in a file. */
+export const MAX_RESULT_CHARS = 50_000;
+export const MAX_RESULT_TOKENS = 25_000;
+/** A limit in milliseconds from the environment, or the default when it is not a number of 0 or more. */
+function envMs(name: string, fallback: number): number {
+  const raw = process.env[name];
+  const value = raw === undefined || raw.trim() === '' ? NaN : Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+/** The most a tool call may take unless its server's entry or CIRCLE_MCP_TOOL_TIMEOUT says otherwise: about 28 hours. */
+export const DEFAULT_CALL_TIMEOUT_MS = 100_000_000;
+/** How long a call to a server reached over the network may go without an answer or a progress notice. */
+export const REMOTE_IDLE_MS = 5 * 60_000;
+/** The same for a program started for a server. */
+export const STDIO_IDLE_MS = 30 * 60_000;
 /**
  * A tool's file parameters: its top-level properties that are base64 text
  * (`contentEncoding: "base64"`), which the model fills with a local file's path.
@@ -247,66 +335,108 @@ export function serverInstructions(
   }
   return `${text.slice(0, end).trimEnd()}\n[cut by Circle: the server's instructions are longer than 8 KiB]`;
 }
-// Model APIs take tool names of letters, digits, `_` and `-`, at most 64 characters. A tool
-// is offered as `<server>_<tool>` for any server name, with every other character turned
-// into `_`, so the request goes through. A name that would be longer is
-// shortened and given a hash of the original, so two long names stay apart.
-export function mcpToolName(server: string, tool: string): string {
-  const part = (value: string): string =>
-    value.replace(/[^A-Za-z0-9_-]+/g, '_') || '_';
-  const name = `${part(server)}_${part(tool)}`;
-  if (name.length <= 64) return name;
-  const hash = createHash('sha256')
-    .update(`${server}\0${tool}`)
-    .digest('hex')
-    .slice(0, 8);
-  return `${name.slice(0, 55)}_${hash}`;
-}
+export { mcpToolName };
 export interface McpConnections {
   connections: McpConnection[];
   // Entries that are not started, with the reason (`/mcp` lists them)
   skipped: McpStatus[];
 }
+/** What a server's row shows of its connection: its command line or its address, as written. */
+export function connectionText(connection: {
+  command?: string;
+  args?: string[];
+  url?: string;
+}): string {
+  return connection.command
+    ? [connection.command, ...(connection.args ?? [])].join(' ')
+    : (connection.url ?? '');
+}
+const strings = (value: unknown): Record<string, string> | undefined =>
+  isRecord(value)
+    ? Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [key, String(item)]),
+      )
+    : undefined;
+/**
+ * The connections the configured servers make, and why the others are not made. `servers` is an `mcpServers` object,
+ * taken as your own, or the entries of every place a run reads (mcp_config.ts mcpServersForRun).
+ */
 export function buildMcpConnections(
-  servers: Record<string, unknown>[],
+  servers: Record<string, McpServerConfig> | McpEntry[],
+  options: { trusted?: boolean } = {},
 ): McpConnections {
-  const connections = new Map<string, McpConnection>();
+  const entries: McpEntry[] = Array.isArray(servers)
+    ? servers
+    : Object.entries(servers).map(([name, config]) => ({
+        name,
+        scope: 'user' as const,
+        config,
+        folder: '',
+      }));
+  const connections: McpConnection[] = [];
   const skipped: McpStatus[] = [];
-  for (const [index, item] of servers.entries()) {
+  for (const { name, scope, config: item, folder } of entries) {
     if (!isRecord(item)) continue;
-    const name = String(item.name || item.id || `mcp${index}`);
-    let connection: McpConnection | undefined;
-    if (item.command) {
-      const args =
-        item.args === undefined
-          ? []
-          : Array.isArray(item.args)
-            ? item.args.map(String)
-            : [String(item.args)];
-      const env = isRecord(item.env)
-        ? Object.fromEntries(
-            Object.entries(item.env).map(([key, value]) => [
-              key,
-              String(value),
-            ]),
-          )
-        : undefined;
+    const shown = connectionText({
+      command: typeof item.command === 'string' ? item.command : undefined,
+      args: Array.isArray(item.args) ? item.args.map(String) : undefined,
+      url: typeof item.url === 'string' ? item.url : undefined,
+    });
+    const skip = (error: string): void => {
+      skipped.push({ name, connection: shown, tools: [], error, scope });
+    };
+    if (item.enabled === false) {
+      skip('disabled');
+      continue;
+    }
+    const type = mcpType(item);
+    if (item.type === 'sdk') {
+      skip(
+        `declares type "sdk", which only an application that embeds Circle can register`,
+      );
+      continue;
+    }
+    if (!type) {
+      skip(
+        `its type ${JSON.stringify(item.type)} is not one of stdio, http, sse and ws`,
+      );
+      continue;
+    }
+    if (type === 'stdio' && item.type === undefined && item.url !== undefined) {
+      skip(
+        'has a "url" but no "type"; add "type": "http" (or "sse" / "ws") to this entry',
+      );
+      continue;
+    }
+    let connection: McpConnection;
+    if (type === 'stdio') {
+      if (typeof item.command !== 'string' || !item.command.trim()) {
+        skip('a stdio server needs a "command"');
+        continue;
+      }
       connection = {
         name,
         transport: 'stdio',
-        command: String(item.command),
-        args,
-        env,
+        scope,
+        folder,
+        command: item.command,
+        args:
+          item.args === undefined
+            ? []
+            : Array.isArray(item.args)
+              ? item.args.map(String)
+              : [String(item.args)],
+        ...(strings(item.env) ? { env: strings(item.env) } : {}),
       };
-    } else if (item.url) {
-      const raw = String(item.transport || 'sse').toLowerCase();
-      const transport = ['sse', 'streamable_http', 'websocket'].includes(raw)
-        ? (raw as McpConnection['transport'])
-        : 'sse';
-      connection = { name, transport, url: String(item.url) };
+    } else {
+      if (typeof item.url !== 'string' || !item.url.trim()) {
+        skip('not configured: the entry has no url');
+        continue;
+      }
+      connection = { name, transport: type, scope, folder, url: item.url };
       if (isRecord(item.headers)) {
-        // Circle's own are left out here, before anything is filled in: a secret named in
-        // a header that is not sent is not needed
+        // Circle's own are left out here, before anything is filled in: a variable named in a header that is not sent
+        // is not needed
         const headers: Record<string, string> = {};
         const notSent: string[] = [];
         for (const [key, value] of Object.entries(item.headers))
@@ -315,58 +445,32 @@ export function buildMcpConnections(
         connection.headers = headers;
         if (notSent.length) connection.notSent = notSent;
       }
+      if (typeof item.headersHelper === 'string' && item.headersHelper.trim()) {
+        connection.headersHelper = item.headersHelper;
+        connection.trusted = scope === 'user' || options.trusted === true;
+      }
     }
-    if (!connection) continue;
-    // Only true or no value trusts what the server says of its tools
-    if (item.trust_annotations !== undefined && item.trust_annotations !== true)
-      connection.trustAnnotations = false;
+    // Below a second the entry's limit is not read, as the documented format has it
+    if (typeof item.timeout === 'number' && item.timeout >= 1000)
+      connection.timeout = item.timeout;
     // A limit that cannot be read is not replaced by the default: the server does not start
     const limit = item.max_file_bytes;
     if (
       limit !== undefined &&
-      item.enabled !== false &&
       (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 1)
     ) {
-      connections.delete(name);
-      skipped.push({
-        name,
-        connection: connection.command || connection.url || '',
-        tools: [],
-        error: 'max_file_bytes must be a whole number of bytes, 1 or more',
-      });
+      skip('max_file_bytes must be a whole number of bytes, 1 or more');
       continue;
     }
     if (typeof limit === 'number') connection.maxFileBytes = limit;
-    if (item.enabled === false) {
-      // A disabled later entry still overrides an earlier server with the same
-      // name. Never construct a transport or expose tools for either entry.
-      connections.delete(name);
-      skipped.push({
-        name,
-        connection: connection.command || connection.url || '',
-        tools: [],
-        error: 'disabled',
-      });
-      continue;
-    }
-    // The later of two servers with one name is used; the earlier is reported.
-    const earlier = connections.get(name);
-    if (earlier) {
-      connections.delete(name);
-      skipped.push({
-        name,
-        connection: earlier.command || earlier.url || '',
-        tools: [],
-        error: `another MCP server is also named '${name}'; the later one is used`,
-      });
-    }
-    connections.set(name, connection);
+    connections.push(connection);
   }
-  return { connections: [...connections.values()], skipped };
+  return { connections, skipped };
 }
-// Header values as sent: each `${env:NAME}` replaced by that variable of Circle's own
-// environment and each `${secret:NAME}` by that saved secret, so a token need not be written
-// into settings.json. An error names the header and the variable or secret, never a value.
+/**
+ * Header values as sent: each `${VAR}` and `${VAR:-default}` filled in from Circle's own environment, then from the
+ * saved secrets, so a token need not be written into settings. A reference to nothing set stays as written.
+ */
 export function resolveHeaders(
   headers: Record<string, string> = {},
   env: NodeJS.ProcessEnv = process.env,
@@ -380,49 +484,123 @@ export function resolveHeaders(
  */
 const credentialHeader = (name: string): boolean =>
   /^(?:proxy-)?authorization$/i.test(name) || secretLookingName(name);
+/** A connection's values with their references filled in, and what the server must not be seen to say back. */
+interface Filled {
+  headers: Record<string, string>;
+  /**
+   * Each secret value put in, with what is shown in its place: `%NAME%` for a saved secret, as everywhere a secret's
+   * value is hidden, and the reference as written for an environment variable whose name, or whose header's, looks
+   * secret. Any other value is no secret, and hiding it would only change what the server says wherever it stands.
+   */
+  filled: Map<string, string>;
+  /** References to nothing set, by where they are; never a value. */
+  missing: string[];
+}
 function fillHeaders(
   headers: Record<string, string> = {},
   env: NodeJS.ProcessEnv,
   secrets: Record<string, string>,
-): { headers: Record<string, string>; filled: Map<string, string> } {
+): Filled {
   const resolved: Record<string, string> = {};
-  // Each secret value put in, with what is shown in its place: `%NAME%` for a saved secret, as
-  // everywhere a secret's value is hidden, and the reference as written for an environment
-  // variable whose name, or whose header's, looks secret. Any other value is no secret, and
-  // hiding it would only change what the server says wherever the same text stands.
   const filled = new Map<string, string>();
+  const missing: string[] = [];
+  const lookup = environmentThenSecrets(env, secrets);
   for (const [name, template] of Object.entries(headers)) {
     if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))
       throw new Error(`invalid header name '${name}'`);
-    const value = template.replace(
-      /\$\{(env|secret):([A-Za-z_][A-Za-z0-9_]*)\}/g,
-      (reference: string, kind: string, variable: string) => {
-        // Only a value set as text: `constructor` and the other names every object has are
-        // neither variables nor secrets
-        const value =
-          kind === 'env'
-            ? env[variable]
-            : Object.hasOwn(secrets, variable)
-              ? secrets[variable]
-              : undefined;
-        const found = typeof value === 'string' ? value : '';
-        if (!found)
-          throw new Error(
-            kind === 'env'
-              ? `header ${name} needs the environment variable ${variable}, which is not set`
-              : `header ${name} needs the secret ${variable}, which is not saved; save it with /secrets ${variable}`,
-          );
-        if (kind === 'secret') filled.set(found, `%${variable}%`);
-        else if (secretLookingName(variable) || credentialHeader(name))
-          filled.set(found, reference);
-        return found;
-      },
+    const expanded = expandReferences(template, lookup, (variable) =>
+      WITHHELD_VARIABLES.has(variable),
     );
-    if (/[\r\n\0]/.test(value))
+    for (const variable of expanded.missing)
+      missing.push(`headers.${name} names \${${variable}}, which is not set`);
+    for (const used of expanded.used)
+      if (!used.value) continue;
+      else if (used.from === 'secret') filled.set(used.value, `%${used.name}%`);
+      else if (secretLookingName(used.name) || credentialHeader(name))
+        filled.set(used.value, `\${${used.name}}`);
+    if (/[\r\n\0]/.test(expanded.text))
       throw new Error(`header ${name} has a line break or NUL in its value`);
-    resolved[name] = value;
+    resolved[name] = expanded.text;
   }
-  return { headers: resolved, filled };
+  return { headers: resolved, filled, missing };
+}
+/**
+ * The address a server reached over the network is connected at: its `url` with its references filled in, as a
+ * connection fills them in. Nothing for a program, or for an address that is not one once filled in.
+ */
+export function connectionAddress(
+  connection: McpConnection,
+  secrets: Record<string, string> = {},
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  if (!connection.url) return undefined;
+  try {
+    return new URL(
+      expandReferences(
+        connection.url,
+        environmentThenSecrets(env, secrets),
+        (variable) => WITHHELD_VARIABLES.has(variable),
+      ).text,
+    ).href;
+  } catch {
+    return undefined;
+  }
+}
+/** What a connection is started or reached with: its references filled in. */
+interface Resolved extends Filled {
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+}
+function resolveConnection(
+  connection: McpConnection,
+  env: NodeJS.ProcessEnv,
+  secrets: Record<string, string>,
+): Resolved {
+  const lookup = environmentThenSecrets(env, secrets);
+  const missing: string[] = [];
+  const filled = new Map<string, string>();
+  const one = (text: string, where: string, remote = false): string => {
+    const expanded = expandReferences(text, lookup, (variable) =>
+      remote ? WITHHELD_VARIABLES.has(variable) : false,
+    );
+    for (const variable of expanded.missing)
+      missing.push(`${where} names \${${variable}}, which is not set`);
+    for (const used of expanded.used)
+      if (used.value && used.from === 'secret')
+        filled.set(used.value, `%${used.name}%`);
+    return expanded.text;
+  };
+  if (connection.transport === 'stdio')
+    return {
+      headers: {},
+      filled,
+      missing,
+      command: one(connection.command!, 'command'),
+      args: (connection.args ?? []).map((arg, index) =>
+        one(arg, `args[${index}]`),
+      ),
+      ...(connection.env
+        ? {
+            env: Object.fromEntries(
+              Object.entries(connection.env).map(([key, value]) => [
+                key,
+                one(value, `env.${key}`),
+              ]),
+            ),
+          }
+        : {}),
+    };
+  const url = one(connection.url!, 'url', true);
+  const headers = fillHeaders(connection.headers, env, secrets);
+  for (const [value, shown] of headers.filled) filled.set(value, shown);
+  return {
+    headers: headers.headers,
+    filled,
+    missing: [...missing, ...headers.missing],
+    url,
+  };
 }
 function hideFilled(filled: Map<string, string>): (text: string) => string {
   return (text) => replaceLongest(text, filled);
@@ -574,42 +752,40 @@ async function answerIn(
 }
 function transportFor(
   connection: McpConnection,
+  resolved: Resolved,
   workspace: string,
-  headers: Record<string, string>,
   fetch: FetchLike,
   authProvider?: McpAuthProvider,
 ): Transport {
   if (connection.transport === 'stdio')
     return new StdioClientTransport({
-      command: connection.command!,
-      args: connection.args ?? [],
+      command: resolved.command!,
+      args: resolved.args ?? [],
       cwd: workspace,
       env: {
         ...(shellEnvironment() as Record<string, string>),
-        ...connection.env,
+        CIRCLE_PROJECT_DIR: workspace,
+        ...resolved.env,
       },
       stderr: 'pipe',
     });
-  const url = new URL(connection.url!);
+  const url = new URL(resolved.url!);
   const protocols =
-    connection.transport === 'websocket'
-      ? ['ws:', 'wss:']
-      : ['http:', 'https:'];
+    connection.transport === 'ws' ? ['ws:', 'wss:'] : ['http:', 'https:'];
   if (!protocols.includes(url.protocol) || url.username || url.password)
     throw new Error('invalid MCP server URL');
+  const headers = resolved.headers;
   const requestInit = Object.keys(headers).length ? { headers } : undefined;
-  if (connection.transport === 'streamable_http')
+  if (connection.transport === 'http')
     return new StreamableHTTPClientTransport(url, {
       requestInit,
       fetch: authProvider ? authProvider.authorizedFetch(fetch) : fetch,
       ...(authProvider ? { authProvider } : {}),
     });
-  if (connection.transport === 'websocket') {
-    if (requestInit)
-      throw new Error('a websocket server cannot be sent headers');
+  if (connection.transport === 'ws') {
+    if (requestInit) throw new Error('a ws server cannot be sent headers yet');
     return new WebSocketClientTransport(url);
   }
-  // A `url` entry without a known transport is reached over HTTP with server-sent events
   return new SSEClientTransport(url, {
     requestInit,
     fetch: authProvider ? authProvider.authorizedFetch(fetch) : fetch,
@@ -689,23 +865,34 @@ function resultText(
 // The longest a timer can wait; the MCP SDK stops a request after 60 seconds unless told.
 const NO_LIMIT = 2_147_483_647;
 /**
- * What a tool's annotations make of it, when its server is trusted with them: read-only
- * (`readOnlyHint`) runs as Circle's own reads do; destructive (`destructiveHint`) asks every
- * time. A tool that says both is destructive. Anything else is unknown, as without them.
- * Idempotent (`idempotentHint`): a call that sends files may get an earlier result again,
- * while no call that may change what the server holds has reached it since.
+ * What a tool's annotations and `_meta` say of it. None of it decides whether a call asks: permission rules and the
+ * person's mode do. Read-only (`readOnlyHint`, and not also `destructiveHint`): its calls may run side by side, and one
+ * cut off after it was sent goes once more. Idempotent (`idempotentHint`): the same, the latter only; and a call that
+ * sends files may get an earlier result again while no call that may change what the server holds has reached it.
+ * `circle/requiresUserInteraction: true` in its `_meta`: every call asks a person, in every mode.
  */
-function toolHints(
-  annotations: unknown,
-  trusted: boolean,
-): { readOnly: boolean; destructive: boolean; idempotent: boolean } {
-  const hints = trusted && isRecord(annotations) ? annotations : {};
-  const destructive = hints.destructiveHint === true;
+function toolHints(spec: { annotations?: unknown; _meta?: unknown }): {
+  readOnly: boolean;
+  idempotent: boolean;
+  asksPerson: boolean;
+} {
+  const hints = isRecord(spec.annotations) ? spec.annotations : {};
   return {
-    readOnly: hints.readOnlyHint === true && !destructive,
-    destructive,
+    readOnly: hints.readOnlyHint === true && hints.destructiveHint !== true,
     idempotent: hints.idempotentHint === true,
+    asksPerson:
+      isRecord(spec._meta) && spec._meta[REQUIRES_USER_INTERACTION] === true,
   };
+}
+/** The `_meta` key a server marks a tool with whose every call a person approves. */
+export const REQUIRES_USER_INTERACTION = 'circle/requiresUserInteraction';
+/** What a tool's server says of it that Circle acts on. */
+interface ToolMarks {
+  readOnly: boolean;
+  asksPerson: boolean;
+  /** The server it belongs to and its own name there. */
+  server: string;
+  tool: string;
 }
 type ToolResult = CallToolResult;
 /** The errors a request's chain of causes carries, outermost first. */
@@ -735,12 +922,42 @@ function notSent(error: unknown): boolean {
     (cause) => typeof cause.code === 'string' && NOT_SENT_CODES.has(cause.code),
   );
 }
+/** An HTTP status a request failed with, when it failed with one. */
+function httpStatus(error: unknown): number | undefined {
+  for (const cause of causes(error))
+    if (
+      (cause instanceof StreamableHTTPError || cause instanceof SseError) &&
+      typeof cause.code === 'number' &&
+      cause.code > 0
+    )
+      return cause.code;
+  return undefined;
+}
+/** A server reached over HTTP that no longer knows the session the request named. */
+function sessionGone(error: unknown, client: Client): boolean {
+  const transport = client.transport;
+  return (
+    httpStatus(error) === 404 &&
+    transport instanceof StreamableHTTPClientTransport &&
+    transport.sessionId !== undefined
+  );
+}
+/** A failure that may pass if the request is made again: nothing was sent, or the server answered 5xx. */
+function passing(error: unknown): boolean {
+  const status = httpStatus(error);
+  return notSent(error) || (status !== undefined && status >= 500);
+}
 /** A call that reached the server and whose answer cannot come: its answer's stream ended, or its task was lost. */
 class Lost extends McpError {
   constructor(message: string) {
     super(ErrorCode.ConnectionClosed, message);
   }
 }
+/**
+ * The server forgot the session while a task it made for the call ran: the tool may have run, whatever the server
+ * says of it, so the call is not sent again on a new session.
+ */
+class TaskSessionLost extends Error {}
 /**
  * The connection ended after the request was sent, so it may have reached the server (#555): the MCP library closed
  * the connection under the call (it has no transport since), the call's answer was lost, or the socket was cut. A
@@ -923,6 +1140,8 @@ interface Connected {
   name: string;
   client: Client;
   connection: McpConnection;
+  /** The address it was reached at, its references filled in. */
+  url?: string;
   instructions?: string;
   /** False once the connection ended, closed by Circle or by the server. */
   open: boolean;
@@ -933,6 +1152,51 @@ export const TOOLS_CHANGED_WAIT_MS = 300;
 /** What a server whose tools changed shows while Circle keeps its earlier tools. */
 export const TOOLS_NOT_LISTED_AGAIN =
   'the server changed its tools and listing them again failed; the earlier tools stay until a reload';
+const OPEN = 'open';
+const DECLINE_PAGE = 'decline';
+/** The question for a page a server asks the person to open. */
+function openPageQuestion(server: string, message: string, page: URL) {
+  return {
+    question: `${server} asks you to open a page: ${message.trim() || '(no message)'}\n${page.href}\nOpen it in the browser?`,
+    header: server.length > 24 ? `${server.slice(0, 23)}…` : server,
+    options: [
+      { label: OPEN, description: 'open the page, and tell the server so' },
+      { label: DECLINE_PAGE, description: `${server} is told you declined` },
+    ],
+    multiple: false,
+    custom: false,
+  };
+}
+/** The first answer of a panel's reply, or nothing when it was closed. */
+function firstAnswer(reply: string): string | undefined {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(reply);
+  } catch {
+    return undefined;
+  }
+  const values = Array.isArray(decoded)
+    ? decoded
+    : isRecord(decoded) && Array.isArray(decoded.answers)
+      ? decoded.answers
+      : undefined;
+  const first = values?.[0];
+  return first === undefined
+    ? undefined
+    : String(Array.isArray(first) ? first[0] : first).trim();
+}
+/** What a server gets: its values only with an accept of a form. */
+function elicitResult(
+  answer: ElicitationAnswer,
+  mode: 'form' | 'url',
+): ElicitResult {
+  return answer.action === 'accept' && mode === 'form' && answer.content
+    ? {
+        action: 'accept',
+        content: answer.content as NonNullable<ElicitResult['content']>,
+      }
+    : { action: answer.action };
+}
 export class McpManager {
   tools: Tool[] = [];
   status: McpStatus[] = [];
@@ -948,13 +1212,8 @@ export class McpManager {
     );
     if (!readable.length) return [];
     const names = readable.map((server) => server.name);
-    // A read, as a read-only tool of theirs is, while every such server is trusted with what it says of its tools;
-    // otherwise these ask as that server's tools do
-    const effect: Effect = readable.every(
-      (server) => server.connection.trustAnnotations !== false,
-    )
-      ? 'read'
-      : 'unknown';
+    // Reading what a server publishes asks no one, as Circle's own reads do
+    const effect: Effect = 'read';
     const find = (name: unknown): Connected => {
       const server = this.servers.find(
         (item) =>
@@ -1057,8 +1316,8 @@ export class McpManager {
       },
     ];
   }
-  // What each tool's server says of it, when trusted with it: destructive or read-only
-  private hinted = new Map<string, ToolHint>();
+  // What each tool's server says of it: read-only, or that every call asks a person
+  private hinted = new Map<string, ToolMarks>();
   private results = new SentResults();
   // For file parameters when the runtime gives no reader: the workspace, as the terminal reads
   private files?: Sandbox;
@@ -1073,16 +1332,43 @@ export class McpManager {
     Connected,
     { wait?: NodeJS.Timeout; running?: Promise<void>; again?: boolean }
   >();
-  // `timeout` bounds connecting and listing tools. A tool call has no limit unless `callTimeout`
-  // is given: a tool may wait minutes (a login), and an interrupt cancels it.
+  // `timeout` bounds connecting a server, 30 seconds unless CIRCLE_MCP_TIMEOUT says otherwise. `callTimeout` is the
+  // most a tool call may take where its server's entry gives no `timeout`: about 28 hours unless
+  // CIRCLE_MCP_TOOL_TIMEOUT says otherwise. A call also ends when it goes without an answer or a progress notice for
+  // the idle limit (idleMs). An interrupt cancels a call at any time.
   constructor(
     readonly workspace: string,
-    readonly timeout = 30000,
+    readonly timeout = envMs('CIRCLE_MCP_TIMEOUT', 30_000),
     readonly callTimeout?: number,
     private readonly services: McpServices = {},
   ) {}
+  /**
+   * The idle limit of a call: five minutes for a server reached over the network and thirty for a program, unless
+   * CIRCLE_MCP_TOOL_IDLE_TIMEOUT says otherwise (0: none). A server's own `timeout` is the least it can be.
+   */
+  private idleMs(connection: McpConnection): number {
+    const fallback =
+      connection.transport === 'stdio' ? STDIO_IDLE_MS : REMOTE_IDLE_MS;
+    const idle = envMs('CIRCLE_MCP_TOOL_IDLE_TIMEOUT', fallback);
+    if (idle === 0) return NO_LIMIT;
+    return Math.max(idle, connection.timeout ?? 0);
+  }
+  /** The most one call of a server may take. */
+  private totalMs(connection: McpConnection): number {
+    return (
+      connection.timeout ??
+      this.callTimeout ??
+      envMs('CIRCLE_MCP_TOOL_TIMEOUT', DEFAULT_CALL_TIMEOUT_MS)
+    );
+  }
   /** The waits before sending a call again that surely did not leave this machine (#555). */
   retryWaitsMs: readonly number[] = [500, 1000, 2000];
+  /** The waits before connecting a server reached over the network again after its connection dropped: five tries. */
+  reconnectWaitsMs: readonly number[] = [1000, 2000, 4000, 8000, 16000];
+  /** The waits before trying a server's first connection again after an error that may pass: three more tries. */
+  connectWaitsMs: readonly number[] = [1000, 2000, 4000];
+  /** The waits before listing a server's tools again after an error that may pass: three more tries. */
+  listWaitsMs: readonly number[] = [250, 500, 1000];
   /** How such a wait is made. */
   wait = (ms: number, signal: AbortSignal): Promise<void> =>
     delay(ms, undefined, { signal });
@@ -1100,9 +1386,14 @@ export class McpManager {
     if (!live) {
       const state = this.status.find((item) => item.name === connection.name);
       throw new Error(
-        `${connection.name} is not connected${state?.error ? `: ${state.error}` : ''}; /mcp reload ${connection.name} connects it again`,
+        `${connection.name} is not connected${state?.error ? `: ${state.error}` : ''}; /mcp reconnect ${connection.name} connects it again`,
       );
     }
+    // Where someone can reconnect it, a program that exited stays failed until they do
+    if (this.services.interactive && live.connection.transport === 'stdio')
+      throw new Error(
+        `the program of ${connection.name} exited; /mcp reconnect ${connection.name} starts it again`,
+      );
     const fresh = await abortable(this.connectedAgain(live.connection), signal);
     if (fresh) return fresh;
     const state = this.status.find((item) => item.name === connection.name);
@@ -1126,7 +1417,7 @@ export class McpManager {
     client: Client,
     spec: ServerTool,
     name: string,
-    hints: { readOnly: boolean; idempotent: boolean },
+    hints: { readOnly: boolean; idempotent: boolean; asksPerson: boolean },
     filled: Map<string, string>,
     validator: AjvJsonSchemaValidator,
   ): Tool {
@@ -1161,7 +1452,7 @@ export class McpManager {
     };
     // The server is sent each file's bytes; Circle shows the file by path, size and digest.
     // `reuse` is the kept result the card said this call gets, decided before the card.
-    const call = async (
+    const callNow = async (
       args: Record<string, unknown>,
       context: ToolContext,
       sent: SentFile[] = [],
@@ -1226,6 +1517,7 @@ export class McpManager {
               // is read-only or idempotent, once, after connecting the server again; any other says it may have.
               let target = await this.sender(connection, own.signal);
               let resent = false;
+              let renewed = false;
               for (let tries = 0; ; tries++) {
                 const attempt = new AbortController();
                 const stop = (): void => attempt.abort(own.signal.reason);
@@ -1239,10 +1531,14 @@ export class McpManager {
                     throw new Error(
                       `${spec.name} runs only as a task, and ${connection.name} does not say it runs tool calls as tasks; nothing was sent`,
                     );
+                  // The idle limit, which a progress notice starts again, and the most the call may take. The MCP
+                  // library looks at the latter only when a notice comes, so the idle limit is never more than it.
+                  const total = this.totalMs(connection);
                   const options: RequestOptions = {
                     signal: attempt.signal,
-                    timeout: this.callTimeout ?? NO_LIMIT,
-                    maxTotalTimeout: this.callTimeout,
+                    timeout: Math.min(this.idleMs(connection), total),
+                    resetTimeoutOnProgress: true,
+                    maxTotalTimeout: total,
                     // Asks the server for progress notices, shown on the call's row
                     onprogress: (notice) => report(progressText(notice)),
                   };
@@ -1251,7 +1547,8 @@ export class McpManager {
                     ? await this.callAsTask(target, params, options, report)
                     : await callServerTool(target, params, options);
                 } catch (error) {
-                  if (own.signal.aborted) throw error;
+                  if (own.signal.aborted || error instanceof TaskSessionLost)
+                    throw error;
                   const said =
                     error instanceof Error ? error.message : String(error);
                   if (notSent(error)) {
@@ -1264,6 +1561,19 @@ export class McpManager {
                       { cause: error },
                     );
                   }
+                  // The server forgot the session (HTTP 404 to a request that named it): the request did not run, so it
+                  // goes once more on a new session
+                  if (!renewed && sessionGone(error, target)) {
+                    const fresh = await abortable(
+                      this.connectedAgain(connection),
+                      own.signal,
+                    );
+                    if (fresh) {
+                      renewed = true;
+                      target = fresh;
+                      continue;
+                    }
+                  }
                   if (!droppedAfterSending(error, target)) throw error;
                   const fresh =
                     !resent && (hints.readOnly || hints.idempotent)
@@ -1274,7 +1584,7 @@ export class McpManager {
                       : undefined;
                   if (!fresh)
                     throw new Error(
-                      `${said} · the connection to ${connection.name} ended after the call was sent: the request may have reached the server, so Circle did not send it again`,
+                      `${said} · the connection to ${connection.name} closed before the call was answered: the tool may have run, so Circle did not send it again; check whether it did before calling it again`,
                       { cause: error },
                     );
                   resent = true;
@@ -1336,6 +1646,17 @@ export class McpManager {
         );
       return framed(shown(text || JSON.stringify(structured ?? {})));
     };
+    // Where the call runs: here, or on as a background job once it ran a while; and how much of its result the model
+    // is given
+    const call = (
+      args: Record<string, unknown>,
+      context: ToolContext,
+      sent: SentFile[] = [],
+      reuse?: string,
+    ): Promise<string> =>
+      this.outcome(name, context, (running) =>
+        callNow(args, running, sent, reuse),
+      );
     // Before the approval: each named file is read under read_file's rules, so the card shows
     // what will be sent, and the call sends those bytes
     const prepare = async (
@@ -1388,18 +1709,12 @@ export class McpManager {
       name,
       description: hide(spec.description || name),
       parameters: modelSchema(spec.inputSchema, files),
-      effect: hints.readOnly ? 'read' : 'unknown',
-      // What the server says of its tool covers what the tool does there, not what a call
-      // sends it: a local file's bytes or a secret's value leave this machine with the call
-      ...(hints.readOnly
-        ? {
-            callEffect: (args, secrets) =>
-              secrets.length ||
-              files.some((parameter) => args[parameter] !== undefined)
-                ? 'unknown'
-                : 'read',
-          }
-        : {}),
+      // Circle cannot see what a server's tool does: a call asks unless a rule allows it, in plan mode too, whatever
+      // the server says of it
+      effect: 'unknown',
+      planAsks: true,
+      ...(hints.readOnly ? { parallel: true } : {}),
+      ...(hints.asksPerson ? { personApproval: true } : {}),
       ...(files.length
         ? {
             paths: named,
@@ -1410,33 +1725,54 @@ export class McpManager {
         : { run: (args, context) => call(args, context) }),
     };
   }
+  /**
+   * Connects the configured servers, side by side, and offers their tools. `servers` is an `mcpServers` object, taken
+   * as your own, or the entries a run reads (mcp_config.ts). `waiting` lists servers that are not connected for a
+   * reason of the run's, such as a `.mcp.json` server that waits for approval.
+   */
   async load(
-    servers: Record<string, unknown>[],
+    servers: Record<string, McpServerConfig> | McpEntry[],
     reserved = new Set<string>(),
     signal?: AbortSignal,
+    options: { waiting?: McpStatus[]; trusted?: boolean } = {},
   ): Promise<void> {
     const connected: Connected[] = [];
     const tools: Tool[] = [];
     const status: McpStatus[] = [];
-    const hinted = new Map<string, ToolHint>();
+    const hinted = new Map<string, ToolMarks>();
     try {
-      const { connections, skipped } = buildMcpConnections(servers);
-      status.push(...skipped);
+      const { connections, skipped } = buildMcpConnections(servers, {
+        trusted: options.trusted,
+      });
+      status.push(...skipped, ...(options.waiting ?? []));
       this.reserved = reserved;
-      for (const connection of connections) {
-        signal?.throwIfAborted();
-        const outcome = await this.connectServer(
-          connection,
-          reserved,
-          (name) => tools.some((tool) => tool.name === name),
-          signal,
+      signal?.throwIfAborted();
+      const outcomes = await Promise.allSettled(
+        connections.map((connection) =>
+          this.firstConnection(connection, reserved, signal),
+        ),
+      );
+      // In the order they are configured: of two servers whose tools would have one name, the earlier keeps it
+      for (const outcome of outcomes) {
+        if (outcome.status === 'rejected') continue;
+        const { state, server } = outcome.value;
+        status.push(state);
+        if (!server) continue;
+        const clash = outcome.value.tools.find((tool) =>
+          tools.some((have) => have.name === tool.name),
         );
-        status.push(outcome.state);
-        if (!outcome.server) continue;
-        connected.push(outcome.server);
-        tools.push(...outcome.tools);
-        for (const [name, hint] of outcome.said) hinted.set(name, hint);
+        if (clash) {
+          state.error = `tool '${clash.name}' already exists`;
+          state.tools = [];
+          await McpManager.disconnect([server]);
+          continue;
+        }
+        connected.push(server);
+        tools.push(...outcome.value.tools);
+        for (const [name, hint] of outcome.value.said) hinted.set(name, hint);
       }
+      const failed = outcomes.find((outcome) => outcome.status === 'rejected');
+      if (failed) throw failed.reason;
       signal?.throwIfAborted();
       const previous = this.servers;
       this.servers = connected;
@@ -1452,6 +1788,37 @@ export class McpManager {
     }
   }
   /**
+   * A server's first connection. One reached over HTTP or SSE that fails in a way that may pass (a 5xx, a refused
+   * connection, a connect timeout) is tried again after each of the connect waits; a program, a ws server, a sign-in
+   * and any other failure are not.
+   */
+  private async firstConnection(
+    connection: McpConnection,
+    reserved: Set<string>,
+    signal?: AbortSignal,
+  ): ReturnType<McpManager['connectServer']> {
+    for (let tries = 0; ; tries++) {
+      const outcome = await this.connectServer(
+        connection,
+        reserved,
+        () => false,
+        signal,
+      );
+      if (
+        outcome.server ||
+        outcome.state.authorize ||
+        (connection.transport !== 'http' && connection.transport !== 'sse') ||
+        tries >= this.connectWaitsMs.length ||
+        !passing(outcome.failure)
+      )
+        return outcome;
+      await this.wait(
+        this.connectWaitsMs[tries]!,
+        signal ?? this.lifetime.signal,
+      );
+    }
+  }
+  /**
    * One server: connected, with its tools, or why not. A server reached by URL that asks for a sign-in gets one in the
    * browser, which ends without holding up the others.
    */
@@ -1464,14 +1831,17 @@ export class McpManager {
     state: McpStatus;
     server?: Connected;
     tools: Tool[];
-    said: Map<string, ToolHint>;
+    said: Map<string, ToolMarks>;
+    /** Why it did not connect, when it did not. */
+    failure?: unknown;
   }> {
     const headerNames = Object.keys(connection.headers ?? {});
     const state: McpStatus = {
       name: connection.name,
-      connection: connection.command || connection.url || '',
+      connection: connectionText(connection),
       tools: [],
       error: '',
+      scope: connection.scope,
       ...(headerNames.length ? { headers: headerNames } : {}),
       ...(connection.notSent ? { notSent: connection.notSent } : {}),
     };
@@ -1482,15 +1852,17 @@ export class McpManager {
         version: VERSION,
         platform: process.platform,
       } as Implementation,
-      // A server may ask the person for input in the middle of a call, with a form (#556), where someone can be asked.
-      // The MCP library answers a request of another mode (a page to open) with an error; without a question panel
-      // (print, line and RPC mode) Circle does not say it takes forms, so a server does not ask.
-      { capabilities: this.services.ask ? { elicitation: { form: {} } } : {} },
+      // A server may ask the person for input in the middle of a call, with a form or by a page to open (#556). Circle
+      // says it takes both; where no one can be asked a question is cancelled, unless a hook answers it.
+      { capabilities: { elicitation: { form: {}, url: {} } } },
     );
-    if (this.services.ask)
-      client.setRequestHandler(ElicitRequestSchema, (request, extra) =>
-        this.elicit(connection.name, request.params, extra.signal),
-      );
+    client.setRequestHandler(ElicitRequestSchema, (request, extra) =>
+      this.elicit(
+        connection.name,
+        request.params as Record<string, unknown>,
+        extra.signal,
+      ),
+    );
     let transport: Transport | undefined;
     let provider: McpAuthProvider | undefined;
     const timeout = AbortSignal.timeout(this.timeout);
@@ -1503,17 +1875,13 @@ export class McpManager {
     // What the server sends back names a header's secret, never its value
     let hide = (text: string): string => text;
     try {
-      const filled = fillHeaders(
-        connection.headers,
-        process.env,
-        this.services.secrets?.() ?? {},
-      );
+      const filled = await this.resolved(connection, state, combined);
       hide = hideFilled(filled.filled);
-      provider = await this.authProvider(connection);
+      provider = await this.authProvider(connection, filled);
       transport = transportFor(
         connection,
+        filled,
         this.workspace,
-        filled.headers,
         requestFetch(this.services.sessionId),
         provider,
       );
@@ -1538,6 +1906,7 @@ export class McpManager {
         name: connection.name,
         client,
         connection,
+        ...(filled.url ? { url: filled.url } : {}),
         instructions: serverInstructions(client.getInstructions(), hide),
         open: true,
       };
@@ -1546,9 +1915,15 @@ export class McpManager {
       client.onclose = () => {
         if (!server.open) return;
         server.open = false;
-        state.error =
-          'the connection ended; the next call connects it again, and so does /mcp reload';
         this.results.forget(connection.name);
+        if (connection.transport !== 'stdio') {
+          // A server reached over the network that dropped is connected again, a few times, in the background
+          state.error = 'the connection ended; reconnecting';
+          this.reconnectDropped(connection);
+        } else
+          state.error = this.services.interactive
+            ? `the program exited; /mcp reconnect ${connection.name} starts it again`
+            : 'the program exited; the next call starts it again';
         this.services.onChange?.();
       };
       // A server that says its tools can change is listed again when it says they did: the next turn has the new
@@ -1573,7 +1948,7 @@ export class McpManager {
       await client.close().catch(() => {});
       await transport?.close().catch(() => {});
       if (signal?.aborted) throw signal.reason;
-      return { state, tools: [], said: new Map() };
+      return { state, tools: [], said: new Map(), failure: error };
     } finally {
       combined.removeEventListener('abort', stop);
     }
@@ -1584,18 +1959,71 @@ export class McpManager {
    */
   private async authProvider(
     connection: McpConnection,
+    resolved: Resolved,
   ): Promise<McpAuthProvider | undefined> {
     const home = this.services.home;
     if (
       !home ||
-      !connection.url ||
-      (connection.transport !== 'streamable_http' &&
-        connection.transport !== 'sse') ||
-      Object.keys(connection.headers ?? {}).some(credentialHeader)
+      !resolved.url ||
+      (connection.transport !== 'http' && connection.transport !== 'sse') ||
+      Object.keys(resolved.headers).some(credentialHeader)
     )
       return undefined;
-    const server = new URL(connection.url).href;
+    const server = new URL(resolved.url).href;
     return new McpAuthProvider(home, server, await redirectPort(home, server));
+  }
+  /**
+   * A connection's values as it is made now: its references filled in from the environment and the saved secrets, and
+   * the headers its `headersHelper` prints over its own. What is not as meant is in the server's warnings.
+   */
+  private async resolved(
+    connection: McpConnection,
+    state: McpStatus,
+    signal: AbortSignal,
+  ): Promise<Resolved> {
+    const resolved = resolveConnection(
+      connection,
+      process.env,
+      this.services.secrets?.() ?? {},
+    );
+    const warnings = [...resolved.missing];
+    if (connection.headersHelper) {
+      if (!connection.trusted)
+        warnings.push(
+          'headersHelper not run: the folder is not trusted, so the server is reached with its own headers only',
+        );
+      else {
+        const given = await runHeadersHelper(connection.headersHelper, {
+          folder: connection.folder || this.workspace,
+          server: connection.name,
+          url: connectionText(connection),
+          own: connection.scope !== 'project',
+          signal,
+        });
+        for (const [name, value] of Object.entries(given)) {
+          if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))
+            throw new Error(
+              `headersHelper gave an invalid header name '${name}'`,
+            );
+          if (/[\r\n\0]/.test(value))
+            throw new Error(
+              `headersHelper gave header ${name} a line break or NUL in its value`,
+            );
+          if (OWN_HEADERS.has(name.toLowerCase())) continue;
+          // Its values are never shown: a server that says one back reads as its header's name
+          if (value && credentialHeader(name))
+            resolved.filled.set(value, `<${name} from headersHelper>`);
+          const same = Object.keys(resolved.headers).find(
+            (key) => key.toLowerCase() === name.toLowerCase(),
+          );
+          if (same) delete resolved.headers[same];
+          resolved.headers[name] = value;
+        }
+      }
+    }
+    if (warnings.length) state.warnings = warnings;
+    else delete state.warnings;
+    return resolved;
   }
   /**
    * The sign-in of a server that answered 401. When its authorization server offers the device code (RFC 8628), Circle
@@ -1682,8 +2110,8 @@ export class McpManager {
       const code = await redirect.code;
       const exchange = transportFor(
         connection,
+        { headers: {}, filled: new Map(), missing: [], url: provider.server },
         this.workspace,
-        {},
         requestFetch(this.services.sessionId),
         provider,
       ) as StreamableHTTPClientTransport | SSEClientTransport;
@@ -1716,28 +2144,34 @@ export class McpManager {
     filled: Map<string, string>,
     taken: (name: string) => boolean,
     signal: AbortSignal,
-  ): Promise<{ registered: Tool[]; said: Map<string, ToolHint> }> {
+  ): Promise<{ registered: Tool[]; said: Map<string, ToolMarks> }> {
     const registered: Tool[] = [];
-    const said = new Map<string, ToolHint>();
+    const said = new Map<string, ToolMarks>();
     const validator = new AjvJsonSchemaValidator();
     let cursor: string | undefined;
     const cursors = new Set<string>();
     do {
-      const listed = await client.request(
-        { method: 'tools/list', params: cursor ? { cursor } : undefined },
-        ListToolsResultSchema,
-        { signal, timeout: this.timeout },
+      const listed = await this.passingRetry(
+        () =>
+          client.request(
+            { method: 'tools/list', params: cursor ? { cursor } : undefined },
+            ListToolsResultSchema,
+            { signal, timeout: this.timeout },
+          ),
+        this.listWaitsMs,
+        signal,
       );
       for (const spec of listed.tools) {
         const name = mcpToolName(connection.name, spec.name);
         if (taken(name) || registered.some((tool) => tool.name === name))
           throw new Error(`tool '${name}' already exists`);
-        const hints = toolHints(
-          spec.annotations,
-          connection.trustAnnotations !== false,
-        );
-        if (hints.destructive) said.set(name, 'destructive');
-        else if (hints.readOnly) said.set(name, 'read-only');
+        const hints = toolHints(spec);
+        said.set(name, {
+          readOnly: hints.readOnly,
+          asksPerson: hints.asksPerson,
+          server: connection.name,
+          tool: spec.name,
+        });
         registered.push(
           this.serverTool(
             connection,
@@ -1868,6 +2302,11 @@ export class McpManager {
           return await request();
         } catch (error) {
           if (signal.aborted) throw error;
+          // A 404 here answers tasks/get or tasks/result, not the call: the call made the task, so it may have run
+          if (sessionGone(error, client))
+            throw new TaskSessionLost(
+              `the server lost the session while task ${taskId} was running: the tool may have run, so check whether it did before calling it again`,
+            );
           if (notSent(error) && tries < this.retryWaitsMs.length) {
             await this.wait(this.retryWaitsMs[tries]!, signal);
             continue;
@@ -1947,17 +2386,17 @@ export class McpManager {
     };
   }
   /**
-   * A server's question in the middle of a call (form mode, #556), in the question panel: a question for each field,
-   * then whether to send the answers. Answers that do not fit the form are asked for again; closing the panel, esc on
-   * the call, or the server's own cancellation cancels it. Without a panel (print, line and RPC mode) it is cancelled.
+   * A server's question in the middle of a call (#556). An Elicitation hook may answer it in the person's place;
+   * otherwise a form is asked in the question panel, a question for each field and then whether to send the answers,
+   * and a page to open is asked about before it opens. Then the ElicitationResult hooks may change or block the
+   * answer. Closing the panel, esc on the call, or the server's own cancellation cancels it, and so does a run where
+   * no one can be asked.
    */
   private async elicit(
     server: string,
-    params: { message: string; requestedSchema?: unknown },
+    params: Record<string, unknown>,
     cancelled: AbortSignal,
   ): Promise<ElicitResult> {
-    const ask = this.services.ask;
-    if (!ask) return { action: 'cancel' };
     // The call it came with, when its answer's stream brought it; and in any case once no call to the server is under
     // way, as a program's question comes on a stream of its own
     const call = toolCalls.getStore()?.signal;
@@ -1968,31 +2407,102 @@ export class McpManager {
       ...(call ? [call] : []),
       ...(idle ? [idle] : []),
     ]);
-    const fields = elicitationFields(params.requestedSchema);
+    const mode = params.mode === 'url' ? 'url' : 'form';
+    const request: ElicitationRequest = {
+      server,
+      mode,
+      message: typeof params.message === 'string' ? params.message : '',
+      ...(mode === 'url' && typeof params.url === 'string'
+        ? { url: params.url }
+        : {}),
+      ...(typeof params.elicitationId === 'string'
+        ? { elicitationId: params.elicitationId }
+        : {}),
+      ...(mode === 'form' && params.requestedSchema !== undefined
+        ? { requestedSchema: params.requestedSchema }
+        : {}),
+    };
+    const hooks = this.services.elicitationHooks;
+    const hooked = await hooks?.before(request, signal).catch(() => undefined);
+    // A hook's answer goes as it is: the ElicitationResult hooks do not run for it
+    if (hooked) return elicitResult(hooked, mode);
+    const answered =
+      mode === 'url'
+        ? await this.askToOpen(request, signal)
+        : await this.askForm(server, request, signal);
+    const changed = await hooks
+      ?.after(request, answered, signal)
+      .catch(() => undefined);
+    return elicitResult(changed ?? answered, mode);
+  }
+  /** A question asked in the panel; it holds the move of the call it came with to the background while it is open. */
+  private async askPanel(
+    questions: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<string | undefined> {
+    const ask = this.services.ask;
+    if (!ask) return undefined;
+    const question = ask(questions, signal);
+    this.openQuestions.add(question);
+    try {
+      const reply = await question;
+      return signal.aborted ? undefined : reply;
+    } catch (error) {
+      if (signal.aborted) return undefined;
+      throw error;
+    } finally {
+      this.openQuestions.delete(question);
+    }
+  }
+  /** A form, asked field by field until the answers fit it. */
+  private async askForm(
+    server: string,
+    request: ElicitationRequest,
+    signal: AbortSignal,
+  ): Promise<ElicitationAnswer> {
+    const fields = elicitationFields(request.requestedSchema);
     let problems: string[] = [];
     for (;;) {
-      let reply: string;
-      try {
-        reply = await ask(
-          {
-            questions: elicitationQuestions(
-              server,
-              params.message,
-              fields,
-              problems,
-            ),
-          },
-          signal,
-        );
-      } catch (error) {
-        if (signal.aborted) return { action: 'cancel' };
-        throw error;
-      }
-      if (signal.aborted) return { action: 'cancel' };
+      const reply = await this.askPanel(
+        {
+          questions: elicitationQuestions(
+            server,
+            request.message,
+            fields,
+            problems,
+          ),
+        },
+        signal,
+      );
+      if (reply === undefined) return { action: 'cancel' };
       const outcome = elicitationOutcome(fields, reply);
       if (outcome.action !== 'again') return outcome;
       problems = outcome.problems;
     }
+  }
+  /** A page a server asks the person to open: opened in the browser once they say so. */
+  private async askToOpen(
+    request: ElicitationRequest,
+    signal: AbortSignal,
+  ): Promise<ElicitationAnswer> {
+    let page: URL;
+    try {
+      page = new URL(request.url ?? '');
+    } catch {
+      return { action: 'decline' };
+    }
+    if (page.protocol !== 'https:' && page.protocol !== 'http:')
+      return { action: 'decline' };
+    const reply = await this.askPanel(
+      { questions: [openPageQuestion(request.server, request.message, page)] },
+      signal,
+    );
+    const choice = reply === undefined ? undefined : firstAnswer(reply);
+    if (choice === OPEN) {
+      await (this.services.openUrl ?? openInBrowser)(page.href).catch(() => {});
+      return { action: 'accept' };
+    }
+    return { action: choice === DECLINE_PAGE ? 'decline' : 'cancel' };
   }
   /**
    * Where a call cut after it was sent goes once more: the server's connection when it is still open, as an HTTP one
@@ -2005,6 +2515,169 @@ export class McpManager {
     const live = this.servers.find((item) => item.name === connection.name);
     if (!live) return undefined;
     return live.open ? live.client : this.connectedAgain(live.connection);
+  }
+  /** How long a call of the conversation runs before it goes on as a background job; 0: it never does. */
+  autoBackgroundMs = envMs('CIRCLE_MCP_AUTO_BACKGROUND_MS', AUTO_BACKGROUND_MS);
+  /** The questions servers ask that are open now: a call waiting on one is not moved to the background. */
+  private openQuestions = new Set<Promise<unknown>>();
+  /**
+   * Runs a call. In an interactive session a call of the conversation itself (not a subagent's) that still runs after
+   * autoBackgroundMs goes on as a background job: the model is told the job's id at once and reads the call's result
+   * in the job's notice; stopping the job cancels the call. A call a server's open question holds up moves once the
+   * question is answered. The result of a call that ends where it was made is given whole up to MAX_RESULT_CHARS
+   * characters and MAX_RESULT_TOKENS tokens (CIRCLE_MAX_MCP_OUTPUT_TOKENS); a longer one, without pictures, is kept
+   * in a file and the model is told its path.
+   */
+  private async outcome(
+    tool: string,
+    context: ToolContext,
+    run: (context: ToolContext) => Promise<string>,
+  ): Promise<string> {
+    let attached = false;
+    let moved = false;
+    let progress = context.progress;
+    const own = new AbortController();
+    const forward = (): void => own.abort(context.signal.reason);
+    context.signal.addEventListener('abort', forward, { once: true });
+    if (context.signal.aborted) forward();
+    const running = run({
+      ...context,
+      signal: own.signal,
+      progress: (text) => progress?.(text),
+      ...(context.emitAttachments
+        ? {
+            emitAttachments: (items) => {
+              // The turn has ended for a call in the background: what it shows goes nowhere
+              if (moved) return;
+              attached = true;
+              context.emitAttachments!(items);
+            },
+          }
+        : {}),
+    });
+    const background = this.services.background;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      if (
+        !background ||
+        !this.services.interactive ||
+        context.identity?.agentId ||
+        !this.autoBackgroundMs
+      )
+        return this.limited(tool, await running, attached);
+      const first = await Promise.race([
+        running.then((text) => ({ text })),
+        new Promise<undefined>((resolve) => {
+          timer = setTimeout(() => resolve(undefined), this.autoBackgroundMs);
+          timer.unref?.();
+        }),
+      ]);
+      if (first) return this.limited(tool, first.text, attached);
+      // A question the server asks holds the move until it is answered
+      while (this.openQuestions.size) {
+        const ended = await Promise.race([
+          running.then(
+            () => true,
+            () => true,
+          ),
+          Promise.allSettled([...this.openQuestions]).then(() => false),
+        ]);
+        if (ended) return this.limited(tool, await running, attached);
+      }
+      if (context.signal.aborted)
+        return this.limited(tool, await running, attached);
+      let job: Job;
+      try {
+        job = background(
+          tool,
+          { sessionId: context.sessionId, startedBy: 'model' },
+          (signal, log) => {
+            const stop = (): void => own.abort(signal.reason);
+            signal.addEventListener('abort', stop, { once: true });
+            if (signal.aborted) stop();
+            progress = log;
+            // The notice gives the result as the model would have read it here: whole, or kept in a file
+            return running.then((text) => this.limited(tool, text, attached));
+          },
+        );
+      } catch {
+        // No room for another job: the call goes on here
+        return this.limited(tool, await running, attached);
+      }
+      moved = true;
+      context.signal.removeEventListener('abort', forward);
+      // Its result is the job's, read in its notice: nothing waits for it here
+      running.catch(() => {});
+      return `${tool} was still running after ${Math.round(this.autoBackgroundMs / 1000)} seconds, so it goes on as background job ${job.id}; its result arrives in a notice when it ends. Do not poll or sleep for it. stop_job stops it, though the server may already have done some of the work.`;
+    } finally {
+      clearTimeout(timer);
+      if (!moved) context.signal.removeEventListener('abort', forward);
+    }
+  }
+  /** A result as the model is given it: whole, or, when too large and without pictures, the path of the file it is kept in. */
+  private limited(tool: string, text: string, attached: boolean): string {
+    const save = this.services.saveResult;
+    if (!save || attached) return text;
+    const most = envMs('CIRCLE_MAX_MCP_OUTPUT_TOKENS', MAX_RESULT_TOKENS);
+    const tokens = tokenLen(text);
+    if (text.length <= MAX_RESULT_CHARS && tokens <= most) return text;
+    const path = save(text, tool);
+    return `The result of ${tool} is too large to give here (${text.length} characters, about ${tokens} tokens), so it was kept in full in ${path}. Read the parts you need with read_file, with offset and limit, or search it with grep.`;
+  }
+  /** A request made again after each of `waits` while it fails in a way that may pass (`passing`). */
+  private async passingRetry<T>(
+    request: () => Promise<T>,
+    waits: readonly number[],
+    signal: AbortSignal,
+  ): Promise<T> {
+    for (let tries = 0; ; tries++) {
+      try {
+        return await request();
+      } catch (error) {
+        if (signal.aborted || tries >= waits.length || !passing(error))
+          throw error;
+        await this.wait(waits[tries]!, signal);
+      }
+    }
+  }
+  /**
+   * A server reached over the network whose connection dropped: connected again in the background, after each of the
+   * reconnect waits, until it is back. A call meanwhile waits for it. After the last try the server is failed, and
+   * `/mcp reconnect` tries again.
+   */
+  private reconnectDropped(connection: McpConnection): void {
+    if (this.reconnects.has(connection.name)) return;
+    const lifetime = this.lifetime.signal;
+    const reconnect = toolCalls.exit(async () => {
+      try {
+        for (const [index, ms] of this.reconnectWaitsMs.entries()) {
+          await this.wait(ms, lifetime);
+          await this.connectAgain(connection, lifetime);
+          const back = this.servers.find(
+            (server) => server.name === connection.name && server.open,
+          );
+          if (back) return back.client;
+          const state = this.status.find(
+            (item) => item.name === connection.name,
+          );
+          // A server that asks for a sign-in waits for it, as at its first connection
+          if (state?.authorize) return undefined;
+          if (state && index < this.reconnectWaitsMs.length - 1)
+            state.error = `the connection ended; reconnecting (${index + 1} of ${this.reconnectWaitsMs.length} tries failed: ${state.error})`;
+          this.services.onChange?.();
+        }
+        const state = this.status.find((item) => item.name === connection.name);
+        if (state)
+          state.error = `disconnected: ${this.reconnectWaitsMs.length} tries to connect again failed${state.error ? ` (${state.error})` : ''}; /mcp reconnect ${connection.name} tries again`;
+        this.services.onChange?.();
+        return undefined;
+      } catch {
+        return undefined;
+      } finally {
+        this.reconnects.delete(connection.name);
+      }
+    });
+    this.reconnects.set(connection.name, reconnect);
   }
   private reconnects = new Map<string, Promise<Client | undefined>>();
   /**
@@ -2039,10 +2712,13 @@ export class McpManager {
    */
   async reloadServer(
     name: string,
-    entries: Record<string, unknown>[],
+    entries: Record<string, McpServerConfig> | McpEntry[],
+    options: { waiting?: McpStatus[]; trusted?: boolean } = {},
   ): Promise<void> {
-    // The whole list, so a server named by its id or its place is named as when it connected
-    const { connections, skipped } = buildMcpConnections(entries);
+    const { connections, skipped } = buildMcpConnections(entries, {
+      trusted: options.trusted,
+    });
+    skipped.push(...(options.waiting ?? []));
     const connection = connections.find((item) => item.name === name);
     if (
       !connection &&
@@ -2127,7 +2803,10 @@ export class McpManager {
     signal: AbortSignal,
   ): Promise<unknown> {
     const server = this.servers.find((s) => s.name === serverName && s.open);
-    if (!server || this.hint(mcpToolName(serverName, toolName)) !== 'read-only')
+    if (
+      !server ||
+      this.hint(mcpToolName(serverName, toolName))?.readOnly !== true
+    )
       throw new Error('read-only MCP tool unavailable');
     const response = await callServerTool(
       server.client,
@@ -2179,11 +2858,8 @@ export class McpManager {
         if (/^Bearer /i.test(value))
           filled.set(value.slice(7), '[MCP credential omitted]');
       }
-    if (this.services.home && server.connection.url) {
-      const auth = keptFor(
-        this.services.home,
-        new URL(server.connection.url).href,
-      );
+    if (this.services.home && server.url) {
+      const auth = keptFor(this.services.home, new URL(server.url).href);
       for (const value of [
         auth.tokens?.access_token,
         auth.tokens?.refresh_token,
@@ -2202,22 +2878,58 @@ export class McpManager {
       .filter((server) => server.open && server.instructions)
       .map((server) => ({ server: server.name, text: server.instructions! }));
   }
+  /** What moving the configuration into the current format did, said in /mcp until the next start. */
+  notes: string[] = [];
   describe(): string {
-    if (!this.status.length)
-      return 'No MCP servers. Add mcp_servers to settings.json.';
-    return (
-      `MCP servers (${this.status.length}):\n` +
-      this.status
-        .map(
-          (server) =>
-            `  · ${server.name}  ${server.connection}${server.headers?.length ? '\n    headers: ' + server.headers.join(', ') : ''}${server.notSent?.length ? '\n    not sent, Circle sets them: ' + server.notSent.join(', ') : ''}${server.authorize ? '\n    ' + server.error + ': ' + server.authorize : server.error === 'disabled' ? '\n    disabled' : server.error === TOOLS_NOT_LISTED_AGAIN ? '\n    ' + server.tools.join(', ') + '\n    ' + server.error : server.error ? '\n    failed: ' + server.error : '\n    ' + server.tools.join(', ')}`,
-        )
-        .join('\n')
-    );
+    if (!this.status.length && !this.notes.length)
+      return 'No MCP servers. Add them to mcpServers in settings.json, or to .mcp.json in the project.';
+    const where = (server: McpStatus): string =>
+      server.scope === 'project'
+        ? ' (.mcp.json)'
+        : server.scope === 'local'
+          ? ' (this project)'
+          : '';
+    const state = (server: McpStatus): string =>
+      server.approval === 'pending'
+        ? `\n    waits for your approval: /mcp reconnect ${server.name} asks for it`
+        : server.approval === 'declined'
+          ? `\n    declined for this project: /mcp reconnect ${server.name} asks again`
+          : server.authorize
+            ? '\n    ' + server.error + ': ' + server.authorize
+            : server.error === 'disabled'
+              ? '\n    disabled'
+              : server.error === TOOLS_NOT_LISTED_AGAIN
+                ? '\n    ' + server.tools.join(', ') + '\n    ' + server.error
+                : server.error
+                  ? '\n    failed: ' + server.error
+                  : '\n    ' + server.tools.join(', ');
+    return [
+      ...this.notes.map((note) => `moved: ${note}`),
+      ...(this.status.length
+        ? [
+            `MCP servers (${this.status.length}):\n` +
+              this.status
+                .map(
+                  (server) =>
+                    `  · ${server.name}${where(server)}  ${server.connection}${server.headers?.length ? '\n    headers: ' + server.headers.join(', ') : ''}${server.notSent?.length ? '\n    not sent, Circle sets them: ' + server.notSent.join(', ') : ''}${server.warnings?.length ? '\n    warning: ' + server.warnings.join('; ') : ''}${state(server)}`,
+                )
+                .join('\n'),
+          ]
+        : []),
+    ].join('\n');
   }
-  /** What the server of a tool, by its name here, says of it, when trusted with it. */
-  hint(tool: string): ToolHint | undefined {
+  /** What the server of a tool, by its name here, says of it. */
+  hint(tool: string): ToolMarks | undefined {
     return this.hinted.get(tool);
+  }
+  /** Whether every call of a tool, by its name here, asks a person: its server marks it so. */
+  asksPerson(tool: string): boolean {
+    return this.hinted.get(tool)?.asksPerson === true;
+  }
+  /** The server a tool, by its name here, belongs to, and its own name there: what rules for a server go by. */
+  mcpTool(tool: string): { server: string; tool: string } | undefined {
+    const marks = this.hinted.get(tool);
+    return marks ? { server: marks.server, tool: marks.tool } : undefined;
   }
   async close(): Promise<void> {
     // A sign-in under way stops waiting; the manager can load again afterwards
@@ -2243,12 +2955,11 @@ export function backgroundMcpConnection(
   connection: McpConnection,
   secrets: () => Record<string, string>,
 ): McpBearerConnection {
-  if (
-    !connection.url ||
-    !['streamable_http', 'sse'].includes(connection.transport)
-  )
+  if (!connection.url || !['http', 'sse'].includes(connection.transport))
     throw new Error('select an HTTP MCP connection');
-  const server = new URL(connection.url).href;
+  const server = new URL(
+    resolveConnection(connection, process.env, secrets()).url!,
+  ).href;
   const directKey =
     server + '#circle-direct-' + encodeURIComponent(connection.name);
   const current = (initialize = false) => {
@@ -2261,6 +2972,14 @@ export function backgroundMcpConnection(
       ([name]) => name.toLowerCase() === 'authorization',
     )?.[1];
     if (credential !== undefined) {
+      // A reference to nothing set stays as written: it is no token
+      const unset = /\$\{((?:secret:)?([A-Za-z_][A-Za-z0-9_]*))/.exec(
+        credential,
+      );
+      if (unset)
+        throw new Error(
+          `the Authorization header names \${${unset[1]}}, which is not set; save it with /secrets ${unset[2]}`,
+        );
       const match = /^Bearer ([^\s]+)$/i.exec(credential);
       if (!match) throw new McpLoginRequired();
       const grant = initialize

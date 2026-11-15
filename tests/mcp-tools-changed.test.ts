@@ -4,7 +4,7 @@
 // earlier tools with the server's status saying so.
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'node:test';
-import { mkdirSync, realpathSync } from 'node:fs';
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { TOOLS_NOT_LISTED_AGAIN } from '../src/mcp_loader.js';
 import { AgentRuntime } from '../src/runtime.js';
@@ -38,9 +38,12 @@ async function world(
   mkdirSync(workspace);
   const stub = await mcpStub(t, options);
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    { name: 'hub', url: stub.url, transport: 'streamable_http' },
-  ];
+  settings.mcpServers = { hub: { url: stub.url, type: 'http' } };
+  // An MCP tool asks unless a rule allows it: every tool of this server is
+  writeFileSync(
+    join(home, 'approvals.json'),
+    JSON.stringify({ rules: [{ tool: 'mcp__hub__*', effect: 'allow' }] }),
+  );
   const model = new ScriptedModel(replies);
   const runtime = new AgentRuntime({
     home,
@@ -59,7 +62,7 @@ async function world(
     stub.requests.filter((r) => r.message?.method === 'tools/list').length;
   const offered = (request: number) =>
     model.requests[request]!.tools.map((tool) => tool.name).filter((name) =>
-      name.startsWith('hub_'),
+      name.startsWith('mcp__hub__'),
     );
   const status = () => runtime.mcp.status.find((s) => s.name === 'hub')!;
   return { stub, model, runtime, listings, offered, status };
@@ -69,13 +72,13 @@ test('several notices that the tools changed list them once, and the next turn o
   const options: StubOptions = { listChanged: true, tools: [tool('alpha')] };
   const w = await world(t, options, [answer('first'), answer('second')]);
   await w.runtime.harness.run('first');
-  assert.deepEqual(w.offered(0), ['hub_alpha']);
+  assert.deepEqual(w.offered(0), ['mcp__hub__alpha']);
   assert.equal(w.listings(), 1);
   options.tools = [tool('beta')];
   for (let i = 0; i < 3; i++) w.stub.notify(CHANGED);
-  await until(() => w.status().tools.includes('hub_beta'));
+  await until(() => w.status().tools.includes('mcp__hub__beta'));
   await w.runtime.harness.run('second');
-  assert.deepEqual(w.offered(1), ['hub_beta']);
+  assert.deepEqual(w.offered(1), ['mcp__hub__beta']);
   assert.equal(w.listings(), 2);
   assert.equal(w.status().error, '');
 });
@@ -87,7 +90,7 @@ test('the turn under way keeps the tools it started with; the next turn has the 
   options.call = async () => {
     options.tools = [tool('beta')];
     w.stub.notify(CHANGED);
-    await until(() => w.status().tools.includes('hub_beta'));
+    await until(() => w.status().tools.includes('mcp__hub__beta'));
     return { content: [{ type: 'text', text: 'ran alpha' }] };
   };
   w = await world(t, options, [
@@ -96,7 +99,7 @@ test('the turn under way keeps the tools it started with; the next turn has the 
         id: 'call',
         role: 'assistant',
         content: '',
-        tool_calls: [{ id: 'alpha', name: 'hub_alpha', args: {} }],
+        tool_calls: [{ id: 'alpha', name: 'mcp__hub__alpha', args: {} }],
       },
     },
     answer('done'),
@@ -104,11 +107,11 @@ test('the turn under way keeps the tools it started with; the next turn has the 
   ]);
   await w.runtime.harness.run('use alpha');
   assert.equal(w.stub.calls().length, 1);
-  assert.deepEqual(w.offered(0), ['hub_alpha']);
+  assert.deepEqual(w.offered(0), ['mcp__hub__alpha']);
   // The same turn, after the call: still the tools it started with
-  assert.deepEqual(w.offered(1), ['hub_alpha']);
+  assert.deepEqual(w.offered(1), ['mcp__hub__alpha']);
   await w.runtime.harness.run('again');
-  assert.deepEqual(w.offered(2), ['hub_beta']);
+  assert.deepEqual(w.offered(2), ['mcp__hub__beta']);
 });
 
 test('when the tools cannot be listed again, the earlier ones stay and the status says why', async (t) => {
@@ -127,16 +130,19 @@ test('when the tools cannot be listed again, the earlier ones stay and the statu
   options.tools = [tool('beta')];
   w.stub.notify(CHANGED);
   await until(() => w.status().error === TOOLS_NOT_LISTED_AGAIN);
-  assert.deepEqual(w.status().tools, ['hub_alpha']);
+  assert.deepEqual(w.status().tools, ['mcp__hub__alpha']);
   // /mcp lists the tools that stay, with why they may be out of date; the server has not failed
   const shown = w.runtime.mcp.describe();
-  assert.match(shown, /\n {4}hub_alpha\n {4}the server changed its tools/);
+  assert.match(
+    shown,
+    /\n {4}mcp__hub__alpha\n {4}the server changed its tools/,
+  );
   assert.doesNotMatch(shown, /failed: the server changed/);
   await w.runtime.harness.run('second');
-  assert.deepEqual(w.offered(1), ['hub_alpha']);
+  assert.deepEqual(w.offered(1), ['mcp__hub__alpha']);
   // The server lists again once it can; the note goes with the earlier tools
   failing = false;
   w.stub.notify(CHANGED);
-  await until(() => w.status().tools.includes('hub_beta'));
+  await until(() => w.status().tools.includes('mcp__hub__beta'));
   assert.equal(w.status().error, '');
 });

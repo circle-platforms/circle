@@ -136,9 +136,7 @@ test('an idempotent tool given the same file contents and arguments in a session
   writeFileSync(join(workspace, 'copy.bin'), 'first contents');
   const stub = await server(t);
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    { name: 'files-server', url: stub.url, transport: 'streamable_http' },
-  ];
+  settings.mcpServers = { 'files-server': { url: stub.url, type: 'http' } };
   const replies: Partial<ModelResponse>[] = [];
   const asked: ToolCall[] = [];
   const runtime = new AgentRuntime({
@@ -159,7 +157,7 @@ test('an idempotent tool given the same file contents and arguments in a session
   const call = async (tool: string, args: Record<string, unknown>) => {
     const id = `call-${++count}`;
     replies.push(
-      reply('', [{ id, name: `files-server_${tool}`, args }]),
+      reply('', [{ id, name: `mcp__files-server__${tool}`, args }]),
       reply('done'),
     );
     await runtime.harness.run(`call ${tool}`);
@@ -251,7 +249,7 @@ test('an idempotent tool given the same file contents and arguments in a session
   assert.equal(served(), 10);
 });
 
-test('the kept results are bounded, the oldest used going first, and trust_annotations false keeps none', async (t) => {
+test('the kept results are bounded, the oldest used going first, and a tool without the hint keeps none', async (t) => {
   const root = scratch(t);
   writeFileSync(join(root, 'a.bin'), 'contents');
   const stub = await server(t);
@@ -259,12 +257,10 @@ test('the kept results are bounded, the oldest used going first, and trust_annot
     sessionId: () => 'session-one',
   });
   cleanup(t, () => manager.close());
-  await manager.load([
-    { name: 'files-server', url: stub.url, transport: 'streamable_http' },
-  ]);
+  await manager.load({ 'files-server': { url: stub.url, type: 'http' } });
   // A tool that only reads: its calls keep what was kept for the server
   const inspect = manager.tools.find(
-    (tool) => tool.name === 'files-server_inspect',
+    (tool) => tool.name === 'mcp__files-server__inspect',
   )!;
   const context = { sessionId: 'any', signal: new AbortController().signal };
   const run = (mode: number) =>
@@ -277,30 +273,21 @@ test('the kept results are bounded, the oldest used going first, and trust_annot
   assert.match(await run(0), /^file: sent/);
   assert.equal(stub.calls().length, MAX_CACHED_RESULTS + 2);
   // A reload forgets every kept result
-  await manager.load([
-    { name: 'files-server', url: stub.url, transport: 'streamable_http' },
-  ]);
+  await manager.load({ 'files-server': { url: stub.url, type: 'http' } });
   const reloaded = manager.tools.find(
-    (tool) => tool.name === 'files-server_inspect',
+    (tool) => tool.name === 'mcp__files-server__inspect',
   )!;
   assert.match(
     await reloaded.run({ file: 'a.bin', mode: '1' }, context),
     /^file: sent/,
   );
-  await manager.load([
-    {
-      name: 'files-server',
-      url: stub.url,
-      transport: 'streamable_http',
-      trust_annotations: false,
-    },
-  ]);
-  const untrusted = manager.tools.find(
-    (tool) => tool.name === 'files-server_convert',
+  // A tool its server does not mark idempotent reaches the server every time
+  const stamp = manager.tools.find(
+    (tool) => tool.name === 'mcp__files-server__stamp',
   )!;
   const before = stub.calls().length;
-  await untrusted.run({ file: 'a.bin', mode: '1' }, context);
-  await untrusted.run({ file: 'a.bin', mode: '1' }, context);
+  await stamp.run({ file: 'a.bin' }, context);
+  await stamp.run({ file: 'a.bin' }, context);
   assert.equal(stub.calls().length, before + 2);
 });
 
@@ -313,13 +300,11 @@ test('a call that may change what a server holds makes what was kept for it untr
     sessionId: () => 'session-one',
   });
   cleanup(t, () => manager.close());
-  await manager.load([
-    { name: 'files-server', url: stub.url, transport: 'streamable_http' },
-  ]);
+  await manager.load({ 'files-server': { url: stub.url, type: 'http' } });
   const context = { sessionId: 'any', signal: new AbortController().signal };
   const run = (tool: string, args: Record<string, unknown>) =>
     manager.tools
-      .find((item) => item.name === `files-server_${tool}`)!
+      .find((item) => item.name === `mcp__files-server__${tool}`)!
       .run(args, context);
   const put = (id: string, file: string) => run('put_document', { id, file });
   const sent = () => stub.calls().length;
@@ -351,12 +336,12 @@ test("nothing kept for a server outlives its connection: once the server's progr
     sessionId: () => 'session-one',
   });
   cleanup(t, () => manager.close());
-  await manager.load([
-    { name: 'fixture', command: process.execPath, args: [FIXTURE] },
-  ]);
+  await manager.load({
+    fixture: { command: process.execPath, args: [FIXTURE] },
+  });
   assert.equal(manager.status[0]!.error, '', manager.describe());
   const checksum = manager.tools.find(
-    (tool) => tool.name === 'fixture_checksum',
+    (tool) => tool.name === 'mcp__fixture__checksum',
   )!;
   const context = { sessionId: 'any', signal: new AbortController().signal };
   const first = await checksum.run({ file: 'a.bin' }, context);
@@ -364,7 +349,10 @@ test("nothing kept for a server outlives its connection: once the server's progr
   assert.match(await checksum.run({ file: 'a.bin' }, context), /^cached/);
   process.kill(pid);
   await until(() => manager.status[0]!.error !== '', { timeout: 10_000 });
-  assert.match(manager.status[0]!.error, /the connection ended/);
+  assert.match(
+    manager.status[0]!.error,
+    /the program exited; the next call starts it again/,
+  );
   // The next call starts the program again (#555) and is read by it, not answered from what the old one gave
   const again = await checksum.run({ file: 'a.bin' }, context);
   assert.doesNotMatch(again, /^cached/);
@@ -379,9 +367,7 @@ test('a call whose card said it would get its earlier result is not run once ano
   writeFileSync(join(workspace, 'v1.txt'), 'version one');
   const { stub, held } = await documents(t);
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    { name: 'files-server', url: stub.url, transport: 'streamable_http' },
-  ];
+  settings.mcpServers = { 'files-server': { url: stub.url, type: 'http' } };
   const replies: Partial<ModelResponse>[] = [];
   let between: (() => Promise<unknown>) | undefined;
   const runtime = new AgentRuntime({
@@ -402,7 +388,7 @@ test('a call whose card said it would get its earlier result is not run once ano
   const call = async (tool: string, args: Record<string, unknown>) => {
     const id = `call-${++count}`;
     replies.push(
-      reply('', [{ id, name: `files-server_${tool}`, args }]),
+      reply('', [{ id, name: `mcp__files-server__${tool}`, args }]),
       reply('done'),
     );
     await runtime.harness.run(`call ${tool}`);
@@ -412,7 +398,7 @@ test('a call whose card said it would get its earlier result is not run once ano
   };
   await call('put_document', { id: 'x', file: 'v1.txt' });
   const remove = runtime.mcp.tools.find(
-    (tool) => tool.name === 'files-server_delete_document',
+    (tool) => tool.name === 'mcp__files-server__delete_document',
   )!;
   between = () =>
     remove.run(

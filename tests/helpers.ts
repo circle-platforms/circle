@@ -337,3 +337,20 @@ export function modelByAsker(
     }),
   );
 }
+/** A server's `mcpServers` entry from a connection as the MCP loader takes it: its transport as the entry's type. */
+export function entryOf(connection: {
+  name?: string;
+  transport?: string;
+  [key: string]: unknown;
+}): Record<string, unknown> {
+  const { name: _name, transport, ...rest } = connection;
+  return { ...(transport ? { type: transport } : {}), ...rest };
+}
+/** An `mcpServers` object of these connections, each under its name. */
+export function serversOf(
+  ...connections: { name: string; transport?: string; [key: string]: unknown }[]
+): Record<string, Record<string, unknown>> {
+  return Object.fromEntries(
+    connections.map((connection) => [connection.name, entryOf(connection)]),
+  );
+}

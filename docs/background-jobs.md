@@ -15,6 +15,8 @@ A command or a subagent can keep running while you and the model go on: a dev se
 - **A command leaves something running.** When a command ends but processes it started are still running (`server &`, `nohup … &`), those processes become a job, marked `left running`. Not on Windows; see [Known issues](known-issues.md#background-jobs).
 - **An extension waits for something.** An extension tool can hand Circle a [watch](extensions.md#waiting-for-something-slow): Circle checks it every few seconds, off the model's turns, and the result becomes a notice.
 
+An [MCP tool call](mcp.md#long-calls-and-large-results) of the conversation that is still running after 2 minutes goes on as a job too: its row shows what the server last said of its progress, its result is the job's output, and stopping it cancels the call.
+
 ## While a job runs
 
 - **Below the input box**, one row per running job, under the strip's header (`Jobs · 2`): its id and command, the last line it printed (or a subagent's current step, or `waiting for you`), and how long it has run.

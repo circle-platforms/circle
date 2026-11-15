@@ -26,10 +26,10 @@ test('one MCP server connects again and lists its tools again, and the others ar
     tools: [{ name: 'echo', inputSchema: schema }],
   });
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    { name: 'one', url: one.url, transport: 'streamable_http' },
-    { name: 'other', url: other.url, transport: 'streamable_http' },
-  ];
+  settings.mcpServers = {
+    one: { url: one.url, type: 'http' },
+    other: { url: other.url, type: 'http' },
+  };
   saveSettings(settings, home);
   const runtime = new AgentRuntime({
     home,
@@ -44,15 +44,15 @@ test('one MCP server connects again and lists its tools again, and the others ar
   const starts = (stub: typeof one) =>
     stub.requests.filter((request) => request.message?.method === 'initialize')
       .length;
-  assert.ok(names().includes('one_old'));
+  assert.ok(names().includes('mcp__one__old'));
   const otherBefore = starts(other);
 
   // The server changed its tools and does not say so: connecting it alone again finds them
   served.tools = [{ name: 'new', inputSchema: schema }];
   await runtime.reloadMcpServer('one');
-  assert.ok(names().includes('one_new'));
-  assert.ok(!names().includes('one_old'));
-  assert.ok(names().includes('other_echo'));
+  assert.ok(names().includes('mcp__one__new'));
+  assert.ok(!names().includes('mcp__one__old'));
+  assert.ok(names().includes('mcp__other__echo'));
   assert.equal(
     starts(other),
     otherBefore,
@@ -69,7 +69,7 @@ test('one MCP server connects again and lists its tools again, and the others ar
 
 async function runtimeWith(
   t: Parameters<typeof scratch>[0],
-  servers: Record<string, unknown>[],
+  servers: Record<string, Record<string, unknown>>,
   model = new ScriptedModel([]),
 ) {
   const root = scratch(t);
@@ -78,7 +78,7 @@ async function runtimeWith(
   mkdirSync(home);
   mkdirSync(workspace);
   const settings = defaultSettings();
-  settings.mcp_servers = servers;
+  settings.mcpServers = servers;
   saveSettings(settings, home);
   const runtime = new AgentRuntime({
     home,
@@ -92,17 +92,17 @@ async function runtimeWith(
   return { runtime, home };
 }
 
-test('a server the settings name by its id is connected again by that name, not taken away', async (t) => {
+test('a server is connected again under its name in mcpServers, not taken away', async (t) => {
   const stub = await mcpStub(t, {
     tools: [{ name: 'echo', inputSchema: { type: 'object', properties: {} } }],
   });
-  const { runtime } = await runtimeWith(t, [
-    { id: 'docs', url: stub.url, transport: 'streamable_http' },
-  ]);
+  const { runtime } = await runtimeWith(t, {
+    docs: { type: 'http', url: stub.url },
+  });
   const names = () => runtime.harness.tools.map((tool) => tool.name);
-  assert.ok(names().includes('docs_echo'));
+  assert.ok(names().includes('mcp__docs__echo'));
   await runtime.reloadMcpServer('docs');
-  assert.ok(names().includes('docs_echo'));
+  assert.ok(names().includes('mcp__docs__echo'));
   assert.equal(
     stub.requests.filter((request) => request.message?.method === 'initialize')
       .length,
@@ -115,7 +115,7 @@ test('an extension saving a server while a turn runs is refused, and nothing is 
   const gate = new Promise<void>((resolve) => (release = resolve));
   const { runtime, home } = await runtimeWith(
     t,
-    [],
+    {},
     new ScriptedModel([
       async () => {
         await gate;
@@ -133,12 +133,13 @@ test('an extension saving a server while a turn runs is refused, and nothing is 
   const turn = runtime.harness.run('wait');
   await until(() => runtime.busy);
   await assert.rejects(
-    runtime.saveMcpServer({ name: 'later', url: 'http://127.0.0.1:9/mcp' }),
+    runtime.saveMcpServer('later', {
+      type: 'http',
+      url: 'http://127.0.0.1:9/mcp',
+    }),
     /a turn is running: nothing was saved/,
   );
-  assert.ok(
-    !loadSettings(home).mcp_servers.some((row) => row.name === 'later'),
-  );
+  assert.ok(!Object.hasOwn(loadSettings(home).mcpServers, 'later'));
   release();
   await turn;
 });

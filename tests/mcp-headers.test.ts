@@ -56,29 +56,73 @@ function result(request: Request): unknown {
   return {};
 }
 
-test('header values fill in environment variables and refuse what cannot be sent', () => {
+test('header values fill in the environment, then saved secrets, a default, and refuse what cannot be sent', () => {
   assert.deepEqual(
     resolveHeaders(
-      { Authorization: 'Bearer ${env:DOCS_TOKEN}', 'X-Team': 'lab' },
+      { Authorization: 'Bearer ${DOCS_TOKEN}', 'X-Team': 'lab' },
       { DOCS_TOKEN: TOKEN },
     ),
     { Authorization: `Bearer ${TOKEN}`, 'X-Team': 'lab' },
   );
-  assert.throws(
-    () => resolveHeaders({ Authorization: 'Bearer ${env:MISSING}' }, {}),
-    /header Authorization needs the environment variable MISSING/,
+  // The environment comes first, then the saved secrets; a default only when neither has the name
+  assert.deepEqual(
+    resolveHeaders(
+      {
+        A: '${BOTH}',
+        B: '${SAVED}',
+        C: '${NEITHER:-fallback}',
+        D: '${EMPTY:-unused}',
+      },
+      { BOTH: 'from-env', EMPTY: '' },
+      { BOTH: 'from-secret', SAVED: 'secret-value' },
+    ),
+    { A: 'from-env', B: 'secret-value', C: 'fallback', D: '' },
+  );
+  // A reference to nothing set stays as written, as the documented format has it
+  assert.deepEqual(resolveHeaders({ Authorization: 'Bearer ${MISSING}' }, {}), {
+    Authorization: 'Bearer ${MISSING}',
+  });
+  // Circle's own model key is never sent to a server a configuration names
+  assert.deepEqual(
+    resolveHeaders(
+      { Authorization: 'Bearer ${OPENAI_API_KEY:-default}' },
+      { OPENAI_API_KEY: 'model-key' },
+    ),
+    { Authorization: 'Bearer ' },
+  );
+  // ${secret:NAME} reads the saved secret alone, as it always did: not the environment, and also a name Circle
+  // withholds from the environment, since it is a secret you saved yourself
+  assert.deepEqual(
+    resolveHeaders(
+      {
+        A: '${secret:BOTH}',
+        B: 'Bearer ${secret:OPENAI_API_KEY}',
+        C: '${secret:ONLY_IN_ENV}',
+      },
+      { BOTH: 'from-env', OPENAI_API_KEY: 'model-key', ONLY_IN_ENV: 'env' },
+      { BOTH: 'from-secret', OPENAI_API_KEY: 'saved-key' },
+    ),
+    {
+      A: 'from-secret',
+      B: 'Bearer saved-key',
+      C: '${secret:ONLY_IN_ENV}',
+    },
   );
   assert.throws(
     () => resolveHeaders({ 'Bad Name': 'x' }, {}),
     /invalid header name/,
   );
   assert.throws(
-    () => resolveHeaders({ 'X-A': '${env:V}' }, { V: 'a\r\nInjected: 1' }),
+    () => resolveHeaders({ 'X-A': '${V}' }, { V: 'a\r\nInjected: 1' }),
     /line break/,
   );
-  const { connections } = buildMcpConnections([
-    { name: 'docs', url: 'https://x.test/mcp', headers: { 'X-Team': 'lab' } },
-  ]);
+  const { connections } = buildMcpConnections({
+    docs: {
+      type: 'http',
+      url: 'https://x.test/mcp',
+      headers: { 'X-Team': 'lab' },
+    },
+  });
   assert.deepEqual(connections[0]!.headers, { 'X-Team': 'lab' });
 });
 
@@ -86,9 +130,7 @@ test('a server is told the real version and platform of the client', async (t) =
   const stub = await mcpStub(t);
   const manager = new McpManager(scratch(t));
   cleanup(t, () => manager.close());
-  await manager.load([
-    { name: 'docs', url: stub.url, transport: 'streamable_http' },
-  ]);
+  await manager.load({ docs: { url: stub.url, type: 'http' } });
   assert.equal(manager.status[0]?.error, '', manager.describe());
   const initialize = stub.requests.find(
     (request) => request.message?.method === 'initialize',
@@ -152,15 +194,15 @@ test('streamable HTTP and SSE servers receive the configured headers on every re
   cleanup(t, () => {
     delete process.env.CIRCLE_TEST_MCP_TOKEN;
   });
-  const headers = { Authorization: 'Bearer ${env:CIRCLE_TEST_MCP_TOKEN}' };
+  const headers = { Authorization: 'Bearer ${CIRCLE_TEST_MCP_TOKEN}' };
   const manager = new McpManager(scratch(t));
   cleanup(t, () => manager.close());
   for (const [transport, url] of [
-    ['streamable_http', `${base}/mcp`],
+    ['http', `${base}/mcp`],
     ['sse', `${base}/sse`],
   ]) {
     seen.length = 0;
-    await manager.load([{ name: 'docs', url, transport, headers }]);
+    await manager.load({ docs: { type: transport, url, headers } });
     assert.equal(
       manager.status[0]?.error,
       '',
@@ -180,74 +222,41 @@ test('streamable HTTP and SSE servers receive the configured headers on every re
     );
   }
   // Without the header the same server turns the connection down.
-  await manager.load([
-    { name: 'docs', url: `${base}/mcp`, transport: 'streamable_http' },
-  ]);
+  await manager.load({ docs: { url: `${base}/mcp`, type: 'http' } });
   assert.notEqual(manager.status[0]?.error, '');
-  await manager.load([
-    {
-      name: 'docs',
-      url: 'ws://127.0.0.1:1/socket',
-      transport: 'websocket',
-      headers,
-    },
-  ]);
-  assert.match(
-    manager.status[0]!.error,
-    /websocket server cannot be sent headers/,
-  );
+  await manager.load({
+    docs: { url: 'ws://127.0.0.1:1/socket', type: 'ws', headers },
+  });
+  assert.match(manager.status[0]!.error, /ws server cannot be sent headers/);
   assert.ok(!manager.describe().includes(TOKEN));
 });
 
-test('header values fill in saved secrets, and a missing secret is named without any value', () => {
+test('header values fill in saved secrets after the environment, and a reference to nothing set stays as written', () => {
   assert.deepEqual(
     resolveHeaders(
       {
-        Authorization: 'Bearer ${secret:FILES_TOKEN}',
-        'X-Pair': '${env:TEAM}/${secret:REGION}',
+        Authorization: 'Bearer ${FILES_TOKEN}',
+        'X-Pair': '${TEAM}/${REGION}',
       },
       { TEAM: 'lab' },
       { FILES_TOKEN: TOKEN, REGION: 'north' },
     ),
     { Authorization: `Bearer ${TOKEN}`, 'X-Pair': 'lab/north' },
   );
-  assert.throws(
-    () =>
-      resolveHeaders(
-        { Authorization: 'Bearer ${secret:NOT_SAVED}' },
-        {},
-        { FILES_TOKEN: TOKEN },
-      ),
-    (error: Error) =>
-      /header Authorization needs the secret NOT_SAVED, which is not saved/.test(
-        error.message,
-      ) && !error.message.includes(TOKEN),
+  assert.deepEqual(
+    resolveHeaders(
+      { Authorization: 'Bearer ${NOT_SAVED}' },
+      {},
+      { FILES_TOKEN: TOKEN },
+    ),
+    { Authorization: 'Bearer ${NOT_SAVED}' },
   );
-  // Each form reads its own store: a variable is not a secret, nor a secret a variable
-  assert.throws(
-    () => resolveHeaders({ 'X-A': '${secret:TEAM}' }, { TEAM: 'lab' }, {}),
-    /needs the secret TEAM/,
-  );
-  assert.throws(
-    () =>
-      resolveHeaders(
-        { 'X-A': '${env:FILES_TOKEN}' },
-        {},
-        { FILES_TOKEN: TOKEN },
-      ),
-    /needs the environment variable FILES_TOKEN/,
-  );
-  assert.throws(
-    () => resolveHeaders({ 'X-A': '${secret:constructor}' }, {}, {}),
-    /needs the secret constructor/,
-  );
-  // A name of what every object has is no variable of the environment either
+  // A name of what every object has is neither a variable of the environment nor a saved secret
   for (const name of ['constructor', 'toString', 'hasOwnProperty', '__proto__'])
     for (const env of [{}, process.env])
-      assert.throws(
-        () => resolveHeaders({ 'X-A': `\${env:${name}}` }, env),
-        new RegExp(`needs the environment variable ${name}, which is not set`),
-      );
+      assert.deepEqual(resolveHeaders({ 'X-A': `\${${name}}` }, env, {}), {
+        'X-A': `\${${name}}`,
+      });
 });
 
 test('a saved secret reaches the server in a header, and what the model reads, the transcript and /mcp show its reference only', async (t) => {
@@ -286,22 +295,21 @@ test('a saved secret reaches the server in a header, and what the model reads, t
     },
   });
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    {
-      name: 'files-server',
+  settings.mcpServers = {
+    'files-server': {
       url: stub.url,
-      transport: 'streamable_http',
+      type: 'http',
       headers: {
-        Authorization: 'Bearer ${secret:FILES_TOKEN}',
-        'X-Team': '${env:CIRCLE_TEST_FILES_TEAM_TOKEN}',
+        Authorization: 'Bearer ${FILES_TOKEN}',
+        'X-Team': '${CIRCLE_TEST_FILES_TEAM_TOKEN}',
       },
     },
-  ];
+  };
   const model = new ScriptedModel([
     {
       message: assistant('', [
-        { id: 'who', name: 'files-server_whoami', args: {} },
-        { id: 'no', name: 'files-server_refuse', args: {} },
+        { id: 'who', name: 'mcp__files-server__whoami', args: {} },
+        { id: 'no', name: 'mcp__files-server__refuse', args: {} },
       ]),
     },
     { message: assistant('done') },
@@ -331,7 +339,7 @@ test('a saved secret reaches the server in a header, and what the model reads, t
   );
   assert.equal(
     results.find((message) => message.tool_call_id === 'who')!.content,
-    'you sent %FILES_TOKEN% for ${env:CIRCLE_TEST_FILES_TEAM_TOKEN}',
+    'you sent %FILES_TOKEN% for ${CIRCLE_TEST_FILES_TEAM_TOKEN}',
   );
   assert.match(
     results.find((message) => message.tool_call_id === 'no')!.content,
@@ -413,21 +421,20 @@ test('only a secret, or a variable whose own or header name looks secret, is hid
     secrets: () => ({ FILES_SESSION: 'session-value-c4a1f2' }),
   });
   cleanup(t, () => manager.close());
-  await manager.load([
-    {
-      name: 'files-server',
+  await manager.load({
+    'files-server': {
       url: stub.url,
-      transport: 'streamable_http',
+      type: 'http',
       headers: {
-        'X-Api-Version': '${env:CIRCLE_TEST_API_VERSION}',
-        'X-Region': '${env:CIRCLE_TEST_REGION}',
+        'X-Api-Version': '${CIRCLE_TEST_API_VERSION}',
+        'X-Region': '${CIRCLE_TEST_REGION}',
         // KEY in the variable's name, a header of credentials, a saved secret
-        'X-Files-Key': '${env:CIRCLE_TEST_FILES_KEY}',
-        Authorization: 'Bearer ${env:CIRCLE_TEST_FILES_PAT}',
-        'X-Session': '${secret:FILES_SESSION}',
+        'X-Files-Key': '${CIRCLE_TEST_FILES_KEY}',
+        Authorization: 'Bearer ${CIRCLE_TEST_FILES_PAT}',
+        'X-Session': '${FILES_SESSION}',
       },
     },
-  ]);
+  });
   assert.equal(manager.status[0]!.error, '', manager.describe());
   assert.equal(stub.requests[0]!.headers['x-api-version'], '2');
   assert.equal(stub.requests[0]!.headers['x-region'], 'us');
@@ -438,7 +445,7 @@ test('only a secret, or a variable whose own or header name looks secret, is hid
       {},
       { sessionId: 'one', signal: new AbortController().signal },
     ),
-    'Found 12 files and 2 folders in 2026 for the users of us-east; key ${env:CIRCLE_TEST_FILES_KEY}, Bearer ${env:CIRCLE_TEST_FILES_PAT}, session %FILES_SESSION%',
+    'Found 12 files and 2 folders in 2026 for the users of us-east; key ${CIRCLE_TEST_FILES_KEY}, Bearer ${CIRCLE_TEST_FILES_PAT}, session %FILES_SESSION%',
   );
   assert.deepEqual(manager.instructions(), [
     {
@@ -448,7 +455,7 @@ test('only a secret, or a variable whose own or header name looks secret, is hid
   ]);
 });
 
-test('a missing secret stops that server before any request, and an error the server quotes back shows the reference', async (t) => {
+test('a reference to nothing set is sent as written with a warning, and an error the server quotes back shows the reference', async (t) => {
   const quoting = await mcpStub(t, {
     refuse: (request) => ({
       status: 401,
@@ -459,28 +466,34 @@ test('a missing secret stops that server before any request, and an error the se
     secrets: () => ({ FILES_TOKEN: TOKEN }),
   });
   cleanup(t, () => manager.close());
-  await manager.load([
-    {
-      name: 'missing',
+  await manager.load({
+    missing: {
       url: quoting.url,
-      transport: 'streamable_http',
-      headers: { Authorization: 'Bearer ${secret:NOT_SAVED}' },
+      type: 'http',
+      headers: { Authorization: 'Bearer ${NOT_SAVED}' },
     },
-  ]);
-  assert.match(
-    manager.status[0]!.error,
-    /header Authorization needs the secret NOT_SAVED, which is not saved/,
+  });
+  // The reference stays as written, as the documented format has it, and /mcp names it, never a value
+  assert.equal(
+    quoting.requests[0]!.headers.authorization,
+    'Bearer ${NOT_SAVED}',
   );
-  assert.equal(quoting.requests.length, 0);
-  await manager.load([
-    {
-      name: 'quoting',
+  assert.match(
+    manager.describe(),
+    /warning: headers\.Authorization names \$\{NOT_SAVED\}, which is not set/,
+  );
+  assert.ok(!manager.describe().includes(TOKEN));
+  await manager.load({
+    quoting: {
       url: quoting.url,
-      transport: 'streamable_http',
-      headers: { Authorization: 'Bearer ${secret:FILES_TOKEN}' },
+      type: 'http',
+      headers: { Authorization: 'Bearer ${FILES_TOKEN}' },
     },
-  ]);
-  assert.equal(quoting.requests[0]!.headers.authorization, `Bearer ${TOKEN}`);
+  });
+  assert.equal(
+    quoting.requests.at(-1)!.headers.authorization,
+    `Bearer ${TOKEN}`,
+  );
   assert.match(manager.status[0]!.error, /rejected Bearer %FILES_TOKEN%/);
   assert.ok(!manager.describe().includes(TOKEN));
   assert.match(manager.describe(), /headers: Authorization/);
@@ -494,14 +507,13 @@ test('a missing secret stops that server before any request, and an error the se
       ],
     }),
   });
-  await manager.load([
-    {
-      name: 'echo',
+  await manager.load({
+    echo: {
       url: echo.url,
-      transport: 'streamable_http',
-      headers: { Authorization: 'Bearer ${secret:FILES_TOKEN}' },
+      type: 'http',
+      headers: { Authorization: 'Bearer ${FILES_TOKEN}' },
     },
-  ]);
+  });
   const context = { sessionId: 'one', signal: new AbortController().signal };
   assert.equal(
     await manager.tools[0]!.run({}, context),

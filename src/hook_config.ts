@@ -24,6 +24,8 @@ export const HOOK_EVENTS = [
   'PreCompact',
   'PostCompact',
   'Notification',
+  'Elicitation',
+  'ElicitationResult',
 ] as const;
 export type HookEvent = (typeof HOOK_EVENTS)[number];
 
@@ -47,8 +49,6 @@ const NOT_RUN_HERE = new Set([
   'WorktreeRemove',
   'PreModelSwitch',
   'PostModelSwitch',
-  'Elicitation',
-  'ElicitationResult',
 ]);
 
 /** Events about a tool call: the matcher names the tool, and only these read `if`. */

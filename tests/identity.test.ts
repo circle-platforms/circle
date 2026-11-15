@@ -67,13 +67,11 @@ test("a subagent's calls carry the conversation's session everywhere, with its o
     `[process.env.CIRCLE_SESSION_ID ?? null, process.env.CIRCLE_AGENT_ID ?? null]`,
   );
   const settings = defaultSettings();
-  settings.mcp_servers = [
-    { name: 'http-server', url: stub.url, transport: 'streamable_http' },
-  ];
+  settings.mcpServers = { 'http-server': { url: stub.url, type: 'http' } };
   const both = () =>
     reply('', [
       { id: crypto.randomUUID(), name: 'execute', args: { command } },
-      { id: crypto.randomUUID(), name: 'http-server_echo', args: {} },
+      { id: crypto.randomUUID(), name: 'mcp__http-server__echo', args: {} },
     ]);
   const model = new ScriptedModel([
     // The conversation: a command and a server call, then a subagent that does the same

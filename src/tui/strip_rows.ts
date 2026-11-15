@@ -196,7 +196,7 @@ export function jobActivity(job: Job): string {
     : '';
   if (job.detail === 'waiting for you')
     return `waiting for you${job.kind === 'agent' ? waiting : ''}`;
-  if (job.kind === 'agent' || job.kind === 'watch')
+  if (job.kind === 'agent' || job.kind === 'watch' || job.kind === 'call')
     return `${job.detail || '—'}${job.kind === 'agent' ? waiting : ''}`;
   try {
     return plainJobOutput(outputTail(job.outputPath, 2048, 1)).trim() || '—';

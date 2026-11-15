@@ -21,9 +21,8 @@ import type { RuntimeCommandName } from '../src/runtime-protocol.ts';
 const placeholders = { url: 'HUB_URL', token: 'HUB_TOKEN' };
 // Nothing listens on the discard port: connecting the entry fails at once
 const legacy = {
-  name: 'Hub',
+  type: 'http',
   url: 'http://127.0.0.1:9/mcp',
-  transport: 'streamable_http',
   enabled: true,
 };
 
@@ -36,7 +35,7 @@ async function start(t: TestContext, hubOn: boolean, entry = legacy) {
   await mkdir(home);
   await mkdir(workspace);
   const settings = trustFolder(defaultSettings(), workspace);
-  settings.mcp_servers = [{ ...entry }];
+  settings.mcpServers = { Hub: { ...entry } };
   settings.extensions = { ...settings.extensions, hub: { enabled: hubOn } };
   saveSettings(settings, home);
   const controller = new RuntimeController({
@@ -65,8 +64,7 @@ async function start(t: TestContext, hubOn: boolean, entry = legacy) {
     assert.equal(reply.ok, true, reply.error);
     return reply;
   };
-  const hub = () =>
-    loadSettings(home).mcp_servers.find((row) => row.name === 'Hub');
+  const hub = () => loadSettings(home).mcpServers.Hub;
   return { call, hub, controller };
 }
 
@@ -98,7 +96,16 @@ test("the Hub extension's switch turns its entry off and on, and switching anoth
   // Another extension's switch does not touch the Hub entry, also one turned off by hand while the extension is on
   await call('save-settings', {
     settings: {},
-    mcp: [{ ...legacy, id: 'Hub', enabled: false }],
+    // A row as the MCP servers page sends it, which names its transport as the page does
+    mcp: [
+      {
+        id: 'Hub',
+        name: 'Hub',
+        transport: 'streamable_http',
+        url: legacy.url,
+        enabled: false,
+      },
+    ],
   });
   assert.equal(hub()?.enabled, false);
   await save('github', false);
@@ -128,7 +135,7 @@ test('switching the Hub applies to every open conversation, not only the one ask
             values(): Iterable<{
               options: {
                 settings: {
-                  mcp_servers: { name?: unknown; enabled?: unknown }[];
+                  mcpServers: Record<string, { enabled?: unknown }>;
                 };
               };
             }>;
@@ -141,9 +148,7 @@ test('switching the Hub applies to every open conversation, not only the one ask
   // What each open conversation runs with: the Hub entry its runtime took
   const applied = () =>
     runtimes().map(
-      (runtime) =>
-        runtime.options.settings.mcp_servers.find((row) => row.name === 'Hub')
-          ?.enabled,
+      (runtime) => runtime.options.settings.mcpServers.Hub?.enabled,
     );
   await call('save-settings', {
     settings: {},

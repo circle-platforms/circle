@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { entryOf } from './helpers.js';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
@@ -17,7 +18,10 @@ function settingsWith(server: Record<string, unknown>): CircleSettings {
     auth: {},
     trusted_folders: [],
     theme: 'auto',
-    mcp_servers: [server],
+    // The server under its name, its transport as the entry's type: over HTTP unless it says otherwise
+    mcpServers: {
+      [String(server.name)]: { type: 'http', ...entryOf(server) },
+    },
     variables: {},
   } as unknown as CircleSettings;
 }
@@ -113,7 +117,7 @@ test('skill_install takes the token of the Hub entry signed in from the extensio
   const settings = settingsWith({
     name: 'Hub',
     url: endpoint,
-    transport: 'streamable_http',
+    transport: 'http',
     enabled: true,
   });
   const install = (): Tool =>

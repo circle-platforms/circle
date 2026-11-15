@@ -3171,17 +3171,15 @@ test('cancelling a secret ends the pending callback without creating its target'
 test('MCP configuration saves preserve private fields and show pending reload honestly', async (t) => {
   const f = await setup(t, []);
   const settings = loadSettings(f.home);
-  settings.mcp_servers = [
-    {
-      id: 'stable-server',
-      name: 'fixture',
-      transport: 'stdio',
+  settings.mcpServers = {
+    fixture: {
+      type: 'stdio',
       command: 'unused-fixture',
       args: ['--path', 'folder with spaces'],
       env: { MCP_SECRET: 'fixture-private-env' },
       enabled: false,
     },
-  ];
+  };
   saveSettings(settings, f.home);
   const draft = f.controller.snapshot().mcp;
   assert.equal(draft[0]!.status, 'reload required');
@@ -3189,10 +3187,12 @@ test('MCP configuration saves preserve private fields and show pending reload ho
     (await f.call('save-settings', { settings: {}, mcp: draft })).ok,
     true,
   );
-  const saved = loadSettings(f.home).mcp_servers[0]!;
+  // Written as mcpServers: the row's server under its name, with what the page does not show kept
+  const saved = loadSettings(f.home).mcpServers.fixture!;
   assert.deepEqual(saved.args, ['--path', 'folder with spaces']);
   assert.deepEqual(saved.env, { MCP_SECRET: 'fixture-private-env' });
-  assert.equal(saved.id, 'stable-server');
+  assert.equal(saved.type, 'stdio');
+  assert.equal(saved.enabled, false);
   assert.equal(
     JSON.stringify(f.controller.snapshot()).includes('fixture-private-env'),
     false,
@@ -3203,28 +3203,24 @@ test('MCP configuration saves preserve private fields and show pending reload ho
 test('a server whose tools could not be listed again shows as connected, with the note, not as an error', async (t) => {
   const { TOOLS_NOT_LISTED_AGAIN } = await import('../../../src/mcp_loader.js');
   const f = await setup(t, []);
-  const spec = {
-    name: 'fixture',
-    transport: 'stdio',
-    command: 'unused-fixture',
-  };
+  const spec = { type: 'stdio', command: 'unused-fixture' };
   const settings = loadSettings(f.home);
-  settings.mcp_servers = [spec];
+  settings.mcpServers = { fixture: spec };
   saveSettings(settings, f.home);
   // The runtime's own state, as a server connected with these settings and then failed to list its tools again
   const runtime = (
     f.controller as unknown as {
       runtime(workspace: string): {
-        options: { settings: { mcp_servers: unknown[] } };
+        options: { settings: { mcpServers: Record<string, unknown> } };
         mcp: { status: import('../../../src/mcp_loader.js').McpStatus[] };
       };
     }
   ).runtime(f.workspace);
-  runtime.options.settings.mcp_servers = [{ ...spec }];
+  runtime.options.settings.mcpServers = { fixture: { ...spec } };
   runtime.mcp.status.splice(0, runtime.mcp.status.length, {
     name: 'fixture',
     connection: 'unused-fixture',
-    tools: ['fixture_kept'],
+    tools: ['mcp__fixture__kept'],
     error: TOOLS_NOT_LISTED_AGAIN,
   });
   const row = () =>
@@ -3560,7 +3556,7 @@ test('the Hub extension connects a Hub by its typed address with a device code, 
     wrong.error ?? '',
     /no Circle Hub answers at http:\/\/127\.0\.0\.1:9/,
   );
-  assert.deepEqual(loadSettings(home).mcp_servers, []);
+  assert.deepEqual(loadSettings(home).mcpServers, {});
 
   // Typed without its scheme: https answers nothing there, so the Hub is found over http
   const connected = await call('hub-connect', {
@@ -3569,16 +3565,15 @@ test('the Hub extension connects a Hub by its typed address with a device code, 
   assert.equal(connected.ok, true, connected.error);
   assert.deepEqual(connected.data, { endpoint: peer.origin + '/mcp' });
   const saved = loadSettings(home);
-  assert.deepEqual(saved.mcp_servers, [
-    {
-      name: 'Hub',
+  assert.deepEqual(saved.mcpServers, {
+    Hub: {
+      type: 'http',
       url: peer.origin + '/mcp',
-      transport: 'streamable_http',
       enabled: true,
       // The placeholders a Hub's skills write for its address and token
       placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
     },
-  ]);
+  });
   assert.equal(saved.extensions.hub?.enabled, true);
   await wait(
     () => updates.some((update) => row(update)?.signIn?.code === 'BCDF-GHJK'),
@@ -3616,7 +3611,7 @@ test('the Hub extension connects a Hub by its typed address with a device code, 
     [kept.tokens!.refresh_token, kept.tokens!.access_token],
   );
   assert.deepEqual(keptFor(home, peer.origin + '/mcp'), {});
-  assert.deepEqual(loadSettings(home).mcp_servers, []);
+  assert.deepEqual(loadSettings(home).mcpServers, {});
   assert.equal(
     controller.snapshot().mcp.find((item) => item.name === 'Hub'),
     undefined,
@@ -3632,9 +3627,7 @@ test('an MCP server that signs in after the start reaches the window without ano
   await peer.start();
   const settings = trustFolder(defaultSettings(), workspace);
   // No credential header: the server answers 401 and Circle signs in to it.
-  settings.mcp_servers = [
-    { name: 'signin', url: peer.origin + '/mcp', transport: 'streamable_http' },
-  ];
+  settings.mcpServers = { signin: { url: peer.origin + '/mcp', type: 'http' } };
   saveSettings(settings, home);
   const updates: RuntimeUpdate[] = [];
   const opened: string[] = [];
@@ -6935,13 +6928,12 @@ test(
     const port = (server.address() as { port: number }).port;
     const f = await coldStartFixture(t, 'scratch', async (home) => {
       const settings = loadSettings(home);
-      settings.mcp_servers = [
-        {
-          name: 'waiting-for-headers',
-          transport: 'sse',
+      settings.mcpServers = {
+        'waiting-for-headers': {
+          type: 'sse',
           url: `http://127.0.0.1:${port}/events`,
         },
-      ];
+      };
       saveSettings(settings, home);
     });
     f.controller.publish();
@@ -7609,4 +7601,69 @@ test('the desktop signs in with ChatGPT, saves no key, runs a turn on the plan a
   // No token reached a reply, a snapshot or an event.
   for (const shown of [replies, updates, controller.snapshot()])
     assert.doesNotMatch(JSON.stringify(shown), /access-\d|refresh-\d/);
+});
+
+test("closing the desktop's question about a project's .mcp.json decides nothing, and its servers wait on", async (t) => {
+  const root = realpathSync.native(
+    await mkdtemp(join(tmpdir(), 'circle-core-desktop-')),
+  );
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(home);
+  await mkdir(workspace);
+  await writeFile(
+    join(workspace, '.mcp.json'),
+    JSON.stringify({
+      mcpServers: { shared: { type: 'http', url: 'http://127.0.0.1:9/mcp' } },
+    }),
+  );
+  saveSettings(trustFolder(defaultSettings(), workspace), home);
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model: new ScriptedModel([]),
+    emit: () => {},
+  });
+  t.after(async () => {
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  await controller.initialize();
+  await wait(
+    () =>
+      controller
+        .snapshot()
+        .interactions.some(
+          (row) => row.kind === 'question' && row.status === 'pending',
+        ),
+    'the question about .mcp.json',
+  );
+  const card = controller
+    .snapshot()
+    .interactions.find(
+      (row) => row.kind === 'question' && row.status === 'pending',
+    )!;
+  assert.match(card.title ?? '', /\.mcp\.json adds MCP servers/);
+  const cancelled = await controller.dispatch({
+    id: randomUUID(),
+    name: 'answer',
+    payload: { id: card.id, revision: card.revision, cancel: true },
+    sessionId: card.sessionId,
+  });
+  assert.equal(cancelled.ok, true, cancelled.error);
+  const runtime = (
+    controller as unknown as { runtime(workspace: string): AgentRuntime }
+  ).runtime(workspace);
+  await wait(
+    () =>
+      (runtime as unknown as { askingForServers?: Promise<void> })
+        .askingForServers === undefined,
+    'the answer read',
+  );
+  assert.equal(loadSettings(home).projects[workspace], undefined);
+  assert.equal(
+    runtime.mcp.status.find((row) => row.name === 'shared')?.approval,
+    'pending',
+  );
 });

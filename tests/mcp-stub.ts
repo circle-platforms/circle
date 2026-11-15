@@ -14,6 +14,8 @@ export interface StubTool {
   inputSchema?: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
   annotations?: Record<string, unknown>;
+  /** What the server says of it besides, such as `circle/requiresUserInteraction`. */
+  _meta?: Record<string, unknown>;
   /** How it may be run, such as `{ taskSupport: 'required' }`. */
   execution?: Record<string, unknown>;
 }
@@ -84,6 +86,11 @@ export interface StubOptions {
   refuse?: (
     request: StubRequest,
   ) => { status: number; body: string } | undefined;
+  /**
+   * Gives each streamable HTTP client a session (`Mcp-Session-Id`) at initialize, and answers a request that names
+   * none it knows with 404, as a server does once it forgot a session (`dropSessions`).
+   */
+  sessions?: boolean;
 }
 export interface McpStub {
   /** The streamable HTTP endpoint. */
@@ -100,6 +107,8 @@ export interface McpStub {
   pause(): Promise<void>;
   /** Listens again, on the same port. */
   resume(): Promise<void>;
+  /** Forgets every session it gave (`sessions`). */
+  dropSessions(): void;
 }
 export async function mcpStub(
   t: TestContext,
@@ -109,6 +118,7 @@ export async function mcpStub(
   // Requests the stub sent a client, by id, waiting for its answer
   const asked = new Map<string, (reply: StubRequest['reply']) => void>();
   let sent = 0;
+  const sessions = new Set<string>();
   let stream: ServerResponse | undefined;
   const pushed: ServerResponse[] = [];
   const answer = async (request: StubRequest): Promise<unknown> => {
@@ -175,6 +185,27 @@ export async function mcpStub(
     if (refused) {
       response.writeHead(refused.status).end(refused.body);
       return;
+    }
+    if (
+      options.sessions &&
+      request.method === 'POST' &&
+      request.path === '/mcp' &&
+      request.message
+    ) {
+      if (request.message.method === 'initialize') {
+        const id = `session-${sessions.size + 1}-${Math.random().toString(36).slice(2)}`;
+        sessions.add(id);
+        response.setHeader('Mcp-Session-Id', id);
+      } else if (!sessions.has(String(incoming.headers['mcp-session-id']))) {
+        response.writeHead(404, { 'Content-Type': 'application/json' }).end(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: request.message.id ?? null,
+            error: { code: -32001, message: 'Session not found' },
+          }),
+        );
+        return;
+      }
     }
     if (request.method === 'GET' && request.path === '/sse') {
       stream = response;
@@ -285,6 +316,7 @@ export async function mcpStub(
       for (const open of [...pushed, ...(stream ? [stream] : [])])
         open.write(event);
     },
+    dropSessions: () => sessions.clear(),
     pause: () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());

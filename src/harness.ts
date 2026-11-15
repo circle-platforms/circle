@@ -1963,10 +1963,12 @@ export class Harness {
       ),
     });
   }
-  // A task call (its name as the tool table resolves it): its subagent can run beside others.
+  // A task call (its name as the tool table resolves it), whose subagent can run beside others, or a call of a tool
+  // that says its calls may, as an MCP tool its server marks read-only.
   private parallel(call: ToolCall): boolean {
     try {
-      return prepareToolCall(call, this.tools).tool.name === 'task';
+      const tool = prepareToolCall(call, this.tools).tool;
+      return tool.name === 'task' || tool.parallel === true;
     } catch {
       return false;
     }
@@ -2067,7 +2069,7 @@ export class Harness {
             ...(tool.paths?.(resolved) ?? []),
           ]),
         ];
-        if (this.readOnlyRefuses(call, effect))
+        if (this.readOnlyRefuses(call, effect) && !tool.planAsks)
           throw new Error('read-only mode: this tool cannot run');
         // A command's effects are those of what it runs: a value can make it delete
         const review = this.options.policy.review(call.name, resolved);
@@ -2203,6 +2205,8 @@ export class Harness {
       const wouldAsk =
         secretAdded ||
         tool.personApproval === true ||
+        // An ask rule, a critical delete: asked in every mode, whatever allows the call otherwise
+        found.always ||
         (!settingsAllowed &&
           !this.options.planFileMutation?.(call) &&
           effect !== 'read' &&
@@ -2211,7 +2215,8 @@ export class Harness {
             call.name,
             resolved,
             this.options.approvalSessionId ?? this.sessionId,
-            true,
+            // In plan mode a tool that asks there asks as in manual mode, whatever mode is under it
+            !(this.readOnly && tool.planAsks === true),
             readOnlyWorkflow ? 'manual' : this.approvalMode(),
           ) ||
             (this.options.headless && found.verdict === 'ASK_FORCED')));
@@ -2287,7 +2292,7 @@ export class Harness {
         }
       }
       signal.throwIfAborted();
-      if (this.readOnlyRefuses(call, effect))
+      if (this.readOnlyRefuses(call, effect) && !tool.planAsks)
         throw new Error('read-only mode: this tool cannot run');
       this.bus.emit('tool_start', { payload: { ...call } });
       const args = resolved;
@@ -2342,7 +2347,7 @@ export class Harness {
         run: async (args, context) => {
           const run = async () => {
             signal.throwIfAborted();
-            if (this.readOnlyRefuses(call, effect))
+            if (this.readOnlyRefuses(call, effect) && !tool.planAsks)
               throw new Error('read-only mode: this tool cannot run');
             return (preparedRun ?? tool.run)(args, context);
           };

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Ajv, type ValidateFunction } from 'ajv';
 import type { JobOwner, JobRegistry } from './jobs.js';
 import { LIMITS, verifyInstalled } from './local_skills.js';
-import { mcpToolName } from './mcp_loader.js';
+import { prefixedToolName } from './mcp_config.js';
 import { isSafePackPath } from './pack_files.js';
 import { identityEnvironment } from './sandbox.js';
 import { runScript } from './script_runs.js';
@@ -333,7 +333,7 @@ export function packTool(options: {
   const { root, pack, declaration } = options;
   const schema = declaration.input_schema;
   return {
-    name: mcpToolName(pack, declaration.name),
+    name: prefixedToolName(pack, declaration.name),
     description: `${declaration.description}\n\nRuns ${declaration.script} of the installed pack ${pack} in the workspace, as execute runs a command: a run still going after 120 seconds goes on as a background job, and its output and exit code come back.`,
     parameters: {
       ...schema,

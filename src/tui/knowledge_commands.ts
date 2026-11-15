@@ -13,7 +13,8 @@ import {
 import { KnowledgeShareRefused } from '../knowledge/sharing.js';
 import type { SyncItem, SyncObject } from '../knowledge/types.js';
 import { forgetAuthorization } from '../mcp_auth.js';
-import { buildMcpConnections } from '../mcp_loader.js';
+import { buildMcpConnections, connectionAddress } from '../mcp_loader.js';
+import { loadSecrets } from '../secrets.js';
 import { SyncHttpError } from '../knowledge/sync-http.js';
 import {
   knowledgeStatusLines,
@@ -374,7 +375,7 @@ export async function knowledgeCommand(
   if (verb === 'login') {
     const name = connection.status().server,
       configured = buildMcpConnections(
-        host.runtime.options.settings.mcp_servers,
+        host.runtime.options.settings.mcpServers,
       ).connections.find((c) => c.name === name);
     if (!configured?.url) throw Error('select an HTTP MCP connection first');
     if (
@@ -400,7 +401,8 @@ export async function knowledgeCommand(
     )
       return;
     await connection.close();
-    forgetAuthorization(host.home, new URL(configured.url).href);
+    const address = connectionAddress(configured, loadSecrets(host.home));
+    if (address) forgetAuthorization(host.home, address);
     await host.runtime.reloadIntegrations();
     notice(host, 'MCP sign-in requested · /knowledge connect after sign-in');
     return;

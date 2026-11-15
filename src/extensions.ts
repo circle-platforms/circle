@@ -269,24 +269,28 @@ export class ExtensionAPI {
     this.services?.onStatus?.();
   }
   /**
-   * Saves an MCP server entry in settings.json, replacing the entry of the same name, and connects that server alone
-   * again, as `/mcp reload <name>` does; the other servers are left as they are. Any extension may offer one. Between
-   * turns, as from a command.
+   * Saves an MCP server under `name` in your settings.json's `mcpServers`, in the documented format (`type`, `url` or
+   * `command`, …), replacing the entry of that name, and connects that server alone again, as `/mcp reconnect <name>`
+   * does; the other servers are left as they are. Any extension may offer one. Between turns, as from a command.
    */
-  async saveMcpServer(entry: Record<string, unknown>): Promise<McpServerState> {
+  async saveMcpServer(
+    name: string,
+    entry: Record<string, unknown>,
+  ): Promise<McpServerState> {
     const save = this.services?.saveMcpServer;
     if (!save)
       throw new ExtensionError('this interface cannot save MCP servers');
     if (
+      typeof name !== 'string' ||
+      !name.trim() ||
+      name === '__proto__' ||
       !isRecord(entry) ||
-      typeof entry.name !== 'string' ||
-      !entry.name.trim() ||
       (typeof entry.url !== 'string' && typeof entry.command !== 'string')
     )
       throw new ExtensionError(
-        'an MCP server entry needs a name, and a url or a command',
+        'an MCP server needs a name, and an entry with a url or a command',
       );
-    return save(structuredClone(entry));
+    return save(name, structuredClone(entry));
   }
   /** Open a web address in the browser: the system's, from the terminal or the application. */
   async openUrl(url: string): Promise<void> {
@@ -598,7 +602,10 @@ export interface ExtensionHostOptions {
   jobs?: JobRegistry;
   jobOwner?: (context: ToolContext) => JobOwner;
   /** Writes an MCP server entry into settings.json, by its name, and connects that one server again (#548). */
-  saveMcpServer?: (entry: Record<string, unknown>) => Promise<McpServerState>;
+  saveMcpServer?: (
+    name: string,
+    entry: Record<string, unknown>,
+  ) => Promise<McpServerState>;
 }
 /**
  * The entry Circle shipped for a bundled extension, not a link to something else. The

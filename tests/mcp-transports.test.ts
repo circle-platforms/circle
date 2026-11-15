@@ -93,11 +93,11 @@ test('MCP Streamable HTTP, legacy SSE and WebSocket perform real initialization 
   const manager = new McpManager(root);
   cleanup(t, () => manager.close());
   for (const [transport, url] of [
-    ['streamable_http', `http://127.0.0.1:${port}/mcp`],
+    ['http', `http://127.0.0.1:${port}/mcp`],
     ['sse', `http://127.0.0.1:${port}/sse`],
-    ['websocket', `ws://127.0.0.1:${port}/socket`],
+    ['ws', `ws://127.0.0.1:${port}/socket`],
   ]) {
-    await manager.load([{ name: 'fixture', url, transport }]);
+    await manager.load({ fixture: { type: transport, url } });
     assert.equal(
       manager.status[0]?.error,
       '',

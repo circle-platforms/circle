@@ -19,6 +19,11 @@ import {
 import type { SessionMode } from './approvals.js';
 import { defaultAttribution, type AttributionSettings } from './attribution.js';
 import { sleepSync } from './session_lock.js';
+import {
+  migrateMcpServersFile,
+  withOldMcpServers,
+  type McpServerConfig,
+} from './mcp_config.js';
 
 // Circle signs in only with an API URL and key. A `mode` or `oauth_provider` that older
 // releases wrote is dropped on load.
@@ -34,7 +39,13 @@ export interface CircleSettings {
   auth: ModelAuth;
   trusted_folders: string[];
   theme: 'auto' | 'dark' | 'light';
-  mcp_servers: Record<string, unknown>[];
+  /** Your MCP servers, for every project, by name (mcp_config.ts). */
+  mcpServers: Record<string, McpServerConfig>;
+  /**
+   * What is kept for one project, under its folder: your MCP servers for it alone (`mcpServers`) and your answers for
+   * the servers of its `.mcp.json` (`enabledMcpjsonServers`, `disabledMcpjsonServers`).
+   */
+  projects: Record<string, Record<string, unknown>>;
   knowledge_sync: { server: string; binding: string };
   extensions: Record<string, Record<string, unknown>>;
   credential_files: string[];
@@ -96,7 +107,8 @@ export const defaultSettings = (): CircleSettings => ({
   auth: defaultAuth(),
   trusted_folders: [],
   theme: 'auto',
-  mcp_servers: [],
+  mcpServers: {},
+  projects: {},
   knowledge_sync: { server: '', binding: '' },
   extensions: {},
   credential_files: [],
@@ -132,10 +144,18 @@ const MODE_NAMES: readonly (SessionMode | '')[] = [
   'plan',
   'auto',
 ];
+// The documented names of the modes Circle has: manual is `default`, accept-edits `acceptEdits`, auto
+// `bypassPermissions`
+const MODE_ALIASES: Record<string, SessionMode> = {
+  default: 'manual',
+  acceptedits: 'accept-edits',
+  bypasspermissions: 'auto',
+};
 const modeName = (value: unknown): SessionMode | '' => {
   const name = String(value || '')
     .trim()
     .toLowerCase();
+  if (Object.hasOwn(MODE_ALIASES, name)) return MODE_ALIASES[name]!;
   return (MODE_NAMES as readonly string[]).includes(name)
     ? (name as SessionMode)
     : '';
@@ -166,9 +186,17 @@ export function loadSettingsFromDict(
         ? sync.binding
         : '',
   };
-  settings.mcp_servers = Array.isArray(raw.mcp_servers)
-    ? raw.mcp_servers.filter(isRecord)
-    : [];
+  // A list of the format before this one is read as the current format until the file is migrated
+  settings.mcpServers = withOldMcpServers(raw);
+  delete settings.mcp_servers;
+  settings.projects = Object.fromEntries(
+    Object.entries(isRecord(raw.projects) ? raw.projects : {}).flatMap(
+      ([folder, entry]) =>
+        isRecord(entry) && folder !== '__proto__'
+          ? [[folder, structuredClone(entry)]]
+          : [],
+    ),
+  );
   settings.extensions = isRecord(raw.extensions)
     ? (Object.fromEntries(
         Object.entries(raw.extensions).filter(([, value]) => isRecord(value)),
@@ -270,7 +298,20 @@ export function saveSettings(
   const path = settingsPath(ensureHome(home));
   return withPrivateJsonLock(path, () => saveSettingsUnlocked(settings, path));
 }
+/**
+ * Moves the `mcp_servers` of settings.json into `mcpServers`, once, keeping a copy of the file as it was. Returns what
+ * was done, for the person to read.
+ */
+export function migrateMcpSettings(home = circleHome()): string[] {
+  const path = settingsPath(home);
+  if (!existsSync(path)) return [];
+  return withPrivateJsonLock(path, () =>
+    migrateMcpServersFile(path, writePrivateJson),
+  );
+}
 function saveSettingsUnlocked(settings: CircleSettings, path: string): string {
+  // A file still in the format before this one is migrated first, so the list is not written back beside its entries
+  migrateMcpServersFile(path, writePrivateJson);
   let previous: Record<string, unknown> = {};
   try {
     const raw = readJson(path);
@@ -278,7 +319,8 @@ function saveSettingsUnlocked(settings: CircleSettings, path: string): string {
   } catch {
     /* Initial setup can repair malformed settings. */
   }
-  writePrivateJson(path, { ...previous, ...settings });
+  const { mcp_servers: _old, ...next } = { ...previous, ...settings };
+  writePrivateJson(path, next);
   return path;
 }
 function transientLockError(error: unknown): boolean {

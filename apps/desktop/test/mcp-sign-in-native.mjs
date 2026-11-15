@@ -34,9 +34,7 @@ await peer.start();
 const name = 'Synthetic sign-in';
 // No credential header: the server answers 401 and Circle signs in to it.
 const settings = defaultSettings();
-settings.mcp_servers = [
-  { name, url: peer.origin + '/mcp', transport: 'streamable_http' },
-];
+settings.mcpServers = { [name]: { type: 'http', url: peer.origin + '/mcp' } };
 saveSettings(settings, home);
 const env = {
   ...process.env,

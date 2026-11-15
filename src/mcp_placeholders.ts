@@ -5,6 +5,12 @@
 // entry names it.
 import { keptFor } from './mcp_auth.js';
 import { buildMcpConnections, resolveHeaders } from './mcp_loader.js';
+import {
+  environmentThenSecrets,
+  expandReferences,
+  mcpServer,
+  WITHHELD_VARIABLES,
+} from './mcp_config.js';
 import { isRecord, VARIABLE_NAME, type CircleSettings } from './settings.js';
 
 /**
@@ -31,27 +37,22 @@ export function mcpPlaceholders(
     ![saved.variables, saved.secrets, variables, secrets].some((values) =>
       Object.hasOwn(values, name),
     );
-  const entries = settings.mcp_servers.filter(isRecord);
-  // As the connections are made: an entry turned off, or an earlier one of the same name, gives nothing
-  for (const connection of buildMcpConnections(settings.mcp_servers)
+  // Your own servers, as their connections are made: an entry turned off gives nothing
+  for (const connection of buildMcpConnections(settings.mcpServers)
     .connections) {
-    if (
-      !connection.url ||
-      !['streamable_http', 'sse'].includes(connection.transport)
-    )
+    if (!connection.url || !['http', 'sse'].includes(connection.transport))
       continue;
-    const entry = entries
-      .filter((row) => row.name === connection.name && row.enabled !== false)
-      .at(-1);
+    const entry = mcpServer(settings.mcpServers, connection.name);
     const named = isRecord(entry?.placeholders) ? entry.placeholders : {};
+    const address = resolveUrl(connection.url, saved.secrets);
     let server: URL;
     try {
-      server = new URL(connection.url);
+      server = new URL(address);
     } catch {
       continue;
     }
     if (server.protocol !== 'http:' && server.protocol !== 'https:') continue;
-    if (free(named.url)) variables[named.url] = connection.url;
+    if (free(named.url)) variables[named.url] = address;
     if (free(named.token)) {
       const token = bearer(
         home,
@@ -68,6 +69,14 @@ export function mcpPlaceholders(
   return { variables, secrets, until };
 }
 
+/** An entry's address as its connection reaches it, its references filled in. */
+function resolveUrl(url: string, secrets: Record<string, string>): string {
+  return expandReferences(
+    url,
+    environmentThenSecrets(process.env, secrets),
+    (name) => WITHHELD_VARIABLES.has(name),
+  ).text;
+}
 /** The Bearer token a connection sends: its Authorization header's, or else the one its sign-in keeps, and its expiry. */
 function bearer(
   home: string,
@@ -81,9 +90,11 @@ function bearer(
       ([name]) => name.toLowerCase() === 'authorization',
     )?.[1];
   } catch {
-    // A header that names a secret or variable not set: the connection sends nothing
+    // A header that cannot be sent: the connection sends nothing
     return undefined;
   }
+  // A reference to nothing set stays as written, and is no token
+  if (header !== undefined && /\$\{[A-Za-z_]/.test(header)) return undefined;
   if (header !== undefined) {
     const value = /^Bearer (\S+)$/i.exec(header)?.[1];
     return value ? { value, until: Infinity } : undefined;

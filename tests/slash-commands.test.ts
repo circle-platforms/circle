@@ -1533,7 +1533,7 @@ test('/compact, /mcp, /extensions, /trust and /reload report what they did', asy
   await app.submit('/mcp');
   assert.equal(
     app.state.notices.at(-1),
-    'No MCP servers. Add mcp_servers to settings.json.',
+    'No MCP servers. Add them to mcpServers in settings.json, or to .mcp.json in the project.',
   );
   await app.submit('/mcp reload');
   assert.equal(app.state.notices.at(-1), 'MCP reloaded · 0 tools');
@@ -2434,14 +2434,12 @@ test('/hub names the switch while the hub extension is off, and once on connects
     on.app.state.notices.join('\n'),
   );
   // The entry is saved as the desktop's Hub page saves it, and the Hub's tools are the model's now
-  const saved = loadSettings(home).mcp_servers.find(
-    (row) => row.name === 'Hub',
-  );
+  const saved = loadSettings(home).mcpServers.Hub;
   assert.deepEqual(
     { url: saved?.url, placeholders: saved?.placeholders },
     { url: endpoint, placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' } },
   );
   assert.ok(
-    on.runtime.harness.tools.some((tool) => tool.name === 'Hub_search'),
+    on.runtime.harness.tools.some((tool) => tool.name === 'mcp__Hub__search'),
   );
 });
