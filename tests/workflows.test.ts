@@ -929,6 +929,10 @@ return [a, b, c]
 
 test('an unedited relaunch hands back every saved result even when agents ended in another order than they started', async (t) => {
   const paths = folders(t);
+  // The scenario needs two agents working at once: the first stage of one item is
+  // still running while the other item goes through both of its stages. A machine
+  // whose workflow limit works out to one could never show that order.
+  envFor(t, 'CIRCLE_WORKFLOW_MAX_CONCURRENT_AGENTS')('2');
   const script =
     META('two-stages') +
     `return await pipeline(['a', 'b'],
