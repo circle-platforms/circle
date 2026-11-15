@@ -193,3 +193,166 @@ test('tool exceptions redact known credential shapes before model context and pe
   assert.equal(model.requests[1]!.messages.at(-1)!.content, result.content);
   assert.match(redact('token=hello'), /token=\*\*\*/);
 });
+test('a value that does not match its pattern is told the field description and examples, or the pattern cut at 120 characters, in the next request', async (t) => {
+  const root = scratch(t);
+  const reference =
+    '^(?:src:[0-9a-f]{4}|tree:[0-9a-f]{4}/(?:[a-z][a-z0-9_.-]{0,15}))$';
+  // Over 1 KB, as reference patterns can be
+  const long =
+    '^(?:' +
+    Array.from({ length: 80 }, (_, index) => `kind${index}:[0-9a-f]{64}`).join(
+      '|',
+    ) +
+    ')$';
+  assert.equal(long.length, 1595);
+  let runs = 0;
+  const model = new ScriptedModel([
+    {
+      message: {
+        id: 'a',
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'described', name: 'synthetic_get', args: { described: 'x' } },
+          { id: 'bare', name: 'synthetic_get', args: { bare: 'x' } },
+          { id: 'long', name: 'synthetic_get', args: { long: 'x' } },
+        ],
+      },
+    },
+    { message: { id: 'done', role: 'assistant', content: 'done' } },
+  ]);
+  const runtime = new AgentRuntime({
+    home: root,
+    workspace: root,
+    settings: defaultSettings(),
+    model,
+    headless: true,
+  });
+  cleanup(t, () => runtime.close());
+  runtime.harness.tools.push({
+    name: 'synthetic_get',
+    description: '',
+    effect: 'read',
+    parameters: {
+      type: 'object',
+      properties: {
+        described: {
+          type: 'string',
+          pattern: reference,
+          description: 'A content reference, e.g. src:<4-hex-digest>',
+          examples: ['src:0f3a', 'tree:0f3a/docs'],
+        },
+        bare: { type: 'string', pattern: reference },
+        long: { type: 'string', pattern: long },
+      },
+    },
+    run: async () => {
+      runs++;
+      return 'ran';
+    },
+  });
+  await runtime.harness.run('get them');
+  assert.equal(runs, 0);
+  const read = Object.fromEntries(
+    model.requests[1]!.messages.filter(
+      (message) => message.role === 'tool',
+    ).map((message) => [message.tool_call_id, message.content]),
+  );
+  assert.deepEqual(read, {
+    described:
+      'synthetic_get was called with invalid arguments: /described: must match the field\'s pattern, described as "A content reference, e.g. src:<4-hex-digest>", for example "src:0f3a" or "tree:0f3a/docs". Re-issue the call with arguments that satisfy the declared schema; no work was done.',
+    bare: 'synthetic_get was called with invalid arguments: /bare: must match pattern "^(?:src:[0-9a-f]{4}|tree:[0-9a-f]{4}/(?:[a-z][a-z0-9_.-]{0,15}))$". Re-issue the call with arguments that satisfy the declared schema; no work was done.',
+    long: 'synthetic_get was called with invalid arguments: /long: must match pattern "^(?:kind0:[0-9a-f]{64}|kind1:[0-9a-f]{64}|kind2:[0-9a-f]{64}|kind3:[0-9a-f]{64}|kind4:[0-9a-f]{64}|kind5:[0-9a-f]{64}|ki…" (pattern cut at 120 of 1595 characters). Re-issue the call with arguments that satisfy the declared schema; no work was done.',
+  });
+  const stored = runtime.harness.messages.filter(
+    (message) => message.role === 'tool',
+  );
+  assert.deepEqual(
+    stored.map((message) => [message.status, message.recoverable]),
+    [
+      ['error', true],
+      ['error', true],
+      ['error', true],
+    ],
+  );
+});
+test('type, required and enum failures keep their short wording when the field has a description', () => {
+  const tool: Tool = {
+    name: 'synthetic_set',
+    description: '',
+    effect: 'read',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'The name' },
+        count: { type: 'integer', description: 'How many' },
+        mode: {
+          type: 'string',
+          enum: ['fast', 'slow'],
+          description: 'Which mode',
+          examples: ['fast'],
+        },
+      },
+      required: ['name'],
+    },
+    run: async () => 'ok',
+  };
+  assert.throws(
+    () =>
+      prepareToolCall(
+        {
+          id: 'set',
+          name: 'synthetic_set',
+          args: { count: 'many', mode: 'medium' },
+        },
+        [tool],
+      ),
+    {
+      message:
+        "synthetic_set was called with invalid arguments: <root>.name: must have required property 'name'; /count: must be integer; /mode: must be equal to one of the allowed values. Re-issue the call with arguments that satisfy the declared schema; no work was done.",
+    },
+  );
+});
+test('a pattern failure gives examples alone, only string ones, and cuts a long description without splitting a character', () => {
+  const tool: Tool = {
+    name: 'synthetic_list',
+    description: '',
+    effect: 'read',
+    parameters: {
+      type: 'object',
+      properties: {
+        ids: {
+          type: 'array',
+          items: { type: 'string', pattern: '^[a-z]+$', examples: [7, 'abc'] },
+        },
+        note: {
+          type: 'string',
+          pattern: '^n:',
+          description: `${'x'.repeat(299)}😀 and more`,
+        },
+      },
+    },
+    run: async () => 'ok',
+  };
+  assert.throws(
+    () =>
+      prepareToolCall(
+        {
+          id: 'list',
+          name: 'synthetic_list',
+          args: { ids: ['ok', 'Private-Value'], note: 'private note' },
+        },
+        [tool],
+      ),
+    (error) => {
+      assert.ok(error instanceof RecoverableToolError);
+      assert.equal(
+        error.message,
+        `synthetic_list was called with invalid arguments: /ids/1: must match the field's pattern, for example "abc"; /note: must match the field's pattern, described as "${'x'.repeat(299)}😀…" (description cut at 300 of 309 characters). Re-issue the call with arguments that satisfy the declared schema; no work was done.`,
+      );
+      assert.ok(!error.message.includes('Private-Value'));
+      assert.ok(!error.message.includes('private note'));
+      return true;
+    },
+  );
+});

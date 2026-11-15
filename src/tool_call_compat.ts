@@ -130,15 +130,62 @@ function normalize(
   }
   return result;
 }
-const ajv = new Ajv({ strict: false, allErrors: true, coerceTypes: true });
+// `verbose` gives each error the schema that holds the failed keyword (`parentSchema`).
+const ajv = new Ajv({
+  strict: false,
+  allErrors: true,
+  coerceTypes: true,
+  verbose: true,
+});
 const validators = new WeakMap<Tool, ValidateFunction>();
+// The most of a pattern a message quotes, in characters: a pattern is written for machines.
+const PATTERN_QUOTED = 120;
+// The most of a description or of one example a message quotes, in characters.
+const TEXT_QUOTED = 300;
+// The most examples a message quotes.
+const EXAMPLES_QUOTED = 3;
+// `text` in quotes. Past `limit` characters it is cut, and a note says so. Characters are
+// counted by code point, so a cut never splits one.
+function quote(text: string, limit: number, what: string): string {
+  const chars = Array.from(text);
+  return chars.length <= limit
+    ? `"${text}"`
+    : `"${chars.slice(0, limit).join('')}…" (${what} cut at ${limit} of ${chars.length} characters)`;
+}
+// A string that does not match its pattern: the description and examples of the schema that
+// holds the pattern, when it has them, and otherwise the pattern itself.
+function patternDetail(error: ErrorObject): string {
+  const schema = isRecord(error.parentSchema) ? error.parentSchema : {};
+  const description =
+    typeof schema.description === 'string'
+      ? schema.description.replace(/\s+/g, ' ').trim()
+      : '';
+  const examples = (Array.isArray(schema.examples) ? schema.examples : [])
+    .filter((example): example is string => typeof example === 'string')
+    .slice(0, EXAMPLES_QUOTED);
+  if (!description && !examples.length)
+    return `must match pattern ${quote(String(error.params.pattern), PATTERN_QUOTED, 'pattern')}`;
+  return [
+    "must match the field's pattern",
+    ...(description
+      ? [`described as ${quote(description, TEXT_QUOTED, 'description')}`]
+      : []),
+    ...(examples.length
+      ? [
+          `for example ${examples
+            .map((example) => quote(example, TEXT_QUOTED, 'example'))
+            .join(' or ')}`,
+        ]
+      : []),
+  ].join(', ');
+}
 function validationDetail(errors: ErrorObject[]): string {
   return (
     errors
       .slice(0, 6)
       .map(
         (error) =>
-          `${error.instancePath || '<root>'}${error.keyword === 'required' ? '.' + String(error.params.missingProperty) : ''}: ${error.message || 'is invalid'}`,
+          `${error.instancePath || '<root>'}${error.keyword === 'required' ? '.' + String(error.params.missingProperty) : ''}: ${error.keyword === 'pattern' ? patternDetail(error) : error.message || 'is invalid'}`,
       )
       .join('; ') +
     (errors.length > 6 ? `; +${errors.length - 6} more fields` : '')
