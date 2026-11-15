@@ -16,6 +16,7 @@ import {
   readPackTools,
 } from '../src/pack_tools.js';
 import { AgentRuntime } from '../src/runtime.js';
+import { canonicalPath } from '../src/paths.js';
 import { saveSecret } from '../src/secrets.js';
 import { defaultSettings, saveSettings, trustFolder } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
@@ -288,9 +289,9 @@ console.log('converted with ' + process.env.HUB_TOKEN);
       // The conversation the call runs for (#551)
       session: runtime.session.id,
       stdin: '',
-      cwd: realpathSync(workspace),
-      skillDir: realpathSync(join(packs, 'example-pack')),
-      data: join(home, 'skill-data', 'example-pack'),
+      cwd: canonicalPath(workspace),
+      skillDir: canonicalPath(join(packs, 'example-pack')),
+      data: canonicalPath(join(home, 'skill-data', 'example-pack')),
       leaked: null,
     },
   ]);

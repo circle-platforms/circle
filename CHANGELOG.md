@@ -4,6 +4,38 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+## 1.18.0 - 2026-11-15
+
+### Added
+- **Workflows.** A workflow script can run many subagents in a declared order — `agent`, `parallel` and `pipeline` — as a background job, from `.circle/workflows/`, a pack, or written in the call; `/workflows` lists the runs. (#570)
+- **Subagents within subagents.** A subagent can start its own subagents, within a depth and a running limit, and a built-in `plan` subagent does read-only research. (#567)
+- **MCP elicitation.** A server can ask you for input in the middle of a call, as a form in the question panel or a page you agree to open first. (#561, #568)
+- **`/hub <address>`** connects a Hub from the terminal, with no settings file to edit. (#561)
+- **Hook rewrites.** A `before_tool` hook can return `updated_input`; the rewrite is checked again from the start and shown on the card when it asks. (#546)
+- **Pack tools.** A pack can declare its scripts in `tools.json` and offer them as typed tools once its skill is loaded. (#546)
+- **Skill hook folders.** A skill's hooks get `CIRCLE_SKILL_DIR` in their environment and `skill_dir` in their input. (#546)
+- **One server at a time.** `/mcp reload <name>` reconnects a single MCP server and lists its tools again; the others are left alone. (#561)
+- **Resource links.** A tool result's `resource_link` reads as a link, and the model can list and read a server's resources. (#561)
+- **Subagent effort.** A subagent definition can set `effort`, like it sets `model`. (#561)
+- **Pack subagents.** An installed pack's `agents/*.md` are offered from the session's start as `<pack>:<name>`. (#561)
+
+### Changed
+- **Hooks take the documented format** — in settings, in a pack's `hooks/hooks.json` and in skill frontmatter. Your own `hooks.json` files are moved once and kept as `hooks.json.migrated`, and moved hooks keep the behaviour they were written for. An installed pack with hooks in the old format runs none of them until the pack moves them. (#564)
+- **MCP servers are written as `mcpServers`**, keyed by name, in settings or an approved `.mcp.json`. Your `mcp_servers` list is moved once, with the old file kept. (#568)
+- **MCP tools are named `mcp__<server>__<tool>`**, and your approval rules are renamed once, with a copy kept; a deny under its old name still denies. What decides whether a call asks is your rules and your mode — a server's annotations no longer decide it, and `trust_annotations` no longer means anything. (#568)
+- **The MCP client speaks 2026-07-28** with servers that support it and falls back to 2025-11-25 with the rest; a list given with `ttlMs` is listed again when it expires. (#571)
+- **One session identity.** Hooks, commands and MCP requests carry the conversation's `session_id`; a subagent's own calls add `agent_id`. A hook in a subagent that told subagents apart by `session_id` reads `agent_id` now. (#561)
+- **A hook's reason reaches the model once.** A hook can add `user_message`, which is shown to you and never to the model. (#546)
+- **Subagents no longer get the `question` tool**, and up to 20 subagents can run at once across the conversation. (#567)
+- **Model lists stay on the source you selected** — a preset provider's models come from its released list, not from discovery. (#545)
+- **A pattern error explains itself**: the model gets the field's description and examples instead of the whole regular expression. (#562)
+
+### Fixed
+- **A dropped MCP server reconnects** up to five times, and a call that never left this machine is sent again; one cut after sending says so. (#568, #561)
+- **Progress shows on the call's row**, and a tool that declares `taskSupport` runs as a task you can cancel with `esc`. (#561)
+- **Two checks no longer fail under load**: the browser-close checks in the test suite, and the MCP placeholder test's 400 ms wall clock. (Tests only.) (#569, #568)
+- **The old MCP SDK's `hono` dependency is gone** with the move to the version 2 SDK packages, and **addressable 2.9.0 → 2.9.1** in the docs site (security fixes). (#571, #539)
+
 ## 1.17.0 - 2026-11-13
 
 ### Added
