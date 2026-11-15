@@ -21,6 +21,7 @@ import { CheckpointStore, type Session } from './checkpoint_store.js';
 import { attachPrompt } from './mentions.js';
 import { prepareToolCall, RecoverableToolError } from './tool_call_compat.js';
 import { redact } from './redact.js';
+import { isRecord } from './settings.js';
 import {
   expandVariables,
   redactSecrets,
@@ -63,7 +64,10 @@ import {
   hookFileShown,
   hookNoticeText,
   hookToolPaths,
+  canonicalJson,
+  redactHookValue,
   HOOK_ASKED_LINE,
+  HOOK_CHANGED_LINE,
   HOOK_OUTPUT_LINE,
   type HookBatch,
   type HookDefinition,
@@ -226,6 +230,64 @@ export interface QueuedMessage {
   display: string;
   pastes?: Record<string, string>;
   attachments?: MediaAttachment[];
+}
+/** A hook asked about this call: the card shows what it wrote for the person, the model reads its reason. */
+function hookAsked(call: ToolCall, batch: HookBatch): ToolCall {
+  return {
+    ...call,
+    ...(batch.reason ? { hook_reason: batch.reason } : {}),
+    ...(batch.userMessage ? { hook_message: batch.userMessage } : {}),
+  };
+}
+/**
+ * The rewrite, with every part the hooks handed back as they were shown taken from the call as the model sent it.
+ * The hooks see each secret's value as its name: a part they did not change keeps the value, also for a tool that
+ * would take the name as written.
+ */
+function keepUnchanged(
+  rewrite: unknown,
+  shown: unknown,
+  sent: unknown,
+): unknown {
+  if (canonicalJson(rewrite) === canonicalJson(shown)) return sent;
+  if (Array.isArray(rewrite) && Array.isArray(shown) && Array.isArray(sent))
+    return rewrite.map((item, index) =>
+      index < shown.length && index < sent.length
+        ? keepUnchanged(item, shown[index], sent[index])
+        : item,
+    );
+  if (isRecord(rewrite) && isRecord(shown) && isRecord(sent))
+    return Object.fromEntries(
+      Object.entries(rewrite).map(([key, item]) => [
+        key,
+        Object.hasOwn(shown, key) && Object.hasOwn(sent, key)
+          ? keepUnchanged(item, shown[key], sent[key])
+          : item,
+      ]),
+    );
+  return rewrite;
+}
+/** The arguments a before_tool rewrite changed, added or took out. Both sides have secrets as `%NAME%`. */
+function changedArguments(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): string[] {
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(
+    (key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]),
+  );
+}
+/** What a rewrite changed, for the model, so its next call can be written that way. */
+function hookChangedLine(
+  by: string,
+  changed: string[],
+  after: Record<string, unknown>,
+): string {
+  const lines = changed.map((key) => {
+    if (!Object.hasOwn(after, key)) return `${key} removed`;
+    const value = JSON.stringify(after[key]) ?? '';
+    return `${key} = ${value.length > 1000 ? `${value.slice(0, 1000)}…` : value}`;
+  });
+  return `${HOOK_CHANGED_LINE} (${by}):\n${lines.join('\n')}`;
 }
 /** Facts a tool read from the values a call runs with, as the person and the hooks see them. */
 function namedSecrets(
@@ -1394,13 +1456,20 @@ export class Harness {
       throw failure;
     }
   }
-  private queueHook(notice: HookNotice): void {
-    const text = hookNoticeText(notice);
-    // A failed hook's error text is for the person; the model only learns it failed.
-    const told =
-      notice.kind === 'failed'
-        ? hookNoticeText({ ...notice, reason: undefined })
-        : text;
+  /**
+   * The person reads the hook's own words for them (`user_message`), or else its reason. The model reads each
+   * reason once: a failed hook's error text is for the person, and a reason the tool result or the system prompt
+   * already carries (`given`) is not repeated here.
+   */
+  private queueHook(notice: HookNotice, given = false): void {
+    const text = hookNoticeText({
+      ...notice,
+      reason: notice.message || notice.reason,
+    });
+    const told = hookNoticeText({
+      ...notice,
+      reason: notice.kind === 'failed' || given ? undefined : notice.reason,
+    });
     this.hookNotes.push({
       id: randomUUID(),
       role: 'user',
@@ -1419,8 +1488,8 @@ export class Harness {
       payload: { hook_notice: true, count: notes.length },
     });
   }
-  private saveHook(notice: HookNotice): void {
-    this.queueHook(notice);
+  private saveHook(notice: HookNotice, given = false): void {
+    this.queueHook(notice, given);
     this.flushHookNotes();
   }
   private async announceHooks(signal: AbortSignal): Promise<void> {
@@ -1460,7 +1529,9 @@ export class Harness {
       secrets: this.hookSecrets(),
       signal,
     });
-    for (const notice of batch.notices) this.saveHook(notice);
+    // Its output is in the system prompt
+    for (const notice of batch.notices)
+      this.saveHook(notice, notice.kind === 'output');
     if (batch.context)
       this.hookPreface = `Hook session_start output:\n${batch.context}`;
   }
@@ -1482,8 +1553,15 @@ export class Harness {
       role: 'user',
       internal: 'hook_notice',
       content: `<system-reminder data-source="circle-hooks">\nA hook blocked the end of this turn: ${reason}\nFix the problem and finish the task. Do not stop while the hook blocks.\n</system-reminder>`,
-      display: hookNoticeText({ kind: 'blocked', reason }),
-      hook: { kind: 'blocked', reason },
+      display: hookNoticeText({
+        kind: 'blocked',
+        reason: batch.userMessage || reason,
+      }),
+      hook: {
+        kind: 'blocked',
+        reason,
+        ...(batch.userMessage ? { message: batch.userMessage } : {}),
+      },
     });
     return true;
   }
@@ -1494,6 +1572,8 @@ export class Harness {
     paths: string[],
     signal: AbortSignal,
     permissionReason?: string,
+    /** Notices the hooks already gave about this call: the same again, on its rewrite, is not repeated. */
+    already: readonly HookNotice[] = [],
   ): Promise<HookBatch | undefined> {
     if (!this.options.hooks) return undefined;
     const batch = await this.options.hooks.run({
@@ -1507,7 +1587,11 @@ export class Harness {
       secrets: this.hookSecrets(),
       signal,
     });
-    for (const notice of batch.notices) this.queueHook(notice);
+    // Every deny's reason is in the tool result (`Hook denied this call:`). An ask's is not on every path.
+    const told = new Set(already.map((notice) => JSON.stringify(notice)));
+    for (const notice of batch.notices)
+      if (!told.has(JSON.stringify(notice)))
+        this.queueHook(notice, notice.kind === 'denied');
     return batch;
   }
   private hookSecrets(): Record<string, string> {
@@ -1539,7 +1623,9 @@ export class Harness {
       onlyIds: starting.map((hook) => hook.id),
       signal,
     });
-    for (const notice of batch.notices) this.saveHook(notice);
+    // Its output is in the system prompt
+    for (const notice of batch.notices)
+      this.saveHook(notice, notice.kind === 'output');
     if (batch.context)
       this.hookPreface = this.hookPreface
         ? `${this.hookPreface}\n\n${batch.context}`
@@ -1563,6 +1649,8 @@ export class Harness {
     let call = original;
     let secrets: Record<string, string> = {};
     let content = '';
+    // Set when a before_tool hook rewrote the call: the tool result starts with it, whatever happens next
+    let changedLine = '';
     let status: 'success' | 'error' = 'success';
     let recoverable = false;
     let attachments: MediaAttachment[] = [];
@@ -1580,75 +1668,192 @@ export class Harness {
     this.bus.emit('tool_call', { payload: { ...call } });
     try {
       signal.throwIfAborted();
-      const prepared = prepareToolCall(call, this.tools);
-      call = prepared.call;
-      const tool = prepared.tool;
       // The values go in once, before anything is decided: what is checked and approved is
       // what runs. The call the person sees and a rule keeps has plain variables' values and
       // secrets' names; a tool whose arguments a model reads keeps the names when it runs.
-      const variables =
-        tool.variables === false ? {} : (this.options.variables?.() ?? {});
-      secrets =
-        tool.variables === false || tool.variables === 'plain'
-          ? {}
-          : (this.options.secrets?.() ?? {});
-      const used = new Set<string>();
-      const raw = call.args;
-      let resolved = expandVariables(raw, { ...variables, ...secrets }, used);
-      call = { ...call, args: expandVariables(raw, variables) };
-      // After the arguments were checked, from the values: the model cannot give these itself.
-      // The rules judge them as they are; the card and the hooks see each secret's value
-      // back as its name, as they see the arguments.
-      const facts = tool.approvalFacts?.(
-        resolved,
-        this.sessionId,
-        call.args,
-        callModel.imageInput,
-      );
-      if (facts) {
-        call = {
-          ...call,
-          args: { ...call.args, ...namedSecrets(facts, secrets) },
+      // A before_tool hook's rewrite goes through all of this again before anything is decided.
+      const check = (next: ToolCall, facts: readonly string[] = []) => {
+        // What Circle works out for the card is Circle's to work out again, not a rewrite's to set
+        const prepared = prepareToolCall(
+          facts.length
+            ? {
+                ...next,
+                args: Object.fromEntries(
+                  Object.entries(next.args).filter(
+                    ([key]) => !facts.includes(key),
+                  ),
+                ),
+              }
+            : next,
+          this.tools,
+        );
+        let call = prepared.call;
+        const tool = prepared.tool;
+        const variables =
+          tool.variables === false ? {} : (this.options.variables?.() ?? {});
+        const secrets =
+          tool.variables === false || tool.variables === 'plain'
+            ? {}
+            : (this.options.secrets?.() ?? {});
+        const used = new Set<string>();
+        const raw = call.args;
+        let resolved = expandVariables(raw, { ...variables, ...secrets }, used);
+        call = { ...call, args: expandVariables(raw, variables) };
+        const plain = call.args;
+        // After the arguments were checked, from the values: the model cannot give these itself.
+        // The rules judge them as they are; the card and the hooks see each secret's value
+        // back as its name, as they see the arguments.
+        const found = tool.approvalFacts?.(
+          resolved,
+          this.sessionId,
+          call.args,
+          callModel.imageInput,
+        );
+        if (found) {
+          call = {
+            ...call,
+            args: { ...call.args, ...namedSecrets(found, secrets) },
+          };
+          resolved = { ...resolved, ...found };
+        }
+        const usedSecrets = [...used].filter((name) =>
+          Object.hasOwn(secrets, name),
+        );
+        // What this call does, which can be more than what the tool does: a read that sends
+        // a local file or a secret's value elsewhere asks, and read-only mode refuses it
+        const effect = tool.callEffect?.(resolved, usedSecrets) ?? tool.effect;
+        // The paths the hooks match: those Circle's own tools name, and the tool's own
+        const paths = [
+          ...new Set([
+            ...hookToolPaths(call.name, resolved),
+            ...(tool.paths?.(resolved) ?? []),
+          ]),
+        ];
+        if (
+          this.readOnly &&
+          effect !== 'read' &&
+          !this.options.planFileMutation?.(call)
+        )
+          throw new Error('read-only mode: this tool cannot run');
+        // A command's effects are those of what it runs: a value can make it delete
+        const review = this.options.policy.review(call.name, resolved);
+        if (review.verdict === 'DENY')
+          throw new Error(review.message || review.reason);
+        return {
+          call,
+          tool,
+          secrets,
+          used,
+          raw,
+          plain,
+          resolved,
+          usedSecrets,
+          effect,
+          paths,
+          found: review,
+          facts: Object.keys(found ?? {}),
         };
-        resolved = { ...resolved, ...facts };
-      }
-      const usedSecrets = [...used].filter((name) =>
-        Object.hasOwn(secrets, name),
-      );
-      // What this call does, which can be more than what the tool does: a read that sends
-      // a local file or a secret's value elsewhere asks, and read-only mode refuses it
-      const effect = tool.callEffect?.(resolved, usedSecrets) ?? tool.effect;
-      // The paths the hooks match: those Circle's own tools name, and the tool's own
-      const paths = [
-        ...new Set([
-          ...hookToolPaths(call.name, resolved),
-          ...(tool.paths?.(resolved) ?? []),
-        ]),
-      ];
-      if (
-        this.readOnly &&
-        effect !== 'read' &&
-        !this.options.planFileMutation?.(call)
-      )
-        throw new Error('read-only mode: this tool cannot run');
-      // A command's effects are those of what it runs: a value can make it delete
-      const found = this.options.policy.review(call.name, resolved);
-      if (found.verdict === 'DENY')
-        throw new Error(found.message || found.reason);
+      };
+      let checked = check(call);
+      secrets = checked.secrets;
       // Hooks see the arguments with secret values put back to %NAME%. A deny
       // stands in every approval mode. A hard denial above is not reconsidered.
       // An allow can skip an ordinary card only: an always-ask stays a card.
-      const before = await this.gateTool(
+      let before = await this.gateTool(
         'before_tool',
-        call,
-        resolved,
-        paths,
+        checked.call,
+        checked.resolved,
+        checked.paths,
         signal,
       );
       if (before?.decision === 'deny')
         throw new Error(hookDeniedMessage(before.reason || 'hook denied'));
-      if (before?.decision === 'ask' && before.reason)
-        call = { ...call, hook_reason: before.reason };
+      // A hook rewrote the input: the call runs as rewritten, and so is checked, matched by the rules, shown on
+      // the card and remembered, as if the model had sent it. Nothing on screen marks it (owner, 2026-11-14): only
+      // the model is told what changed, at the start of the tool result.
+      let secretAdded = false;
+      if (before?.updatedInput) {
+        const original = checked;
+        const by = before.changedBy.join(', ');
+        const saved = this.hookSecrets();
+        // What the hooks were given: each secret's value as its name
+        const shown = redactHookValue(original.resolved, saved);
+        try {
+          checked = check(
+            {
+              id: original.call.id,
+              name: original.call.name,
+              args: keepUnchanged(
+                before.updatedInput,
+                shown,
+                original.raw,
+              ) as Record<string, unknown>,
+            },
+            original.facts,
+          );
+        } catch (error) {
+          throw new Error(
+            `${HOOK_CHANGED_LINE} (${by}), and it cannot run: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        const changed = changedArguments(original.plain, checked.plain);
+        // Only a key order or a fact Circle works out again differs: the call is the model's
+        if (!changed.length) checked = original;
+        else {
+          secrets = checked.secrets;
+          // A secret the call did not carry is not a hook's to send: you see the call before it runs
+          const named = (value: unknown) => {
+            const text = JSON.stringify(value) ?? '';
+            return Object.keys(saved).filter((name) =>
+              text.includes(`%${name}%`),
+            );
+          };
+          const carried = new Set(named(shown));
+          secretAdded = named(before.updatedInput).some(
+            (name) => !carried.has(name),
+          );
+          changedLine = hookChangedLine(by, changed, checked.plain);
+          // Every before_tool hook judges what runs: they all see the rewrite once more, matched by its paths. An
+          // allow given before the rewrite does not carry over, and a hook that changes it again stops the call.
+          const again = await this.gateTool(
+            'before_tool',
+            checked.call,
+            checked.resolved,
+            checked.paths,
+            signal,
+            undefined,
+            before.notices,
+          );
+          if (again?.decision === 'deny')
+            throw new Error(hookDeniedMessage(again.reason || 'hook denied'));
+          if (again?.updatedInput)
+            throw new Error(
+              `Hook ${again.changedBy.join(', ')} changed the rewrite again when shown it, so the call does not run. A rewrite must come back unchanged.`,
+            );
+          if (again) {
+            const asked = [before, again].filter(
+              (batch) => batch.decision === 'ask',
+            );
+            // A hook that asked in both rounds asked once
+            const once = (field: 'reason' | 'userMessage') =>
+              [...new Set(asked.flatMap((batch) => batch[field].split('\n')))]
+                .filter(Boolean)
+                .join('\n');
+            before = asked.length
+              ? {
+                  ...again,
+                  decision: 'ask',
+                  reason: once('reason'),
+                  userMessage: once('userMessage'),
+                }
+              : again;
+          }
+        }
+      }
+      const { tool, used, raw, resolved, usedSecrets, effect, paths, found } =
+        checked;
+      call = checked.call;
+      if (before?.decision === 'ask') call = hookAsked(call, before);
       let hookLine = '';
       // A command the settings' allowed_commands patterns cover runs without
       // asking: in every mode, including the always-asking calls and the
@@ -1660,6 +1865,7 @@ export class Harness {
       );
       // A first write to one of the person's terminal tabs asks as well, in every mode
       const alwaysAsk =
+        secretAdded ||
         tool.personApproval === true ||
         found.verdict === 'ASK_FORCED' ||
         this.options.policy.tabAlwaysAsks(call.name, resolved);
@@ -1682,6 +1888,7 @@ export class Harness {
           args: { ...call.args, ...namedSecrets(preparedRun.shown, secrets) },
         };
       const wouldAsk =
+        secretAdded ||
         tool.personApproval === true ||
         (!settingsAllowed &&
           !this.options.planFileMutation?.(call) &&
@@ -1706,11 +1913,13 @@ export class Harness {
           throw new Error(
             hookDeniedMessage(permission.reason || 'hook denied'),
           );
-        if (permission?.decision === 'ask' && permission.reason)
-          call = { ...call, hook_reason: permission.reason };
+        if (permission?.decision === 'ask') call = hookAsked(call, permission);
         if (permission?.decision !== 'allow' || alwaysAsk || hookAsk) {
           this.bus.emit('tool_waiting', {
-            payload: { ...call, reason: call.hook_reason || found.reason },
+            payload: {
+              ...call,
+              reason: call.hook_message || call.hook_reason || found.reason,
+            },
           });
           if (!this.options.approve)
             throw new Error(
@@ -1838,7 +2047,9 @@ export class Harness {
           })
         : undefined;
       if (after) {
-        for (const notice of after.notices) this.queueHook(notice);
+        // The output is in the tool result below
+        for (const notice of after.notices)
+          this.queueHook(notice, notice.kind === 'output');
         const reported = after.outcomes.filter((item) => item.context);
         if (reported.length)
           content += `\n\n${HOOK_OUTPUT_LINE} (${reported
@@ -1853,6 +2064,7 @@ export class Harness {
     } finally {
       acceptingAttachments = false;
     }
+    if (changedLine) content = `${changedLine}\n\n${content}`;
     // A command or a page may show a secret back: the model reads its name instead, for the
     // values the call used and the ones saved now, unless the person or the model wrote it
     content = this.redact(content, secrets, () => written(this.messages));

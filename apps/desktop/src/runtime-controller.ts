@@ -4263,7 +4263,10 @@ export class RuntimeController {
         input: structuredClone(call.args),
         title: `${call.name} · ${review.reason}`,
         reason: review.reason,
-        ...(call.hook_reason ? { hookReason: call.hook_reason } : {}),
+        // The words the hook wrote for the person, when it gave them; the model reads its reason
+        ...(call.hook_message || call.hook_reason
+          ? { hookReason: call.hook_message || call.hook_reason }
+          : {}),
         prefix: review.prefix.length ? review.prefix.join(' ') : undefined,
         tool: call.name,
         command:
@@ -6488,10 +6491,12 @@ export class RuntimeController {
       case 'load-skill': {
         const skill = runtime.skills.find((skill) => skill.name === p.name);
         if (!skill) throw Error('skill not found');
-        await runtime.activateSkillHooks(skill.name);
+        // A skill that cannot be read is not loaded: nothing of it starts
+        const body = loadSkillBody(skill.name, runtime.skills);
+        const tools = await runtime.activateSkillHooks(skill.name);
         return {
           name: skill.name,
-          content: loadSkillBody(skill.name, runtime.skills),
+          content: tools ? `${body}\n\n${tools}` : body,
         };
       }
       case 'init':

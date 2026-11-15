@@ -36,7 +36,7 @@ import { relativeTo } from '../model/overview';
 import { useSources } from './SourceNavigation';
 import type { Attachment } from '../model/types';
 import { hasToolInput } from '../model/browser';
-import { withoutHookAllowedLine } from '../../../../src/hook_display';
+import { withoutHookLines } from '../../../../src/hook_display';
 import {
   isKnowledgeTool,
   knowledgeToolResult,
@@ -131,19 +131,29 @@ const SEARCH_QUOTA = 'Native search unavailable: search quota exceeded';
 const SEARCH_PROVIDER = 'Provider: DuckDuckGo';
 /** The provider line and its quota error, in the interface language. The stored text stays English. */
 export function shownToolOutput(text: string): string {
-  return withoutHookAllowedLine(text)
-    .replaceAll(SEARCH_PROVIDER, t(SEARCH_PROVIDER))
-    .replaceAll(SEARCH_QUOTA, t(SEARCH_QUOTA))
-    .replaceAll('Hook denied this call:', t('Hook denied this call:'))
-    .replaceAll(
-      'Hook asked before this call:',
-      t('Hook asked before this call:'),
-    )
-    .replaceAll('Hook allowed this call.', t('Hook allowed this call.'))
-    .replaceAll('Hook session_start output:', t('Hook session_start output:'))
-    .replace(/Hook output \(([^)]+)\):/g, (_match, name: string) =>
-      t('Hook output ({name}):', { name }),
-    );
+  return (
+    withoutHookLines(text)
+      .replaceAll(SEARCH_PROVIDER, t(SEARCH_PROVIDER))
+      .replaceAll(SEARCH_QUOTA, t(SEARCH_QUOTA))
+      .replaceAll('Hook denied this call:', t('Hook denied this call:'))
+      .replaceAll(
+        'Hook asked before this call:',
+        t('Hook asked before this call:'),
+      )
+      .replaceAll('Hook allowed this call.', t('Hook allowed this call.'))
+      .replaceAll('Hook session_start output:', t('Hook session_start output:'))
+      .replace(/Hook output \(([^)]+)\):/g, (_match, name: string) =>
+        t('Hook output ({name}):', { name }),
+      )
+      // What a rewrite changed is the model's alone (`withoutHookLines`); a rewrite that could not run says why
+      .replace(
+        /Hook changed this call's input \(([^)]+)\), and it cannot run:/g,
+        (_match, name: string) =>
+          t("Hook changed this call's input ({name}), and it cannot run:", {
+            name,
+          }),
+      )
+  );
 }
 interface ToolMessageProps {
   tool: ToolCall;
@@ -242,7 +252,7 @@ function GenericToolMessage({
     'tool-input:' + tool.id,
   );
   const textOutput = useMemo(
-    () => structuredTextOutput(withoutHookAllowedLine(tool.output)),
+    () => structuredTextOutput(withoutHookLines(tool.output)),
     [tool.output],
   );
   // A command's terminal opens from the right end of the head; each block of text copies itself

@@ -16,7 +16,8 @@ function hookReason(reason: string | undefined): string {
 
 /** The transcript line for a hook. The hook's own reason is not translated. */
 export function formatHookNotice(notice: HookNotice): string {
-  const reason = hookReason(notice.reason);
+  // What the hook wrote for the person (`user_message`) goes in place of its reason
+  const reason = hookReason(notice.message || notice.reason);
   const tail = reason ? ` · ${reason}` : '';
   switch (notice.kind) {
     case 'denied':

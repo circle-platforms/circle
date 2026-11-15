@@ -120,7 +120,9 @@ export class ApprovalCard implements Card<ApprovalAnswer> {
       });
     if (request.warnDelete)
       lines.push({ text: 'This deletes or overwrites data.', tone: 'warn' });
-    if (request.policy) lines.push({ text: request.policy, tone: 'dim' });
+    // What the policy and the hooks say: each line wraps on its own, inside the box
+    for (const text of request.policy ? request.policy.split('\n') : [])
+      lines.push({ text, tone: 'dim' });
     const tint = toolTint(request.tool);
     return {
       title: request.origin ? `${request.origin} · ${title}` : title,

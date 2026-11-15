@@ -38,6 +38,8 @@ export const conversation: Record<string, string> = {
   'Hook allowed this call.': '钩子允许了此次调用。',
   'Hook session_start output:': '钩子会话开始输出：',
   'Hook output ({name}):': '钩子输出（{name}）：',
+  "Hook changed this call's input ({name}), and it cannot run:":
+    '钩子改写了此次调用的输入（{name}），改写后无法运行：',
   'stopping work before deletion…': '正在停止任务以便删除…',
   'open in another terminal; view only': '已在其他终端打开，仅可查看',
   'no model connected': '未连接模型',

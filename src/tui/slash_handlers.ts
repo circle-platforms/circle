@@ -1876,7 +1876,7 @@ async function skill(host: CommandHost, args: string): Promise<void> {
     host.fail(`Error: ${reason(error)}`);
     return;
   }
-  await runtime.activateSkillHooks(name);
+  const tools = await runtime.activateSkillHooks(name);
   // Into the conversation without a turn: the model reads it with your next message.
   runtime.store.append(runtime.session.id, [
     {
@@ -1886,7 +1886,8 @@ async function skill(host: CommandHost, args: string): Promise<void> {
       content:
         `[Circle system] Skill \`${name}\` loaded via /skill.` +
         (skillArgs ? `\nUser arguments: ${skillArgs}\n` : '\n') +
-        `Follow it for subsequent requests until the user says otherwise.\n\n${body}`,
+        `Follow it for subsequent requests until the user says otherwise.\n\n${body}` +
+        (tools ? `\n\n${tools}` : ''),
     },
   ]);
   host.notice(

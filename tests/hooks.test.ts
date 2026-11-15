@@ -16,10 +16,12 @@ import {
   approveHookFile,
   hookNoticeText,
   loadHooks,
+  hookShellCommand,
   matchHookPath,
   resolveHookCommand,
   type HookDefinition,
 } from '../src/hooks.js';
+import { withoutHookLines } from '../src/hook_display.js';
 import { canonicalPath } from '../src/paths.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { Sandbox } from '../src/sandbox.js';
@@ -923,6 +925,747 @@ test('a failed after_tool hook notifies without giving the model its error text'
   assert.doesNotMatch(stored?.content ?? '', /private lint detail/);
 });
 
+test('a hook reason reaches the model once, and user_message is only for the person', async (t) => {
+  const dirs = layout(t);
+  writeFileSync(join(dirs.workspace, 'note.txt'), 'hello');
+  const script = join(dirs.workspace, 'canon.mjs');
+  writeFileSync(
+    script,
+    `
+import { readFileSync } from 'node:fs';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+const answer =
+  input.event === 'after_tool'
+    ? { context: 'lint found 2 warnings\\nline 3: unused', user_message: 'lint · 2 warnings' }
+    : input.tool_name === 'write_file'
+      ? { decision: 'ask', reason: 'Check the file name first.', user_message: 'check the name' }
+      : { decision: 'deny', reason: 'Write --name value, not --name=value.', user_message: 'use --name value' };
+process.stdout.write(JSON.stringify(answer));
+`,
+  );
+  writeJson(join(dirs.home, 'hooks.json'), {
+    hooks: {
+      before_tool: [
+        {
+          name: 'canon',
+          command: nodeCommand(script),
+          tools: ['execute', 'write_file'],
+        },
+      ],
+      after_tool: [
+        { name: 'lint', command: nodeCommand(script), tools: 'read_file' },
+      ],
+    },
+  });
+  const modelText = (run: Awaited<ReturnType<typeof turn>>) =>
+    run.model.requests[1]!.messages.map((message) =>
+      String(message.content),
+    ).join('\n');
+  const count = (text: string, part: string) => text.split(part).length - 1;
+
+  // A deny: the reason is in the tool result, and the notice the model reads names only the tool
+  const denied = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    replies: [
+      assistant('', [
+        {
+          id: 'e',
+          name: 'execute',
+          args: { command: 'example-tool --name=value' },
+        },
+      ]),
+      assistant('done'),
+    ],
+  });
+  let seen = modelText(denied);
+  assert.equal(count(seen, 'Write --name value, not --name=value.'), 1);
+  assert.match(
+    seen,
+    /Hook denied this call: Write --name value, not --name=value\./,
+  );
+  assert.match(seen, /hook denied execute\n/);
+  assert.doesNotMatch(seen, /use --name value/);
+  const deniedNotice = denied.harness.messages.find(
+    (message) => message.hook?.kind === 'denied',
+  );
+  assert.equal(deniedNotice?.hook?.message, 'use --name value');
+  assert.equal(deniedNotice?.display, 'hook denied execute · use --name value');
+
+  // An ask: the card shows the person's words, the model reads the reason
+  const cards: ToolCall[] = [];
+  const asked = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    replies: [
+      assistant('', [
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'ask.txt', content: 'yes' },
+        },
+      ]),
+      assistant('done'),
+    ],
+    approve: (call) => {
+      cards.push(call);
+      return 'approve';
+    },
+  });
+  assert.equal(cards[0]?.hook_message, 'check the name');
+  assert.equal(cards[0]?.hook_reason, 'Check the file name first.');
+  seen = modelText(asked);
+  assert.match(
+    seen,
+    /^Hook asked before this call: Check the file name first\./m,
+  );
+  assert.doesNotMatch(seen, /check the name/);
+  assert.equal(
+    asked.harness.messages.find((message) => message.hook?.kind === 'asked')
+      ?.display,
+    'hook asked write_file · check the name',
+  );
+
+  // after_tool output: the tool result carries it, the notice the model reads names only the hook
+  const output = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    replies: [
+      assistant('', [
+        { id: 'r', name: 'read_file', args: { file_path: 'note.txt' } },
+      ]),
+      assistant('done'),
+    ],
+  });
+  seen = modelText(output);
+  assert.equal(count(seen, 'lint found 2 warnings'), 1);
+  assert.match(seen, /Hook output \(lint\):\nlint found 2 warnings/);
+  assert.match(seen, /hook lint\n/);
+  assert.doesNotMatch(seen, /lint · 2 warnings/);
+  assert.equal(
+    output.harness.messages.find((message) => message.hook?.kind === 'output')
+      ?.display,
+    'hook lint · lint · 2 warnings',
+  );
+});
+
+// A before_tool hook as a script: `body` reads `input` (what Circle wrote on stdin) and prints `answer`.
+function answering(dir: string, name: string, body: string): string {
+  const script = join(dir, `${name}.mjs`);
+  writeFileSync(
+    script,
+    `import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';\nconst input = JSON.parse(readFileSync(0, 'utf8'));\nlet answer = {};\n${body}\nprocess.stdout.write(JSON.stringify(answer));\n`,
+  );
+  return nodeCommand(script);
+}
+
+const firstToolResult = (run: Awaited<ReturnType<typeof turn>>) =>
+  String(
+    run.model.requests[1]!.messages.find((message) => message.role === 'tool')
+      ?.content,
+  );
+
+test('a before_tool rewrite runs instead, hooks pass it on in order, see it once more, and the model is told what changed', async (t) => {
+  const dirs = layout(t);
+  const twoSaw = join(dirs.root, 'two-saw.jsonl');
+  const afterSaw = join(dirs.root, 'after-saw.json');
+  writeJson(join(dirs.home, 'hooks.json'), {
+    hooks: {
+      before_tool: [
+        {
+          name: 'one',
+          command: answering(
+            dirs.root,
+            'one',
+            // A rewrite that comes back unchanged when the hook sees it again
+            "if (input.tool_input.file_path === 'a.txt') answer = { updated_input: { file_path: 'b.txt', content: 'one' } };",
+          ),
+          tools: 'write_file',
+        },
+        {
+          name: 'two',
+          command: answering(
+            dirs.root,
+            'two',
+            `appendFileSync(${JSON.stringify(twoSaw)}, JSON.stringify(input.tool_input) + '\\n');
+const content = input.tool_input.content.endsWith(' two') ? input.tool_input.content : input.tool_input.content + ' two';
+answer = { decision: 'allow', updated_input: { ...input.tool_input, content } };`,
+          ),
+          tools: 'write_file',
+        },
+      ],
+      after_tool: [
+        {
+          name: 'after',
+          command: answering(
+            dirs.root,
+            'after',
+            `writeFileSync(${JSON.stringify(afterSaw)}, JSON.stringify(input.tool_input));`,
+          ),
+          tools: 'write_file',
+        },
+      ],
+    },
+  });
+  const run = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'manual',
+    replies: [
+      assistant('', [
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'a.txt', content: 'model' },
+        },
+      ]),
+      assistant('done'),
+    ],
+    approve: () => {
+      throw new Error('the last hook allowed the call');
+    },
+  });
+  assert.deepEqual(run.asked, []);
+  assert.equal(readFileSync(join(dirs.workspace, 'b.txt'), 'utf8'), 'one two');
+  assert.throws(() => readFileSync(join(dirs.workspace, 'a.txt')));
+  // The second hook got the first one's rewrite, then, with every hook, the rewrite that runs; after_tool gets it
+  assert.deepEqual(
+    readFileSync(twoSaw, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line)),
+    [
+      { file_path: 'b.txt', content: 'one' },
+      { file_path: 'b.txt', content: 'one two' },
+    ],
+  );
+  assert.deepEqual(JSON.parse(readFileSync(afterSaw, 'utf8')), {
+    file_path: 'b.txt',
+    content: 'one two',
+  });
+  // The model's own call stays as it sent it; the result says what ran instead, once
+  const request = run.model.requests[1]!.messages;
+  assert.deepEqual(
+    request.find((message) => message.role === 'assistant')?.tool_calls?.[0]
+      ?.args,
+    { file_path: 'a.txt', content: 'model' },
+  );
+  assert.match(
+    firstToolResult(run),
+    /^Hook changed this call's input \(one, two\):\nfile_path = "b\.txt"\ncontent = "one two"\n\n/,
+  );
+  // Only the model is told (owner, 2026-11-14): no notice marks the rewrite, and the transcript hides the lines
+  assert.ok(
+    run.harness.messages
+      .filter((message) => message.hook)
+      .every(
+        (message) =>
+          !/rewr|changed/i.test(`${message.display}${message.content}`),
+      ),
+  );
+  assert.equal(
+    withoutHookLines(firstToolResult(run)).startsWith('Hook'),
+    false,
+  );
+});
+
+test('the rules, the hard refusals and the schema judge a rewrite, and a deny voids it', async (t) => {
+  const dirs = layout(t);
+  const outside = join(dirs.root, 'outside.txt');
+  const hooksFile = join(dirs.home, 'hooks.json');
+  const hook = (body: string) =>
+    writeJson(hooksFile, {
+      hooks: {
+        before_tool: [
+          { name: 'canon', command: answering(dirs.root, 'canon', body) },
+        ],
+      },
+    });
+
+  // accept-edits writes in the workspace without a card, but the rewrite writes outside it: the card asks, and
+  // shows the rewrite with what the model sent
+  hook(
+    `answer = { updated_input: { ...input.tool_input, file_path: ${JSON.stringify(outside)} } };`,
+  );
+  const cards: ToolCall[] = [];
+  const away = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'accept-edits',
+    replies: [
+      assistant('', [
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'a.txt', content: 'x' },
+        },
+      ]),
+      assistant('done'),
+    ],
+    approve: (call) => {
+      cards.push(call);
+      return 'reject';
+    },
+  });
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0]?.args.file_path, outside);
+  assert.throws(() => readFileSync(outside));
+  assert.match(firstToolResult(away), /The user rejected this tool call/);
+
+  // A hard refusal of the rewrite, and a rewrite the tool's schema refuses: nothing runs, and the hook is named
+  hook(`answer = input.tool_name === 'execute'
+  ? { decision: 'allow', updated_input: { command: 'sudo true' } }
+  : { decision: 'allow', updated_input: { content: 'no path' } };`);
+  const refused = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    replies: [
+      assistant('', [
+        { id: 'e', name: 'execute', args: { command: 'echo hi' } },
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'a.txt', content: 'x' },
+        },
+      ]),
+      assistant('done'),
+    ],
+  });
+  const results = refused.model.requests[1]!.messages.filter(
+    (message) => message.role === 'tool',
+  );
+  assert.match(
+    String(results[0]?.content),
+    /^Hook changed this call's input \(canon\), and it cannot run: .*sudo/,
+  );
+  assert.match(
+    String(results[1]?.content),
+    /^Hook changed this call's input \(canon\), and it cannot run: write_file was called with invalid arguments/,
+  );
+  assert.throws(() => readFileSync(join(dirs.workspace, 'a.txt')));
+
+  // An input that is not an object is no input: the call does not run
+  hook("answer = { decision: 'allow', updated_input: 'b.txt' };");
+  const broken = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    replies: [
+      assistant('', [
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'a.txt', content: 'x' },
+        },
+      ]),
+      assistant('done'),
+    ],
+  });
+  assert.match(
+    firstToolResult(broken),
+    /Hook denied this call: hook updated_input is not a JSON object/,
+  );
+
+  // A rewrite, then a deny from the next hook: nothing runs, in either form, and no rewrite is reported
+  writeJson(hooksFile, {
+    hooks: {
+      before_tool: [
+        {
+          name: 'move',
+          command: answering(
+            dirs.root,
+            'move',
+            "answer = { updated_input: { file_path: 'b.txt', content: 'x' } };",
+          ),
+        },
+        {
+          name: 'stop',
+          command: answering(
+            dirs.root,
+            'stop',
+            "answer = { decision: 'deny', reason: 'no writes' };",
+          ),
+        },
+      ],
+    },
+  });
+  const denied = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    replies: [
+      assistant('', [
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'a.txt', content: 'x' },
+        },
+      ]),
+      assistant('done'),
+    ],
+  });
+  assert.equal(firstToolResult(denied), 'Hook denied this call: no writes');
+  assert.throws(() => readFileSync(join(dirs.workspace, 'a.txt')));
+  assert.throws(() => readFileSync(join(dirs.workspace, 'b.txt')));
+});
+
+test('a rewrite that brings in a secret always shows the card, and handing the input back is no rewrite', async (t) => {
+  const dirs = layout(t);
+  const hooksFile = join(dirs.home, 'hooks.json');
+  // The same allow and rewrite with no secret in it runs without a card in auto
+  writeJson(hooksFile, {
+    hooks: {
+      before_tool: [
+        {
+          name: 'plain',
+          command: answering(
+            dirs.root,
+            'plain',
+            "answer = { decision: 'allow', updated_input: { command: 'echo there' } };",
+          ),
+          tools: 'execute',
+        },
+      ],
+    },
+  });
+  const plain = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    secrets: { API_TOKEN: 'sekret-value-123' },
+    replies: [
+      assistant('', [
+        { id: 'e', name: 'execute', args: { command: 'echo hi' } },
+      ]),
+      assistant('done'),
+    ],
+    approve: () => {
+      throw new Error('no card without a new secret');
+    },
+  });
+  assert.deepEqual(plain.asked, []);
+  assert.match(
+    firstToolResult(plain),
+    /command = "echo there"\n\n[\s\S]*there/,
+  );
+
+  writeJson(hooksFile, {
+    hooks: {
+      before_tool: [
+        {
+          name: 'creds',
+          command: answering(
+            dirs.root,
+            'creds',
+            "answer = { decision: 'allow', updated_input: { command: 'echo %API_TOKEN%' } };",
+          ),
+          tools: 'execute',
+        },
+      ],
+    },
+  });
+  const cards: ToolCall[] = [];
+  const run = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    secrets: { API_TOKEN: 'sekret-value-123' },
+    replies: [
+      assistant('', [
+        { id: 'e', name: 'execute', args: { command: 'echo hi' } },
+      ]),
+      assistant('done'),
+    ],
+    approve: (call) => {
+      cards.push(call);
+      return 'reject';
+    },
+  });
+  // The hook allowed it, in auto, and still you are asked; the card shows the secret's name
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0]?.args.command, 'echo %API_TOKEN%');
+  assert.doesNotMatch(
+    run.model.requests[1]!.messages.map((m) => String(m.content)).join('\n'),
+    /sekret-value-123/,
+  );
+
+  // Handing back the input it got is not a rewrite: no notice, no line, nothing on the card
+  writeJson(hooksFile, {
+    hooks: {
+      before_tool: [
+        {
+          name: 'echo',
+          command: answering(
+            dirs.root,
+            'echo',
+            'answer = { updated_input: input.tool_input };',
+          ),
+        },
+      ],
+    },
+  });
+  const same = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    replies: [
+      assistant('', [
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'same.txt', content: 'x' },
+        },
+      ]),
+      assistant('done'),
+    ],
+  });
+  assert.equal(readFileSync(join(dirs.workspace, 'same.txt'), 'utf8'), 'x');
+  assert.doesNotMatch(firstToolResult(same), /Hook changed/);
+});
+
+test('every before_tool hook judges the rewrite: a path guard sees it, an earlier allow does not carry, and a rewrite must be stable', async (t) => {
+  const dirs = layout(t);
+  const hooksFile = join(dirs.home, 'hooks.json');
+  const write = (file_path: string) =>
+    assistant('', [
+      { id: 'w', name: 'write_file', args: { file_path, content: 'x' } },
+    ]);
+  const mover = (to: string) => ({
+    name: 'mover',
+    command: answering(
+      dirs.root,
+      `mover-${to.replace(/\W/g, '-')}`,
+      `if (input.tool_input.file_path.startsWith('src/')) answer = { updated_input: { ...input.tool_input, file_path: ${JSON.stringify(to)} } };`,
+    ),
+  });
+
+  // A guard on config/ ran on the call as sent, before the rewrite: it sees the rewrite too, and denies it
+  writeJson(hooksFile, {
+    hooks: {
+      before_tool: [
+        {
+          name: 'guard',
+          paths: 'config/**',
+          command: answering(
+            dirs.root,
+            'guard',
+            "answer = { decision: 'deny', reason: 'config is protected' };",
+          ),
+        },
+        mover('config/prod.yml'),
+      ],
+    },
+  });
+  const guarded = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    replies: [write('src/a.txt'), assistant('done')],
+  });
+  // The model learns what the rewrite was, and that it was denied
+  assert.equal(
+    firstToolResult(guarded),
+    `Hook changed this call's input (mover):\nfile_path = "config/prod.yml"\n\nHook denied this call: config is protected`,
+  );
+  assert.throws(() => readFileSync(join(dirs.workspace, 'config', 'prod.yml')));
+
+  // An allow for src/ does not carry to the rewrite under docs/: the card asks
+  writeJson(hooksFile, {
+    hooks: {
+      before_tool: [
+        {
+          name: 'src ok',
+          paths: 'src/**',
+          command: answering(
+            dirs.root,
+            'src-ok',
+            "answer = { decision: 'allow' };",
+          ),
+        },
+        mover('docs/b.txt'),
+      ],
+    },
+  });
+  const moved = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'manual',
+    replies: [write('src/a.txt'), assistant('done')],
+    approve: () => 'reject',
+  });
+  assert.deepEqual(moved.asked, ['write_file']);
+  assert.throws(() => readFileSync(join(dirs.workspace, 'docs', 'b.txt')));
+
+  // A hook that changes its own rewrite again stops the call
+  writeJson(hooksFile, {
+    hooks: {
+      before_tool: [
+        {
+          name: 'grow',
+          command: answering(
+            dirs.root,
+            'grow',
+            "answer = { decision: 'allow', updated_input: { ...input.tool_input, content: input.tool_input.content + '!' } };",
+          ),
+        },
+      ],
+    },
+  });
+  const unstable = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    replies: [write('a.txt'), assistant('done')],
+  });
+  assert.match(
+    firstToolResult(unstable),
+    /^Hook changed this call's input \(grow\):\ncontent = "x!"\n\nHook grow changed the rewrite again when shown it, so the call does not run/,
+  );
+  assert.throws(() => readFileSync(join(dirs.workspace, 'a.txt')));
+});
+
+test('a hook that asks about its rewrite in both rounds asks once', async (t) => {
+  const dirs = layout(t);
+  writeJson(join(dirs.home, 'hooks.json'), {
+    hooks: {
+      before_tool: [
+        {
+          name: 'notes',
+          command: answering(
+            dirs.root,
+            'notes',
+            "answer = { decision: 'ask', reason: 'Notes go in notes/.', user_message: 'moved to notes/', updated_input: { ...input.tool_input, file_path: 'notes/a.txt' } };",
+          ),
+        },
+      ],
+    },
+  });
+  const cards: ToolCall[] = [];
+  const run = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    replies: [
+      assistant('', [
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'a.txt', content: 'x' },
+        },
+      ]),
+      assistant('done'),
+    ],
+    approve: (call) => {
+      cards.push(call);
+      return 'reject';
+    },
+  });
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0]?.hook_reason, 'Notes go in notes/.');
+  assert.equal(cards[0]?.hook_message, 'moved to notes/');
+  assert.equal(
+    run.harness.messages.filter((message) => message.hook?.kind === 'asked')
+      .length,
+    1,
+  );
+});
+
+test('a rewrite keeps the secret values of what no hook changed, and a new key order is no rewrite', async (t) => {
+  const dirs = layout(t);
+  const hooksFile = join(dirs.home, 'hooks.json');
+  // write_file takes %NAME% as written: the value the model wrote must survive a hook that saw its name
+  writeJson(hooksFile, {
+    hooks: {
+      before_tool: [
+        {
+          name: 'rename',
+          command: answering(
+            dirs.root,
+            'rename',
+            "if (input.tool_input.file_path === 'a.conf') answer = { updated_input: { ...input.tool_input, file_path: 'b.conf' } };",
+          ),
+        },
+      ],
+    },
+  });
+  const kept = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    secrets: { API_KEY: 'sk-synthetic-123' },
+    replies: [
+      assistant('', [
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'a.conf', content: 'KEY=sk-synthetic-123' },
+        },
+      ]),
+      assistant('done'),
+    ],
+  });
+  assert.equal(
+    readFileSync(join(dirs.workspace, 'b.conf'), 'utf8'),
+    'KEY=sk-synthetic-123',
+  );
+  assert.match(
+    firstToolResult(kept),
+    /^Hook changed this call's input \(rename\):\nfile_path = "b\.conf"\n\n/,
+  );
+
+  // The same input in another key order changes nothing: no notice, no line
+  writeJson(hooksFile, {
+    hooks: {
+      before_tool: [
+        {
+          name: 'shuffle',
+          command: answering(
+            dirs.root,
+            'shuffle',
+            'answer = { updated_input: Object.fromEntries(Object.entries(input.tool_input).reverse()) };',
+          ),
+        },
+      ],
+    },
+  });
+  const shuffled = await turn({
+    ...dirs,
+    t,
+    trusted: false,
+    mode: 'auto',
+    replies: [
+      assistant('', [
+        {
+          id: 'w',
+          name: 'write_file',
+          args: { file_path: 'c.txt', content: 'x' },
+        },
+      ]),
+      assistant('done'),
+    ],
+  });
+  assert.equal(readFileSync(join(dirs.workspace, 'c.txt'), 'utf8'), 'x');
+  assert.doesNotMatch(firstToolResult(shuffled), /Hook changed/);
+});
+
 test('an allow does not skip an always-ask, a hard refusal, or read-only mode', async (t) => {
   const dirs = layout(t);
   const marker = join(dirs.workspace, 'hook-ran');
@@ -1329,6 +2072,102 @@ test('a skill hook runs only after that skill is loaded in this session', async 
   assert.equal(
     runtime.hookListing().find((item) => item.hook.skill === 'lint')?.active,
     false,
+  );
+});
+
+test('a skill hook finds its skill folder by CIRCLE_SKILL_DIR and skill_dir, and no other hook has one', async (t) => {
+  const dirs = layout(t);
+  // Installed outside the project, under a folder with a space, as `npx skills add` or a copy would put it
+  const userHome = join(dirs.root, 'user home');
+  const skill = join(userHome, '.agents', 'skills', 'example-skill');
+  mkdirSync(join(skill, 'scripts'), { recursive: true });
+  writeFileSync(
+    join(skill, 'SKILL.md'),
+    '---\nname: example-skill\ndescription: Logs each tool call.\n---\n\nLog.\n',
+  );
+  const recorder = (marker: string) => `
+import { readFileSync, writeFileSync } from 'node:fs';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+writeFileSync(${JSON.stringify(marker)}, JSON.stringify({
+  env: process.env.CIRCLE_SKILL_DIR ?? null,
+  skill_dir: input.skill_dir ?? null,
+  cwd: process.cwd(),
+}));
+`;
+  const skillMarker = join(dirs.root, 'skill-hook.json');
+  const userMarker = join(dirs.root, 'user-hook.json');
+  writeFileSync(join(skill, 'scripts', 'log.mjs'), recorder(skillMarker));
+  // Written once for every system: Circle turns `${CIRCLE_SKILL_DIR}` into `%CIRCLE_SKILL_DIR%` for cmd.exe
+  writeJson(join(skill, 'hooks.json'), {
+    hooks: {
+      after_tool: [
+        {
+          name: 'log',
+          command: `${JSON.stringify(process.execPath)} "\${CIRCLE_SKILL_DIR}/scripts/log.mjs"`,
+          tools: 'read_file',
+        },
+      ],
+    },
+  });
+  const userScript = join(dirs.root, 'user-hook.mjs');
+  writeFileSync(userScript, recorder(userMarker));
+  writeJson(join(dirs.home, 'hooks.json'), {
+    hooks: {
+      after_tool: [
+        { name: 'mine', command: nodeCommand(userScript), tools: 'read_file' },
+      ],
+    },
+  });
+  writeFileSync(join(dirs.workspace, 'note.txt'), 'hello');
+  // A value Circle itself was started with must not reach a hook that is not a skill's
+  const inherited = process.env.CIRCLE_SKILL_DIR;
+  process.env.CIRCLE_SKILL_DIR = join(dirs.root, 'inherited');
+  t.after(() => {
+    if (inherited === undefined) delete process.env.CIRCLE_SKILL_DIR;
+    else process.env.CIRCLE_SKILL_DIR = inherited;
+  });
+  const runtime = new AgentRuntime({
+    workspace: dirs.workspace,
+    home: dirs.home,
+    userHome,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      {
+        message: assistant('', [
+          { id: 'r', name: 'read_file', args: { file_path: 'note.txt' } },
+        ]),
+      },
+      { message: assistant('done') },
+    ]),
+    headless: true,
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.activateSkillHooks('example-skill');
+  await runtime.harness.run('read the note');
+  const seen = JSON.parse(readFileSync(skillMarker, 'utf8'));
+  assert.equal(seen.env, realpathSync(skill));
+  assert.equal(seen.skill_dir, realpathSync(skill));
+  // The working directory stays the workspace
+  assert.equal(realpathSync(seen.cwd), dirs.workspace);
+  assert.deepEqual(
+    { ...JSON.parse(readFileSync(userMarker, 'utf8')), cwd: undefined },
+    { env: null, skill_dir: null, cwd: undefined },
+  );
+});
+
+test('only cmd.exe gets the skill folder variable rewritten, to %CIRCLE_SKILL_DIR%', () => {
+  const command =
+    'node "${CIRCLE_SKILL_DIR}/scripts/a.mjs" "${CIRCLE_SKILL_DIR}"';
+  assert.equal(
+    hookShellCommand(command, 'win32'),
+    'node "%CIRCLE_SKILL_DIR%/scripts/a.mjs" "%CIRCLE_SKILL_DIR%"',
+  );
+  assert.equal(hookShellCommand(command, 'linux'), command);
+  assert.equal(hookShellCommand(command, 'darwin'), command);
+  // Another variable, and the form without braces, are the shell's own business
+  assert.equal(
+    hookShellCommand('echo ${HOME} $CIRCLE_SKILL_DIR', 'win32'),
+    'echo ${HOME} $CIRCLE_SKILL_DIR',
   );
 });
 
