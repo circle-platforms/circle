@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { EventEmitter } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { test } from 'node:test';
@@ -167,7 +167,20 @@ test(
       child.once('error', reject);
     });
     const browser = browserWithChild(child);
+    // The kill step hands back only once the killed process's exit has arrived: how long a busy machine takes to
+    // deliver it is then no part of this check. That close itself waits for that exit is checked deterministically
+    // below, with a stand-in.
+    const state = browser as any;
+    const stop = state.stopProcess.bind(browser);
+    const steps: boolean[] = [];
+    state.stopProcess = async (target: ChildProcess, force: boolean) => {
+      steps.push(force);
+      const exit = force ? once(target, 'exit') : undefined;
+      await stop(target, force);
+      await exit;
+    };
     await browser.close();
+    assert.deepEqual(steps, [false, true]);
     assert.equal(child.signalCode, 'SIGKILL');
     assert.equal(child.exitCode, null);
   },
@@ -209,15 +222,11 @@ test(
   async (t) => {
     // What macOS showed: ps lists a member running, the kill of the group is refused
     // (EPERM), and ps then lists the member as exiting, "?E", a state that runs no code
-    const root = scratch(t);
+    // The listing as the process inspector gives it, in-process: no program to start, so no time bound to miss
     const group = 1_073_741_824;
-    const calls = join(root, 'calls');
-    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-    writeFileSync(
-      join(root, 'ps'),
-      `#!/bin/sh\necho x >> ${quote(calls)}\nif [ "$(wc -l < ${quote(calls)})" -le 1 ]; then echo "${group} Ss"; else echo "${group} ?E"; echo "${group} Z"; fi\n`,
-      { mode: 0o755 },
-    );
+    let listings = 0;
+    let listing = (): string =>
+      ++listings <= 1 ? `${group} Ss` : `${group} ?E\n${group} Z`;
     const signals: [number, NodeJS.Signals | number | undefined][] = [];
     const kill = process.kill.bind(process);
     t.mock.method(
@@ -234,7 +243,7 @@ test(
       const browser = new ChromeBrowser({
         executable: process.execPath,
         closeTimeout: 1000,
-        processInspector: join(root, 'ps'),
+        processLister: async () => listing(),
       });
       const owned = browser as any;
       owned.cdp = {
@@ -251,9 +260,7 @@ test(
     assert.equal(exiting.groups.has(group), false);
     assert.equal(closed, true);
     // A member that still runs after the refusal is no stop: close keeps the group
-    writeFileSync(join(root, 'ps'), `#!/bin/sh\necho "${group} Ss"\n`, {
-      mode: 0o755,
-    });
+    listing = () => `${group} Ss`;
     closed = false;
     const running = owning();
     await assert.rejects(running.browser.close(), /kill EPERM/);
@@ -1008,5 +1015,39 @@ test(
         child.kill('SIGKILL');
       await exited;
     }
+  },
+);
+
+test(
+  'browser close returns only once the exit of the browser it killed has arrived',
+  { skip: process.platform === 'win32' },
+  async () => {
+    // A stand-in that ignores the stop, and whose exit arrives on a later turn of the event loop than the kill, as a
+    // real one's does. Anything close's own wait schedules after the kill runs after that exit, however busy the
+    // machine. Its process id is one that exists, as a killed browser's does until it is reaped, so only the exit
+    // event tells close that it has gone; nothing here may signal it.
+    const child = Object.assign(new EventEmitter(), {
+      pid: process.pid,
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      kill: () => true,
+    }) as unknown as ChildProcess;
+    const browser = browserWithChild(child);
+    const state = browser as any;
+    const steps: boolean[] = [];
+    state.stopProcess = async (target: ChildProcess, force: boolean) => {
+      steps.push(force);
+      if (force)
+        setImmediate(() => {
+          (target as any).signalCode = 'SIGKILL';
+          target.emit('exit', null, 'SIGKILL');
+        });
+    };
+    state.groupRunning = async () => false;
+    state.groupAnswers = () => false;
+    state.signalGroup = async () => assert.fail('nothing signals the stand-in');
+    await browser.close();
+    assert.deepEqual(steps, [false, true]);
+    assert.equal(child.signalCode, 'SIGKILL');
   },
 );
