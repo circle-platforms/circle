@@ -385,6 +385,27 @@ test('loop analysis groups parallel empty results as one round and permits order
       );
   }
   assert.equal(analyze(failedEditReads).loose, 6);
+  const patchedReads: Message[] = [
+    { id: 'u', role: 'user', content: 'patch loop' },
+  ];
+  for (let index = 0; index < 6; index++) {
+    patchedReads.push(
+      assistant(`pread-${index}`, '', 'read_file', {
+        file_path: 'a.ts',
+        offset: 1,
+      }),
+      tool(`pread-${index}`, 'read_file', 'line 1'),
+    );
+    if (index < 5)
+      patchedReads.push(
+        assistant(`patch-${index}`, '', 'apply_patch', {
+          patchText: `*** Begin Patch\n*** Update File: a.ts\n@@\n-v${index}\n+v${index + 1}\n*** End Patch`,
+        }),
+        tool(`patch-${index}`, 'apply_patch', 'Updated a.ts'),
+      );
+  }
+  assert.equal(analyze(patchedReads).loose, 0);
+  assert.equal(analyze(patchedReads).duplicate, 1);
 });
 test('productive long turns are not cut off at the prototype one-hundred-call limit', async (t) => {
   const root = scratch(t);

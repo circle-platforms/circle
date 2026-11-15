@@ -89,7 +89,9 @@ function mutatedPaths(name: string, args: Record<string, unknown>): string[] {
   const lower = name.toLowerCase();
   if (!MUTATING_FILE_TOOLS.has(lower)) return [];
   if (lower === 'apply_patch') {
-    const patch = typeof args.patch === 'string' ? args.patch : '';
+    // The tool's own argument is patchText; patch is the alias a model may still write.
+    const given = args.patchText ?? args.patch;
+    const patch = typeof given === 'string' ? given : '';
     const found = new Set<string>();
     for (const match of patch.matchAll(
       /^\*\*\* (?:Add|Update|Delete) File: (.+)$|^\*\*\* Move to: (.+)$/gmu,
