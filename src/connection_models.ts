@@ -5,7 +5,12 @@ import {
   resolveEndpoint,
   type ProbeResult,
 } from './probe.js';
-import { providerPreset } from './providers.js';
+import {
+  inferredPresetProvider,
+  PROVIDER_PRESETS,
+  providerPreset,
+} from './providers.js';
+import type { ModelAuth } from './settings.js';
 export type ConnectionModels = Omit<ProbeResult, 'status'> & {
   status: ProbeResult['status'] | 'preset';
 };
@@ -30,6 +35,26 @@ export async function connectionModels(
     detail: '',
   };
 }
+
+/** Runtime model lists use the connection's selected source, never a failure fallback. */
+export async function availableModels(
+  auth: ModelAuth,
+  apiKey: string,
+  probe: typeof resolveEndpoint = resolveEndpoint,
+): Promise<ConnectionModels> {
+  const selected = auth.provider
+    ? PROVIDER_PRESETS.find((item) => item.id === auth.provider)
+    : inferredPresetProvider(auth.base_url, auth.protocol);
+  if (
+    selected?.source === 'preset' &&
+    (selected.protocol ?? 'openai') === auth.protocol
+  )
+    return connectionModels(auth.base_url, apiKey, selected.id, probe);
+  const base = normalizeBaseUrl(auth.base_url, auth.protocol);
+  if (!apiKey) throw new Error(desktopText('missing API key'));
+  return probe(base, apiKey, { protocol: auth.protocol });
+}
+
 export function connectionSummary(found: ConnectionModels): string {
   if (found.status === 'preset')
     return 'provider presets; model and key are unverified';

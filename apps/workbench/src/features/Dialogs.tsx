@@ -309,6 +309,7 @@ function ConnectionWizard({ onClose }: { onClose: () => void }) {
         // The URL that answered; for a kind of API chosen here, the URL as typed
         endpoint: manual ? endpoint.trim() : probe.baseUrl,
         protocol: manual ? protocol : probe.protocol,
+        provider: providerId,
         model,
         apiKey: secret,
       });
@@ -1288,6 +1289,7 @@ export function DialogHost({
               runtime.request('configure-connection', {
                 endpoint,
                 protocol,
+                provider: 'custom',
                 model,
                 credentialProvided: !!secret,
               });

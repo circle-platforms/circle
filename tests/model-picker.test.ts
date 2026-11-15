@@ -216,3 +216,127 @@ for (const scopedRun of [false, true])
     assert.equal(transcript.includes('  '), false, transcript);
     assert.equal(runtime.harness.model.model, 'nosuch-model-x');
   });
+
+for (const protocol of ['openai', 'anthropic'] as const)
+  test(`terminal ${protocol} provider presets open and switch without model discovery`, async (t) => {
+    const root = scratch(t);
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(request.url ?? '');
+      response.writeHead(404).end();
+    });
+    await new Promise<void>((ready) => server.listen(0, '127.0.0.1', ready));
+    cleanup(t, async () => {
+      server.closeAllConnections();
+      await new Promise<void>((done) => server.close(() => done()));
+    });
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const settings = defaultSettings();
+    settings.auth = {
+      ...settings.auth,
+      provider: protocol === 'openai' ? 'bailian' : 'bailian-anthropic',
+      protocol,
+      base_url: `http://127.0.0.1:${address.port}${protocol === 'openai' ? '/compatible-mode/v1' : '/apps/anthropic'}`,
+      model: 'qwen3.8-flash',
+    };
+    saveCredentials({ api_key: 'fixture' }, root);
+    const runtime = new AgentRuntime({
+      workspace: root,
+      home: root,
+      settings,
+      model: new GatewayModel(settings, root),
+      headless: true,
+    });
+    cleanup(t, () => runtime.close());
+    const app = new SessionApp(root, root, settings);
+    app.runtime = runtime;
+    const ui = app as any;
+    ui.screen.render = () => {};
+    cleanup(t, () => {
+      if (ui.flashTimer) clearTimeout(ui.flashTimer);
+      ui.input.close();
+    });
+    const key = async (value: string): Promise<void> => {
+      ui.handle({ type: 'key', key: value, char: '' });
+      await delay(10);
+    };
+    await app.command('models', '');
+    const rows = app.state.picker!.rows(120).map(stripAnsi).join('\n');
+    assert.match(rows, /provider presets/);
+    assert.match(rows, /qwen3\.7-plus/);
+    app.state.picker!.query = 'qwen3.7-plus';
+    await key('enter');
+    assert.equal(runtime.harness.model.model, 'qwen3.7-plus');
+    await key('alt+m');
+    assert.equal(runtime.harness.model.model, 'qwen3-coder-flash');
+    await app.command('models', 'account-qwen');
+    assert.match(app.state.flash, /not in provider presets/);
+    assert.equal(runtime.harness.model.model, 'account-qwen');
+    assert.deepEqual(requests, []);
+  });
+
+test('terminal custom discovery failure keeps known models and accepts a typed id', async (t) => {
+  const root = scratch(t);
+  const requests: string[] = [];
+  const server = createServer((request, response) => {
+    requests.push(request.url ?? '');
+    response.writeHead(404).end();
+  });
+  await new Promise<void>((ready) => server.listen(0, '127.0.0.1', ready));
+  cleanup(t, async () => {
+    server.closeAllConnections();
+    await new Promise<void>((done) => server.close(() => done()));
+  });
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const settings = defaultSettings();
+  settings.auth = {
+    ...settings.auth,
+    provider: 'custom',
+    base_url: `http://127.0.0.1:${address.port}/v1`,
+    model: 'current-model',
+  };
+  settings.enabled_models = ['enabled-model', 'second-enabled', 'pattern-*'];
+  saveCredentials({ api_key: 'fixture' }, root);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings,
+    model: new GatewayModel(settings, root),
+    headless: true,
+  });
+  cleanup(t, () => runtime.close());
+  const app = new SessionApp(root, root, settings);
+  app.runtime = runtime;
+  const ui = app as any;
+  ui.screen.render = () => {};
+  cleanup(t, () => {
+    if (ui.flashTimer) clearTimeout(ui.flashTimer);
+    ui.input.close();
+  });
+  const key = async (value: string): Promise<void> => {
+    ui.handle({ type: 'key', key: value, char: '' });
+    await delay(10);
+  };
+  await app.command('models', '');
+  const rows = app.state.picker!.rows(120).map(stripAnsi).join('\n');
+  assert.match(rows, /endpoint did not list models \(http 404\)/);
+  assert.match(rows, /current-model/);
+  assert.match(rows, /enabled-model/);
+  assert.doesNotMatch(rows, /pattern-\*/);
+  assert.equal(
+    app.state.notices.some((line) => line.includes('/models failed')),
+    false,
+  );
+  app.state.picker!.query = 'manual-model';
+  await key('enter');
+  assert.equal(runtime.harness.model.model, 'manual-model');
+  assert.equal(app.state.picker, undefined);
+  await key('alt+m');
+  assert.equal(runtime.harness.model.model, 'enabled-model');
+  await app.command('models', 'another-manual-model');
+  assert.equal(runtime.harness.model.model, 'another-manual-model');
+  assert.doesNotMatch(app.state.flash, /not listed by this endpoint/);
+  assert.deepEqual(requests, ['/v1/models']);
+});

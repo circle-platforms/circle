@@ -315,6 +315,7 @@ export class SetupFlow {
   auth(): ModelAuth {
     return {
       ...defaultAuth(),
+      provider: this.providerId,
       protocol: this.protocol,
       base_url: normalizeBaseUrl(this.baseUrl, this.protocol),
       model: this.model,

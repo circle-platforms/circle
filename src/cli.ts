@@ -33,7 +33,7 @@ import {
   toolNames,
   type RunOptions,
 } from './run_options.js';
-import { resolveEndpoint } from './probe.js';
+import { availableModels } from './connection_models.js';
 import { mediaType } from './media.js';
 import { mention } from './mentions.js';
 import { EFFORT_LEVELS } from './model.js';
@@ -477,14 +477,15 @@ async function listModels(search: string, home: string): Promise<number> {
       'Circle is not set up yet. Run `circle` in a terminal first.',
     );
   const key = await connectionKey(settings, home);
-  const found = key
-    ? await resolveEndpoint(settings.auth.base_url, key, {
-        protocol: settings.auth.protocol,
-      })
-    : undefined;
+  const found = key ? await availableModels(settings.auth, key) : undefined;
   const models = found?.models ?? [];
   if (!models.length)
-    throw new Error(`${settings.auth.base_url} did not list its models`);
+    throw new Error(
+      `${settings.auth.base_url} did not list its models` +
+        (found?.status === 'failed' && found.detail
+          ? ` (${found.detail})`
+          : ''),
+    );
   const words = search.toLowerCase().split(/\s+/).filter(Boolean);
   const shown = models.filter((model) =>
     words.every((word) => model.toLowerCase().includes(word)),

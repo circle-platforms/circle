@@ -653,7 +653,14 @@ test('/editor hands the terminal to the editor and loads what it wrote, whatever
 
 test('ctrl+l redraws the screen; alt+l opens the model list; ctrl+b says when there is nothing to move', async (t) => {
   const { app, ui, log, key, runtime, script, workspace } = await session(t);
-  ui.loadModels = async () => ['scripted', 'other'];
+  ui.loadModels = async () => ({
+    protocol: 'openai',
+    models: ['scripted', 'other'],
+    inferred: false,
+    base_url: '',
+    status: 'discovered',
+    detail: '',
+  });
   ui.repaint();
   log.length = 0;
   key('ctrl+l');
