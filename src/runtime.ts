@@ -37,6 +37,7 @@ import {
   type ApprovalMode,
   type SessionMode,
 } from './approvals.js';
+import { ruleSources, ruleWhere } from './approval_rules.js';
 import { Sandbox, WORKFLOW_RUNS_FOLDER } from './sandbox.js';
 import { EditorBridge } from './editor_bridge.js';
 import { buildTools, type Todo } from './tools.js';
@@ -1687,7 +1688,15 @@ export class AgentRuntime {
               : builtinSubagentPrompt(name))) +
           (launch?.schema ? '\n\n' + STRUCTURED_OUTPUT_PROMPT : '') +
           '\n' +
-          this.harness.system,
+          this.harness.system +
+          this.subagentContextSuffix(
+            root,
+            ownedChildTools,
+            builtinReadOnly,
+            callerReadOnly() || (wanted !== undefined && approval().readOnly),
+            approval().dontAsk,
+            agentHooks,
+          ),
         bus: childBus,
         approve: this.options.approve
           ? (call, signal) =>
@@ -1771,8 +1780,17 @@ export class AgentRuntime {
           signal.throwIfAborted();
           // SubagentStart hooks (#557): what they say back starts its conversation
           await this.subagentStartHooks(child, agent, description, signal);
-          // The skills its definition names are in its conversation before its task, as if it had loaded them
-          await this.preloadSkills(file?.skills ?? [], session.id, signal);
+          // The skills its definition names, then those the one that started it has loaded, are in its conversation
+          // before its task, as if it had loaded them. An agent of a workflow takes only its definition's: the
+          // script chooses the agent type, so a run of many agents does not carry the caller's skills to each
+          await this.preloadSkills(
+            this.uniqueSkillNames([
+              ...(file?.skills ?? []),
+              ...(launch ? [] : this.callerLoadedSkills(context.sessionId)),
+            ]),
+            session.id,
+            signal,
+          );
           let { answer } = await child.run(description);
           // SubagentStop hooks can send it back to work, a few times in a row at most, while it has turns left
           for (let again = 0; ; again++) {
@@ -1865,6 +1883,111 @@ export class AgentRuntime {
       this.childJobOwners.delete(session.id);
       throw error;
     }
+  }
+  /**
+   * Compact inherited context for a subagent: active session plan file,
+   * read-only/permission boundaries, deny rules, and active tool guard hooks.
+   * Returns '' when none apply so bare runs carry zero extra prompt overhead.
+   */
+  private subagentContextSuffix(
+    root: string,
+    childTools: Tool[],
+    builtinReadOnly: boolean,
+    inheritedReadOnly: boolean,
+    dontAsk: boolean,
+    agentHooks?: HookDefinition[],
+  ): string {
+    const lines: string[] = [];
+    const childReadOnly = builtinReadOnly || inheritedReadOnly;
+    const plan = this.planFile;
+    const planExists = existsSync(plan.path);
+    if (this.harness.planMode || planExists) {
+      const state = childReadOnly
+        ? 'read-only in this subagent'
+        : planExists
+          ? 'exists on disk'
+          : 'not yet created';
+      lines.push(`- Session plan file: ${plan.file} (${state}).`);
+    }
+    if (inheritedReadOnly && !builtinReadOnly) {
+      lines.push(
+        '- Read-only constraint: workspace file writes and command execution are disabled in this subagent.',
+      );
+    } else if (dontAsk) {
+      lines.push(
+        '- Permission mode (dontAsk): unapproved write or execute actions are automatically refused.',
+      );
+    }
+    const owned = new Set(childTools.map((tool) => tool.name));
+    const seenDeny = new Set<string>();
+    const denyLines: string[] = [];
+    for (const source of ruleSources(
+      this.options.home,
+      this.options.workspace,
+    )) {
+      for (const rule of source.rules) {
+        if (rule.effect !== 'deny') continue;
+        if (
+          rule.tool !== '*' &&
+          !owned.has(rule.tool) &&
+          !(rule.tool === 'terminal' && owned.has('execute'))
+        )
+          continue;
+        const key = `${rule.tool}\0${rule.pattern}`;
+        if (seenDeny.has(key)) continue;
+        seenDeny.add(key);
+        const label =
+          rule.label && rule.label !== rule.pattern ? ` (${rule.label})` : '';
+        denyLines.push(
+          `- Denied by ${ruleWhere(source.layer)}: ${rule.tool} matching ${JSON.stringify(rule.pattern)}${label}.`,
+        );
+      }
+    }
+    const maxDeny = 25;
+    if (denyLines.length > maxDeny) {
+      lines.push(
+        ...denyLines.slice(0, maxDeny),
+        `- …and ${denyLines.length - maxDeny} more deny rules.`,
+      );
+    } else {
+      lines.push(...denyLines);
+    }
+    const runner = this.ensureHooks();
+    if (!runner.loaded.disabled) {
+      const seenHooks = new Set<string>();
+      for (const hook of [...runner.active(), ...(agentHooks ?? [])]) {
+        if (hook.event !== 'PreToolUse' && hook.event !== 'PermissionRequest')
+          continue;
+        const matcher = hook.matcherText || '*';
+        const condition = hook.condition?.text
+          ? `, if ${hook.condition.text}`
+          : '';
+        const key = `${hook.event}\0${matcher}\0${condition}`;
+        if (seenHooks.has(key)) continue;
+        seenHooks.add(key);
+        lines.push(
+          `- ${hook.event} guard active for matcher ${JSON.stringify(matcher)}${condition}.`,
+        );
+      }
+    }
+    if (!lines.length) return '';
+    const block = `<subagent_context>\n${lines.join('\n')}\n</subagent_context>`;
+    return (
+      '\n\n' + this.redact(block, {}, () => written(this.store.messages(root)))
+    );
+  }
+  /** Deduplicate skill names case-insensitively while preserving order. */
+  private uniqueSkillNames(names: string[]): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const raw of names) {
+      const trimmed = raw.trim();
+      const key = trimmed.toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(trimmed);
+    }
+    return out;
   }
   /**
    * The skills a definition preloads, in its conversation before its task: each loaded as the `skill` tool loads it,
@@ -3259,6 +3382,50 @@ export class AgentRuntime {
   }
   /** Skills whose hooks are armed for the current session. */
   private armedSkills = new Set<string>();
+  /** The skills each session has loaded, so a subagent starts with those of the one that started it and not a sibling's. */
+  private sessionSkills = new Map<string, string[]>();
+  private recordSessionSkill(
+    sessionId: string | undefined,
+    name: string,
+  ): void {
+    const trimmed = name.trim();
+    const key = trimmed.toLowerCase();
+    if (!key) return;
+    const target = sessionId ?? this.session.id;
+    const canonical =
+      this.skills.find((item) => item.name.toLowerCase() === key)?.name ??
+      trimmed;
+    // What the session's record already holds comes first, so a skill loaded before a resume is not lost
+    const list = this.callerLoadedSkills(target);
+    if (list.some((item) => item.toLowerCase() === key)) return;
+    this.sessionSkills.set(target, [...list, canonical]);
+  }
+  /** The skills a session has loaded: those noted this run, else those its record shows. */
+  private callerLoadedSkills(sessionId: string): string[] {
+    const cached = this.sessionSkills.get(sessionId);
+    if (cached) return cached;
+    const restored: string[] = [];
+    for (const message of this.store.messages(sessionId)) {
+      if (
+        message.internal !== 'skill' &&
+        !(message.role === 'tool' && message.name === 'skill')
+      )
+        continue;
+      const match = String(message.content ?? '').match(
+        /<skill_content name="([^"]+)">/,
+      );
+      if (match?.[1]) {
+        const name = match[1].trim();
+        if (
+          name &&
+          !restored.some((item) => item.toLowerCase() === name.toLowerCase())
+        )
+          restored.push(name);
+      }
+    }
+    this.sessionSkills.set(sessionId, restored);
+    return restored;
+  }
   private ensureHooks(): HookRunner {
     if (!this.hookRunner) {
       const trusted = isFolderTrusted(
@@ -3299,6 +3466,7 @@ export class AgentRuntime {
     signal?: AbortSignal,
     sessionId?: string,
   ): Promise<string> {
+    this.recordSessionSkill(sessionId, name);
     const note = await this.armSkill(name, signal);
     // A subagent that loads it gets the pack's tools it may have, from its next request
     const child = sessionId ? this.childHarnesses.get(sessionId) : undefined;
@@ -4396,6 +4564,7 @@ export class AgentRuntime {
     this.memorySession = undefined;
     this.todos = [];
     this.armedSkills.clear();
+    this.sessionSkills.clear();
     this.hookRunner?.close();
     this.hookRunner = undefined;
     this.harness = this.createHarness(this.options.model);
@@ -4426,6 +4595,7 @@ export class AgentRuntime {
     const repaired = this.store.get(session.id);
     if (repaired) this.session = repaired;
     this.armedSkills.clear();
+    this.sessionSkills.clear();
     this.hookRunner?.close();
     this.hookRunner = undefined;
     this.harness = this.createHarness(this.options.model);
@@ -4451,6 +4621,7 @@ export class AgentRuntime {
       this.store.claimSession(session.id, (error) => this.ownershipLost(error));
       this.session = session;
       this.armedSkills.clear();
+      this.sessionSkills.clear();
       this.hookRunner?.close();
       this.hookRunner = undefined;
       this.harness = this.createHarness(this.options.model);

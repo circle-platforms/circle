@@ -1227,3 +1227,48 @@ test('an agent whose reply the model layer gave up on starts over as one that st
   assert.equal(agent!.attempt, 2);
   assert.deepEqual(agent!.endings, ['lost its reply']);
 });
+
+test('an agent of a workflow takes the skills its definition names, not those the conversation has loaded', async (t) => {
+  const paths = folders(t);
+  for (const [name, text] of [
+    ['loaded', 'Follow the loaded checklist.'],
+    ['named', 'Follow the named checklist.'],
+  ] as const) {
+    const dir = join(paths.home, 'skills', name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: Skill ${name}\n---\n${text}\n`,
+    );
+  }
+  mkdirSync(join(paths.home, 'agents'), { recursive: true });
+  writeFileSync(
+    join(paths.home, 'agents', 'checker.md'),
+    '---\nname: checker\ndescription: The checker agent.\nskills:\n  - named\n---\nYou are checker.\n',
+  );
+  const model = modelByAsker({
+    go: [
+      reply('', [{ id: 'load', name: 'skill', args: { name: 'loaded' } }]),
+      workflowCall('w1', {
+        script:
+          META('one-check') +
+          `return await agent('check it', { agentType: 'checker' })`,
+      }),
+      reply('started'),
+    ],
+    'check it': [reply('checked')],
+  });
+  const runtime = runtimeFor(t, paths, model);
+  await runtime.initialize();
+  await runtime.harness.run('go');
+  const { job } = started(runtime, 'w1');
+  assert.equal((await finished(runtime, job)).status, 'done');
+  const users = requestsOf(model, 'check it')[0]!
+    .messages.filter((message) => message.role === 'user')
+    .map((message) => message.content);
+  assert.ok(users.some((text) => text.includes('Follow the named checklist.')));
+  assert.ok(
+    !users.some((text) => text.includes('Follow the loaded checklist.')),
+    'the conversation’s skill is not carried to each agent of a run',
+  );
+});
