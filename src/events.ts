@@ -10,6 +10,7 @@ export type EventKind =
   | 'tool_call'
   | 'tool_start'
   | 'tool_waiting'
+  | 'tool_progress'
   | 'tool_result'
   | 'tool_end'
   | 'llm_start'

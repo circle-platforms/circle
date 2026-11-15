@@ -1,6 +1,8 @@
 /** Trusted execution identity; notification ownership can belong to a parent. */
 export interface CommandOrigin {
   executionSessionId: string;
+  /** Who the command runs for: its environment's `CIRCLE_SESSION_ID` and `CIRCLE_AGENT_ID` (#551). */
+  identity?: import('./sandbox.js').CallIdentity;
   toolCallId?: string;
   /** Host-created identity for an explicit human ! command, never a provider call ID. */
   userShellId?: string;

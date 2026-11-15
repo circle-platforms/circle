@@ -21,6 +21,7 @@ import { CheckpointStore, type Session } from './checkpoint_store.js';
 import { attachPrompt } from './mentions.js';
 import { prepareToolCall, RecoverableToolError } from './tool_call_compat.js';
 import { redact } from './redact.js';
+import type { CallIdentity } from './sandbox.js';
 import { isRecord } from './settings.js';
 import {
   expandVariables,
@@ -121,6 +122,16 @@ export type ApprovalDecision =
   // a rejection with the user's reason, which the model reads in the tool result
   | { decision: 'reject'; message: string };
 export interface HarnessOptions {
+  /**
+   * Set in a subagent (#550, #551): the conversation's session and this agent's type. Hooks, MCP servers and
+   * child processes are told the conversation's session, with this harness's own as the agent's.
+   */
+  agent?: { sessionId: string; type: string };
+  /**
+   * A subagent's own thinking depth, sent with each of its requests in place of the model's. Unset, the model's
+   * depth applies, as for the conversation.
+   */
+  effort?: string;
   /** Trusted host lookup, never model-supplied execution metadata or authority. */
   commandExecution?: {
     epoch: string;
@@ -1154,6 +1165,7 @@ export class Harness {
           if (this.options.sessionHooks !== false)
             await this.options.reviewHooks?.(signal);
           await this.announceHooks(signal);
+          if (prompt !== undefined) await this.promptHooks(prompt, signal);
         }
         // The step starts here: a steerNow while the messages before are read stops it
         const stepControl = new AbortController();
@@ -1175,6 +1187,7 @@ export class Harness {
             continue;
           this.consumeInput(input, content);
           this.bus.emit('steer', { payload: { message } });
+          await this.promptHooks(message, signal);
         }
         this.options.beforeStep?.();
         try {
@@ -1203,6 +1216,7 @@ export class Harness {
                 : this.options.store.projectedMessages(this.sessionId),
             ),
             tools: this.tools,
+            ...(this.options.effort ? { effort: this.options.effort } : {}),
             signal: stepSignal,
             notice: (event) =>
               this.bus.emit('info', { payload: { model_notice: event } }),
@@ -1535,6 +1549,68 @@ export class Harness {
     if (batch.context)
       this.hookPreface = `Hook session_start output:\n${batch.context}`;
   }
+  /**
+   * user_prompt hooks (#557): each gets the person's message as written, and what they say back is added to the turn
+   * for the model, after the message. The screen shows each hook's first line, as for any hook output. Not in a
+   * subagent, whose first message is the task the model wrote.
+   */
+  private async promptHooks(
+    prompt: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const runner = this.options.hooks;
+    // A turn started only for messages that wait (after a compaction) has none of its own: they get theirs
+    if (
+      !prompt.trim() ||
+      this.options.sessionHooks === false ||
+      !runner?.active().some((hook) => hook.event === 'user_prompt')
+    )
+      return;
+    const batch = await runner.run({
+      event: 'user_prompt',
+      sessionId: this.sessionId,
+      cwd: this.options.session.workspace,
+      prompt,
+      secrets: this.hookSecrets(),
+      signal,
+    });
+    this.hookOutput(batch, 'user_prompt');
+  }
+  /**
+   * What hooks of an event said back: their notices, and their output for the model. user_prompt's goes in the turn,
+   * with the first notice of an output; subagent_start's is in the subagent's system prompt, so it holds after a
+   * compaction.
+   */
+  hookOutput(
+    batch: { notices: HookNotice[]; context: string },
+    event: 'user_prompt' | 'subagent_start',
+  ): void {
+    let told = event !== 'user_prompt' || !batch.context;
+    for (const notice of batch.notices) {
+      if (notice.kind === 'output' && !told) {
+        told = true;
+        this.hookNotes.push({
+          id: randomUUID(),
+          role: 'user',
+          internal: 'hook_notice',
+          content: `<system-reminder data-source="circle-hooks">\nHook user_prompt output, for this message:\n${batch.context}\n</system-reminder>`,
+          display: hookNoticeText({
+            ...notice,
+            reason: notice.message || notice.reason,
+          }),
+          hook: notice,
+        });
+      } else this.queueHook(notice, notice.kind === 'output');
+    }
+    this.flushHookNotes();
+    if (event === 'subagent_start' && batch.context)
+      this.hookPreface = [
+        this.hookPreface,
+        `Hook subagent_start output:\n${batch.context}`,
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+  }
   private async blockStop(signal: AbortSignal): Promise<boolean> {
     if (this.options.sessionHooks === false || !this.options.hooks)
       return false;
@@ -1578,7 +1654,7 @@ export class Harness {
     if (!this.options.hooks) return undefined;
     const batch = await this.options.hooks.run({
       event,
-      sessionId: this.sessionId,
+      ...this.hookIdentity(),
       cwd: this.options.session.workspace,
       toolName: call.name,
       toolInput: args,
@@ -1593,6 +1669,24 @@ export class Harness {
       if (!told.has(JSON.stringify(notice)))
         this.queueHook(notice, notice.kind === 'denied');
     return batch;
+  }
+  /** Who this harness's calls run for (#551): the conversation's session, and in a subagent its own as the agent's. */
+  private identity(): CallIdentity {
+    return this.options.agent
+      ? { sessionId: this.options.agent.sessionId, agentId: this.sessionId }
+      : { sessionId: this.sessionId };
+  }
+  /** A hook hears the conversation's session; in a subagent also which agent the call came from (#550). */
+  private hookIdentity(): {
+    sessionId: string;
+    agent?: { id: string; type: string };
+  } {
+    return this.options.agent
+      ? {
+          sessionId: this.options.agent.sessionId,
+          agent: { id: this.sessionId, type: this.options.agent.type },
+        }
+      : { sessionId: this.sessionId };
   }
   private hookSecrets(): Record<string, string> {
     return this.options.secrets?.() ?? {};
@@ -1967,7 +2061,10 @@ export class Harness {
         signal,
         ...(readOnlyCommand ? { readOnlyCommand } : {}),
         sessionId: this.sessionId,
+        identity: this.identity(),
         callId: call.id,
+        progress: (text) =>
+          this.bus.emit('tool_progress', { payload: { id: call.id, text } }),
         ...(used.size ? { rawArgs: structuredClone(raw) } : {}),
         ...(usedSecrets.length ? { secretNames: usedSecrets } : {}),
         imageInput: callModel.imageInput,
@@ -2029,7 +2126,7 @@ export class Harness {
       const after = this.options.hooks
         ? await this.options.hooks.run({
             event: 'after_tool',
-            sessionId: this.sessionId,
+            ...this.hookIdentity(),
             cwd: this.options.session.workspace,
             toolName: call.name,
             toolInput: args,

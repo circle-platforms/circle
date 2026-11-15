@@ -85,6 +85,8 @@ export interface ScreenState {
   version: string;
   busy: boolean;
   waiting: boolean;
+  /** By call id, the latest a running call said of its progress (#554). */
+  toolProgress?: Record<string, string>;
   planMode: boolean;
   /** Another terminal is running this session. The transcript is readable. */
   viewOnly?: boolean;
@@ -442,7 +444,14 @@ export function transcriptRows(state: ScreenState, width: number): string[] {
         if (!result) first = false;
         if (HIDDEN_TOOLS.has(call.name)) continue;
         gap('tool');
-        rows.push(toolRow(call, shownResult, { width, pending }));
+        rows.push(
+          toolRow(call, shownResult, {
+            width,
+            pending,
+            progress:
+              pending === 'running' ? state.toolProgress?.[call.id] : undefined,
+          }),
+        );
         if (together)
           rows.push(
             ...taskSummaryRows(agent, { width, expanded: state.showTools }),

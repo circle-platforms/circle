@@ -365,7 +365,11 @@ test("nothing kept for a server outlives its connection: once the server's progr
   process.kill(pid);
   await until(() => manager.status[0]!.error !== '', { timeout: 10_000 });
   assert.match(manager.status[0]!.error, /the connection ended/);
-  await assert.rejects(checksum.run({ file: 'a.bin' }, context));
+  // The next call starts the program again (#555) and is read by it, not answered from what the old one gave
+  const again = await checksum.run({ file: 'a.bin' }, context);
+  assert.doesNotMatch(again, /^cached/);
+  const restarted = Number(/8 bytes read by (\d+)$/.exec(again)![1]);
+  assert.ok(restarted && restarted !== pid, again);
 });
 
 test('a call whose card said it would get its earlier result is not run once another call has reached that server', async (t) => {

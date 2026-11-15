@@ -38,3 +38,4 @@ More:
 - [Windows acceptance](windows-acceptance.md): what has been tried by hand on Windows, what it showed, and what still has no evidence.
 - [Register Circle in skills.sh](skills-registry.md).
 - [Messages to a running subagent](subagent-messages.md): a design note for #373 box 7, awaiting agreement; nothing in it works yet.
+- [Declared orchestration](orchestration.md): a design note for #558, two ways to hold a session to declared phases, awaiting the owner's choice; nothing in it works yet.

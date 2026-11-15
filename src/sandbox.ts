@@ -36,6 +36,23 @@ export function secretLookingName(name: string): boolean {
         ) || /(PASS|PASSWORD|PASSWD|TOKEN|SECRET|APIKEY)$/.test(part),
     );
 }
+/** Who a call runs for: the conversation's session, and in a subagent that agent's own session (#551). */
+export interface CallIdentity {
+  sessionId: string;
+  agentId?: string;
+}
+/**
+ * What a process started for a call is told of it: `CIRCLE_SESSION_ID`, and `CIRCLE_AGENT_ID` in a subagent. An
+ * unset value removes one the process would otherwise inherit from Circle's own environment.
+ */
+export function identityEnvironment(
+  identity?: CallIdentity,
+): Record<string, string | undefined> {
+  return {
+    CIRCLE_SESSION_ID: identity?.sessionId,
+    CIRCLE_AGENT_ID: identity?.agentId,
+  };
+}
 export function shellEnvironment(
   source: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
@@ -205,6 +222,7 @@ export class Sandbox {
     command: string,
     signal: AbortSignal,
     timeout = 120000,
+    identity?: CallIdentity,
   ): Promise<{ output: string; exit_code: number; timed_out: boolean }> {
     const found = classifyCommand(command, this.credentialFiles);
     if (found.verdict === 'DENY')
@@ -213,7 +231,7 @@ export class Sandbox {
     return new Promise((resolveResult, reject) => {
       const child = spawn(command, {
         cwd: this.workspace,
-        env: shellEnvironment(),
+        env: { ...shellEnvironment(), ...identityEnvironment(identity) },
         shell: true,
         detached: process.platform !== 'win32',
         stdio: ['ignore', 'pipe', 'pipe'],

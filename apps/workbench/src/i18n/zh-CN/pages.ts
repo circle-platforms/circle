@@ -152,6 +152,8 @@ export const pages: Record<string, string> = {
   'command added to the message draft': '命令已加入消息草稿',
   'insert into draft': '插入草稿',
   // mcp servers
+  reconnect: '重新连接',
+  'reconnecting {name}': '正在重新连接 {name}',
   'reloading MCP servers': '正在重新加载 MCP 服务器',
   'reloading skills': '正在重新加载技能',
   reload: '重新加载',

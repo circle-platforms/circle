@@ -28,6 +28,7 @@ import {
 } from '../src/tui/slash_commands.js';
 import { ScriptedModel } from '../src/testing.js';
 import { parseFrontmatter } from '../src/skills.js';
+import { mcpStub } from './mcp-stub.js';
 import {
   defaultSettings,
   loadCredentials,
@@ -2219,4 +2220,54 @@ test('/agents lists the subagents, a single one, and what is wrong with a file',
   );
   await app.submit('/agents nobody');
   assert.match(app.state.notices.at(-1)!, /No subagent nobody/);
+});
+
+test('/hub names the switch while the hub extension is off, and once on connects a Hub by its address alone', async (t) => {
+  // Off, as Circle ships it: the shipped extension's command names the switch
+  const off = await session(t, [], { integrations: true });
+  off.ui.setDraft('/hub');
+  await off.key('enter');
+  assert.equal(
+    off.app.state.flash,
+    'Unknown command /hub · turn it on with /extensions enable hub',
+  );
+
+  // On: a Hub answers its discovery document, with its MCP endpoint on the same address
+  const hub = await mcpStub(t, {
+    tools: [
+      { name: 'search', inputSchema: { type: 'object', properties: {} } },
+    ],
+    get: (path, origin) =>
+      path === '/.well-known/knowledge-sync'
+        ? {
+            schema: 'knowledge-sync-discovery@1',
+            mcp: { endpoint: `${origin}/mcp` },
+          }
+        : undefined,
+  });
+  const home = scratch(t);
+  const settings = defaultSettings();
+  settings.extensions = { ...settings.extensions, hub: { enabled: true } };
+  saveSettings(settings, home);
+  const on = await session(t, [], { integrations: true, home, settings });
+  const address = new URL(hub.url).host;
+  await on.app.submit(`/hub ${address}`);
+  const endpoint = `http://${address}/mcp`;
+  assert.ok(
+    on.app.state.notices.some((line) =>
+      line.includes(`Hub connected: ${endpoint} · 1 tools.`),
+    ),
+    on.app.state.notices.join('\n'),
+  );
+  // The entry is saved as the desktop's Hub page saves it, and the Hub's tools are the model's now
+  const saved = loadSettings(home).mcp_servers.find(
+    (row) => row.name === 'Hub',
+  );
+  assert.deepEqual(
+    { url: saved?.url, placeholders: saved?.placeholders },
+    { url: endpoint, placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' } },
+  );
+  assert.ok(
+    on.runtime.harness.tools.some((tool) => tool.name === 'Hub_search'),
+  );
 });

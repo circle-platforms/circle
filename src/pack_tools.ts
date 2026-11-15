@@ -6,6 +6,7 @@ import type { JobOwner, JobRegistry } from './jobs.js';
 import { LIMITS, verifyInstalled } from './local_skills.js';
 import { mcpToolName } from './mcp_loader.js';
 import { isSafePackPath } from './pack_files.js';
+import { identityEnvironment } from './sandbox.js';
 import { runScript } from './script_runs.js';
 import { expandVariables } from './secrets.js';
 import type { Tool, ToolContext } from './types.js';
@@ -47,6 +48,8 @@ const RESERVED_ENV = new Set([
   'HOME',
   'TMPDIR',
   'NODE_OPTIONS',
+  'CIRCLE_SESSION_ID',
+  'CIRCLE_AGENT_ID',
   'CIRCLE_SKILL_DIR',
   'CIRCLE_SKILL_DATA',
 ]);
@@ -347,12 +350,15 @@ export function packTool(options: {
       const { timeout, background, ...input } = args;
       const variables = options.variables();
       const secrets = options.secrets();
-      const env = Object.fromEntries(
-        Object.entries(declaration.env).map(([name, value]) => [
-          name,
-          expandVariables(value, { ...variables, ...secrets }),
-        ]),
-      );
+      const env = {
+        ...Object.fromEntries(
+          Object.entries(declaration.env).map(([name, value]) => [
+            name,
+            expandVariables(value, { ...variables, ...secrets }),
+          ]),
+        ),
+        ...identityEnvironment(context.identity),
+      };
       const owner = options.jobOwner?.(context) ?? {
         sessionId: context.sessionId,
         startedBy: 'model' as const,
@@ -379,6 +385,7 @@ export function packTool(options: {
               ...owner.origin,
               executionSessionId: context.sessionId,
               toolCallId: context.callId,
+              ...(context.identity ? { identity: context.identity } : {}),
               displayCommand: [pack, declaration.script, ...argv].join(' '),
               description: `${pack} ${declaration.name}`,
             },

@@ -1001,6 +1001,28 @@ function approvalsList(host: CommandHost): void {
 
 async function mcp(host: CommandHost, args: string): Promise<void> {
   const runtime = host.runtime;
+  const [verb = '', ...rest] = args.trim().split(/\s+/);
+  const server = rest.join(' ');
+  // One server again; the others and their programs stay as they are (#559)
+  if (['reload', 'refresh', 'connect'].includes(verb.toLowerCase()) && server) {
+    if (runtime.busy) {
+      host.flash('Busy · reload MCP after the current turn');
+      return;
+    }
+    try {
+      await runtime.reloadMcpServer(server);
+    } catch (error) {
+      host.fail(`MCP reload failed: ${reason(error)}`);
+      return;
+    }
+    const row = runtime.mcp.status.find((item) => item.name === server);
+    host.notice(
+      row?.error
+        ? `MCP ${server} reloaded · ${row.error}`
+        : `MCP ${server} reloaded · ${row?.tools.length ?? 0} tools`,
+    );
+    return;
+  }
   if (['reload', 'refresh', 'connect'].includes(args.trim().toLowerCase())) {
     if (runtime.busy) {
       host.flash('Busy · reload MCP after the current turn');
@@ -1234,6 +1256,7 @@ function agents(host: CommandHost, args: string): void {
         `${one.name} · ${one.description}`,
         `  source: ${one.source}`,
         one.model ? `  model: ${one.model}` : '  model: the conversation’s',
+        one.effort ? `  effort: ${one.effort}` : '  effort: the conversation’s',
         one.tools
           ? `  tools: ${one.tools.join(', ')}`
           : '  tools: every tool a subagent may have',

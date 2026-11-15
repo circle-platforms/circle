@@ -6,6 +6,8 @@ nav_order: 12.4
 
 A subagent is a second Circle with its own context: `task` starts one, it works alone, and only its report comes back to your conversation. Two ship with Circle — `general-purpose` and the read-only `explore` — [extensions](extensions.md) register more, and **folders of markdown files define the rest**. This page is about those.
 
+Each built-in has a prompt of its own, followed by the conversation's system prompt: `general-purpose` works from a short prompt for general tasks (do what the task asks, report in the format it asks for), `explore` from one for read-only searching. A built-in whose prompt file is missing is an error that names the file; it never borrows another agent's prompt.
+
 ## A file per agent
 
 One file is one agent: `<name>.md` in one of the folders below. The keys say what it is, and the text under them is the system prompt the agent works from.
@@ -28,6 +30,7 @@ the file and the line. Change nothing.
 | `description` | yes | the line the model reads to decide when to use the agent |
 | `tools` | no | the exact tool names it may use; without the key it gets everything a subagent may have |
 | `model` | no | an id on the same endpoint; without it the agent uses the conversation's model |
+| `effort` | no | its thinking depth, one of `minimal`, `low`, `medium`, `high`, `xhigh` or `max`, sent with each of its requests; without it the agent follows the conversation's depth. `CIRCLE_REASONING_EFFORT` set for the run wins over it. Another word means the file is not offered, and `/agents` says why. `/agents <name>` shows the depth |
 
 ## Where the files live
 
@@ -43,6 +46,12 @@ Read in this order, lowest first, so a later folder replaces an earlier one of t
 | `<workspace>/.circle/agents` | this project, Circle's own |
 
 An **extension** that registers the name wins over a file, and a file wins over a built-in: your `explore.md` replaces the shipped `explore`, and gets the tools its own keys name rather than the read-only set.
+
+### A pack can ship subagents
+
+A pack installed with `skill_install` can define subagents in an `agents` folder next to its `SKILL.md`: `agents/reviewer.md`, in the format above. They are in `task`'s list from the session's first request, whether or not the skill is loaded, under the pack's name: `reviewer` in the pack `kit` is `kit:reviewer`. `/agents` lists them as from `Pack <name>`. A skill folder of your own, one without a `pack.json`, is not a pack: an `agents` folder in it defines nothing.
+
+A name a folder above, an extension or a built-in already gives stays theirs: the pack's definition is not offered, and `/agents` says so. A definition that names a tool that does not exist is not offered either. The packs' folders are read again whenever the others are, and before each `task` call. A pack replaced with a new version therefore offers what the new version has: a definition it renamed or left out is `unknown subagent type` under its old name.
 
 ## Seeing them: `/agents`
 
@@ -66,4 +75,4 @@ The desktop application's `/agents` opens the subagents panel, which lists the a
 - With `background: true` it keeps running and its report arrives as a notice. See [Background jobs](background-jobs.md).
 - A file naming a tool that does not exist is skipped rather than run with a broken set, so load the MCP server or the extension first.
 
-The folders are read again with every rebuild of the system prompt — a new or resumed session, a model switch, `/reload`, `/mcp reload`, `/extensions reload` — so a file you have just written is in the next turn's list.
+The folders are read again before each `task` call and with every rebuild of the system prompt: a new or resumed session, a model switch, `/reload`, `/mcp reload`, `/extensions reload`. A file written during a turn can therefore be given to `task` at once, also by a later call in the same reply that wrote it. `task`'s list of names is written again with the tools: when the session starts, when tools change, and when a skill that ships subagents loads.

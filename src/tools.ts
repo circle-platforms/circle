@@ -13,7 +13,7 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { glob } from 'glob';
 import type { Tool, ToolContext } from './types.js';
-import { Sandbox } from './sandbox.js';
+import { Sandbox, identityEnvironment } from './sandbox.js';
 import { loadToolPrompt } from './system_prompt.js';
 import { applyPatch, patchFilePaths } from './apply_patch.js';
 import { QUESTION_SCHEMA } from './questions.js';
@@ -77,6 +77,7 @@ export interface ToolHooks {
     name: string,
     signal?: AbortSignal,
     reference?: string,
+    context?: ToolContext,
   ) => Promise<string>;
   compact?: (hint: string, context: ToolContext) => Promise<string>;
   /**
@@ -91,7 +92,11 @@ export interface ToolHooks {
     variables: () => Record<string, string>;
     root?: string;
     /** The typed tool offered for this script of a pack, when its skill is loaded and the pack declares it. */
-    typed?: (pack: string, script: string) => string | undefined;
+    typed?: (
+      pack: string,
+      script: string,
+      sessionId?: string,
+    ) => string | undefined;
   };
   /** Offer `screenshot`; tests give it their own runner. */
   screenshot?: Omit<ScreenshotOptions, 'app' | 'target'>;
@@ -460,6 +465,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
           ...notificationOwner,
           origin: {
             executionSessionId: context.sessionId,
+            ...(context.identity ? { identity: context.identity } : {}),
             toolCallId: context.callId,
             ...(typeof rawCommand === 'string' && hooks.displayCommand
               ? { displayCommand: hooks.displayCommand(rawCommand, context) }
@@ -503,6 +509,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         context.readOnlyCommand ?? string(args, 'command'),
         context.signal,
         Math.max(1, Number(args.timeout) || 120) * 1000,
+        context.identity,
       );
       return `${result.output}\nExit code: ${result.exit_code}`;
     },
@@ -618,6 +625,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         const typed = localSkills.typed?.(
           string(args, 'pack'),
           string(args, 'script'),
+          context.sessionId,
         );
         if (typed)
           throw new Error(
@@ -641,6 +649,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
               ...(localSkills.home
                 ? { dataRoot: join(localSkills.home, SKILL_DATA_FOLDER) }
                 : {}),
+              env: identityEnvironment(context.identity),
             },
             {
               jobs: hooks.jobs,
@@ -650,6 +659,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
                   ...owner.origin,
                   executionSessionId: context.sessionId,
                   toolCallId: context.callId,
+                  ...(context.identity ? { identity: context.identity } : {}),
                   // As the model wrote them: %NAME% stays unfilled on screen
                   displayCommand: [
                     string(args, 'pack'),
@@ -855,6 +865,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
           string(args, 'name'),
           context.signal,
           args.reference as string | undefined,
+          context,
         ),
     );
   if (hooks.compact)

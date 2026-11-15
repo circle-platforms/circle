@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { AgentRuntime } from '../src/runtime.js';
+import {
+  AgentRuntime,
+  BUILTIN_SUBAGENT_PROMPTS,
+  builtinSubagentPrompt,
+} from '../src/runtime.js';
 import { discoverSubagents } from '../src/subagent_files.js';
 import { defaultSettings } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
@@ -267,5 +271,123 @@ test('an agent naming a tool that does not exist is not offered, and says why', 
   assert.match(
     listed.problems.join('\n'),
     /ghost names tools that do not exist: no_such_tool · not offered/,
+  );
+});
+
+test('general-purpose works from a prompt for general tasks, and a built-in without its prompt file says which file', async (t) => {
+  const root = scratch(t);
+  const { home, workspace, userHome } = harness(root);
+  const model = taskModel('general-purpose');
+  const runtime = new AgentRuntime({
+    home,
+    workspace,
+    userHome,
+    settings: defaultSettings(),
+    model,
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('do it');
+  // Not the prompt that writes agent configurations (#547)
+  const system = model.requests[1]!.system;
+  assert.match(system, /general-purpose agent/);
+  assert.doesNotMatch(system, /agent architect|whenToUse|"identifier"/);
+  // Every built-in has its own file; a missing one is named, not replaced by another
+  assert.deepEqual(Object.keys(BUILTIN_SUBAGENT_PROMPTS).sort(), [
+    'explore',
+    'general-purpose',
+  ]);
+  assert.throws(
+    () => builtinSubagentPrompt('general-purpose', join(root, 'no-prompts')),
+    /general-purpose subagent has no prompt: prompts\/agent\/general-purpose\.md is missing/,
+  );
+});
+
+test("a definition's effort is sent with its subagent's requests, the run's CIRCLE_REASONING_EFFORT wins, and a word that is no depth does not load", async (t) => {
+  const root = scratch(t);
+  const { home, workspace, userHome } = harness(root);
+  agentFile(
+    join(workspace, '.circle', 'agents'),
+    'checker.md',
+    '---\nname: checker\ndescription: Checks each line.\neffort: high\n---\n\nCheck it.\n',
+  );
+  agentFile(
+    join(workspace, '.circle', 'agents'),
+    'odd.md',
+    '---\nname: odd\ndescription: Odd depth.\neffort: extreme\n---\n\nOdd.\n',
+  );
+  const settings = defaultSettings();
+  settings.trusted_folders = [workspace];
+  const run = async () => {
+    const model = taskModel('checker');
+    const runtime = new AgentRuntime({
+      home,
+      workspace,
+      userHome,
+      settings,
+      model,
+    });
+    cleanup(t, () => runtime.close());
+    await runtime.harness.run('check');
+    return { model, runtime };
+  };
+  const saved = process.env.CIRCLE_REASONING_EFFORT;
+  t.after(() => {
+    if (saved === undefined) delete process.env.CIRCLE_REASONING_EFFORT;
+    else process.env.CIRCLE_REASONING_EFFORT = saved;
+  });
+  delete process.env.CIRCLE_REASONING_EFFORT;
+  const own = await run();
+  // The conversation asks for no depth of its own; the subagent asks for its definition's
+  assert.equal(own.model.requests[0]!.effort, undefined);
+  assert.equal(own.model.requests[1]!.effort, 'high');
+  const listed = own.runtime.inspectSubagents();
+  assert.equal(
+    listed.agents.find((agent) => agent.name === 'checker')?.effort,
+    'high',
+  );
+  assert.ok(
+    listed.problems.some((line) =>
+      /odd\.md: effort 'extreme' is not one of minimal, low, medium, high, xhigh, max/.test(
+        line,
+      ),
+    ),
+  );
+  process.env.CIRCLE_REASONING_EFFORT = 'low';
+  const env = await run();
+  assert.equal(env.model.requests[1]!.effort, 'low');
+});
+
+test("an extension's subagent can carry an effort too, and one that is no depth is refused", async (t) => {
+  const root = scratch(t);
+  const { home, workspace, userHome } = harness(root);
+  extension(
+    join(home, 'extensions'),
+    'deep',
+    'export function register(api){api.registerSubagent({name:"deep",description:"Thinks hard.",system_prompt:"deep marker",effort:"max"})}',
+  );
+  extension(
+    join(home, 'extensions'),
+    'odd',
+    'export function register(api){api.registerSubagent({name:"odd",description:"Odd.",system_prompt:"odd",effort:"extreme"})}',
+  );
+  const saved = process.env.CIRCLE_REASONING_EFFORT;
+  delete process.env.CIRCLE_REASONING_EFFORT;
+  t.after(() => {
+    if (saved !== undefined) process.env.CIRCLE_REASONING_EFFORT = saved;
+  });
+  const model = taskModel('deep');
+  const runtime = new AgentRuntime({
+    home,
+    workspace,
+    userHome,
+    settings: defaultSettings(),
+    model,
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('think');
+  assert.equal(model.requests[1]!.effort, 'max');
+  assert.equal(
+    runtime.inspectSubagents().agents.some((agent) => agent.name === 'odd'),
+    false,
   );
 });

@@ -95,6 +95,8 @@ export interface ToolCall {
   /** Main-process ledger links to actual child session identities. */
   agentIds?: string[];
   diff?: DiffView;
+  /** What a running call last said of its progress, as an MCP server reports it. */
+  progress?: string;
 }
 export interface Message {
   /** An update while the model works (`commentary`), or its answer (`final_answer`). */

@@ -15,7 +15,11 @@ import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { classifyCommand } from './approvals.js';
-import { shellEnvironment, type Sandbox } from './sandbox.js';
+import {
+  identityEnvironment,
+  shellEnvironment,
+  type Sandbox,
+} from './sandbox.js';
 import { redact } from './redact.js';
 import { decodeOutput } from './output_encoding.js';
 import type { Message } from './types.js';
@@ -747,7 +751,10 @@ export class JobRegistry {
             },
             command,
             cwd: this.sandbox.workspace,
-            env,
+            env: {
+              ...env,
+              ...identityEnvironment(owner.origin?.identity),
+            },
             outputPath: entry.path,
             signal: entry.controller.signal,
           });
@@ -820,7 +827,10 @@ export class JobRegistry {
     try {
       const child = spawn(command, {
         cwd: this.sandbox.workspace,
-        env,
+        env: {
+          ...env,
+          ...identityEnvironment(owner.origin?.identity),
+        },
         shell: true,
         detached: process.platform !== 'win32',
         stdio: ['ignore', fd, fd],
