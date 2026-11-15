@@ -158,6 +158,14 @@ export const model: Record<string, string> = {
     '运行子代理（general-purpose、explore，或扩展添加的子代理）并返回它的回答',
   'Run a subagent (`general-purpose`, `explore`, or one an extension adds) and return its answer. Arguments: `description`, `subagent_type`, `background`. With `background: true` the subagent runs as a background job and its report comes as a notice. See How Circle works.':
     '运行子代理（`general-purpose`、`explore`，或扩展添加的子代理）并返回它的回答。参数：`description`、`subagent_type`、`background`。设置 `background: true` 时子代理作为后台任务运行，报告以通知形式送达。参见文档中的 How Circle works。',
+  'Run a workflow: a script that starts subagents and decides what runs next':
+    '运行工作流：由脚本启动子代理并决定下一步做什么',
+  'Run a workflow: a JavaScript script that starts subagents and decides itself what runs next. It runs in the background as a job, after you approve it, and its result comes as a notice. Arguments: `name`, `script`, `script_path`, `args`, `resume_from_run_id`. See Workflows.':
+    '运行工作流：一段 JavaScript 脚本，启动子代理并自己决定下一步做什么。经批准后作为后台任务运行，结果以通知形式送达。参数：`name`、`script`、`script_path`、`args`、`resume_from_run_id`。参见文档中的 Workflows。',
+  "Return a workflow agent's result in the shape its script asked for":
+    '按脚本要求的结构返回工作流代理的结果',
+  "Return a workflow agent's result in the shape its script asked for. Only an agent whose script gave a schema has it; a call that does not fit is refused with the reason.":
+    '按脚本要求的结构返回工作流代理的结果。只有脚本给了 schema 的代理才有这个工具；不符合 schema 的调用会被拒绝并说明原因。',
   'Summarize older messages now': '立即总结较早的消息',
   'Summarize older messages now. See Compaction.':
     '立即总结较早的消息。参见文档中的 Compaction。',
@@ -177,6 +185,8 @@ export const model: Record<string, string> = {
   'Session approvals: /approvals [revoke N]':
     '会话审批规则：/approvals [revoke N]',
   'Background jobs: open one, or stop it': '后台任务：打开或停止',
+  'Workflow runs: their phases and agents, or stop one':
+    '工作流运行：查看阶段和代理，或停止一个',
   'Start a new session': '开始新会话',
   'Choose a session to open: /resume [n|id]':
     '选择要打开的会话：/resume [n|id]',

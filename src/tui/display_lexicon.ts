@@ -19,6 +19,7 @@ export const TOOL_SHORT_NAMES: Record<string, string> = {
   grep: 'Grep',
   execute: 'Bash',
   task: 'Agent',
+  workflow: 'Workflow',
   write_todos: 'TodoWrite',
   webfetch: 'Fetch',
   websearch: 'Search',
@@ -152,6 +153,22 @@ export function toolArgSummary(
   // Knowledge arguments are hashes and objects: the row names a title or path instead.
   const knowledge = knowledgeArgSummary(name, values);
   if (knowledge !== undefined) return clip(knowledge);
+  // A workflow by its name: the saved one's, or the one its script's meta gives
+  if (name === 'workflow') {
+    const named =
+      summarize('text', value('name')) ||
+      summarize(
+        'text',
+        /\bname\s*:\s*['"`]([^'"`\n]+)['"`]/.exec(
+          String(values.script ?? ''),
+        )?.[1],
+      ) ||
+      summarize('path_tail', value('script_path'));
+    const resumed = summarize('text', value('resume_from_run_id'));
+    return named && resumed
+      ? clip(`${named} · relaunch ${resumed}`)
+      : named || (resumed ? `relaunch ${resumed}` : '');
+  }
   if (name === 'question') {
     const asked = values.questions;
     if (Array.isArray(asked) && asked[0] && typeof asked[0] === 'object')

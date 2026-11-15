@@ -57,6 +57,8 @@ When the conversation passes 85% of the model's context window (from models.dev 
 
 `task` calls next to each other in one reply run at the same time. While they run, a strip below the input box shows it; `↓` selects it and `enter` opens its full record.
 
+A [workflow](workflows.md) goes further: a script the model writes, or one you saved, starts many subagents and decides what runs next, in the background, and the model gets one result at the end.
+
 With `background: true` a subagent runs as a [background job](background-jobs.md#background-subagents): the turn goes on, and its report reaches the model when it ends. Several can run at once. Its approvals show as cards of their own. At most 20 subagents run at once, at any depth; a `task` call past that fails and tells the model not to retry ([Subagents](agents.md#subagents-of-a-subagent)).
 
 ## Safety

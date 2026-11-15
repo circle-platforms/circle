@@ -125,7 +125,7 @@ Add names with `credential_files` in [settings](settings.md), or in a project's 
 
 ## Read-only mode
 
-`/plan` turns on `read-only`, and so can the model with `plan_enter`. Circle then cannot run commands at all, and can change only its plan: one Markdown file for the conversation, kept in the data folder (`projects/<folder>-<id>/session_plans/<session>.md`), never in your workspace. Writing it never asks, in any mode. Reads, searches and the web keep working. A card is never shown for a blocked call; the model is simply told. Your own `!` commands are refused too. To leave it, run `/plan` again, or choose to implement the plan when the model asks with `plan_exit`: in `auto` mode, or with each change asking you first.
+`/plan` turns on `read-only`, and so can the model with `plan_enter`. Circle then cannot run commands at all, and can change only its plan: one Markdown file for the conversation, kept in the data folder (`projects/<folder>-<id>/session_plans/<session>.md`), never in your workspace. Writing it never asks, in any mode. Reads, searches and the web keep working. A card is never shown for a blocked call; the model is simply told. Your own `!` commands are refused too. A [workflow](workflows.md) can still start: it asks first in every mode, `auto` included, unless a rule allows it, and its agents work in read-only mode as well. To leave it, run `/plan` again, or choose to implement the plan when the model asks with `plan_exit`: in `auto` mode, or with each change asking you first.
 
 MCP tools their server does not mark read-only, a call of one it marks read-only that sends it a local file or a secret's value, and extension tools not marked read-only, are blocked. Secret entry is not.
 

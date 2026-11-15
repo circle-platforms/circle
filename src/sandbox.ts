@@ -8,6 +8,8 @@ import {
 } from './approvals.js';
 import { decodeOutput } from './output_encoding.js';
 import { PLAN_FOLDER } from './plan_file.js';
+/** The folder of a project's workflow runs in its data folder, which the model names `/workflow_runs/…`. */
+export const WORKFLOW_RUNS_FOLDER = 'workflow_runs';
 /**
  * A path the operating system already anchors. On POSIX every leading `/` is absolute,
  * including `/workspace`, `/srv`, `/data` and `/code`. On Windows a drive (`C:\`, `C:/`),
@@ -97,6 +99,7 @@ export class Sandbox {
         'large_tool_results',
         'background_jobs',
         PLAN_FOLDER,
+        WORKFLOW_RUNS_FOLDER,
       ].includes(top ?? '')
     )
       full = resolve(this.offloadRoot, virtual);

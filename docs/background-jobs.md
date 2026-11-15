@@ -9,6 +9,7 @@ A command or a subagent can keep running while you and the model go on: a dev se
 ## How a job starts
 
 - **The model asks for one.** `execute` with `background: true` runs a command as a job, and so do a pack's script run with `skill_run` and a pack's [typed tool](skills.md#how-a-packs-script-runs); `task` with `background: true` runs a [subagent](#background-subagents) as one. The call returns at once with the job's id (`j1`, `j2`…) and the file its output goes to.
+- **The model starts a workflow.** A [workflow](workflows.md) runs as one job, `workflow <name>`; its row shows its phase and how its agents stand, its output file holds its progress, and its notice carries the script's result.
 - **A command takes longer than expected.** A command or a pack's script still running at the default timeout (120 seconds) goes on as a job instead of being ended. One the model gave its own `timeout` is still ended at that time.
 - **You press `ctrl+b`.** The command being waited on goes on as a job: the model's, a subagent's, or your own `!command`.
 - **A command leaves something running.** When a command ends but processes it started are still running (`server &`, `nohup … &`), those processes become a job, marked `left running`. Not on Windows; see [Known issues](known-issues.md#background-jobs).

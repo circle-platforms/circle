@@ -42,6 +42,7 @@ const SHORT_NAMES: Record<string, string> = {
   grep: 'Grep',
   execute: 'Bash',
   task: 'Agent',
+  workflow: 'Workflow',
   write_todos: 'TodoWrite',
   webfetch: 'Fetch',
   websearch: 'Search',

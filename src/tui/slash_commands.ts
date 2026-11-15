@@ -92,6 +92,10 @@ export const BUILTIN_SLASH: SlashCommand[] = [
     aliases: ['tasks'],
   },
   {
+    name: 'workflows',
+    description: 'Workflow runs: their phases and agents, or stop one',
+  },
+  {
     name: 'terminals',
     description: 'Device terminals: open a console, connect a profile, cut one',
   },

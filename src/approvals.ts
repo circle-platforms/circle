@@ -1046,6 +1046,23 @@ export class ApprovalPolicy {
         'ASK_FORCED',
         'changes the knowledge sync connection and always needs your confirmation',
       );
+    // A run of many subagents. A rule in a file can allow every workflow (`*`) or a saved one by its name, and a
+    // deny refuses as it does for any tool. A yes kept from the card covers a workflow run by its name, for the
+    // rest of the conversation; a script written in the call is new each time, so none covers it.
+    if (tool === 'workflow') {
+      const name = typeof args.name === 'string' ? args.name.trim() : '';
+      return review(
+        'ASK',
+        'starts a workflow: a script that runs subagents in the background',
+        name
+          ? {
+              pattern: name,
+              scope: `the workflow ${name}`,
+              covered_by: ['*'],
+            }
+          : { covered_by: ['*'] },
+      );
+    }
     const hint = this.hints(tool);
     if (hint === 'destructive')
       return review(

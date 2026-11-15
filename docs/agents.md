@@ -135,7 +135,7 @@ A subagent can start subagents of its own with `task`, up to three layers below 
 - A read-only subagent (the built-in `explore` or `plan`, or one with `permissionMode: plan`) keeps the subagents it starts read-only. Its other modes are its own: a subagent it starts works in that subagent's own `permissionMode`, or the conversation's.
 - The built-in `explore` and `plan` have no `task`. A definition that must not delegate leaves `task` out of its `tools` or puts it in `disallowedTools`.
 
-At most 20 subagents run at once for one conversation, in the foreground or the background, at any depth (`CIRCLE_MAX_CONCURRENT_SUBAGENTS`). At the limit `task` fails with `Concurrent subagent limit reached` and tells the model not to retry; it works again once one of them has finished. There is no limit on how many a session starts over its life.
+At most 20 subagents run at once for one conversation, in the foreground or the background, at any depth (`CIRCLE_MAX_CONCURRENT_SUBAGENTS`). At the limit `task` fails with `Concurrent subagent limit reached` and tells the model not to retry; it works again once one of them has finished. There is no limit on how many a session starts over its life. The agents a [workflow](workflows.md) starts are not counted here: they keep to the workflow's own limit of 16 at once.
 
 ## Seeing them: `/agents`
 

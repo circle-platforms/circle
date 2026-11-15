@@ -211,6 +211,8 @@ const expected = {
   approvals: ['heading', 'approvals'],
   // Background commands have their own mode; device consoles are tabs of the terminal.
   jobs: ['region', 'background jobs panel'],
+  // A workflow run is a background job: /workflows opens the same panel
+  workflows: ['region', 'background jobs panel'],
   terminals: ['region', 'interactive terminal'],
   new: ['heading', 'new session'],
   resume: ['heading', 'sessions'],

@@ -60,6 +60,11 @@ import {
 } from '../approval_rules.js';
 import { transcriptRows, type ScreenState } from './render.js';
 import { elapsed, type Job } from '../jobs.js';
+import {
+  workflowSummary,
+  type WorkflowAgentView,
+  type WorkflowRunView,
+} from '../workflows.js';
 import { emptyUsage } from '../types.js';
 import { EFFORT_LEVELS } from '../model.js';
 import { exportKind, toHtml } from '../session_export.js';
@@ -132,6 +137,8 @@ export interface CommandHost {
   clipboard(text: string): Promise<boolean>;
   // While `list` is open it takes `rows()` again whenever a job starts, changes or ends.
   followJobs(list: Picker, rows: () => PickerItem[]): void;
+  // Open the page of a subagent of this conversation, by its session: false when there is none.
+  openAgent?(id: string): boolean;
 
   // This conversation's device terminals, when the app drives them.
   terminals?(): import('../terminal/sessions.js').TerminalSessions | undefined;
@@ -170,6 +177,7 @@ const BUSY_OK = new Set([
   'name',
   'tree',
   'jobs',
+  'workflows',
   'terminals',
   'logout',
   'new',
@@ -1813,6 +1821,191 @@ function jobs(host: CommandHost, args: string): void {
   if (host.state.picker) host.followJobs(host.state.picker, rows);
 }
 
+// How long a run or an agent has taken: running, or from start to end.
+const took = (started?: number, ended?: number): string =>
+  started ? elapsed({ started, ended } as Job) : '';
+function runMeta(run: WorkflowRunView): string {
+  return run.status === 'running'
+    ? `running · ${workflowSummary(run)} · ${took(run.started)}`
+    : [
+        run.status,
+        `${run.agents.length} ${run.agents.length === 1 ? 'agent' : 'agents'}`,
+        took(run.started, run.ended ?? run.started),
+      ].join(' · ');
+}
+function agentMeta(agent: WorkflowAgentView): string {
+  const state =
+    agent.state === 'cached'
+      ? 'saved result'
+      : agent.state === 'queued'
+        ? 'waiting'
+        : agent.state;
+  return [
+    agent.attempt > 1 ? `${state} · attempt ${agent.attempt}` : state,
+    agent.error && agent.state !== 'stopped' ? agent.error : '',
+    agent.tokens ? `${agent.tokens} tokens` : '',
+    agent.state === 'running'
+      ? took(agent.started)
+      : agent.started
+        ? took(agent.started, agent.ended ?? agent.started)
+        : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+// An agent's row: its label, and `(retry 2)` once it started over after a stall.
+const agentLabel = (agent: WorkflowAgentView): string =>
+  agent.attempt > 1
+    ? `${agent.label} (retry ${agent.attempt - 1})`
+    : agent.label;
+// The rows of one run: where it stands, its last log lines, then each phase with its agents. `only` keeps
+// one phase.
+function runRows(run: WorkflowRunView, only?: string): PickerItem[] {
+  const rows: PickerItem[] = [];
+  if (only === undefined) {
+    rows.push({
+      key: 'run',
+      label: `${run.id} ${run.name}`,
+      meta: run.error ? `${runMeta(run)} · ${run.error}` : runMeta(run),
+      search: run.description,
+    });
+    run.logs
+      .slice(-3)
+      .forEach((line, index) =>
+        rows.push({ key: `log:${index}`, label: `log · ${line}` }),
+      );
+  }
+  const titles = [
+    ...run.phases.map((phase) => phase.title),
+    ...new Set(run.agents.map((agent) => agent.phase)),
+  ].filter((title, index, all) => all.indexOf(title) === index);
+  for (const title of titles) {
+    if (only !== undefined && title !== only) continue;
+    const agents = run.agents.filter((agent) => agent.phase === title);
+    const counts = (
+      ['running', 'queued', 'done', 'cached', 'failed', 'stopped'] as const
+    )
+      .map(
+        (state) =>
+          [
+            state,
+            agents.filter((agent) => agent.state === state).length,
+          ] as const,
+      )
+      .filter(([, count]) => count)
+      .map(
+        ([state, count]) =>
+          `${count} ${state === 'queued' ? 'waiting' : state === 'cached' ? 'saved' : state}`,
+      );
+    if (only === undefined)
+      rows.push({
+        key: `phase:${title}`,
+        label: title || 'agents',
+        meta: counts.join(' · ') || 'not started',
+      });
+    for (const agent of agents)
+      rows.push({
+        key: `agent:${agent.index}`,
+        label: `${only === undefined ? '  ' : ''}${agentLabel(agent)}`,
+        meta: agentMeta(agent),
+        search: `${agent.phase} ${agent.result ?? ''}`,
+      });
+  }
+  return rows;
+}
+// One run of /workflows: enter on an agent opens its conversation, enter on a phase shows that phase alone,
+// ctrl+k stops the agent in focus (its call gives the script null) or, on the first row, the whole run.
+function workflowRun(host: CommandHost, id: string, only?: string): void {
+  const runtime = host.runtime;
+  const view = (): WorkflowRunView | undefined =>
+    runtime.workflowRunViews().find((run) => run.id === id);
+  const run = view();
+  if (!run) {
+    host.fail(`No workflow run ${id} · /workflows lists them`);
+    return;
+  }
+  const rows = (): PickerItem[] => {
+    const now = view();
+    return now ? runRows(now, only) : [];
+  };
+  const stop = (item: PickerItem | undefined): void => {
+    const list = host.state.picker;
+    const now = view();
+    if (!item || !list || !now) return;
+    if (item.key.startsWith('agent:')) {
+      const agent = now.agents[Number(item.key.slice(6))];
+      if (!agent || !['running', 'queued'].includes(agent.state)) return;
+      list.confirm(`Stop ${agentLabel(agent).slice(0, 40)}?`, () => {
+        runtime.stopWorkflowAgent(id, agent.index);
+        list.setItems(rows());
+      });
+    } else if (item.key === 'run' && now.status === 'running')
+      list.confirm(`Stop ${now.id} ${now.name}?`, async () => {
+        await runtime.stopWorkflow(id);
+        list.setItems(rows());
+      });
+  };
+  host.picker(
+    only === undefined
+      ? `${run.name} · ${run.description}`
+      : `${run.name} · ${only || 'agents'}`,
+    rows(),
+    (item) => {
+      if (item.key.startsWith('phase:'))
+        return workflowRun(host, id, item.key.slice(6));
+      if (!item.key.startsWith('agent:')) return workflowRun(host, id, only);
+      const agent = view()?.agents[Number(item.key.slice(6))];
+      if (!agent?.session || !host.openAgent?.(agent.session))
+        host.flash('this agent has no conversation to open');
+    },
+    {
+      hint: 'enter opens · ctrl+k stops',
+      empty: 'No agents yet',
+      keys: { 'ctrl+k': stop },
+    },
+  );
+  if (host.state.picker) host.followJobs(host.state.picker, rows);
+}
+// /workflows: this conversation's workflow runs, newest first. One run, or a run named, opens at once; enter
+// opens one, ctrl+k stops a running one after asking.
+function workflows(host: CommandHost, args: string): void {
+  const runtime = host.runtime;
+  const wanted = args.trim();
+  const all = runtime.workflowRunViews();
+  if (wanted) {
+    const run = all.find((item) => item.id === wanted || item.name === wanted);
+    if (run) workflowRun(host, run.id);
+    else host.fail(`No workflow run ${wanted} · /workflows lists them`);
+    return;
+  }
+  if (all.length === 1) {
+    workflowRun(host, all[0]!.id);
+    return;
+  }
+  const rows = (): PickerItem[] =>
+    runtime.workflowRunViews().map((run) => ({
+      key: run.id,
+      label: `${run.id} ${run.name}`,
+      meta: runMeta(run),
+      search: run.description,
+    }));
+  const stop = (item: PickerItem | undefined): void => {
+    const list = host.state.picker;
+    const run = runtime.workflowRunViews().find((one) => one.id === item?.key);
+    if (!list || !run || run.status !== 'running') return;
+    list.confirm(`Stop ${run.id} ${run.name}?`, async () => {
+      await runtime.stopWorkflow(run.id);
+      list.setItems(rows());
+    });
+  };
+  host.picker('Workflows', rows(), (item) => workflowRun(host, item.key), {
+    hint: 'enter opens · ctrl+k stops',
+    empty: 'No workflow runs in this conversation',
+    keys: { 'ctrl+k': stop },
+  });
+  if (host.state.picker) host.followJobs(host.state.picker, rows);
+}
+
 // Device terminals: this conversation's consoles on top (live, then ended), then the
 // person's saved profiles that are not open. Enter opens a console's page or connects a
 // profile; ctrl+d cuts a console after a question, as /jobs stops a job after one.
@@ -2604,6 +2797,7 @@ const HANDLERS: Record<string, Handler> = {
   effort,
   logout,
   jobs,
+  workflows,
   terminals,
   skill,
   agents,

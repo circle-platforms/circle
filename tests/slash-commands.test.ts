@@ -621,6 +621,110 @@ test('/jobs lists running jobs first; ctrl+k stops one after asking in the list 
   assert.equal(app.state.jobDetail?.id, running.id);
 });
 
+test('/workflows opens the run with its phases and agents; enter opens an agent, ctrl+k stops one after asking', async (t) => {
+  const script = `export const meta = { name: 'pair', description: 'Two agents', phases: [{ title: 'Work' }] }
+phase('Work')
+const both = await parallel([() => agent('quick task'), () => agent('slow task', { label: 'slow one' })])
+return both
+`;
+  const asked = (
+    request: import('../src/types.js').ModelRequest,
+    text: string,
+  ) =>
+    request.messages.some(
+      (message) => message.role === 'user' && message.content === text,
+    );
+  let conversation = 0;
+  const route = async (
+    request: import('../src/types.js').ModelRequest,
+  ): Promise<ModelResponse> => {
+    if (asked(request, 'quick task'))
+      return { ...answer('quick done'), usage: emptyUsage() };
+    if (asked(request, 'slow task'))
+      return new Promise((_, reject) =>
+        request.signal.addEventListener(
+          'abort',
+          () => reject(new Error('stopped')),
+          {
+            once: true,
+          },
+        ),
+      );
+    conversation++;
+    return conversation === 1
+      ? {
+          message: {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: '',
+            tool_calls: [{ id: 'wf', name: 'workflow', args: { script } }],
+          },
+          usage: emptyUsage(),
+        }
+      : { ...answer('it runs'), usage: emptyUsage() };
+  };
+  const home = scratch(t);
+  // A rule in the person's file lets workflows start without a card
+  writeFileSync(
+    join(home, 'approvals.json'),
+    JSON.stringify({
+      rules: [{ tool: 'workflow', pattern: '*', effect: 'allow' }],
+    }),
+  );
+  const { app, runtime, key } = await session(
+    t,
+    Array.from({ length: 6 }, () => route),
+    { home },
+  );
+  await app.submit('go');
+  await until(() => !runtime.busy && runtime.workflowRunViews().length === 1);
+  const run = () => runtime.workflowRunViews()[0]!;
+  await until(
+    () =>
+      run().agents[0]?.state === 'done' && run().agents[1]?.state === 'running',
+  );
+  // One run: /workflows opens it at once
+  await app.submit('/workflows');
+  const picker = app.state.picker!;
+  assert.equal(picker.title, 'pair · Two agents');
+  assert.deepEqual(
+    picker.items.map((item) => item.key),
+    ['run', 'phase:Work', 'agent:0', 'agent:1'],
+  );
+  assert.match(
+    picker.items[0]!.meta!,
+    /^running · Work · 1 running · 1 done · \d+s$/,
+  );
+  assert.equal(picker.items[1]!.meta, '1 running · 1 done');
+  assert.equal(picker.items[2]!.label, '  quick task');
+  assert.match(picker.items[2]!.meta!, /^done · \d+s$/);
+  assert.equal(picker.items[3]!.label, '  slow one');
+  // ctrl+k on a running agent asks in the list; enter stops it, and the script gets null for it
+  picker.focus = 3;
+  await key('ctrl+k');
+  assert.ok(picker.asking);
+  assert.ok(picker.rows(400).some((row) => row.includes('Stop slow one?')));
+  await key('enter');
+  await until(() => run().status === 'done');
+  assert.deepEqual(
+    run().agents.map((agent) => agent.state),
+    ['done', 'stopped'],
+  );
+  assert.equal(
+    readFileSync(
+      join(runtime.workflowRunsFolder, run().id, 'result.txt'),
+      'utf8',
+    ),
+    '[\n  "quick done",\n  null\n]',
+  );
+  // enter on an agent opens its conversation's page
+  await app.submit('/workflows');
+  app.state.picker!.focus = 2;
+  await key('enter');
+  assert.equal(app.state.agentDetail?.id, run().agents[0]!.session);
+  assert.equal(app.state.agentDetail?.messages[0]?.content, 'quick task');
+});
+
 test('/yolo takes off, 0, false and no as off; /plan takes on and off and says when nothing changes', async (t) => {
   const { app, runtime } = await session(t);
   const id = runtime.session.id;
