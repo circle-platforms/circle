@@ -326,6 +326,65 @@ test('loop analysis groups parallel empty results as one round and permits order
   assert.equal(analyze(pages).loose, 0);
   for (const message of pages) message.tool_calls![0]!.args.offset = 1;
   assert.equal(analyze(pages).loose, 8);
+  const charPages = Array.from({ length: 8 }, (_, index) =>
+    assistant('char-page-' + index, '', 'read_file', {
+      file_path: 'long.txt',
+      offset: 1,
+      char_offset: index * 2000,
+    }),
+  );
+  assert.equal(analyze(charPages).loose, 0);
+  const editedReads: Message[] = [
+    { id: 'u', role: 'user', content: 'edit loop' },
+  ];
+  for (let index = 0; index < 6; index++) {
+    editedReads.push(
+      assistant(`read-${index}`, '', 'read_file', {
+        file_path: 'a.ts',
+        offset: 1,
+      }),
+      tool(`read-${index}`, 'read_file', 'line 1'),
+    );
+    if (index < 5)
+      editedReads.push(
+        assistant(`edit-${index}`, '', 'edit_file', {
+          file_path: 'a.ts',
+          old_string: `v${index}`,
+          new_string: `v${index + 1}`,
+        }),
+        tool(`edit-${index}`, 'edit_file', 'Edited a.ts'),
+      );
+  }
+  assert.equal(analyze(editedReads).loose, 0);
+  assert.equal(analyze(editedReads).duplicate, 1);
+  const failedEditReads: Message[] = [
+    { id: 'u', role: 'user', content: 'failed edit loop' },
+  ];
+  for (let index = 0; index < 6; index++) {
+    failedEditReads.push(
+      assistant(`fread-${index}`, '', 'read_file', {
+        file_path: 'a.ts',
+        offset: 1,
+      }),
+      tool(`fread-${index}`, 'read_file', 'line 1'),
+    );
+    if (index < 5)
+      failedEditReads.push(
+        assistant(`fedit-${index}`, '', 'edit_file', {
+          file_path: 'a.ts',
+          old_string: `v${index}`,
+          new_string: `v${index + 1}`,
+        }),
+        {
+          id: `fedit-${index}-err`,
+          role: 'tool',
+          content: 'no match',
+          tool_call_id: `call-fedit-${index}`,
+          status: 'error',
+        },
+      );
+  }
+  assert.equal(analyze(failedEditReads).loose, 6);
 });
 test('productive long turns are not cut off at the prototype one-hundred-call limit', async (t) => {
   const root = scratch(t);
@@ -360,11 +419,43 @@ test('productive long turns are not cut off at the prototype one-hundred-call li
     'completed the long task',
   );
   assert.equal(model.requests.length, 106);
-  assert.ok(
-    runtime.harness.messages.some(
+  assert.equal(
+    runtime.harness.messages.filter(
       (message) => message.internal === 'loop-guard',
-    ),
+    ).length,
+    1,
   );
+});
+test('loop guard resets repeated-call evidence across warnings without repeating soft-budget noise', () => {
+  const messages: Message[] = [
+    { id: 'u', role: 'user', content: 'investigate' },
+  ];
+  for (let index = 0; index < 4; index++) {
+    messages.push(
+      assistant(`dup-${index}`, '', 'read_file', { file_path: 'same.txt' }),
+      tool(`dup-${index}`, 'read_file', 'same content'),
+    );
+  }
+  const first = loopReminder(messages);
+  assert.equal(first?.internal, 'loop-guard');
+  assert.match(first!.content, /going in circles/);
+  messages.push(first!);
+  for (let index = 0; index < 9; index++) {
+    messages.push(
+      assistant(`next-${index}`, '', 'grep', { pattern: `token-${index}` }),
+      tool(`next-${index}`, 'grep', `match ${index}`),
+    );
+  }
+  assert.equal(loopReminder(messages), undefined);
+  for (let index = 0; index < 4; index++) {
+    messages.push(
+      assistant(`again-${index}`, '', 'read_file', { file_path: 'again.txt' }),
+      tool(`again-${index}`, 'read_file', 'same again'),
+    );
+  }
+  const second = loopReminder(messages);
+  assert.equal(second?.internal, 'loop-guard');
+  assert.match(second!.content, /going in circles/);
 });
 
 for (const reason of [

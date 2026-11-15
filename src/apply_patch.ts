@@ -200,7 +200,10 @@ export function patchSummary(changes: PatchChange[]): string {
   );
 }
 
-export function applyPatch(patch: string, sandbox: Sandbox): string {
+export function applyPatchChanges(
+  patch: string,
+  sandbox: Sandbox,
+): PatchChange[] {
   const changes = planPatch(patch, sandbox);
   const completed: PatchChange[] = [];
   try {
@@ -220,5 +223,9 @@ export function applyPatch(patch: string, sandbox: Sandbox): string {
     }
     throw error;
   }
-  return patchSummary(changes);
+  return changes;
+}
+
+export function applyPatch(patch: string, sandbox: Sandbox): string {
+  return patchSummary(applyPatchChanges(patch, sandbox));
 }

@@ -478,3 +478,52 @@ test('the real cancellation fixture writes after its gate opens when the process
   assert.equal(readFileSync(join(root, 'late'), 'utf8'), 'bad');
   assert.equal((await fixture.exited(running)).exit_code, 0);
 });
+
+test('execute marks non-zero foreground exits as tool errors while keeping stdout and exit code', async (t) => {
+  const root = scratch(t);
+  const model = new ScriptedModel([
+    {
+      message: assistant('', [
+        {
+          id: 'fail-cmd',
+          name: 'execute',
+          args: {
+            command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('failing output'); process.exit(2)"`,
+          },
+        },
+        {
+          id: 'ok-cmd',
+          name: 'execute',
+          args: {
+            command: `${JSON.stringify(process.execPath)} -e "process.stdout.write('ok output')"`,
+          },
+        },
+      ]),
+    },
+    { message: assistant('done') },
+  ]);
+  const { harness, store, policy, session } = runtime(
+    root,
+    model,
+    buildTools(new Sandbox(root)),
+  );
+  cleanup(t, () => store.close());
+  policy.setYolo(session.id, true);
+  await harness.run('check command statuses');
+  const results = model.requests[1]!.messages.filter(
+    (message) => message.role === 'tool',
+  );
+  assert.equal(results.length, 2);
+  const failed = results.find(
+    (message) => message.tool_call_id === 'fail-cmd',
+  )!;
+  const succeeded = results.find(
+    (message) => message.tool_call_id === 'ok-cmd',
+  )!;
+  assert.equal(failed.status, 'error');
+  assert.match(failed.content, /failing output/);
+  assert.match(failed.content, /Exit code: 2/);
+  assert.equal(succeeded.status, 'success');
+  assert.match(succeeded.content, /ok output/);
+  assert.match(succeeded.content, /Exit code: 0/);
+});

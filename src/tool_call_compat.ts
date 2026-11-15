@@ -10,6 +10,33 @@ export function canonical(name: string): string {
     .replace(/[-_\s]+/g, '')
     .toLowerCase();
 }
+const FIELD_SYNONYM_GROUPS: readonly (readonly string[])[] = [
+  ['filepath', 'path', 'file', 'filename', 'targetfile'],
+  ['path', 'directory', 'dir', 'folder', 'cwd'],
+  ['command', 'cmd'],
+  ['oldstring', 'oldtext'],
+  ['newstring', 'newtext'],
+  ['patchtext', 'patch', 'diff'],
+  ['jobid', 'id'],
+  ['subagenttype', 'type', 'agent', 'agenttype'],
+  ['query', 'q'],
+  ['maxcount', 'limit'],
+];
+function resolveFieldName(
+  name: string,
+  candidates: string[],
+): string | undefined {
+  const direct = resolveName(name, candidates);
+  if (direct) return direct;
+  const canon = canonical(name);
+  const matched = new Set<string>();
+  for (const group of FIELD_SYNONYM_GROUPS) {
+    if (!group.includes(canon)) continue;
+    for (const candidate of candidates)
+      if (group.includes(canonical(candidate))) matched.add(candidate);
+  }
+  return matched.size === 1 ? [...matched][0] : undefined;
+}
 export function resolveName(
   name: string,
   candidates: string[],
@@ -118,7 +145,7 @@ function normalize(
   );
   const result: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
-    const target = resolveName(key, keys) ?? key;
+    const target = resolveFieldName(key, keys) ?? key;
     if (Object.hasOwn(result, target))
       throw new RecoverableToolError(
         `arguments contain ambiguous aliases for field ${target}`,
@@ -179,14 +206,44 @@ function patternDetail(error: ErrorObject): string {
       : []),
   ].join(', ');
 }
+function additionalPropertyDetail(error: ErrorObject): string {
+  const extra =
+    typeof error.params.additionalProperty === 'string'
+      ? error.params.additionalProperty
+      : '';
+  const schema = isRecord(error.parentSchema) ? error.parentSchema : {};
+  const allowed = isRecord(schema.properties)
+    ? Object.keys(schema.properties)
+    : [];
+  const label = extra
+    ? `unexpected property '${extra}'`
+    : 'unexpected property';
+  return allowed.length
+    ? `${label}; allowed properties: ${allowed.join(', ')}`
+    : label;
+}
+function errorPath(error: ErrorObject): string {
+  const base = error.instancePath || '<root>';
+  if (error.keyword === 'required')
+    return `${base}.${String(error.params.missingProperty)}`;
+  if (
+    error.keyword === 'additionalProperties' &&
+    typeof error.params.additionalProperty === 'string'
+  )
+    return `${base}.${error.params.additionalProperty}`;
+  return base;
+}
+function errorDetail(error: ErrorObject): string {
+  if (error.keyword === 'pattern') return patternDetail(error);
+  if (error.keyword === 'additionalProperties')
+    return additionalPropertyDetail(error);
+  return error.message || 'is invalid';
+}
 function validationDetail(errors: ErrorObject[]): string {
   return (
     errors
       .slice(0, 6)
-      .map(
-        (error) =>
-          `${error.instancePath || '<root>'}${error.keyword === 'required' ? '.' + String(error.params.missingProperty) : ''}: ${error.keyword === 'pattern' ? patternDetail(error) : error.message || 'is invalid'}`,
-      )
+      .map((error) => `${errorPath(error)}: ${errorDetail(error)}`)
       .join('; ') +
     (errors.length > 6 ? `; +${errors.length - 6} more fields` : '')
   );
