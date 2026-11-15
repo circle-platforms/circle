@@ -51,6 +51,8 @@ async function oauthServer(
     refuse?: boolean;
     /** Offer the device code (RFC 8628); `noCode` refuses to give one, `deny` refuses the sign-in on the page. */
     device?: { noCode?: boolean; deny?: boolean };
+    /** Say it sends `iss` with the code (RFC 9207), and send this one: its own issuer, or another's. */
+    iss?: 'own' | 'other';
   } = {},
 ): Promise<OAuthServer> {
   const state: OAuthServer = {
@@ -92,6 +94,9 @@ async function oauthServer(
           : {}),
         code_challenge_methods_supported: ['S256'],
         token_endpoint_auth_methods_supported: ['none'],
+        ...(options.iss
+          ? { authorization_response_iss_parameter_supported: true }
+          : {}),
       });
     if (url.pathname === '/device' && request.method === 'POST') {
       state.devices.push(new URLSearchParams(body));
@@ -129,6 +134,11 @@ async function oauthServer(
         });
         back.searchParams.set('code', code);
       }
+      if (options.iss)
+        back.searchParams.set(
+          'iss',
+          options.iss === 'own' ? state.origin : 'https://issuer.example',
+        );
       response.writeHead(302, { location: back.href }).end();
       return;
     }
@@ -300,6 +310,37 @@ test('a server that asks for a sign-in is signed in through the browser, and the
   assert.equal(manager.status[0]!.error, '', manager.describe());
   assert.equal(opened.length, 2);
   assert.equal(server.clients.length, 1, 'the registration is kept');
+});
+
+test('a code the browser brings back from another issuer is not exchanged; one from its own is (RFC 9207)', async (t) => {
+  for (const iss of ['other', 'own'] as const) {
+    const server = await oauthServer(t, { iss });
+    const change = changes();
+    const manager = new McpManager(scratch(t), 5000, undefined, {
+      home: scratch(t),
+      openUrl: browser([]),
+      onChange: change.onChange,
+    });
+    cleanup(t, () => manager.close());
+    const settled = change.next();
+    await manager.load({
+      remote: { url: `${server.origin}/mcp`, type: 'http' },
+    });
+    assert.equal(manager.status[0]!.error, SIGN_IN_WAITING);
+    await settled;
+    if (iss === 'other') {
+      assert.match(manager.status[0]!.error, /^sign-in failed: /);
+      assert.deepEqual(server.exchanges, [], 'the code was never redeemed');
+      assert.equal(manager.tools.length, 0);
+    } else {
+      assert.equal(manager.status[0]!.error, '', manager.describe());
+      assert.equal(server.exchanges.length, 1);
+      assert.equal(
+        await manager.tools[0]!.run({}, context),
+        'signed-in answer',
+      );
+    }
+  }
 });
 
 test('a credential header, or no home to keep a sign-in in, leaves the 401 a plain failure', async (t) => {

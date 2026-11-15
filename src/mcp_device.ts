@@ -5,10 +5,12 @@
 // sign-in also works where the page cannot be opened from here or cannot reach back to this machine. Nothing here
 // belongs to one server: any authorization server that names a device_authorization_endpoint and the grant is used so.
 import { setTimeout as delay } from 'node:timers/promises';
-import type { OAuthDiscoveryState } from '@modelcontextprotocol/sdk/client/auth.js';
-import { OAuthTokensSchema } from '@modelcontextprotocol/sdk/shared/auth.js';
-import type { OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
-import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type {
+  FetchLike,
+  OAuthDiscoveryState,
+  OAuthTokens,
+} from '@modelcontextprotocol/client';
+import { OAuthTokensSchema } from '@modelcontextprotocol/core';
 
 export const DEVICE_CODE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
 /** RFC 8628 3.2: the interval when the server names none. */

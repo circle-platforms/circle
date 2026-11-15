@@ -1,9 +1,42 @@
 import { createInterface } from 'node:readline';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
+// How it answers Circle's question for its revision (server/discover): with the 2026-07-28 revision (TEST_MODERN),
+// by exiting as some servers of the older revision do (TEST_EXIT_ON_PROBE), not at all (TEST_SILENT_PROBE), or as
+// a method it does not know, as any request it has no answer for. TEST_PROBE_LOG names a file each question is noted
+// in.
+const modern = process.env.TEST_MODERN === '1';
 const pending = new Map<unknown, NodeJS.Timeout>();
 const input = createInterface({ input: process.stdin, terminal: false });
+// A result on the 2026-07-28 revision names its kind, and a list says how long it stays good
+let revision = '';
+let method = '';
 const send = (id: unknown, result: unknown): void => {
-  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
+  process.stdout.write(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id,
+      result:
+        revision && result && typeof result === 'object'
+          ? {
+              resultType: 'complete',
+              ...(method === 'tools/list'
+                ? { ttlMs: 0, cacheScope: 'private' }
+                : {}),
+              ...result,
+            }
+          : result,
+    }) + '\n',
+  );
+};
+const fail = (id: unknown, code: number, message: string): void => {
+  process.stdout.write(
+    JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }) + '\n',
+  );
 };
 for await (const line of input) {
   const request = JSON.parse(line) as {
@@ -11,7 +44,30 @@ for await (const line of input) {
     method: string;
     params?: Record<string, unknown>;
   };
-  if (request.method === 'initialize')
+  const meta = request.params?._meta as Record<string, unknown> | undefined;
+  revision =
+    typeof meta?.['io.modelcontextprotocol/protocolVersion'] === 'string'
+      ? String(meta['io.modelcontextprotocol/protocolVersion'])
+      : '';
+  method = request.method;
+  if (request.method === 'server/discover') {
+    if (process.env.TEST_PROBE_LOG)
+      appendFileSync(process.env.TEST_PROBE_LOG, `${process.pid}\n`);
+    if (process.env.TEST_EXIT_ON_PROBE === '1') process.exit(1);
+    if (process.env.TEST_SILENT_PROBE === '1') continue;
+    if (modern)
+      send(request.id, {
+        supportedVersions: ['2026-07-28'],
+        capabilities: { tools: {} },
+        _meta: {
+          'io.modelcontextprotocol/serverInfo': {
+            name: 'test-server',
+            version: '1',
+          },
+        },
+      });
+    else fail(request.id, -32601, 'Method not found');
+  } else if (request.method === 'initialize')
     send(request.id, {
       protocolVersion: request.params?.protocolVersion,
       capabilities: { tools: {} },
@@ -159,6 +215,7 @@ for await (const line of input) {
     const timer = pending.get(id);
     if (timer) clearTimeout(timer);
     pending.delete(id);
-  }
+  } else if (request.id !== undefined)
+    fail(request.id, -32601, 'Method not found');
 }
 for (const timer of pending.values()) clearTimeout(timer);

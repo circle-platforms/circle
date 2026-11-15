@@ -98,7 +98,8 @@ test("each connected server's instructions reach the system prompt in a section 
   await runtime.initialize();
   assert.match(
     runtime.mcp.status.find((row) => row.name === 'down-server')!.error,
-    /Error POSTing to endpoint: down/,
+    // Its answer to Circle's first request, the question for its revision
+    /answered the probe with HTTP 500: down/,
   );
   await runtime.harness.run('hi');
   const system = model.requests[0]!.system;

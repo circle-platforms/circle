@@ -153,3 +153,57 @@ test('the resource tools are reads that ask no one, whatever the server says of 
     [['mcp__docs__echo', 'unknown']],
   );
 });
+
+test('on the 2026-07-28 revision resources are listed ten pages at most and read afresh, whatever ttlMs the server gives', async (t) => {
+  let reads = 0;
+  const stub = await mcpStub(t, {
+    modern: true,
+    tools: [{ name: 'echo', inputSchema: { type: 'object', properties: {} } }],
+    capabilities: { resources: {} },
+    answer: (request) => {
+      const message = request.message!;
+      // Good for an hour, which a client may hold them for
+      if (message.method === 'resources/read')
+        return {
+          contents: [
+            {
+              uri: String(message.params?.uri),
+              mimeType: 'text/plain',
+              text: `read ${++reads}`,
+            },
+          ],
+          ttlMs: 3_600_000,
+        };
+      if (message.method === 'resources/list') {
+        const page = Number(message.params?.cursor ?? 0);
+        return {
+          resources: [{ uri: `example://page/${page}`, name: `page-${page}` }],
+          nextCursor: String(page + 1),
+          ttlMs: 3_600_000,
+        };
+      }
+      return undefined;
+    },
+  });
+  const manager = new McpManager(scratch(t));
+  cleanup(t, () => manager.close());
+  await manager.load({ docs: { url: stub.url, type: 'http' } });
+  const [read, list] = manager.resourceTools;
+  const context = { sessionId: 'one', signal: new AbortController().signal };
+  const listed = String(await list!.run({}, context));
+  assert.equal(listed.split('\n').length, 10);
+  assert.match(listed, /docs · page-9 <example:\/\/page\/9>$/);
+  const asked = (method: string) =>
+    stub.requests.filter((request) => request.message?.method === method)
+      .length;
+  assert.equal(asked('resources/list'), 10);
+  assert.match(
+    String(await read!.run({ server: 'docs', uri: 'example://a' }, context)),
+    /read 1/,
+  );
+  assert.match(
+    String(await read!.run({ server: 'docs', uri: 'example://a' }, context)),
+    /read 2/,
+  );
+  assert.equal(asked('resources/read'), 2);
+});

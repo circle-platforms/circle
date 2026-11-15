@@ -1,8 +1,9 @@
-// The MCP authorization on Circle's side (OAuth 2.1 with PKCE, through the official SDK's client). A server reached by
-// URL that answers 401 with its resource metadata is authorized in the system browser; Circle keeps what that gave it,
-// the client registration, the tokens and the port of its loopback redirect, per server in mcp-auth.json under the
-// Circle home (0600). Nothing here belongs to one server: any server that follows the specification is authorized the
-// same way. A server whose entry already sends a credential header is not authorized this way; its header is used.
+// The MCP authorization on Circle's side (OAuth 2.1 with PKCE, through the official MCP library's client). A server
+// reached by URL that answers 401 with its resource metadata is authorized in the system browser; Circle keeps what
+// that gave it, the client registration, the tokens and the port of its loopback redirect, per server in mcp-auth.json
+// under the Circle home (0600). Nothing here belongs to one server: any server that follows the specification is
+// authorized the same way. A server whose entry already sends a credential header is not authorized this way; its
+// header is used.
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { hostname } from 'node:os';
@@ -13,18 +14,16 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { ensureHome } from './paths.js';
 import { DEVICE_CODE_GRANT, deviceEndpoint } from './mcp_device.js';
 import { abortable } from './watch.js';
-import { refreshAuthorization } from '@modelcontextprotocol/sdk/client/auth.js';
-import { OAuthTokensSchema } from '@modelcontextprotocol/sdk/shared/auth.js';
-import type { FetchLike } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type {
-  OAuthClientProvider,
-  OAuthDiscoveryState,
-} from '@modelcontextprotocol/sdk/client/auth.js';
-import type {
-  OAuthClientInformationMixed,
-  OAuthClientMetadata,
-  OAuthTokens,
-} from '@modelcontextprotocol/sdk/shared/auth.js';
+import {
+  refreshAuthorization,
+  type FetchLike,
+  type OAuthClientInformationMixed,
+  type OAuthClientMetadata,
+  type OAuthClientProvider,
+  type OAuthDiscoveryState,
+  type OAuthTokens,
+} from '@modelcontextprotocol/client';
+import { OAuthTokensSchema } from '@modelcontextprotocol/core';
 import {
   isRecord,
   readJson,
@@ -287,12 +286,54 @@ export class McpAuthProvider implements OAuthClientProvider {
   discoveryState(): OAuthDiscoveryState | undefined {
     return keptFor(this.home, this.server).discovery;
   }
+  /**
+   * The registration the MCP library sends, asking for the device code too where the server's metadata offers it: the
+   * library reads the client's metadata before it discovers the server, and saves what it found before it registers,
+   * so only here is it known whether to ask. Nothing for any other request.
+   */
+  private registration(
+    url: string | URL,
+    init: RequestInit | undefined,
+  ): RequestInit | undefined {
+    if (init?.method?.toUpperCase() !== 'POST' || typeof init.body !== 'string')
+      return undefined;
+    const discovery = keptFor(this.home, this.server).discovery;
+    if (!deviceEndpoint(discovery)) return undefined;
+    const endpoint =
+      discovery?.authorizationServerMetadata?.registration_endpoint ??
+      (discovery?.authorizationServerUrl
+        ? new URL('/register', discovery.authorizationServerUrl).href
+        : undefined);
+    if (!endpoint || new URL(String(url)).href !== new URL(endpoint).href)
+      return undefined;
+    let body: unknown;
+    try {
+      body = JSON.parse(init.body);
+    } catch {
+      return undefined;
+    }
+    if (
+      !isRecord(body) ||
+      !Array.isArray(body.grant_types) ||
+      body.grant_types.includes(DEVICE_CODE_GRANT)
+    )
+      return undefined;
+    return {
+      ...init,
+      body: JSON.stringify({
+        ...body,
+        grant_types: [...body.grant_types, DEVICE_CODE_GRANT],
+      }),
+    };
+  }
   /** SDK transports and the background client share this single refresh boundary. */
   authorizedFetch(
     fetcher: FetchLike = fetch,
     lifetime?: AbortSignal,
   ): FetchLike {
     return async (url, init) => {
+      const registration = this.registration(url, init);
+      if (registration) return fetcher(url, registration);
       const form =
         init?.body instanceof URLSearchParams
           ? init.body
@@ -586,18 +627,23 @@ const page = (text: string): string =>
 
 /**
  * Listens on the loopback port for the browser's redirect: `ready` once listening, `code` the code it brings, after
- * checking that it brings back the state of this sign-in. A refusal (`error`) with that state ends the wait; anything
- * else gets a page and is ignored. The wait ends after `waitMs`, or when `signal` aborts.
+ * checking that it brings back the state of this sign-in, and `callback` all it brings with it, such as the `iss` the
+ * code is checked against (RFC 9207). A refusal (`error`) with that state ends the wait; anything else gets a page
+ * and is ignored. The wait ends after `waitMs`, or when `signal` aborts.
  */
 export function startRedirect(
   port: number,
   state: () => string,
   signal: AbortSignal,
   waitMs = AUTHORIZATION_WAIT_MS,
-): { ready: Promise<void>; code: Promise<string> } {
+): {
+  ready: Promise<void>;
+  code: Promise<string>;
+  callback: Promise<URLSearchParams>;
+} {
   let listening!: () => void;
   const ready = new Promise<void>((resolve) => (listening = resolve));
-  const code = new Promise<string>((resolve, reject) => {
+  const callback = new Promise<URLSearchParams>((resolve, reject) => {
     let done = false;
     const server = createServer((request, response) => {
       const url = new URL(request.url ?? '/', `http://127.0.0.1:${port}`);
@@ -619,7 +665,7 @@ export function startRedirect(
           .end(page(text));
       if (ours && given) {
         answer(200, 'Circle is signed in. You can close this window.');
-        finish(() => resolve(given));
+        finish(() => resolve(url.searchParams));
       } else if (ours && error) {
         answer(
           200,
@@ -661,5 +707,8 @@ export function startRedirect(
     server.once('error', (error) => finish(() => reject(error)));
     server.listen(port, '127.0.0.1', () => listening());
   });
-  return { ready, code };
+  const code = callback.then((params) => params.get('code')!);
+  // Read by whichever of the two its caller waits on
+  code.catch(() => {});
+  return { ready, code, callback };
 }

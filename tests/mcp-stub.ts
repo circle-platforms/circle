@@ -1,6 +1,7 @@
 // An MCP server on loopback for tests, written by hand so a test sees what reaches the wire:
 // every HTTP request with its headers and raw body. It answers JSON-RPC over streamable HTTP
-// (`url`, one JSON answer per POST) and over the older HTTP+SSE transport (`sseUrl`).
+// (`url`, one JSON answer per POST) and over the older HTTP+SSE transport (`sseUrl`), on the
+// 2025 revisions and, with `modern`, on the 2026-07-28 revision too.
 import { createServer, type IncomingHttpHeaders } from 'node:http';
 import type { ServerResponse } from 'node:http';
 import { cleanupServer } from './helpers.js';
@@ -59,6 +60,8 @@ export interface StubOptions {
   capabilities?: Record<string, unknown>;
   /** Answers a method the stub has no answer of its own for; undefined falls back to an empty result. */
   answer?: (request: StubRequest) => unknown;
+  /** Holds the answer to a request until the promise it returns settles, as a server that stopped answering. */
+  hold?: (request: StubRequest) => Promise<unknown> | undefined;
   /** Answers a GET of another path with JSON, such as a discovery document; undefined is a 405. */
   get?: (path: string, origin: string) => unknown;
   /** Closes each connection after its answer, so a client opens a new one for each request. */
@@ -91,6 +94,15 @@ export interface StubOptions {
    * none it knows with 404, as a server does once it forgot a session (`dropSessions`).
    */
   sessions?: boolean;
+  /**
+   * Speaks the 2026-07-28 revision too: answers `server/discover` with it, gives a request that carries that revision in
+   * its `_meta` a result with `resultType: "complete"` unless the result names another, and holds the streams a client
+   * opens with `subscriptions/listen`, on which `notify` sends. Without it `server/discover` is a method the stub has
+   * no answer for, as on a server of an earlier revision.
+   */
+  modern?: boolean;
+  /** The `ttlMs` its tools/list results give, read at each listing; nothing gives none. */
+  ttlMs?: () => number | undefined;
 }
 export interface McpStub {
   /** The streamable HTTP endpoint. */
@@ -109,7 +121,25 @@ export interface McpStub {
   resume(): Promise<void>;
   /** Forgets every session it gave (`sessions`). */
   dropSessions(): void;
+  /** How many `subscriptions/listen` streams a client holds open now (`modern`). */
+  listens(): number;
+  /** Ends every `subscriptions/listen` stream without a word, as a server whose streams time out does. */
+  endListens(): void;
 }
+/** The `_meta` key a 2026-07-28 request names its revision under, and the one a subscription's messages carry. */
+export const PROTOCOL_VERSION_KEY = 'io.modelcontextprotocol/protocolVersion';
+export const SUBSCRIPTION_KEY = 'io.modelcontextprotocol/subscriptionId';
+/** The methods whose results say how long they stay good on the 2026-07-28 revision. */
+const CACHED = new Set([
+  'tools/list',
+  'prompts/list',
+  'resources/list',
+  'resources/templates/list',
+  'resources/read',
+]);
+/** Whether a request was sent on the 2026-07-28 revision. */
+export const modernRequest = (request: StubRequest): boolean =>
+  request.message?.params?._meta?.[PROTOCOL_VERSION_KEY] === '2026-07-28';
 export async function mcpStub(
   t: TestContext,
   options: StubOptions = {},
@@ -121,8 +151,27 @@ export async function mcpStub(
   const sessions = new Set<string>();
   let stream: ServerResponse | undefined;
   const pushed: ServerResponse[] = [];
+  // The subscriptions/listen streams held open, with the id of the request that opened each
+  const listening: { response: ServerResponse; id: number | string }[] = [];
   const answer = async (request: StubRequest): Promise<unknown> => {
     const message = request.message!;
+    if (options.modern && message.method === 'server/discover') {
+      const instructions = options.instructions?.();
+      return {
+        supportedVersions: ['2026-07-28'],
+        capabilities: {
+          tools: options.listChanged ? { listChanged: true } : {},
+          ...options.capabilities,
+        },
+        _meta: {
+          'io.modelcontextprotocol/serverInfo': {
+            name: options.name ?? 'files-server',
+            version: '1',
+          },
+        },
+        ...(instructions === undefined ? {} : { instructions }),
+      };
+    }
     if (message.method === 'initialize') {
       const instructions = options.instructions?.();
       return {
@@ -136,13 +185,16 @@ export async function mcpStub(
       };
     }
     if (message.method === 'tools/list') {
-      if (!options.pages) return { tools: options.tools ?? [] };
+      const ttlMs = options.ttlMs?.();
+      const ttl = ttlMs === undefined ? {} : { ttlMs };
+      if (!options.pages) return { tools: options.tools ?? [], ...ttl };
       const page = Number(message.params?.cursor ?? 0);
       return {
         tools: options.pages[page] ?? [],
         ...(page + 1 < options.pages.length
           ? { nextCursor: String(page + 1) }
           : {}),
+        ...(page === 0 ? ttl : {}),
       };
     }
     if (message.method === 'tools/call')
@@ -254,6 +306,28 @@ export async function mcpStub(
       response.writeHead(202).end();
       return;
     }
+    // A stream the client holds open for what changes: acknowledged at once, then left open for `notify`
+    if (options.modern && request.message.method === 'subscriptions/listen') {
+      const id = request.message.id;
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.write(
+        `event: message\ndata: ${JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'notifications/subscriptions/acknowledged',
+          params: {
+            _meta: { [SUBSCRIPTION_KEY]: id },
+            notifications: request.message.params?.notifications ?? {},
+          },
+        })}\n\n`,
+      );
+      const held = { response, id };
+      listening.push(held);
+      response.on('close', () => {
+        const index = listening.indexOf(held);
+        if (index >= 0) listening.splice(index, 1);
+      });
+      return;
+    }
     if (options.endStream?.(request)) {
       response.writeHead(200, { 'Content-Type': 'text/event-stream' }).end();
       return;
@@ -282,11 +356,23 @@ export async function mcpStub(
       else response.write(event);
       request.reply = await answered;
     }
+    await options.hold?.(request);
     const failure = options.error?.(request);
+    let result = failure ? undefined : await answer(request);
+    // On the 2026-07-28 revision a result names its kind, and a list or a read says how long it stays good, as a
+    // server of that revision stamps them unless told otherwise
+    if (modernRequest(request) && result && typeof result === 'object')
+      result = {
+        resultType: 'complete',
+        ...(CACHED.has(request.message.method)
+          ? { ttlMs: 0, cacheScope: 'private' }
+          : {}),
+        ...(result as Record<string, unknown>),
+      };
     const reply = JSON.stringify({
       jsonrpc: '2.0',
       id: request.message.id,
-      ...(failure ? { error: failure } : { result: await answer(request) }),
+      ...(failure ? { error: failure } : { result }),
     });
     if (first?.length || ask) {
       response.end(`event: message\ndata: ${reply}\n\n`);
@@ -315,8 +401,20 @@ export async function mcpStub(
       const event = `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', method })}\n\n`;
       for (const open of [...pushed, ...(stream ? [stream] : [])])
         open.write(event);
+      for (const { response, id } of listening)
+        response.write(
+          `event: message\ndata: ${JSON.stringify({
+            jsonrpc: '2.0',
+            method,
+            params: { _meta: { [SUBSCRIPTION_KEY]: id } },
+          })}\n\n`,
+        );
     },
     dropSessions: () => sessions.clear(),
+    listens: () => listening.length,
+    endListens: () => {
+      for (const { response } of listening.splice(0)) response.end();
+    },
     pause: () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());
