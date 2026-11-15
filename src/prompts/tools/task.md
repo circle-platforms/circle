@@ -7,7 +7,9 @@ before a plan is written. A definition that replaces one of them does what its o
 description says.
 
 Use description and subagent_type for each call. Include the needed context, the
-allowed work, and the expected result in description. Foreground calls wait for one
+allowed work, and the expected result in description. A subagent starts with the
+skills you have loaded, and its prompt lists the deny rules and guard hooks that apply
+to its calls, so do not repeat those in description. Foreground calls wait for one
 report and pause for approval when needed. With background: true, the call returns a
 job id and output path immediately. The report arrives as a completion notice; do not
 poll or sleep. Processes a subagent starts are stopped when it finishes. The report is
