@@ -60,6 +60,8 @@ export interface StubOptions {
   capabilities?: Record<string, unknown>;
   /** Answers a method the stub has no answer of its own for; undefined falls back to an empty result. */
   answer?: (request: StubRequest) => unknown;
+  /** Holds the answer to a request until the promise it returns settles, as a server that stopped answering. */
+  hold?: (request: StubRequest) => Promise<unknown> | undefined;
   /** Answers a GET of another path with JSON, such as a discovery document; undefined is a 405. */
   get?: (path: string, origin: string) => unknown;
   /** Closes each connection after its answer, so a client opens a new one for each request. */
@@ -354,6 +356,7 @@ export async function mcpStub(
       else response.write(event);
       request.reply = await answered;
     }
+    await options.hold?.(request);
     const failure = options.error?.(request);
     let result = failure ? undefined : await answer(request);
     // On the 2026-07-28 revision a result names its kind, and a list or a read says how long it stays good, as a

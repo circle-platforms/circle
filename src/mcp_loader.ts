@@ -2616,7 +2616,8 @@ export class McpManager {
    * Lists the tools again of each server whose last list has outlived the `ttlMs` it came with (2026-07-28; at most a
    * day is believed), before a turn starts, so the turn offers what the server lists now. A server that gave no `ttlMs`
    * is listed again only when it says its tools changed, or is reconnected. The turn waits for these listings at most
-   * ttlWaitMs: one still under way then gives the next turn its tools. A listing that fails keeps the earlier tools.
+   * ttlWaitMs: one still under way then gives a later turn its tools, and no turn waits for it again. A listing that
+   * fails keeps the earlier tools.
    */
   async refreshExpired(signal?: AbortSignal): Promise<void> {
     const now = this.now();
@@ -2627,8 +2628,17 @@ export class McpManager {
           server.ttlMs !== undefined &&
           now - server.listedAt >= Math.min(server.ttlMs, MAX_LIST_TTL_MS),
       )
-      .map((server) => this.listExpired(server));
+      .map((server) => this.listExpired(server))
+      // One a turn already waited for as long as it waits is not waited for again: a server that stopped answering
+      // costs one turn that wait, not every turn until the listing ends
+      .filter((listing) => !this.waitedOut.has(listing));
     if (!listings.length) return;
+    const settled = new Set<Promise<void>>();
+    for (const listing of listings)
+      void listing.then(
+        () => settled.add(listing),
+        () => settled.add(listing),
+      );
     const waited = new AbortController();
     try {
       await Promise.race([
@@ -2642,8 +2652,13 @@ export class McpManager {
       ]);
     } finally {
       waited.abort();
+      if (!signal?.aborted)
+        for (const listing of listings)
+          if (!settled.has(listing)) this.waitedOut.add(listing);
     }
   }
+  /** Listings a turn waited for until ttlWaitMs ran out, which the next turns do not wait for again. */
+  private waitedOut = new WeakSet<Promise<void>>();
   /** How long a turn waits for the listings refreshExpired starts. */
   ttlWaitMs = 5_000;
   /**

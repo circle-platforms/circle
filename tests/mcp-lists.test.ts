@@ -172,6 +172,41 @@ test("a list given with ttlMs is listed again before the first turn after it exp
   );
 });
 
+test(
+  'a listing a turn waited out is not waited for again: a server that stopped answering costs one turn its wait, not each turn',
+  { timeout: 60_000 },
+  async (t) => {
+    let held: Promise<void> | undefined;
+    let release = () => {};
+    const options: StubOptions = {
+      tools: [tool('alpha')],
+      ttlMs: () => 1000,
+      hold: (request) =>
+        request.message?.method === 'tools/list' ? held : undefined,
+    };
+    const w = await world(t, options, 3);
+    cleanup(t, () => release());
+    await w.runtime.harness.run('first');
+    assert.equal(w.listings(), 1);
+    // The list expires and the server stops answering: the turn waits its time, then keeps the earlier tools
+    held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    w.runtime.mcp.ttlWaitMs = 20;
+    w.clock.now += 1000;
+    await w.runtime.harness.run('second');
+    assert.equal(w.listings(), 2);
+    assert.deepEqual(w.offered(1), ['mcp__hub__alpha']);
+    // The next turn does not wait for that listing again: were it to, a wait of an hour would hold this test until
+    // its timeout. No second listing starts while the first is under way.
+    w.runtime.mcp.ttlWaitMs = 3_600_000;
+    w.clock.now += 1000;
+    await w.runtime.harness.run('third');
+    assert.equal(w.listings(), 2);
+    assert.deepEqual(w.offered(2), ['mcp__hub__alpha']);
+  },
+);
+
 test('a list given without ttlMs, as by a server of an earlier revision, is not listed again by the turn', async (t) => {
   const root = realpathSync.native(scratch(t));
   const stub = await mcpStub(t, { tools: [tool('alpha')] });
