@@ -791,3 +791,84 @@ test('an update before a tool call keeps its commentary phase, and the next requ
   );
   assert.equal('phase' in (unmarked ?? {}), false);
 });
+test('Responses wire body sends internal reminders as developer messages instead of user messages', async (t) => {
+  let capturedBody: Record<string, unknown> = {};
+  const base = await server(t, (_request, response, body) => {
+    capturedBody = body;
+    stream(response, [
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { id: 'msg_1', type: 'message', role: 'assistant', content: [] },
+      },
+      {
+        type: 'response.output_text.delta',
+        output_index: 0,
+        item_id: 'msg_1',
+        delta: 'done',
+      },
+      completed(),
+    ]);
+  });
+  const home = scratch(t);
+  const gateway = model(base, home);
+  await gateway.complete(
+    request([
+      {
+        id: 'h0',
+        role: 'user',
+        content: '<session-hook>rules</session-hook>',
+        internal: 'hook_context',
+      },
+      { id: 'u1', role: 'user', content: 'fix bug' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'c1', name: 'read_file', args: { file_path: 'a.ts' } },
+        ],
+      },
+      {
+        id: 't1',
+        role: 'tool',
+        tool_call_id: 'c1',
+        content: 'const x = 1;',
+      },
+      {
+        id: 'lg',
+        role: 'user',
+        content:
+          '<system-reminder data-source="loop-guard">note</system-reminder>',
+        internal: 'loop-guard',
+      },
+      {
+        id: 'pr',
+        role: 'user',
+        content:
+          '<system-reminder data-source="circle-plan">todo</system-reminder>',
+        internal: 'plan-reminder',
+      },
+    ]),
+  );
+  const input = capturedBody.input as {
+    type?: string;
+    role?: string;
+    content?: { text?: string }[];
+  }[];
+  const userItems = input.filter((item) => item.role === 'user');
+  assert.equal(userItems.length, 1);
+  assert.equal(userItems[0]?.content?.[0]?.text, 'fix bug');
+  const developerTexts = input
+    .filter((item) => item.role === 'developer')
+    .flatMap((item) => item.content?.map((part) => part.text ?? '') ?? []);
+  assert.ok(
+    developerTexts.some((text) => text.includes('<session-hook>rules')),
+  );
+  assert.ok(
+    developerTexts.some((text) => text.includes('data-source="loop-guard"')),
+  );
+  assert.ok(
+    developerTexts.some((text) => text.includes('data-source="circle-plan"')),
+  );
+});
