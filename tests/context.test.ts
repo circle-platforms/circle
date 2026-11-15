@@ -270,7 +270,10 @@ test('plan reminders are bounded, after tool results, current-turn-only and do n
     );
   const reminder = planReminder(raw, raw, todos)!;
   assert.equal(reminder.internal, 'plan-reminder');
-  assert.match(reminder.content, /\[>\] work/);
+  assert.match(
+    reminder.content,
+    /^<system-reminder data-source="circle-plan">\n[\s\S]*\[>\] work[\s\S]*<\/system-reminder>$/,
+  );
   assert.equal(planReminder(raw, raw, todos, true), undefined);
   assert.equal(
     planReminder(
