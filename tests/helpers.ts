@@ -7,6 +7,8 @@ import type { Server as HttpsServer } from 'node:https';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loopbackEvidence } from './browser-port.mjs';
+import { ScriptedModel } from '../src/testing.js';
+import type { ModelRequest, ModelResponse } from '../src/types.js';
 interface TestContext {
   after(fn: () => void | Promise<void>): void;
   /** By its cleanup, node:test's own context says whether the test failed. */
@@ -293,4 +295,45 @@ socket.on('close',()=>process.exit(0));`,
     },
     close,
   };
+}
+
+/** A reply for `modelByAsker`: as written, or worked out from the request. */
+export type AskerReply =
+  | ModelResponse
+  | ((request: ModelRequest) => ModelResponse | Promise<ModelResponse>);
+/** Whether a request comes from the asker given this message: the conversation's prompt, or a subagent's task. */
+export function askedBy(
+  request: Pick<ModelRequest, 'messages'>,
+  key: string,
+): boolean {
+  return request.messages.some(
+    (message) => message.role === 'user' && message.content === key,
+  );
+}
+/**
+ * One scripted model for a conversation and its subagents. Each asker, known by a message it was given, takes its
+ * own replies in order, whoever asks first; a request no asker claims fails the test.
+ */
+export function modelByAsker(
+  routes: Record<string, AskerReply[]>,
+): ScriptedModel {
+  const queues = new Map(
+    Object.entries(routes).map(([key, replies]) => [key, [...replies]]),
+  );
+  const total = [...queues.values()].reduce(
+    (sum, replies) => sum + replies.length,
+    0,
+  );
+  return new ScriptedModel(
+    Array.from({ length: total }, () => async (request: ModelRequest) => {
+      const key = [...queues.keys()].find((key) => askedBy(request, key));
+      if (key === undefined)
+        throw new Error(
+          `no asker for this request: ${JSON.stringify(request.messages.map((message) => message.content)).slice(0, 300)}`,
+        );
+      const next = queues.get(key)!.shift();
+      if (!next) throw new Error(`no reply left for ${key}`);
+      return typeof next === 'function' ? next(request) : next;
+    }),
+  );
 }

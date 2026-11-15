@@ -44,6 +44,13 @@ This also applies to `websearch`'s native provider request and DuckDuckGo fallba
 | `CIRCLE_JOB_WAIT`            | How many seconds print mode (and RPC mode, when its input ends) waits after its answer for [background jobs](background-jobs.md) the model started. What still runs then is stopped. `0` does not wait. | `1800`  |
 | `CIRCLE_JOB_OUTPUT_LIMIT_MB` | A background job that writes more output than this is stopped. Also applies to a command in the foreground.                                                                                             | `1024`  |
 
+## Subagents
+
+| Variable                          | Effect                                                                                                                                                                   | Default |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
+| `CIRCLE_MAX_SUBAGENT_SPAWN_DEPTH` | How many layers of [subagents](agents.md#subagents-of-a-subagent) run below the conversation: a subagent in the last layer is not offered `task`. `1` turns nesting off. | `3`     |
+| `CIRCLE_MAX_CONCURRENT_SUBAGENTS` | How many subagents run at once for one conversation, in the foreground and the background, at any depth. Past it `task` fails with `Concurrent subagent limit reached`.  | `20`    |
+
 ## Model requests
 
 | Variable                                | Effect                                                                                                                                                                                                                                                                                                                                                                                      | Default                                                     |

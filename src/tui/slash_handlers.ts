@@ -1239,9 +1239,9 @@ async function init(host: CommandHost, args: string): Promise<void> {
   await host.send(template.replaceAll('$ARGUMENTS', args.trim() || '(none)'));
 }
 
-// The subagents `task` may choose: the two that ship with Circle, the ones the folders
+// The subagents `task` may choose: the three that ship with Circle, the ones the folders
 // define and the ones extensions register. A definition that cannot be used is named
-// with its reason rather than left out in silence.
+// with its reason rather than left out in silence, and so is a key Circle does not apply yet.
 function agents(host: CommandHost, args: string): void {
   const { agents: list, problems } = host.runtime.inspectSubagents();
   const token = args.trim().split(/\s/, 1)[0] ?? '';
@@ -1260,6 +1260,28 @@ function agents(host: CommandHost, args: string): void {
         one.tools
           ? `  tools: ${one.tools.join(', ')}`
           : '  tools: every tool a subagent may have',
+        one.disallowedTools
+          ? `  disallowed tools: ${one.disallowedTools.join(', ')}`
+          : '',
+        one.permissionMode ? `  permission mode: ${one.permissionMode}` : '',
+        one.maxTurns ? `  max turns: ${one.maxTurns}` : '',
+        one.skills
+          ? `  skills: ${one.skills.join(', ')}` +
+            (one.missingSkills
+              ? ` · not installed: ${one.missingSkills.join(', ')}`
+              : '')
+          : '',
+        one.mcpServers ? `  mcp servers: ${one.mcpServers.join(', ')}` : '',
+        one.hooks
+          ? `  hooks: ${one.hooks.join(', ')}` +
+            (one.hooksHeld ? ` · not run: ${one.hooksHeld}` : '')
+          : '',
+        one.background ? '  background: always' : '',
+        ...(one.unsupported ?? []).map(
+          (item) => `  ${item} · not supported yet`,
+        ),
+        one.ignored ? `  ignored for a pack: ${one.ignored.join(', ')}` : '',
+        ...(one.notApplied ?? []).map((item) => `  not applied: ${item}`),
         one.path ? `  file: ${shortPath(one.path)}` : '',
       ]
         .filter(Boolean)
@@ -1267,6 +1289,8 @@ function agents(host: CommandHost, args: string): void {
     );
     return;
   }
+  const unsupported = list.filter((agent) => agent.unsupported?.length);
+  const held = list.filter((agent) => agent.notApplied?.length);
   host.notice(
     [
       'Subagents:',
@@ -1279,6 +1303,24 @@ function agents(host: CommandHost, args: string): void {
       ),
       ...(problems.length
         ? ['', 'Not offered:', ...problems.map((line) => `  ${line}`)]
+        : []),
+      ...(unsupported.length
+        ? [
+            '',
+            'Not supported yet:',
+            ...unsupported.map(
+              (agent) => `  ${agent.name}: ${agent.unsupported!.join(', ')}`,
+            ),
+          ]
+        : []),
+      ...(held.length
+        ? [
+            '',
+            'Not applied:',
+            ...held.map(
+              (agent) => `  ${agent.name}: ${agent.notApplied!.join('; ')}`,
+            ),
+          ]
         : []),
       '',
       'Add one as a markdown file in .circle/agents · /agents <name> for one',

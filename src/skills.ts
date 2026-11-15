@@ -26,14 +26,31 @@ export interface SkillInfo {
   source_label: string;
   personal_home?: string;
 }
+/**
+ * A markdown file's frontmatter: the lines between a first line of `---` and the next line that starts with `---`, and
+ * the text after that line. `block` is undefined when the file has none. Every reader of a frontmatter finds it here,
+ * so they all see the same lines.
+ */
+export function splitFrontmatter(text: string): {
+  block?: string;
+  body: string;
+} {
+  const match = text.match(
+    /^\uFEFF?---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[^\r\n]*(?:\r?\n|$)/,
+  );
+  return match
+    ? { block: match[1] ?? '', body: text.slice(match[0].length) }
+    : { body: text };
+}
+/** The frontmatter's keys read one line each, `key: value`, keys in lower case; nothing nested is read. */
 export function parseFrontmatter(text: string): {
   meta: Record<string, string>;
   body: string;
 } {
-  const match = text.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/);
-  if (!match) return { meta: {}, body: text };
+  const { block, body } = splitFrontmatter(text);
+  if (block === undefined) return { meta: {}, body: text };
   const meta: Record<string, string> = {};
-  const lines = match[1]!.split('\n');
+  const lines = block.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     if (!line.trim() || line.trimStart().startsWith('#')) continue;
@@ -43,22 +60,22 @@ export function parseFrontmatter(text: string): {
     const key = entry[1]!.trim().toLowerCase();
     let value = entry[2]!.trim();
     if (/^[>|][-+]?$/.test(value)) {
-      const block: string[] = [];
+      const folded: string[] = [];
       while (
         i + 1 < lines.length &&
         (/^\s/.test(lines[i + 1]!) || !lines[i + 1]!.trim())
       )
-        block.push(lines[++i]!);
+        folded.push(lines[++i]!);
       value = value.startsWith('>')
-        ? block
+        ? folded
             .map((line) => line.trim())
             .filter(Boolean)
             .join(' ')
-        : block.join('\n').trim();
+        : folded.join('\n').trim();
     }
     meta[key] = value.replace(/^['"]|['"]$/g, '');
   }
-  return { meta, body: text.slice(match[0].length) };
+  return { meta, body };
 }
 // The skills that ship with Circle: src/builtin_skills in a checkout, dist/builtin_skills in
 // a build and a release, beside the bundled runtime in the desktop application (inside its

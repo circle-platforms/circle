@@ -264,7 +264,7 @@ See [Background jobs](background-jobs.md).
 | Tool | What it does |
 |---|---|
 | `skill` | Load the full instructions of a [skill](skills.md) by name. |
-| `task` | Run a subagent (`general-purpose`, `explore`, or one an extension adds) and return its answer. Arguments: `description`, `subagent_type`, `background`. With `background: true` the subagent runs as a [background job](background-jobs.md#background-subagents) and its report comes as a notice. See [How Circle works](how-circle-works.md#subagents). |
+| `task` | Run a subagent (`general-purpose`, `explore`, `plan`, or one a file or an extension defines) and return its answer. Arguments: `description`, `subagent_type`, `background`. With `background: true` the subagent runs as a [background job](background-jobs.md#background-subagents) and its report comes as a notice. A subagent has `task` too, without `background`, up to three layers below the conversation. See [Subagents](agents.md). |
 | `compact_conversation` | Summarize older messages now. See [Compaction](sessions.md#compaction). |
 
 ## Limiting the tools

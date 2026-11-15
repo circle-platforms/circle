@@ -584,10 +584,13 @@ function stripRows(
     ...jobRows(jobs, {
       width,
       now,
-      tokens: new Map(
-        (state.subagents ?? [])
-          .filter((agent) => agent.jobId)
-          .map((agent) => [agent.jobId!, agent.tokens]),
+      // A job's tokens: its subagent's and those of the subagents that one started
+      tokens: (state.subagents ?? []).reduce(
+        (sum, agent) =>
+          agent.jobId
+            ? sum.set(agent.jobId, (sum.get(agent.jobId) ?? 0) + agent.tokens)
+            : sum,
+        new Map<string, number>(),
       ),
       max: Math.floor(
         (height - rows.length - (state.todos.length ? 14 : 8)) / 2,

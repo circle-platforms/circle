@@ -365,20 +365,17 @@ export class JobRegistry {
       }
     }
   }
+  // Subagents are not counted here: the runtime holds them to its limit of running subagents, background or not
   private checkCapacity(kind: Job['kind']): void {
     if (this.closed) throw new Error('background jobs are closed');
+    if (kind === 'agent') return;
     const count = [...this.entries].filter(
       (entry) =>
         !entry.finished &&
-        (kind === 'agent'
-          ? entry.job?.kind === 'agent'
-          : (entry.job && entry.job.kind !== 'agent') || entry.reserved),
+        ((entry.job && entry.job.kind !== 'agent') || entry.reserved),
     ).length;
-    const limit = kind === 'agent' ? 4 : this.maxRunning;
-    if (count >= limit)
-      throw new Error(
-        `${limit} background ${kind === 'agent' ? 'subagents' : 'jobs'} are already running`,
-      );
+    if (count >= this.maxRunning)
+      throw new Error(`${this.maxRunning} background jobs are already running`);
   }
   private entry(command: string, owner: JobOwner): Entry {
     let settle!: () => void;

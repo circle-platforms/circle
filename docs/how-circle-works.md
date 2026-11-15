@@ -47,16 +47,17 @@ When the conversation passes 85% of the model's context window (from models.dev 
 
 ## Subagents
 
-`task` starts a subagent with its own fresh context and returns its answer. Circle has two, extensions can add more, and a folder of markdown files can define them — see [Subagents](agents.md).
+`task` starts a subagent with its own fresh context and returns its answer. Circle has three, extensions can add more, and a folder of markdown files can define them — see [Subagents](agents.md).
 
 | Subagent | What it can do |
 |---|---|
-| `general-purpose` | The same tools as the main agent, without `task`, `compact_conversation` and the plan-mode tools, plus `wait_jobs`. Approvals apply to it exactly as to the main agent. |
+| `general-purpose` | The same tools as the main agent, without `question`, `compact_conversation` and the plan-mode tools, plus `wait_jobs`. It has `task` too, so it can start subagents of its own, up to three layers below the conversation. Approvals apply to it exactly as to the main agent. |
 | `explore` | Read-only: list, read and search files, the web and language servers, and load skills. It never asks for approval. |
+| `plan` | The same read-only tools as `explore`, with a prompt for research before a plan: how the code works now, and what a change would touch. |
 
 `task` calls next to each other in one reply run at the same time. While they run, a strip below the input box shows it; `↓` selects it and `enter` opens its full record.
 
-With `background: true` a subagent runs as a [background job](background-jobs.md#background-subagents): the turn goes on, and its report reaches the model when it ends. Several can run at once. Its approvals show as cards of their own.
+With `background: true` a subagent runs as a [background job](background-jobs.md#background-subagents): the turn goes on, and its report reaches the model when it ends. Several can run at once. Its approvals show as cards of their own. At most 20 subagents run at once, at any depth; a `task` call past that fails and tells the model not to retry ([Subagents](agents.md#subagents-of-a-subagent)).
 
 ## Safety
 

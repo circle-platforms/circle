@@ -21,7 +21,7 @@ A command or a subagent can keep running while you and the model go on: a dev se
 - **`/jobs`** (`/tasks`) lists the jobs, running ones first. `enter` opens a job's page: a band with its lamp, id and command, state and time, and the file its output goes to, then its output, refreshed while it runs; `esc` goes back. `ctrl+k` stops a running job after asking, or removes one that has ended from the list.
 - **The model** has `list_jobs` and `stop_job`. A subagent also has `wait_jobs`, because only the main agent can be woken by a notice.
 
-Limits: 16 commands and watches at once (processes left running by a command are never refused), 4 background subagents at once, and 1 GiB of output per job; a job that writes more is stopped (`CIRCLE_JOB_OUTPUT_LIMIT_MB`). A background command's `timeout` can be up to a day.
+Limits: 16 commands and watches at once (processes left running by a command are never refused), 20 subagents at once in the background and the foreground together ([`CIRCLE_MAX_CONCURRENT_SUBAGENTS`](agents.md#subagents-of-a-subagent)), and 1 GiB of output per job; a job that writes more is stopped (`CIRCLE_JOB_OUTPUT_LIMIT_MB`). A background command's `timeout` can be up to a day.
 
 ## When a job ends
 
@@ -49,14 +49,14 @@ The model is told not to poll. If it runs a bare `sleep` anyway (`sleep 30`), th
 
 ## Background subagents
 
-`task` with `background: true` runs `general-purpose`, `explore` or an extension's subagent as a job. It works with a context of its own, as in the foreground, and its report becomes the notice; its steps go to the job's file, so `read_file` (or the job's page) shows its progress.
+`task` with `background: true` runs a subagent as a job, and so does `task` for a definition with `background: true`. It works with a context of its own, as in the foreground, and its report becomes the notice; its steps go to the job's file, so `read_file` (or the job's page) shows its progress.
 
-- **Approvals.** When it needs your approval or asks a question, its card appears whether a turn is running or not. The card's title starts with the job: `j3 general-purpose · Bash needs your permission`. A card of the running turn goes first; the background card waits behind it, and both wait while you are typing. Rejecting tells the subagent (and why, if you explain). "Allow … for this session" adds a rule to the conversation the subagent belongs to, and `auto` mode lets it run without asking, as it does the main agent. `ctrl+c` does not answer a background card.
+- **Approvals.** When it needs your approval, its card appears whether a turn is running or not. A subagent asks no questions: it has no `question` tool. The card's title starts with the job: `j3 general-purpose · Bash needs your permission`. A card of the running turn goes first; the background card waits behind it, and both wait while you are typing. Rejecting tells the subagent (and why, if you explain). "Allow … for this session" adds a rule to the conversation the subagent belongs to, and `auto` mode lets it run without asking, as it does the main agent. `ctrl+c` does not answer a background card.
 - **Sending it something.** `send_to_job` tells one running subagent of this conversation one thing, and the subagent reads it before its next model request - never in the middle of one, and never as an answer to a card. At most eight messages wait for one job, and a message is at most 4000 characters, on one line. The refusal says which of these stopped it. A message the subagent never reached stays in that subagent's own queue, where its conversation shows it: nothing pretends it was delivered. There is no way to type into a job from the keyboard in this version: the person's route to a running subagent is still its cards and `stop_job`.
 - **Read-only.** `/plan` reaches subagents that are already running.
 - **What it costs** counts in the conversation's total.
 - **What it starts** (a server, a watcher) is stopped when it ends.
-- A subagent cannot start another one. One that is already running keeps the model it started with when you switch models or `/reload`.
+- The subagents it starts run in the foreground: it waits for their reports, and their cards wait under its job. One that is already running keeps the model it started with when you switch models or `/reload`.
 
 ## When Circle ends
 

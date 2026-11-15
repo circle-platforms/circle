@@ -164,7 +164,7 @@ A pack can declare its scripts' parameters in a `tools.json` at its root, listed
 - **Checks when the skill loads.** The pack must verify against its manifest, and `tools.json` must be valid: unique names, scripts under `tools/` that the pack lists, and a template that names only declared properties. Otherwise the pack offers no tool and the model is told why. A built-in tool, an MCP server's and an extension's keep their names: a pack's tool with the same name is not offered, also when the other tool arrives later.
 - **Approval.** A typed tool runs like `skill_run`: its card shows the input by name, the approval rules and hooks match its own name, and `tool_input` is the named input. Once a script has a typed tool in this session, `skill_run` refuses it and names the tool.
 
-A subagent that loads the skill itself gets the pack's tools from its next request, those it may have: `explore`, which only reads, is told the tools are not its own. Subagents started after the skill loaded have them from the start.
+A subagent that loads the skill itself gets the pack's tools from its next request, those it may have: `explore`, which only reads, is told the tools are not its own. So does a subagent whose definition [preloads the skill](agents.md) with `skills`. Subagents started after the skill loaded have them from the start.
 
 The tools belong to the session that loaded the skill, like its hooks: switching, importing or starting another session leaves them out until the skill is loaded there. Loading the skill again tells the model again which tools it has. Loading it adds tools to the list, so the next request does not reuse the prompt cache of the requests before.
 

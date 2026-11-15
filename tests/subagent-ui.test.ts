@@ -270,6 +270,31 @@ test('a background subagent job row shows its tokens, and counts past a million 
   assert.doesNotMatch(plain!, /tokens/);
 });
 
+test("a background job's row counts the tokens of every subagent that worked under it", () => {
+  const job = {
+    id: 'j4',
+    kind: 'agent',
+    title: 'general-purpose: research',
+    status: 'running',
+    started: Date.now() - 60_000,
+    detail: 'working',
+    outputPath: '/nowhere',
+  } as unknown as Job;
+  const rows = renderScreen(
+    state({
+      jobs: [job],
+      subagents: [
+        agent(1, { jobId: 'j4', background: true, tokens: 1200 }),
+        agent(2, { jobId: 'j4', background: true, tokens: 3400 }),
+      ],
+    }),
+    120,
+    40,
+  ).map(stripAnsi);
+  const row = rows.find((line) => line.includes('j4'))!;
+  assert.match(row, /4\.6k tokens/);
+});
+
 test('a notice sits after the message it came after, not under everything that followed', () => {
   const messages: Message[] = [
     { id: 'u1', role: 'user', content: 'first question' },

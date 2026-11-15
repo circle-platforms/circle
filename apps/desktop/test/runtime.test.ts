@@ -2393,6 +2393,7 @@ test('shell execution is real, shares output according to core semantics and res
 });
 
 test('subagent interaction remains bound to its actual parent and child sessions', async (t) => {
+  // A subagent asks no questions; its approval card is its interaction
   const f = await setup(t, [
     {
       message: assistant('', [
@@ -2400,7 +2401,7 @@ test('subagent interaction remains bound to its actual parent and child sessions
           id: 'task-parent',
           name: 'task',
           args: {
-            description: 'ask which target',
+            description: 'write the target',
             subagent_type: 'general-purpose',
           },
         },
@@ -2409,18 +2410,16 @@ test('subagent interaction remains bound to its actual parent and child sessions
     {
       message: assistant('', [
         {
-          id: 'question-child',
-          name: 'question',
-          args: {
-            questions: [{ question: 'Child target?', options: ['local'] }],
-          },
+          id: 'write-child',
+          name: 'write_file',
+          args: { file_path: 'target.txt', content: 'local\n' },
         },
       ]),
     },
     { message: assistant('child done') },
     { message: assistant('parent received child') },
   ]);
-  await f.call('prompt', { text: 'delegate this question' });
+  await f.call('prompt', { text: 'delegate this write' });
   await wait(
     () =>
       f.controller
@@ -2434,7 +2433,7 @@ test('subagent interaction remains bound to its actual parent and child sessions
   assert.equal(row.sessionId, f.controller.snapshot().activeSessionId);
   assert(row.origin?.agent);
   assert.notEqual(row.origin.agent, row.sessionId);
-  await f.call('answer', { id: row.id, revision: 1, answer: 'local' });
+  await f.call('answer', { id: row.id, revision: 1, answer: 'approve' });
   await wait(
     () =>
       f.model.requests.length === 4 &&
@@ -2454,6 +2453,10 @@ test('subagent interaction remains bound to its actual parent and child sessions
     f.model.requests[3]!.messages.some(
       (m) => m.role === 'tool' && m.content.includes('child done'),
     ),
+  );
+  assert.equal(
+    await readFile(join(f.workspace, 'target.txt'), 'utf8'),
+    'local\n',
   );
 });
 

@@ -19,6 +19,7 @@ Hooks are code execution. Circle shows which ones are active, runs a project's h
 | `hooks` in `<workspace>/.circle/settings.local.json` | This project, for you only. Runs once the folder is trusted. Only `hooks` and `disableAllHooks` are read from this file. |
 | `hooks/hooks.json` in an installed pack | Every session while the pack is installed, like an enabled plugin. Its `hooks` key holds the hooks; `description` is optional. |
 | `hooks:` in a skill's `SKILL.md` frontmatter | The rest of the session once the skill is loaded, with `/skill` or the `skill` tool. A project's skill waits for the folder to be trusted. |
+| `hooks:` in a [subagent definition](agents.md#its-own-hooks)'s frontmatter | That subagent's own calls and its stop, while it runs. A project's definition waits for the folder to be trusted. |
 
 Hooks from every place run together. A folder that is not trusted runs no hook of the project's own, and the transcript says `project hooks need a trusted folder`; yours, your skills' and your installed packs' still run. Circle asks to trust a folder before a session starts there, so in practice every session is in a trusted folder.
 
@@ -97,7 +98,7 @@ What the matcher is tested against depends on the event:
 | `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure` | The tool's name |
 | `SessionStart` | `startup`, `resume`, `clear` or `compact` |
 | `SessionEnd` | `clear`, `resume` or `other` |
-| `SubagentStart`, `SubagentStop` | The subagent's type: `general-purpose`, `explore`, a name of yours, or `<pack>:<name>` |
+| `SubagentStart`, `SubagentStop` | The subagent's type: `general-purpose`, `explore`, `plan`, a name of yours, or `<pack>:<name>` |
 | `PreCompact`, `PostCompact` | `manual` or `auto` |
 | `Notification` | `permission_prompt` or `idle_prompt` |
 | `UserPromptSubmit`, `Stop` | Nothing: every group runs |
@@ -128,7 +129,7 @@ The same handler in more than one settings file runs once for an occurrence. A p
 | `PostCompact` | After a compaction | Nothing: it gets the summary |
 | `Notification` | When an approval card has waited about 6 seconds, or a turn ended about a minute ago with no message since | Nothing: for side effects |
 
-A subagent runs the tool events of its own calls. `SessionStart`, `UserPromptSubmit` and `Stop` are the conversation's; `SubagentStart` and `SubagentStop` are the conversation's hooks about a subagent.
+A subagent runs the tool events of its own calls, at every depth: a subagent's own subagents too. `SessionStart`, `UserPromptSubmit` and `Stop` are the conversation's; `SubagentStart` and `SubagentStop` are the conversation's hooks about a subagent. A subagent definition's own hooks run beside them for that subagent alone, and its `Stop` hooks run as `SubagentStop` ([Subagents](agents.md#its-own-hooks)).
 
 ## What a hook receives
 
@@ -147,8 +148,8 @@ Circle writes one JSON object to standard input:
 }
 ```
 
-- `session_id` is the conversation's session. In a subagent, `agent_id` is the subagent's own session and `agent_type` its type.
-- `permission_mode` is `default` (manual, and a print, line or rpc run without `--yolo`), `acceptEdits`, `plan` (read-only) or `bypassPermissions` (auto).
+- `session_id` is the conversation's session. In a subagent, at any depth, `agent_id` is the subagent's own session and `agent_type` its type.
+- `permission_mode` is `default` (manual, and a print, line or rpc run without `--yolo`), `acceptEdits`, `plan` (read-only) or `bypassPermissions` (auto). A subagent whose definition sets [`permissionMode: dontAsk`](agents.md#permission-modes) is `dontAsk`, and one in a mode of its own is told that mode, also in the `SubagentStart` and `SubagentStop` hooks about it.
 - Circle keeps sessions in a database, so there is no `transcript_path`. `Stop` and `SubagentStop` give the last answer as `last_assistant_message`.
 - `paths` is Circle's own: the paths the call names, canonical.
 

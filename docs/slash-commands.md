@@ -34,7 +34,7 @@ Going back with `/tree` while a turn runs stops the turn first. A [custom comman
 | `/compact [hint]` | `/summarize` | Summarize older messages now. |
 | `/jobs [id]` | `/tasks` | List the session's [background jobs](background-jobs.md), running ones first, or open one's page. `enter` opens a job's page: a band with its lamp, id and command, state and time, and the file its output goes to, then the end of the output. `ctrl+k` stops a running job (after asking in the list) or removes one that has ended. |
 | `/terminals [id]` | | List this conversation's [device terminals](tools.md#device-terminals), live ones first then the saved profiles, or open one console's page. `enter` opens a terminal's page or connects a profile; `ctrl+d` cuts a live console after asking. On the page `enter` attaches and `esc` leaves. |
-| `/agents [name]` | `/subagents` | List the [subagents](agents.md) `task` may choose: the two that ship with Circle, the markdown files in the agent folders and what extensions register. With a name it shows that one. A definition that could not be used is listed with its reason. |
+| `/agents [name]` | `/subagents` | List the [subagents](agents.md) `task` may choose: the three that ship with Circle, the markdown files in the agent folders and what extensions register. With a name it shows that one. A definition that could not be used is listed with its reason, and so is a key Circle does not apply yet. |
 
 What these do and do not do is on [Sessions](sessions.md). Several have limits in this version.
 
