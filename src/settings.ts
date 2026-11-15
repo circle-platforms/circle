@@ -63,8 +63,6 @@ export interface CircleSettings {
   /** The four editor-bridge tools, for an editor that reports over the bridge. */
   editor_bridge: boolean;
   show_hook_allow: boolean;
-  /** A workflow was said yes to in `auto` mode: later ones start without a card there. */
-  workflow_consent: boolean;
   /**
    * Where the desktop application starts its default workspace; "" is the
    * built-in scratch folder inside the data folder. Desktop-only: the
@@ -115,7 +113,6 @@ export const defaultSettings = (): CircleSettings => ({
   hide_thinking: false,
   editor_bridge: false,
   show_hook_allow: false,
-  workflow_consent: false,
   workspace_folder: '',
   task_folder: '',
   variables: {},
@@ -221,7 +218,6 @@ export function loadSettingsFromDict(
   settings.hide_thinking = Boolean(raw.hide_thinking);
   settings.editor_bridge = Boolean(raw.editor_bridge);
   settings.show_hook_allow = Boolean(raw.show_hook_allow);
-  settings.workflow_consent = raw.workflow_consent === true;
   const attribution = isRecord(raw.attribution) ? raw.attribution : {};
   const author = String(attribution.author || '')
     .trim()

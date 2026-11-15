@@ -16,14 +16,14 @@ The call returns at once. The conversation shows `⎿ in background · j3`, and 
 
 ## Approve the run
 
-Before a run starts, the card shows the workflow's name and description, its phases, where the script comes from (a saved file, a path, or written in the call), the `args` it is given, and the first 40 lines of the script. It offers to allow it once or to reject it, and no rule for the rest of the session.
+Before a run starts, the card shows the workflow's name and description, its phases, where the script comes from (a saved file, a path, or written in the call), the `args` it is given, and the first 40 lines of the script. It offers to allow it once or to reject it. A workflow run by its name, saved or from a pack, can also be allowed for the rest of the conversation (**Allow the workflow *name* for this session**). A script written in the call is new each time, so no yes covers the next one.
 
 | Mode | When you are asked |
 |---|---|
-| `manual`, `accept-edits` | before every run |
-| `auto` | before the first run only. Your yes is kept as `workflow_consent: true` in your `settings.json`, and later runs in `auto` mode start without a card |
-| read-only (`/plan`) | never: a run does not start in read-only mode |
-| print, line and RPC mode (`-p`, `--line`, `--mode rpc`) | never: nobody can answer a card, so a run starts only with an allow rule, a `PreToolUse` hook that allows it, or `--yolo` |
+| `manual`, `accept-edits` | before every run, unless you allowed that workflow for this session |
+| `auto` | never: the run starts at once |
+| read-only (`/plan`) | before every run, in `auto` mode too, unless a rule allows it. A hook's allow alone does not start it. The run's agents work in read-only mode as well, so they read and plan and change nothing |
+| print, line and RPC mode (`-p`, `--line`, `--mode rpc`) | never: nobody can answer a card, so a run starts only with an allow rule, a `PreToolUse` hook that allows it, or `--yolo`. In read-only mode only a rule starts it |
 
 A rule in your `approvals.json` decides as it does for any tool:
 
@@ -34,7 +34,7 @@ A rule in your `approvals.json` decides as it does for any tool:
 ] }
 ```
 
-`*` allows every workflow; a name allows that saved workflow when it is run by name, and no script written in the call. A rule that denies `workflow` refuses it in every mode, `auto` included. A `PreToolUse` hook on `workflow` hears the call and can allow, ask or deny it.
+`*` allows every workflow; a name allows that saved workflow when it is run by name, and no script written in the call. A rule that denies `workflow` refuses it in every mode, `auto` included. A `PreToolUse` hook on `workflow` hears the call and can allow, ask or deny it; in read-only mode its allow does not start the run.
 
 The run's agents ask for their own calls as any subagent does: their cards appear while the run goes on, titled with the run's job and the agent's type (`j3 workflow · Bash needs your permission`). To keep a long run from waiting on you, allow the commands its agents need first.
 

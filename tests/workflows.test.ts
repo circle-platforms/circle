@@ -9,7 +9,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { AgentRuntime, type RuntimeOptions } from '../src/runtime.js';
-import { defaultSettings, loadSettings } from '../src/settings.js';
+import { defaultSettings } from '../src/settings.js';
 import type { ScriptedModel } from '../src/testing.js';
 import {
   emptyUsage,
@@ -515,7 +515,7 @@ test('a subagent cannot start a workflow: it is not offered one, and a call it m
   assert.equal(runtime.jobs.list().length, 0);
 });
 
-test('manual and accept-edits ask before every run, auto asks before the first and keeps the yes, and the card shows the phases and the script', async (t) => {
+test('manual and accept-edits ask before every run, auto starts it at once, and the card shows the phases and the script', async (t) => {
   const paths = folders(t);
   const script =
     META('checked', ['Find', 'Check']) + `phase('Find')\nreturn 'ok'\n`;
@@ -533,7 +533,7 @@ test('manual and accept-edits ask before every run, auto asks before the first a
     reply('started'),
   ]);
   const asked: import('../src/types.js').ToolCall[] = [];
-  const answers = ['reject', 'approve', 'approve', 'approve'];
+  const answers = ['reject', 'approve', 'approve'];
   const runtime = runtimeFor(t, paths, model, {
     yolo: false,
     approve: async (call) => {
@@ -553,16 +553,14 @@ test('manual and accept-edits ask before every run, auto asks before the first a
   runtime.policy.setMode(id, 'accept-edits');
   await runtime.harness.run('third');
   assert.equal(asked.length, 3);
-  // Auto: the first asks and its yes is kept in the person's settings, the next does not ask
+  // Auto: no card, the first run or any other
   runtime.policy.setMode(id, 'auto');
-  assert.equal(loadSettings(paths.home).workflow_consent, false);
   await runtime.harness.run('fourth');
-  assert.equal(asked.length, 4);
-  assert.equal(loadSettings(paths.home).workflow_consent, true);
   await runtime.harness.run('fifth');
-  assert.equal(asked.length, 4);
+  assert.equal(asked.length, 3);
+  assert.match(resultOf(runtime, 'a4'), /^Workflow checked started as run w/);
   assert.match(resultOf(runtime, 'a5'), /^Workflow checked started as run w/);
-  // The card: what the script's meta says, the script itself, and no rule to keep for the session
+  // The card: what the script's meta says, the script itself, and no yes to keep for a script written in the call
   const card = approvalRequest(
     asked[0]!,
     runtime.policy.review('workflow', asked[0]!.args),
@@ -578,6 +576,156 @@ test('manual and accept-edits ask before every run, auto asks before the first a
       "  2  phase('Find')",
       "  3  return 'ok'",
     ],
+  );
+});
+
+test('a workflow run by its name can be allowed for the rest of the conversation, and a script written in the call cannot', async (t) => {
+  const paths = folders(t);
+  mkdirSync(join(paths.workspace, '.circle', 'workflows'), { recursive: true });
+  writeFileSync(
+    join(paths.workspace, '.circle', 'workflows', 'saved.js'),
+    META('saved-one') + 'return 1',
+  );
+  const inline = META('inline') + 'return 2';
+  const { ScriptedModel } = await import('../src/testing.js');
+  const model = new ScriptedModel(
+    [
+      workflowCall('s1', { name: 'saved-one' }),
+      workflowCall('s2', { name: 'saved-one' }),
+      workflowCall('s3', { script: inline }),
+      workflowCall('s4', { script: inline }),
+    ].flatMap((call) => [call, reply('ok')]),
+  );
+  const asked: import('../src/types.js').ToolCall[] = [];
+  const answers = ['always', 'approve', 'approve'];
+  const runtime = runtimeFor(t, paths, model, {
+    yolo: false,
+    approve: async (call) => {
+      asked.push(call);
+      return answers.shift() as 'always' | 'approve';
+    },
+  });
+  await runtime.initialize();
+  // The card for a saved workflow offers to allow it for the session, by its name
+  const named = approvalRequest(
+    { id: 'x', name: 'workflow', args: { name: 'saved-one' } },
+    runtime.policy.review('workflow', { name: 'saved-one' }),
+  );
+  assert.equal(named.scope, 'the workflow saved-one');
+  // Allowed for the session, the next run of it starts without a card
+  await runtime.harness.run('one');
+  await runtime.harness.run('two');
+  assert.equal(asked.length, 1);
+  assert.match(resultOf(runtime, 's2'), /^Workflow saved-one started/);
+  // A script written in the call is new each time: its card offers no yes to keep, and every run asks
+  assert.equal(
+    approvalRequest(
+      { id: 'y', name: 'workflow', args: { script: inline } },
+      runtime.policy.review('workflow', { script: inline }),
+    ).scope,
+    '',
+  );
+  await runtime.harness.run('three');
+  await runtime.harness.run('four');
+  assert.equal(asked.length, 3);
+  assert.match(resultOf(runtime, 's4'), /^Workflow inline started/);
+  for (const run of runtime.workflowRunViews())
+    if (run.job) await finished(runtime, run.job);
+});
+
+test('in read-only mode a workflow asks in every mode and starts only on a yes or a rule, never on a hook alone, and its agents change nothing', async (t) => {
+  const paths = folders(t);
+  const script =
+    META('reader') +
+    `const wrote = await agent('write notes.md')\nreturn wrote\n`;
+  const write = reply('', [
+    {
+      id: 'wf-write',
+      name: 'write_file',
+      args: { file_path: 'notes.md', content: 'notes' },
+    },
+  ]);
+  const model = modelByAsker({
+    go: [
+      workflowCall('r1', { script }),
+      reply('ok'),
+      workflowCall('r2', { script }),
+      reply('ok'),
+      workflowCall('r3', { script }),
+      reply('ok'),
+      // The turn the run's notice starts
+      reply('noted'),
+    ],
+    'write notes.md': [
+      write,
+      (request) => {
+        // The agent's write was refused, as the conversation's would be
+        const result = request.messages.at(-1)!;
+        assert.equal(result.tool_call_id, 'wf-write');
+        assert.match(result.content, /read-only mode: this tool cannot run/);
+        return reply('could not write');
+      },
+    ],
+  });
+  const asked: import('../src/types.js').ToolCall[] = [];
+  const runtime = runtimeFor(t, paths, model, {
+    approve: async (call) => {
+      asked.push(call);
+      return 'reject';
+    },
+  });
+  await runtime.initialize();
+  // Auto mode, and read-only on top of it
+  runtime.setPlanMode(true);
+  // A PreToolUse hook that allows every workflow does not start one here: the card asks
+  const allow = join(paths.root, 'allow.mjs');
+  writeFileSync(
+    allow,
+    `process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } }))`,
+  );
+  writeFileSync(
+    join(paths.home, 'settings.json'),
+    JSON.stringify({
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: 'workflow',
+            hooks: [
+              {
+                type: 'command',
+                command: `${JSON.stringify(process.execPath)} ${JSON.stringify(allow)}`,
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  );
+  await runtime.reloadIntegrations();
+  for (const prompt of ['go', 'go']) await runtime.harness.run(prompt);
+  assert.equal(asked.length, 2);
+  assert.match(resultOf(runtime, 'r1'), /^The user rejected this tool call\./);
+  assert.match(resultOf(runtime, 'r2'), /^The user rejected this tool call\./);
+  assert.equal(runtime.jobs.list().length, 0);
+  // A rule in the person's file starts it without a card, and its agent works in read-only mode
+  writeFileSync(
+    join(paths.home, 'approvals.json'),
+    JSON.stringify({
+      rules: [{ tool: 'workflow', pattern: '*', effect: 'allow' }],
+    }),
+  );
+  await runtime.harness.run('go');
+  assert.equal(asked.length, 2);
+  const { job } = started(runtime, 'r3');
+  await finished(runtime, job);
+  assert.equal(existsSync(join(paths.workspace, 'notes.md')), false);
+  const run = runtime.workflowRunViews().find((view) => view.job === job)!;
+  assert.equal(
+    readFileSync(
+      join(runtime.workflowRunsFolder, run.id, 'result.txt'),
+      'utf8',
+    ),
+    'could not write',
   );
 });
 

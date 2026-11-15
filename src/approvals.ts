@@ -866,8 +866,6 @@ export class ApprovalPolicy {
    * as the workspace (the desktop's): a change there is a change in the workspace.
    */
   worktree?: (path: string) => boolean;
-  /** Whether a workflow may start in `auto` mode without a card: once said yes to, or nobody to ask. */
-  workflowConsent: () => boolean = () => false;
   constructor(
     readonly store: ApprovalStore,
     readonly workspace: string,
@@ -1048,14 +1046,21 @@ export class ApprovalPolicy {
         'ASK_FORCED',
         'changes the knowledge sync connection and always needs your confirmation',
       );
-    // A run of many subagents: no rule kept from a card covers the next one. A rule in a file can allow every
-    // workflow (`*`) or a saved one by its name, and a deny refuses as it does for any tool.
+    // A run of many subagents. A rule in a file can allow every workflow (`*`) or a saved one by its name, and a
+    // deny refuses as it does for any tool. A yes kept from the card covers a workflow run by its name, for the
+    // rest of the conversation; a script written in the call is new each time, so none covers it.
     if (tool === 'workflow') {
       const name = typeof args.name === 'string' ? args.name.trim() : '';
       return review(
         'ASK',
         'starts a workflow: a script that runs subagents in the background',
-        { covered_by: ['*', ...(name ? [name] : [])] },
+        name
+          ? {
+              pattern: name,
+              scope: `the workflow ${name}`,
+              covered_by: ['*'],
+            }
+          : { covered_by: ['*'] },
       );
     }
     const hint = this.hints(tool);
@@ -1295,11 +1300,6 @@ export class ApprovalPolicy {
       ].includes(tool)
     )
       return true;
-    // A workflow asks every time in manual and accept-edits, and once in auto; a rule in a file can allow it
-    if (tool === 'workflow') {
-      if (this.allowDecision(tool, args, found, thread)) return false;
-      return !(allowYolo && mode === 'auto' && this.workflowConsent());
-    }
     if (allowYolo && mode === 'auto') return false;
     if (found.verdict === 'ASK_FORCED') return true;
     // A rule that allows this call answers for it: the person's own file, or what

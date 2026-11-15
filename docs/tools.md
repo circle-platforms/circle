@@ -6,7 +6,7 @@ nav_order: 20
 
 The main agent has these twenty-one core tools, and `vision` when a [side vision model](usage.md#images-and-screenshots) is set. The desktop application adds the thirteen [browser tools](#the-browser) below, and so does the full-screen terminal interface when Chrome, Edge or Chromium is installed. The eight [device terminal](#device-terminals) tools come with both. MCP servers and [extensions](extensions.md) add more.
 
-"Asks" means Circle shows an approval card before the call runs. See [Security](security.md). In `read-only` mode the tools that do not ask keep working; the others are refused, except writing the conversation's plan (see [Read-only mode](security.md#read-only-mode)).
+"Asks" means Circle shows an approval card before the call runs. See [Security](security.md). In `read-only` mode the tools that do not ask keep working; the others are refused, except writing the conversation's plan and starting a [workflow](workflows.md), whose agents work in read-only mode too (see [Read-only mode](security.md#read-only-mode)).
 
 ## Reading and searching
 
@@ -265,7 +265,7 @@ See [Background jobs](background-jobs.md).
 |---|---|
 | `skill` | Load the full instructions of a [skill](skills.md) by name. |
 | `task` | Run a subagent (`general-purpose`, `explore`, `plan`, or one a file or an extension defines) and return its answer. Arguments: `description`, `subagent_type`, `background`. With `background: true` the subagent runs as a [background job](background-jobs.md#background-subagents) and its report comes as a notice. A subagent has `task` too, without `background`, up to three layers below the conversation. See [Subagents](agents.md). |
-| `workflow` | Run a [workflow](workflows.md): a JavaScript script that starts subagents and decides itself what runs next. Arguments: `name` (a saved workflow), `script` or `script_path`, `args`, `resume_from_run_id`. It asks before every run in `manual` and `accept-edits` mode and before the first in `auto` mode, then runs as a background job; its result comes as a notice. Subagents do not have it. |
+| `workflow` | Run a [workflow](workflows.md): a JavaScript script that starts subagents and decides itself what runs next. Arguments: `name` (a saved workflow), `script` or `script_path`, `args`, `resume_from_run_id`. It asks before every run in `manual` and `accept-edits` mode and in read-only mode, and not in `auto` mode, then runs as a background job; its result comes as a notice. Subagents do not have it. |
 | `structured_output` | Return a workflow agent's result in the shape its script asked for: only an agent whose `agent()` call gave a `schema` has it, and the schema is its arguments. A call that does not fit is refused with the reason. |
 | `compact_conversation` | Summarize older messages now. See [Compaction](sessions.md#compaction). |
 

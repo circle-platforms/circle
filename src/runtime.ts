@@ -823,10 +823,6 @@ export class AgentRuntime {
       (path) => this.sandbox.resolvePath(path),
       options.settings.allowed_commands,
     );
-    // A workflow asks once in auto mode, and the yes is kept; nobody can be asked without a card, so there
-    // --yolo is the yes
-    this.policy.workflowConsent = () =>
-      !this.options.approve || this.options.settings.workflow_consent === true;
     // The plan folder takes this conversation's plan and nothing else
     this.sandbox.ownPlan = () => this.planFile;
     // Where file tools keep to the workspace (the desktop's backend), another checkout of
@@ -1253,19 +1249,8 @@ export class AgentRuntime {
       bus: this.bus,
       headless: this.options.headless,
       approve: this.options.approve
-        ? async (call: ToolCall, signal: AbortSignal) => {
-            const decision = await this.noticeWaiting(call, () =>
-              this.options.approve!(call, signal),
-            );
-            // A yes to a workflow in auto mode holds for the later ones: they start without asking
-            if (
-              call.name === 'workflow' &&
-              decision === 'approve' &&
-              this.policy.mode(this.session.id) === 'auto'
-            )
-              this.recordWorkflowConsent();
-            return decision;
-          }
+        ? async (call: ToolCall, signal: AbortSignal) =>
+            this.noticeWaiting(call, () => this.options.approve!(call, signal))
         : undefined,
       hooks: this.ensureHooks(),
       hookScreenshot: this.options.hookScreenshot,
@@ -1929,18 +1914,6 @@ export class AgentRuntime {
   /** Stops one agent of a run: the script gets null for it, and a relaunch runs it again. */
   stopWorkflowAgent(id: string, index: number): boolean {
     return this.workflowRuns.get(id)?.run.stopAgent(index) ?? false;
-  }
-  /** A yes to a workflow in auto mode, kept in the person's settings: later runs start without a card. */
-  private recordWorkflowConsent(): void {
-    if (this.options.settings.workflow_consent) return;
-    this.options.settings.workflow_consent = true;
-    try {
-      saveSettingsChange(this.options.home, (saved) => {
-        saved.workflow_consent = true;
-      });
-    } catch {
-      /* Kept for this run; the next one asks again. */
-    }
   }
   /** Why an agent type cannot be a workflow agent's, or nothing. */
   private workflowAgentType(name: string): string | undefined {

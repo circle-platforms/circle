@@ -411,6 +411,18 @@ export class Harness {
   get readOnly(): boolean {
     return this.planMode || this.options.parentPlanMode?.() === true;
   }
+  /**
+   * Whether read-only mode refuses this call: anything but a read, except a write of this conversation's plan
+   * file and a workflow, which asks first and whose agents work in read-only mode too.
+   */
+  private readOnlyRefuses(call: ToolCall, effect: Tool['effect']): boolean {
+    return (
+      this.readOnly &&
+      effect !== 'read' &&
+      call.name !== 'workflow' &&
+      !this.options.planFileMutation?.(call)
+    );
+  }
   /** Model requests made so far, counted against `maxTurns`. */
   private turnsTaken = 0;
   private turnLimitHit = false;
@@ -2055,11 +2067,7 @@ export class Harness {
             ...(tool.paths?.(resolved) ?? []),
           ]),
         ];
-        if (
-          this.readOnly &&
-          effect !== 'read' &&
-          !this.options.planFileMutation?.(call)
-        )
+        if (this.readOnlyRefuses(call, effect))
           throw new Error('read-only mode: this tool cannot run');
         // A command's effects are those of what it runs: a value can make it delete
         const review = this.options.policy.review(call.name, resolved);
@@ -2164,12 +2172,16 @@ export class Harness {
         call.name,
         call.args,
       );
+      // In read-only mode a workflow asks as in manual mode, auto included: the person's yes or a rule starts it,
+      // and a hook's allow alone does not
+      const readOnlyWorkflow = call.name === 'workflow' && this.readOnly;
       // A first write to one of the person's terminal tabs asks as well, in every mode
       const alwaysAsk =
         secretAdded ||
         tool.personApproval === true ||
         found.verdict === 'ASK_FORCED' ||
-        this.options.policy.tabAlwaysAsks(call.name, resolved);
+        this.options.policy.tabAlwaysAsks(call.name, resolved) ||
+        readOnlyWorkflow;
       const hookAsk = before?.decision === 'ask';
       const hookAllow = before?.decision === 'allow' && !alwaysAsk;
       const preparedRun = tool.prepare
@@ -2200,7 +2212,7 @@ export class Harness {
             resolved,
             this.options.approvalSessionId ?? this.sessionId,
             true,
-            this.approvalMode(),
+            readOnlyWorkflow ? 'manual' : this.approvalMode(),
           ) ||
             (this.options.headless && found.verdict === 'ASK_FORCED')));
       if (!hookAllow && (hookAsk || wouldAsk)) {
@@ -2249,7 +2261,9 @@ export class Harness {
             throw new Error(
               found.verdict === 'ASK_FORCED'
                 ? 'not run: this operation always asks'
-                : 'not run: needs --yolo or approval',
+                : readOnlyWorkflow
+                  ? 'not run: in read-only mode a workflow starts only with your approval or a rule that allows it'
+                  : 'not run: needs --yolo or approval',
             );
           const decision = await this.options.approve(call, signal);
           if (call.hook_reason)
@@ -2273,11 +2287,7 @@ export class Harness {
         }
       }
       signal.throwIfAborted();
-      if (
-        this.readOnly &&
-        effect !== 'read' &&
-        !this.options.planFileMutation?.(call)
-      )
+      if (this.readOnlyRefuses(call, effect))
         throw new Error('read-only mode: this tool cannot run');
       this.bus.emit('tool_start', { payload: { ...call } });
       const args = resolved;
@@ -2332,11 +2342,7 @@ export class Harness {
         run: async (args, context) => {
           const run = async () => {
             signal.throwIfAborted();
-            if (
-              this.readOnly &&
-              effect !== 'read' &&
-              !this.options.planFileMutation?.(call)
-            )
+            if (this.readOnlyRefuses(call, effect))
               throw new Error('read-only mode: this tool cannot run');
             return (preparedRun ?? tool.run)(args, context);
           };
