@@ -74,8 +74,10 @@ async function session(t: TestContext, replies: string[] = []) {
   app.runtime = runtime;
   const ui = app as any;
   let frame: string[] = [];
+  let paints = 0;
   ui.screen.render = (rows: string[]) => {
     frame = rows;
+    paints++;
   };
   const writes: string[] = [];
   const runner = fakeRunner();
@@ -101,6 +103,12 @@ async function session(t: TestContext, replies: string[] = []) {
     wheelUp: () => feed('\x1b[<64;2;2M'),
     wheelDown: () => feed('\x1b[<65;2;2M'),
   };
+  const report = {
+    wheelUp: '\x1b[<64;2;2M',
+    wheelDown: '\x1b[<65;2;2M',
+    press: (x: number, y: number) => `\x1b[<0;${x + 1};${y + 1}M`,
+    release: (x: number, y: number) => `\x1b[<0;${x + 1};${y + 1}m`,
+  };
   if (replies.length) await app.submit('question');
   ui.repaint();
   return {
@@ -112,6 +120,10 @@ async function session(t: TestContext, replies: string[] = []) {
     calls: runner.calls,
     feed,
     mouse,
+    report,
+    /** One read from the terminal, as the screen takes it from stdin. */
+    burst: (data: string): void => ui.dataListener(data),
+    paints: () => paints,
     frame: () => frame,
     plain: () => frame.map(stripAnsi),
     /** Screen column and row of `text` in the painted frame. */
@@ -293,6 +305,84 @@ test('wheel scrolling moves the selection with its text and keeps the rows that 
   s.feed('\x03');
   await settle();
   assert.equal(s.writes.at(-1), osc52(text));
+});
+
+test('a burst of wheel reports scrolls by all of them and draws once', async (t) => {
+  const lines = Array.from(
+    { length: 60 },
+    (_, i) => `line ${String(i + 1).padStart(2, '0')}`,
+  );
+  const s = await session(t, [lines.join('\n\n')]);
+  const top = s.app.state.view!.maxScroll;
+  assert.ok(top > 12);
+  let paints = s.paints();
+  s.burst(s.report.wheelUp.repeat(4));
+  assert.equal(s.app.state.scroll, 12);
+  assert.equal(s.paints(), paints + 1);
+  // the frame drawn is the one the scroll gives
+  const shown = s.plain();
+  s.ui.repaint();
+  assert.deepEqual(s.plain(), shown);
+  // past the top it stops at the top
+  paints = s.paints();
+  s.burst(s.report.wheelUp.repeat(200));
+  assert.equal(s.app.state.scroll, top);
+  assert.equal(s.paints(), paints + 1);
+  s.burst(s.report.wheelDown.repeat(2));
+  assert.equal(s.app.state.scroll, top - 6);
+  assert.equal(s.paints(), paints + 2);
+});
+
+test('a click in the same burst lands on the frame drawn after the wheel', async (t) => {
+  const lines = Array.from(
+    { length: 60 },
+    (_, i) => `line ${String(i + 1).padStart(2, '0')}`,
+  );
+  const s = await session(t, [lines.join('\n\n')]);
+  s.ui.selection.now = () => 1000;
+  const { x, y } = s.find('line 57');
+  const click = s.report.press(x + 5, y) + s.report.release(x + 5, y);
+  // a double click with two notches of the wheel between its clicks: the second click
+  // takes the word under the mouse on the frame the wheel moved to
+  s.burst(click + s.report.wheelUp.repeat(2) + click);
+  assert.equal(s.app.state.scroll, 6);
+  assert.ok(s.plain()[y]!.trimEnd().endsWith('line 54'));
+  assert.equal(
+    getSelectedText(s.ui.selection.state, s.ui.selection.grid),
+    '54',
+  );
+  await settle();
+  assert.equal(s.writes.at(-1), osc52('54'));
+});
+
+test('with a selection each wheel report draws and the selection keeps its text', async (t) => {
+  const lines = Array.from(
+    { length: 60 },
+    (_, i) => `line ${String(i + 1).padStart(2, '0')}`,
+  );
+  const s = await session(t, [lines.join('\n\n')]);
+  const start = s.find('line 57');
+  const end = s.find('line 59');
+  s.mouse.press(start.x, start.y);
+  s.mouse.drag(end.x + 6, end.y);
+  s.mouse.release(end.x + 6, end.y);
+  await settle();
+  const text = Buffer.from(s.writes[0]!.slice(7, -1), 'base64').toString();
+  assert.match(text, /^line 57\n[\s\S]*line 59$/);
+  const selected = (): string =>
+    getSelectedText(s.ui.selection.state, s.ui.selection.grid);
+  const paints = s.paints();
+  s.burst(s.report.wheelUp.repeat(2));
+  assert.equal(s.app.state.scroll, 6);
+  assert.equal(s.paints(), paints + 2);
+  assert.ok(s.ui.selection.state.scrolledOffBelow.length > 0);
+  assert.equal(selected(), text);
+  s.burst(s.report.wheelDown.repeat(2));
+  assert.equal(s.app.state.scroll, 0);
+  assert.equal(s.paints(), paints + 4);
+  assert.deepEqual(s.ui.selection.state.scrolledOffBelow, []);
+  assert.equal(selectionBounds(s.ui.selection.state)![0].row, start.y);
+  assert.equal(selected(), text);
 });
 
 test('on a transcript scrolled back, the selection stays on its text when rows arrive below', async (t) => {

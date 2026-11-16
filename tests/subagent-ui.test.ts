@@ -388,6 +388,22 @@ test('the wheel over a strip with folded subagents moves the strip and leaves th
   assert.ok(s.app.state.stripAgents!.ids.includes(s.app.state.selectedAgent!));
 });
 
+test('two wheel reports over the strip in one burst move it two rows', async (t) => {
+  const s = await subagents(
+    t,
+    Array.from({ length: 8 }, (_, index) => `task ${index}`),
+  );
+  await until(() => s.running() === 8);
+  s.frame();
+  const strip = s.app.state.stripAgents!;
+  assert.equal(strip.scrollable, true);
+  const first = strip.ids;
+  const down = `\x1b[<65;11;${strip.row + 3}M`;
+  s.ui.dataListener(down + down);
+  assert.equal(s.app.state.scroll, 0);
+  assert.deepEqual(s.app.state.stripAgents!.ids.slice(0, -2), first.slice(2));
+});
+
 test("a subagent's card names it, and its record keeps esc and ← → while the card waits", async (t) => {
   const s = await subagents(t, ['write the notes', 'task b']);
   await until(() => Boolean(s.app.state.dialog) && s.running() === 2);
