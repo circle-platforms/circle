@@ -7,6 +7,7 @@ import {
   type ScreenState,
 } from '../src/tui/render.js';
 import { jobRows } from '../src/tui/strip_rows.js';
+import { detailRows, taskSummaryRows } from '../src/tui/agent_rows.js';
 import { formatTokens } from '../src/tui/status_rows.js';
 import type { SubagentView } from '../src/tui/subagents.js';
 import { AgentRuntime } from '../src/runtime.js';
@@ -600,4 +601,163 @@ test('a row whose marker is a lamp keeps its tint after the lamp', () => {
     after.slice(p.reset.length).startsWith(p.write_bg.slice(0, -1)),
     JSON.stringify(after),
   );
+});
+
+test('background subagent job shows live thinking summary and retains lastStep across rounds', async (t) => {
+  const root = scratch(t);
+  let seenThinking: string | undefined;
+  let seenRetained: string | undefined;
+  let releaseRound2!: () => void;
+  const round2Hold = new Promise<void>((resolve) => {
+    releaseRound2 = resolve;
+  });
+  let runtime!: AgentRuntime;
+  const route = async (request: ModelRequest): Promise<ModelResponse> => {
+    const first = String(
+      request.messages.find((m) => m.role === 'user')?.content,
+    );
+    const last = request.messages.at(-1)!;
+    if (first === 'go')
+      return last.role === 'tool'
+        ? reply('Started.')
+        : reply('', [
+            {
+              id: 'bg',
+              name: 'task',
+              args: {
+                description: 'background compile',
+                subagent_type: 'general-purpose',
+                background: true,
+              },
+            },
+          ]);
+    if (last.role === 'user') {
+      request.token('**Drafting ', true);
+      request.token('plan**', true);
+      seenThinking = runtime.jobs.list()[0]?.detail;
+      return reply('', [
+        {
+          id: 'w1',
+          name: 'write_file',
+          args: { file_path: 'notes/a.md', content: 'hello' },
+        },
+      ]);
+    }
+    seenRetained = runtime.jobs.list()[0]?.detail;
+    await round2Hold;
+    return reply('finished bg');
+  };
+  const model = new ScriptedModel(Array.from({ length: 10 }, () => route));
+  runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: trustFolder(defaultSettings(), root),
+    model,
+    approve: async () => 'approve',
+  });
+  cleanup(t, async () => {
+    releaseRound2();
+    await runtime.close();
+  });
+  await runtime.harness.run('go');
+  await until(() => seenRetained !== undefined);
+  assert.equal(seenThinking, 'Drafting plan');
+  assert.equal(seenRetained, 'Write(notes/a.md)');
+  const [row] = jobRows(runtime.jobs.list(), { width: 120 }).map(stripAnsi);
+  assert.match(row!, /Write\(notes\/a\.md\)/);
+  releaseRound2();
+  await until(() => runtime.jobs.list()[0]?.status === 'done');
+});
+
+test('open subagent detail page renders live thinking while main transcript Agent summary stays unchanged', async (t) => {
+  bigScreen(t);
+  const root = scratch(t);
+  const settings = trustFolder(defaultSettings(), root);
+  let entered!: () => void;
+  const streamingNow = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const model = new ScriptedModel([
+    reply('', [
+      {
+        id: 't-live',
+        name: 'task',
+        args: {
+          description: 'inspect manual',
+          subagent_type: 'general-purpose',
+        },
+      },
+    ]),
+    async (request) => {
+      request.token('First thought sentence.\nSecond thought sentence.', true);
+      request.token('Draft reply line');
+      entered();
+      await hold;
+      return reply('done');
+    },
+    reply('Parent done'),
+  ]);
+  const app = new SessionApp(root, root, settings);
+  const ui = app as any;
+  let rendered: string[] = [];
+  ui.screen.render = (rows: string[]) => {
+    rendered = rows;
+  };
+  await app.attach({
+    workspace: root,
+    home: root,
+    settings,
+    model,
+    headless: true,
+  });
+  cleanup(t, async () => {
+    release();
+    ui.off?.();
+    if (ui.flashTimer) clearTimeout(ui.flashTimer);
+    if (ui.renderTimer) clearTimeout(ui.renderTimer);
+    ui.input.close();
+    await app.runtime!.close();
+  });
+  const turn = app.runtime!.harness.run('go');
+  await streamingNow;
+  ui.repaint();
+  await until(() => Boolean(app.state.subagents?.length));
+  const child = app.state.subagents![0]!;
+  // Main transcript Agent(...) folded summary stays unchanged (meta line only, no live thinking row).
+  const folded = taskSummaryRows(child, { width: 100, expanded: false }).map(
+    stripAnsi,
+  );
+  assert.equal(folded.length, 1);
+  assert.doesNotMatch(folded[0]!, /Thinking|Second thought/);
+
+  // Opening the subagent detail page shows live thinking and streaming reply before llm_end.
+  ui.agents.open(child.id);
+  ui.repaint();
+  const detail = rendered.map(stripAnsi);
+  assert.ok(
+    detail.some((line) =>
+      line.includes('⎿ ∴ Thinking · Second thought sentence. · 48 chars'),
+    ),
+    detail.join('\n'),
+  );
+  assert.ok(
+    detail.some((line) => line.includes('● Draft reply line')),
+    detail.join('\n'),
+  );
+
+  // Expanding thinking (ctrl+t) renders the live thinking body on the detail page.
+  const expanded = detailRows(app.state.agentDetail!, {
+    width: 100,
+    expanded: true,
+  }).map(stripAnsi);
+  assert.ok(
+    expanded.some((line) => line.includes('First thought sentence.')),
+    expanded.join('\n'),
+  );
+  release();
+  await turn;
 });

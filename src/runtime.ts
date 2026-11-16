@@ -179,7 +179,10 @@ import {
 } from './vision.js';
 import { saveMediaAttachment } from './media.js';
 import { UserShells } from './user_shell.js';
-import { toolCallLine } from './headless.js';
+import {
+  stepAgentActivity,
+  type AgentActivityState,
+} from './session_activity.js';
 import { canScreenshot, type ScreenshotOptions } from './screenshot.js';
 import { titleNeedsRefresh, userPrompts } from './session_title.js';
 import { migrateHookFiles } from './hook_migration.js';
@@ -1472,6 +1475,18 @@ export class AgentRuntime {
       const childBus = new EventBus(session.id);
       let backgroundJob: Job | undefined;
       let backgroundLog: ((text: string) => void) | undefined;
+      let jobActivity: AgentActivityState | undefined;
+      let lastJobDetail: string | undefined;
+      const redactDetail = (text: string): string =>
+        this.redact(text, {}, () => written(this.store.messages(session.id)));
+      const updateJobDetail = (detail: string): void => {
+        if (!backgroundJob) return;
+        const clean = redactDetail(detail);
+        if (clean !== lastJobDetail) {
+          lastJobDetail = clean;
+          this.jobs.activity(backgroundJob.id, clean);
+        }
+      };
       // The job a card waits under: its own, the one of the background subagent it works under, or its workflow's
       const jobOf = (): string | undefined =>
         launch?.jobId ?? backgroundJob?.id ?? spawner?.job();
@@ -1488,15 +1503,26 @@ export class AgentRuntime {
         const jobId = jobOf();
         // what the job said it was doing comes back once the answer is in
         const before = jobId ? this.jobs.get(jobId)?.detail : undefined;
-        if (jobId) this.jobs.activity(jobId, 'waiting for you');
+        if (jobId) {
+          if (backgroundJob?.id === jobId) lastJobDetail = 'waiting for you';
+          this.jobs.activity(jobId, 'waiting for you');
+        }
         try {
           return await action({ jobId, name, agent: session.id });
         } finally {
-          if (jobId)
-            this.jobs.activity(
-              jobId,
-              before && before !== 'waiting for you' ? before : 'working',
-            );
+          if (jobId) {
+            if (backgroundJob?.id === jobId) {
+              updateJobDetail(
+                jobActivity?.lastStep ??
+                  (before && before !== 'waiting for you' ? before : 'working'),
+              );
+            } else {
+              this.jobs.activity(
+                jobId,
+                before && before !== 'waiting for you' ? before : 'working',
+              );
+            }
+          }
         }
       };
       childBus.subscribe((event) => {
@@ -1522,16 +1548,17 @@ export class AgentRuntime {
           backgroundLog?.(
             `${event.payload.name}(${JSON.stringify(event.payload.args)})`,
           );
-          if (backgroundJob)
-            this.jobs.activity(
-              backgroundJob.id,
-              toolCallLine(String(event.payload.name), event.payload.args),
-            );
+          lastJobDetail = undefined;
         }
-        if (event.kind === 'llm_end')
+        if (event.kind === 'llm_end') {
           backgroundLog?.(
             String((event.payload.message as Message)?.content || ''),
           );
+          lastJobDetail = undefined;
+        }
+        jobActivity = stepAgentActivity(jobActivity, event);
+        if (event.kind !== 'run_end' && event.kind !== 'run_error')
+          updateJobDetail(jobActivity.activity);
         // A subagent that works under a background job, its own or one above it, is that job's work
         const jobId = jobOf();
         this.bus.emit(event.kind, {
@@ -1832,6 +1859,7 @@ export class AgentRuntime {
           { sessionId: root, startedBy: 'model' },
           async (signal, log, job) => {
             backgroundJob = job;
+            if (jobActivity) updateJobDetail(jobActivity.activity);
             this.childJobOwners.set(session.id, {
               sessionId: root,
               parent: job.id,

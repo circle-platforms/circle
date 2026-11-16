@@ -9,7 +9,7 @@ import { t } from '../i18n';
 import { agentActivityText, agentDot, isAgentActive } from '../model/activity';
 import { agentLabel, pendingFor } from '../model/overview';
 import { currentSession } from '../model/state';
-import type { AgentRecord, DialogId } from '../model/types';
+import type { AgentRecord, DialogId, Interaction } from '../model/types';
 import { groupMessages } from './Conversation';
 import { ModeButtons } from './mode-chrome';
 
@@ -17,22 +17,34 @@ function Row({
   agent,
   selected,
   elapsed,
-  waiting,
+  asked,
   onSelect,
 }: {
   agent: AgentRecord;
   selected: boolean;
   elapsed?: string;
-  waiting: boolean;
+  asked?: Interaction;
   onSelect: () => void;
 }) {
   const label = agentLabel(agent);
+  const waiting = !!asked;
+  const live = asked
+    ? asked.kind === 'approval' || asked.kind === 'hooks'
+      ? t('needs approval')
+      : t('waiting for you')
+    : isAgentActive(agent) && agent.activity && agent.activity !== 'working'
+      ? agentActivityText(agent)
+      : '';
+  const detail = live || label.detail;
+  const tooltip = asked
+    ? (asked.command ?? asked.tool ?? asked.title)
+    : agentActivityText(agent);
   return (
     <button
       type="button"
       className="agent-row"
       aria-current={selected || undefined}
-      title={agentActivityText(agent)}
+      title={tooltip}
       onClick={onSelect}
     >
       <i
@@ -42,7 +54,7 @@ function Row({
       />
       <span className="agent-row-text">
         <span className="agent-row-name">{label.name}</span>
-        {label.detail && <small>{label.detail}</small>}
+        {detail && <small>{detail}</small>}
       </span>
       {elapsed && <small className="agent-row-time">{elapsed}</small>}
     </button>
@@ -103,7 +115,7 @@ export function AgentsMode({
                 agent={agent}
                 selected={agent.id === selected?.id}
                 elapsed={jobOf(agent)?.elapsed}
-                waiting={!!pendingFor(agent.id, snapshot.interactions)}
+                asked={pendingFor(agent.id, snapshot.interactions)}
                 onSelect={() => onSelect(agent.id)}
               />
             ))}

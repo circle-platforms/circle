@@ -19,7 +19,12 @@ import {
 } from '../src/types.js';
 import { cleanup, scratch, until } from './helpers.js';
 import { PlanCompletionTracker, planVisible } from '../src/plan_state.js';
-import { nextAgentActivity } from '../src/session_activity.js';
+import {
+  nextAgentActivity,
+  stepAgentActivity,
+  thinkingActivitySummary,
+  type AgentActivityState,
+} from '../src/session_activity.js';
 import { loadRemap } from '../src/keybindings.js';
 import { PLAN_CHOICES } from '../src/plan_file.js';
 
@@ -379,4 +384,110 @@ test('network trust is visible in the welcome and the existing session report', 
       (note) => note.includes('network: proxy') && note.includes('trust'),
     ),
   );
+});
+
+test('thinkingActivitySummary tracks closed bold headings and pure-text sentences without leaking half-open markdown', () => {
+  assert.equal(thinkingActivitySummary('**'), undefined);
+  assert.equal(thinkingActivitySummary('<!-- empty -->\n\n'), undefined);
+  assert.equal(
+    thinkingActivitySummary('**Scanning logs**\n\n**Drafting'),
+    'Scanning logs',
+  );
+  assert.equal(
+    thinkingActivitySummary('**Scanning logs**\n\nDetails\n\n**Writing plan**'),
+    'Writing plan',
+  );
+  assert.equal(
+    thinkingActivitySummary(
+      'Read tasks/1.md and check v1.2. Now write plans/1.json!',
+    ),
+    'Now write plans/1.json',
+  );
+  assert.equal(
+    thinkingActivitySummary('先核对 tasks/1.md。再检查 plans/1.json；最后输出'),
+    '最后输出',
+  );
+});
+
+test('stepAgentActivity follows Scheme B across round boundaries and approval waits', () => {
+  let state: AgentActivityState | undefined;
+  state = stepAgentActivity(state, { kind: 'run_start', payload: {} });
+  assert.equal(state.activity, 'working');
+  state = stepAgentActivity(state, { kind: 'llm_start', payload: {} });
+  assert.equal(state.activity, 'working');
+  state = stepAgentActivity(state, {
+    kind: 'llm_token',
+    payload: { text: '**Reading ', thinking: true },
+  });
+  assert.equal(state.activity, 'Reading');
+  state = stepAgentActivity(state, {
+    kind: 'llm_token',
+    payload: { text: 'manual**', thinking: true },
+  });
+  assert.equal(state.activity, 'Reading manual');
+  state = stepAgentActivity(state, {
+    kind: 'tool_start',
+    payload: { name: 'write_file', args: { file_path: 'note.txt' } },
+  });
+  assert.equal(state.activity, 'Write(note.txt)');
+  state = stepAgentActivity(state, { kind: 'tool_waiting', payload: {} });
+  assert.equal(state.activity, 'waiting for you');
+  state = stepAgentActivity(state, { kind: 'llm_start', payload: {} });
+  assert.equal(state.activity, 'Write(note.txt)');
+  state = stepAgentActivity(state, {
+    kind: 'llm_end',
+    payload: { message: { thinking: 'Final check\n\nVerify output.' } },
+  });
+  assert.equal(state.activity, 'Verify output.');
+});
+
+test('foreground subagent strip shows live streaming thinking summary in dark and light palettes', async (t) => {
+  let entered!: () => void;
+  const thinkingLive = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const model = new ScriptedModel([
+    reply('p1', '', [
+      {
+        id: 't1',
+        name: 'task',
+        args: {
+          description: 'compile script 1',
+          subagent_type: 'general-purpose',
+        },
+      },
+    ]),
+    async (request) => {
+      request.token('**Inspecting ', true);
+      request.token('schema**', true);
+      entered();
+      await hold;
+      return reply('c1', 'done');
+    },
+    reply('p2', 'all done'),
+  ]);
+  const s = await app(t, model);
+  cleanup(t, () => release());
+  const turn = s.runtime.harness.run('start');
+  await thinkingLive;
+  s.ui.repaint();
+  await until(() =>
+    (s.app.state.subagents ?? []).some(
+      (agent) => agent.activity === 'Inspecting schema',
+    ),
+  );
+  for (const colors of [DEFAULT_DARK, DEFAULT_LIGHT]) {
+    setPalette(buildPalette(...colors));
+    s.ui.repaint();
+    const strip = s.app.state.stripAgents!;
+    assert.ok(strip, 'subagent strip is visible');
+    assert.ok(s.rows()[strip.row]!.includes('Inspecting schema'));
+    assert.ok(!s.rows()[strip.row]!.includes('working'));
+  }
+  release();
+  await turn;
 });
