@@ -4,6 +4,13 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+### Added
+- **Live thinking summaries.** A running subagent shows what it is thinking — the newest heading or the latest sentence of its reasoning — in the terminal's agent rows and detail view and on the desktop's Overview cards and in the Subagents drawer, instead of a bare `working` label. (#576)
+
+### Fixed
+- **Responsive with many subagents.** With many subagents in a long conversation, the terminal and the desktop no longer rescan every subagent session on each frame: context state, footer totals and compaction history are cached per session and publications are coalesced, so the interface stays responsive. (#578)
+- **The native performance suite runs again.** The desktop's native performance suite, broken since the terminal mode replaced the inspector's terminal tab, runs on Apple silicon in CI on pushes to main and reports its latency there; on shared runners the budgets are reported, not enforced. Tests and CI only. (#580)
+
 ## 1.18.0 - 2026-11-15
 
 ### Added
