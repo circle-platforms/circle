@@ -1398,7 +1398,8 @@ export class SessionApp {
       runtime,
       runtime.bus.subscribe((event) => {
         this.inView(view, () => {
-          // Stream tokens draw through the coalescing scheduler; everything else at once.
+          // Stream tokens and job progress draw through the coalescing scheduler;
+          // everything else at once.
           let coalesce = false;
           this.turns.apply(
             event,
@@ -1433,6 +1434,8 @@ export class SessionApp {
           }
           if (['job_started', 'job_updated', 'job_ended'].includes(event.kind))
             this.refreshJobsList();
+          // A background subagent reports every step on its job's row
+          if (event.kind === 'job_updated') coalesce = true;
           if (event.tags.subagent) {
             const id = String(event.tags.subagent);
             const old = this.agentActivity.get(id);
@@ -1461,7 +1464,7 @@ export class SessionApp {
               : event.kind === 'llm_token' && !event.payload.thinking
                 ? (old?.streaming ?? '') + String(event.payload.text ?? '')
                 : (old?.streaming ?? '');
-            this.agentActivity.set(id, {
+            const next = {
               state,
               name: String(event.tags.name || old?.name || 'subagent'),
               background: Boolean(event.tags.job_id) || old?.background,
@@ -1470,20 +1473,32 @@ export class SessionApp {
               tracker,
               streaming,
               updated: Date.now(),
-            });
-            if (
-              event.kind !== 'llm_token' ||
-              tracker.activity !== old?.activity ||
-              this.agents.detail === id
-            )
-              this.activityVersion++;
+            };
+            this.agentActivity.set(id, next);
+            // The rows are rebuilt only for what they show: the open page shows the live
+            // text and the clock too, the rest only these fields. What the subagent
+            // writes to its record moves the store's version instead.
+            const shown =
+              !old ||
+              this.agents.detail === id ||
+              old.state !== next.state ||
+              old.name !== next.name ||
+              old.background !== next.background ||
+              old.jobId !== next.jobId ||
+              old.activity !== next.activity;
+            if (shown) this.activityVersion++;
             if (event.kind === 'llm_end')
               for (const key of Object.keys(
                 this.state.usage,
               ) as (keyof typeof this.state.usage)[])
                 this.state.usage[key] += event.usage?.[key] ?? 0;
-            if (event.kind === 'llm_token') this.requestRender();
-            else this.repaint();
+            // Tokens and progress come many times a second and mostly change nothing on
+            // screen; the animation tick moves the clocks. A step draws on the next frame.
+            if (
+              shown ||
+              (event.kind !== 'llm_token' && event.kind !== 'tool_progress')
+            )
+              this.requestRender();
             return;
           }
           if (event.kind === 'run_start') {
@@ -1655,7 +1670,13 @@ export class SessionApp {
           if (coalesce) this.requestRender();
           else this.repaint();
         });
-        if (view !== this.selectedView) this.requestRender();
+        // Another conversation's stream and progress show nothing on this screen
+        if (
+          view !== this.selectedView &&
+          event.kind !== 'llm_token' &&
+          event.kind !== 'tool_progress'
+        )
+          this.requestRender();
       }),
     );
     return runtime;

@@ -280,6 +280,45 @@ test('requestRender coalesces a burst into one frame and a direct repaint supers
   }
 });
 
+test("another conversation's stream and progress ask for no frame here, its turn ending does", async (t) => {
+  const root = scratch(t);
+  const settings = defaultSettings();
+  const app = new SessionApp(root, root, settings);
+  const ui = app as any;
+  let frames = 0;
+  ui.screen.render = (): void => {
+    frames++;
+  };
+  app.terminal = {
+    platform: process.platform,
+    write: () => {},
+    input: () => {},
+    kill: () => {},
+  };
+  await app.attach({
+    workspace: root,
+    home: root,
+    settings,
+    model: new ScriptedModel(),
+    headless: true,
+  });
+  cleanup(t, () => app.close());
+  const other = app.runtime!;
+  await app.command('new', '');
+  assert.notEqual(app.runtime, other);
+  ui.repaint();
+  const before = frames;
+  for (let i = 0; i < 50; i++) {
+    other.bus.emit('llm_token', { payload: { text: 'word ' + i + ' ' } });
+    other.bus.emit('tool_progress', { payload: { id: 'call', text: `${i}` } });
+  }
+  assert.equal(ui.renderQueued, false, 'nothing of it is on this screen');
+  assert.equal(frames, before);
+  // the header lists the conversations still running
+  other.bus.emit('run_end');
+  assert.equal(ui.renderQueued, true);
+});
+
 test('a streaming turn keeps the loop responsive: a key works right away and frames coalesce', async (t) => {
   const root = scratch(t);
   const settings = defaultSettings();

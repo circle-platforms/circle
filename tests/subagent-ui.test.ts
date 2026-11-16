@@ -30,6 +30,7 @@ import {
   type ModelResponse,
 } from '../src/types.js';
 import type { Job } from '../src/jobs.js';
+import type { EventKind } from '../src/events.js';
 import { cleanup, scratch, until } from './helpers.js';
 
 const reply = (
@@ -183,6 +184,7 @@ async function subagents(t: Parameters<typeof scratch>[0], tasks: string[]) {
     app,
     ui,
     runtime,
+    model,
     turn,
     frame,
     running,
@@ -190,6 +192,8 @@ async function subagents(t: Parameters<typeof scratch>[0], tasks: string[]) {
     key,
     release,
     paints: () => paints,
+    /** The frame last drawn, without drawing another. */
+    rows: () => rendered,
   };
 }
 
@@ -760,4 +764,150 @@ test('open subagent detail page renders live thinking while main transcript Agen
   );
   release();
   await turn;
+});
+
+// One subagent that has asked the model and waits there: from here on only the test
+// sends its events, on the runtime's own bus, as the runtime forwards them.
+async function heldSubagent(t: Parameters<typeof scratch>[0]) {
+  const s = await subagents(t, ['task a']);
+  await until(() => s.model.requests.length === 2 && s.running() === 1);
+  s.frame();
+  const id = s.app.state.subagents![0]!.id;
+  const emit = (kind: EventKind, payload: Record<string, unknown> = {}) =>
+    s.runtime.bus.emit(kind, {
+      payload,
+      tags: { subagent: id, name: 'general-purpose' },
+    });
+  const stripRow = (): string =>
+    stripAnsi(s.rows()[s.app.state.stripAgents!.row]!);
+  return { ...s, id, emit, stripRow };
+}
+
+test("a subagent's tokens and progress draw nothing while nothing shown changes", async (t) => {
+  const s = await heldSubagent(t);
+  s.emit('llm_token', { text: '**Reading the notes**\n', thinking: true });
+  s.frame();
+  assert.match(s.stripRow(), /Reading the notes/);
+  const version = s.ui.activityVersion;
+  const paints = s.paints();
+  let stats = 0;
+  const stat = s.runtime.stats.bind(s.runtime);
+  s.runtime.stats = () => {
+    stats++;
+    return stat();
+  };
+  for (let i = 0; i < 100; i++) {
+    s.emit('llm_token', { text: `looking at part ${i} `, thinking: true });
+    s.emit('llm_token', { text: `answer ${i} ` });
+    s.emit('tool_progress', { id: 'call', text: `${i} of 100` });
+  }
+  assert.equal(s.ui.renderQueued, false, 'no frame was asked for');
+  assert.equal(s.paints(), paints);
+  assert.equal(stats, 0);
+  assert.equal(s.ui.activityVersion, version, 'the rows were not rebuilt');
+  // what they carried is kept, for the page when it opens
+  const kept = s.ui.agentActivity.get(s.id);
+  assert.equal(kept.activity, 'Reading the notes');
+  assert.match(kept.tracker.thinking, /looking at part 99 $/);
+  assert.match(kept.streaming, /answer 99 $/);
+  s.ui.agents.open(s.id);
+  const page = s.frame().map(stripAnsi);
+  assert.ok(
+    page.some((row) => row.includes('answer 99')),
+    page.join('\n'),
+  );
+});
+
+test('a new thinking heading or an open page still draws', async (t) => {
+  const s = await heldSubagent(t);
+  s.emit('llm_token', {
+    text: '**Reading the notes**\nfirst ',
+    thinking: true,
+  });
+  s.frame();
+  const before = s.paints();
+  s.emit('llm_token', { text: '\n**Writing the ', thinking: true });
+  assert.equal(s.ui.renderQueued, false, 'a heading not yet closed');
+  s.emit('llm_token', { text: 'answer**', thinking: true });
+  assert.equal(s.ui.renderQueued, true);
+  assert.equal(s.paints(), before, 'drawn with the next frame, not now');
+  await until(() => s.paints() > before);
+  assert.match(s.stripRow(), /Writing the answer/);
+  // with its page open, every token is on screen
+  s.ui.agents.open(s.id);
+  s.frame();
+  const version = s.ui.activityVersion;
+  s.emit('llm_token', { text: 'Draft reply line' });
+  assert.equal(s.ui.activityVersion, version + 1);
+  assert.equal(s.ui.renderQueued, true);
+  const shown = s.paints();
+  await until(() => s.paints() > shown);
+  assert.ok(
+    s.rows().some((row) => stripAnsi(row).includes('● Draft reply line')),
+    s.rows().map(stripAnsi).join('\n'),
+  );
+});
+
+test('its next step updates the strip on the next frame', async (t) => {
+  const s = await heldSubagent(t);
+  const before = s.paints();
+  s.emit('tool_start', {
+    id: 'read-b',
+    name: 'read_file',
+    args: { file_path: 'notes/b.md' },
+  });
+  assert.equal(s.ui.agentActivity.get(s.id).activity, 'Read(notes/b.md)');
+  assert.equal(s.paints(), before, 'not drawn at once');
+  assert.equal(s.ui.renderQueued, true);
+  await until(() => s.paints() > before);
+  assert.match(s.stripRow(), /Read\(notes\/b\.md\)/);
+});
+
+test('an unchanged step does not rebuild the list', async (t) => {
+  const s = await heldSubagent(t);
+  const version = s.ui.activityVersion;
+  const step = {
+    id: 'read-b',
+    name: 'read_file',
+    args: { file_path: 'notes/b.md' },
+  };
+  s.emit('tool_start', step);
+  s.frame();
+  s.emit('tool_start', step);
+  assert.equal(s.ui.activityVersion, version + 1);
+  let children = 0;
+  const list = s.runtime.store.children.bind(s.runtime.store);
+  s.runtime.store.children = (parent: string) => {
+    children++;
+    return list(parent);
+  };
+  s.frame();
+  assert.equal(children, 0);
+  assert.match(s.stripRow(), /Read\(notes\/b\.md\)/);
+});
+
+test('a background job update draws on the next frame', async (t) => {
+  const s = await heldSubagent(t);
+  let log: ((text: string) => void) | undefined;
+  s.runtime.jobs.startCall(
+    'fetch the pages',
+    { sessionId: s.runtime.session.id, startedBy: 'model' },
+    (signal, report) => {
+      log = report;
+      return new Promise((resolve) =>
+        signal.addEventListener('abort', () => resolve('stopped')),
+      );
+    },
+  );
+  await until(() => log !== undefined);
+  s.frame();
+  const before = s.paints();
+  log!('page 2 of 3');
+  assert.equal(s.paints(), before, 'not drawn at once');
+  assert.equal(s.ui.renderQueued, true);
+  await until(() => s.paints() > before);
+  assert.ok(
+    s.rows().some((row) => stripAnsi(row).includes('page 2 of 3')),
+    s.rows().map(stripAnsi).join('\n'),
+  );
 });
