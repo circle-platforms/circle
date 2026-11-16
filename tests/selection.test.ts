@@ -14,11 +14,14 @@ import { InputParser } from '../src/ink/parse_keypress.js';
 import {
   Grid,
   createSelectionState,
+  finishSelection,
   getSelectedText,
   hasSelection,
   paintRow,
   paintSelection,
   selectionBounds,
+  startSelection,
+  updateSelection,
 } from '../src/ink/selection.js';
 import { stringWidth, stripAnsi } from '../src/ink/string_width.js';
 import {
@@ -33,6 +36,7 @@ import { AgentRuntime } from '../src/runtime.js';
 import { defaultSettings } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import { SessionApp } from '../src/tui/session_app.js';
+import { MouseSelection } from '../src/tui/mouse_selection.js';
 import { cleanup, scratch } from './helpers.js';
 
 interface Call {
@@ -404,6 +408,49 @@ test('on a transcript scrolled back, the selection stays on its text when rows a
   const painted = s.frame().findIndex((row) => selectedIn(row));
   assert.notEqual(painted, y, 'the text moved up');
   assert.equal(stripAnsi(s.frame()[painted]!).trim(), 'line 55');
+});
+
+test('a scrolled frame with nothing selected does not read the previous frame', () => {
+  const host = { scroll: () => {}, copy: () => {}, repaint: () => {} };
+  const rows = (first: number): string[] =>
+    Array.from({ length: 10 }, (_, i) => `row ${first + i}`);
+  const viewport = (first: number) => ({
+    top: 0,
+    height: 10,
+    first,
+    total: 100,
+  });
+  // The frame drawn before, counting each row read from it
+  const counted = (list: string[]) => {
+    let reads = 0;
+    const proxy = new Proxy(list, {
+      get(target, key, receiver) {
+        if (typeof key === 'string' && /^\d+$/.test(key)) reads++;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    return { proxy, reads: () => reads };
+  };
+  const scrolled = (selection: MouseSelection): number => {
+    const previous = counted(rows(50));
+    selection.frame(previous.proxy, { scroll: 40, viewport: viewport(50) });
+    const before = previous.reads();
+    selection.frame(rows(53), { scroll: 37, viewport: viewport(53) });
+    return previous.reads() - before;
+  };
+  const idle = new MouseSelection(host);
+  assert.equal(scrolled(idle), 0);
+  // with rows 8 and 9 selected, the selection moves up with its text
+  const selecting = new MouseSelection(host);
+  startSelection(selecting.state, 0, 8);
+  updateSelection(selecting.state, 5, 9);
+  finishSelection(selecting.state);
+  assert.ok(scrolled(selecting) > 0);
+  assert.equal(selectionBounds(selecting.state)![0].row, 5);
+  assert.equal(
+    getSelectedText(selecting.state, selecting.grid),
+    'row 58\nrow 59',
+  );
 });
 
 test('dragging to the top of the transcript scrolls it and the selection grows onto the rows that come in', async (t) => {

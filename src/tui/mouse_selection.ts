@@ -80,8 +80,10 @@ export class MouseSelection {
       key,
     };
     // A transcript scrolled back moves when rows arrive, so the selection follows its
-    // text then too; at the bottom it stays put.
+    // text then too; at the bottom it stays put. With nothing selected nothing follows,
+    // and the last frame is not read again.
     if (
+      hasSelection(this.state) &&
       before?.viewport &&
       view.viewport &&
       before.key === key &&

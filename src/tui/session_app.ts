@@ -1052,6 +1052,10 @@ export class SessionApp {
     if (changed) this.repaint();
   }
   private projectedCompletionNotices = new WeakMap<SessionView, string[]>();
+  // The message a finished compaction's notice goes after, by the checkpoint it started
+  // from: a checkpoint never changes once written, so it is read once, not every frame.
+  // Ids are unique across sessions; the map is emptied when it grows past 256.
+  private compactionAnchors = new Map<string, string>();
   private get persistedCompletionNotices(): string[] {
     let notices = this.projectedCompletionNotices.get(this.view);
     if (!notices) {
@@ -1102,8 +1106,16 @@ export class SessionApp {
     }
     for (const snapshot of this.runtime?.compactionHistory() ?? []) {
       if (snapshot.status === 'running') continue;
-      const checkpoint = this.runtime!.store.checkpoint(snapshot.branchHead);
-      const anchor = checkpoint?.message?.id;
+      let anchor = this.compactionAnchors.get(snapshot.branchHead);
+      if (anchor === undefined) {
+        const checkpoint = this.runtime!.store.checkpoint(snapshot.branchHead);
+        anchor = checkpoint?.message?.id;
+        if (anchor) {
+          if (this.compactionAnchors.size >= 256)
+            this.compactionAnchors.clear();
+          this.compactionAnchors.set(snapshot.branchHead, anchor);
+        }
+      }
       if (!anchor || !this.state.messages.some((m) => m.id === anchor))
         continue;
       const text =
