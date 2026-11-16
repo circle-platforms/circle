@@ -67,6 +67,7 @@ import {
   journeyNodeCommand,
 } from './helpers/native-journey-platform.mjs';
 import { patience } from './helpers/patience.mjs';
+import { setViewport } from './helpers/viewport.mjs';
 import {
   openNativeTerminalInspector,
   chooseNewLocalTerminal,
@@ -302,6 +303,16 @@ try {
   page.setDefaultTimeout(patience(15000));
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.bringToFront();
+  // The window opens at whatever the display allows: 1024 wide on a CI runner's
+  // 1024×768 screen, where the workbench is narrow (≤1050) and lays the drawer over
+  // the conversation, terminal over the message box. The suite measures the wide
+  // layout, the drawer beside the conversation, as the native journey does.
+  report.viewport = await setViewport(
+    app,
+    page,
+    { width: 1400, height: 900 },
+    { show: true },
+  );
   if (process.env.CIRCLE_NATIVE_PERF_CPU_PROFILE === '1') {
     cpuProfile = await startNativePerformanceCpuProfile(page, report);
     await page.evaluate(() => {
