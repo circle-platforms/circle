@@ -61,6 +61,10 @@ import {
   journeyNodeCommand,
 } from './helpers/native-journey-platform.mjs';
 import { patience } from './helpers/patience.mjs';
+import {
+  openNativeTerminalInspector,
+  chooseNewLocalTerminal,
+} from './helpers/native-terminal-journey.mjs';
 const exec = promisify(execFile);
 const desktopRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
@@ -254,6 +258,23 @@ async function finish(metric) {
   assert.ok(Number.isFinite(value));
   samples[metric].push(value);
 }
+// The work drawer's terminal mode; each terminal in it is `#terminal-<id>`.
+const terminalMode = '[data-inspector-resource="terminal"]';
+/** Open the terminal mode and make a shell from its + menu; returns the new PTY's id. */
+async function openNewTerminal() {
+  const before = new Set(
+    (await service('terminal', 'list')).map((item) => item.id),
+  );
+  await chooseNewLocalTerminal(page, await openNativeTerminalInspector(page));
+  let created;
+  await waitFor(async () => {
+    created = (await service('terminal', 'list')).find(
+      (item) => !before.has(item.id),
+    );
+    return !!created;
+  }, 'a new terminal made from the terminal mode');
+  return created.id;
+}
 try {
   app = await electron.launch({
     executablePath: executable,
@@ -364,20 +385,10 @@ try {
       window.__circleNativeTerminalTiming = (record) =>
         window.__circleNativePerfTerminalTiming.push(record);
     });
+    terminalId = await openNewTerminal();
     await page
-      .getByRole('button', { name: 'terminal panel', exact: true })
-      .click();
-    await page
-      .locator('#inspector-terminal-terminal')
+      .locator(`${terminalMode} #terminal-${terminalId} .xterm-screen`)
       .waitFor({ state: 'visible' });
-    await page
-      .locator('#inspector-terminal-terminal button[aria-label="new terminal"]')
-      .click();
-    await page
-      .locator('#inspector-terminal-terminal .xterm-screen')
-      .first()
-      .waitFor({ state: 'visible' });
-    terminalId = (await service('terminal', 'list'))[0].id;
     const identity = await app.evaluate(({ app }) => ({
       isPackaged: app.isPackaged,
       resourcesPath: process.resourcesPath,
@@ -436,11 +447,9 @@ try {
       ),
       'probe producer record joins actual parser and frame callbacks',
     );
-    report.originalEntryProbe = await page.evaluate(async () => {
+    report.originalEntryProbe = await page.evaluate(async (selector) => {
       await document.fonts.ready;
-      const screen = document.querySelector(
-        '#inspector-terminal-terminal .xterm-screen',
-      );
+      const screen = document.querySelector(selector);
       const rows = window.__circleNativePerfTerminalTiming;
       return {
         inspectorVisible: screen.getBoundingClientRect().width > 0,
@@ -451,7 +460,7 @@ try {
           .fontFamily,
         phases: [...new Set(rows.map((row) => row.phase))],
       };
-    });
+    }, `${terminalMode} #terminal-${terminalId} .xterm-screen`);
     assert.ok(report.originalEntryProbe.inspectorVisible);
     assert.ok(report.originalEntryProbe.phases.includes('write-parsed'));
     await page.screenshot({ path: join(output, 'original-entry-probe.png') });
@@ -503,16 +512,10 @@ try {
       window.__circleNativePerfTerminalTiming.push(record);
     };
   });
+  terminalId = await openNewTerminal();
   await page
-    .getByRole('button', { name: 'terminal panel', exact: true })
-    .first()
-    .click();
-  await page
-    .locator('#inspector-terminal-terminal button[aria-label="new terminal"]')
-    .click();
-  await page.locator('#inspector-terminal-terminal .xterm').first().waitFor();
-  const terminals = await service('terminal', 'list');
-  terminalId = terminals[0].id;
+    .locator(`${terminalMode} #terminal-${terminalId} .xterm`)
+    .waitFor();
   const appIdentity = await app.evaluate(({ app }) => ({
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
@@ -681,23 +684,22 @@ try {
         originalAttachments,
       );
       if (index === 0) {
+        // The chip opens the attachment in a dialog over the window; the terminal
+        // mode stays open behind it.
         await page
           .locator('.attachment-strip')
           .getByRole('button', { name: marker, exact: true })
           .click();
-        const source = page
-          .locator('.inspector .context-source')
-          .filter({ has: page.locator('summary', { hasText: marker }) });
-        if (!(await source.evaluate((node) => node.open)))
-          await source.locator(':scope > summary').click();
+        const source = page.getByRole('dialog', { name: marker, exact: true });
         assert.equal(
-          await source.locator(':scope > pre').textContent(),
+          await source.locator('.data-block pre').textContent(),
           longPaste,
           'original UI exposes all600lines exactly',
         );
-        await page
-          .getByRole('button', { name: 'terminal panel', exact: true })
+        await source
+          .getByRole('button', { name: 'close dialog', exact: true })
           .click();
+        await source.waitFor({ state: 'detached' });
       }
     } else {
       assert.equal(
@@ -733,20 +735,28 @@ try {
     '20 trusted native clipboard pastes retain exact600line originals and20 keyboard clears restore composer context',
   );
   report.interfaceScope =
-    'original topbar panels, inspector and main file view; no dual layout';
+    'top bar mode buttons, the work drawer terminal and files modes; no dual layout';
   await input.fill('retained developer draft');
   await input.evaluate((node) => {
     node.focus();
     node.setSelectionRange(3, 10);
   });
   const panelAnchor = await page.evaluate(captureNativeTranscriptAnchor);
+  // The roundtrips start from the open terminal mode: even clicks close it, odd ones reopen it.
+  assert.equal(
+    await page
+      .getByRole('button', { name: 'terminal panel', exact: true })
+      .getAttribute('aria-pressed'),
+    'true',
+  );
+  await page.locator(terminalMode).waitFor({ state: 'visible' });
   for (let index = 0; index < 40; index++) {
     const open = index % 2 === 1;
     await arm('click', 'button[aria-label="terminal panel"]', {
       selector: 'button[aria-label="terminal panel"]',
       attribute: 'aria-pressed',
       equals: String(open),
-      panel: { selector: '#inspector-terminal-terminal', visible: open },
+      panel: { selector: terminalMode, visible: open },
     });
     await page
       .getByRole('button', { name: 'terminal panel', exact: true })
