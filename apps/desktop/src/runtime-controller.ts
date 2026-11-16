@@ -231,7 +231,10 @@ function pageTransport(
         : 'stdio';
 }
 import { PlanCompletionTracker } from '../../../src/plan_state.js';
-import { nextAgentActivity } from '../../../src/session_activity.js';
+import {
+  stepAgentActivity,
+  type AgentActivityState,
+} from '../../../src/session_activity.js';
 import { formatElapsed, type TurnUsage } from '../../../src/tui/status_rows.js';
 import {
   approvalPreview,
@@ -454,7 +457,8 @@ export class RuntimeController {
   readonly home: string;
   private metadata: SessionMetadata;
   private planCompletions = new Map<string, PlanCompletionTracker>();
-  private activities = new Map<string, string>();
+  private activities = new Map<string, AgentActivityState>();
+  private taskSessionIds = new Set<string>();
   private notices = new Map<
     string,
     {
@@ -1853,10 +1857,12 @@ export class RuntimeController {
         onRuntimeCreated: (task, runtime) => {
           this.taskRuntimes.set(task.spec.id, runtime);
           this.activeRuns.add(runtime.session.id);
+          this.taskSessionIds.add(runtime.session.id);
         },
         onRuntimeClosed: (task, runtime) => {
           this.taskRuntimes.delete(task.spec.id);
           this.activeRuns.delete(runtime.session.id);
+          this.taskSessionIds.delete(runtime.session.id);
           if (this.active === runtime) {
             this.viewedSessionId = runtime.session.id;
             const parent = task.spec.sessionId
@@ -1975,7 +1981,7 @@ export class RuntimeController {
               task.spec.prompt.split(/\r\n|\r|\n/u)[0] ||
               'agent',
             description: task.spec.prompt,
-            activity: this.activities.get(child.id),
+            activity: this.activities.get(child.id)?.activity,
             status:
               recovery ||
               ['waiting', 'blocked', 'needs_review'].includes(source.state)
@@ -2642,6 +2648,7 @@ export class RuntimeController {
       else throw error;
     }
     this.fileRewinds.set(runtime, fileRewind);
+    if (task) this.taskSessionIds.add(runtime.session.id);
     runtime.bus.subscribe((event) => {
       if (task) {
         this.event(
@@ -3568,7 +3575,7 @@ export class RuntimeController {
                 // Core history has no durable per-child permission metadata.
                 readOnly: true,
                 name: row.title || 'agent',
-                activity: this.activities.get(row.id),
+                activity: this.activities.get(row.id)?.activity,
                 description: row.title,
                 status: [...this.pending.values()].some(
                   (pending) => pending.row.origin?.agent === row.id,
@@ -3950,10 +3957,12 @@ export class RuntimeController {
       event.tags?.subagent ?? event.tags?.session_id ?? runtime.session.id,
     );
     this.sessionEvents.set(id, (this.sessionEvents.get(id) ?? 0) + 1);
-    if (event.tags?.subagent)
+    const trackActivity =
+      Boolean(event.tags?.subagent) || this.taskSessionIds.has(id);
+    if (trackActivity)
       this.activities.set(
         id,
-        nextAgentActivity(this.activities.get(id), event),
+        stepAgentActivity(this.activities.get(id), event),
       );
     if (!event.tags?.subagent && event.kind === 'todo_list') {
       let tracker = this.planCompletions.get(id);
@@ -4218,6 +4227,9 @@ export class RuntimeController {
           parentId: this.store.get(id)?.head ?? null,
           text: event.payload.thinking ? undefined : chunk,
           thinking: event.payload.thinking ? chunk : undefined,
+          ...(trackActivity
+            ? { activity: this.activities.get(id)?.activity }
+            : {}),
           at: event.ts,
           turn: this.turn(id),
         });
@@ -5707,6 +5719,7 @@ export class RuntimeController {
           this.sessionEvents.delete(target);
           this.histories.delete(target);
           this.activities.delete(target);
+          this.taskSessionIds.delete(target);
           this.changes.delete(target);
           for (const key of this.diffs.keys())
             if (key.startsWith(`${target}:`)) this.diffs.delete(key);

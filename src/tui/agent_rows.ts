@@ -12,6 +12,7 @@ import {
 } from '../ink/components/markdown_renderer.js';
 import type { Message, ToolCall } from '../types.js';
 import { toolArgSummary, toolShortName } from './display_lexicon.js';
+import { thinkingActivitySummary } from '../session_activity.js';
 import { formatElapsed, formatTokens } from './status_rows.js';
 import { agentName, agentSeconds } from './strip_rows.js';
 import type { SubagentView } from './subagents.js';
@@ -349,12 +350,21 @@ function callLine(step: ToolStep, width: number, now: number): string {
 // ctrl+t shows it.
 function thinkingLines(
   step: Extract<AgentStep, { kind: 'thinking' }>,
-  options: { width: number; expanded: boolean; seconds?: number },
+  options: {
+    width: number;
+    expanded: boolean;
+    seconds?: number;
+    live?: boolean;
+  },
 ): string[] {
   const p = palette();
-  const { title, body } = reasoningSummary(step.text);
-  let header = '∴ Thought';
-  if (options.seconds !== undefined)
+  const parsed = reasoningSummary(step.text);
+  const title = options.live
+    ? (parsed.title ?? thinkingActivitySummary(step.text))
+    : parsed.title;
+  const body = options.live && !parsed.title ? step.text.trim() : parsed.body;
+  let header = options.live ? '∴ Thinking' : '∴ Thought';
+  if (!options.live && options.seconds !== undefined)
     header += ` ${formatElapsed(options.seconds)}`;
   if (title) header += ` · ${clip(title, 120)}`;
   header += ` · ${formatChars(Array.from(step.text.trim()).length)}`;
@@ -417,11 +427,39 @@ export function detailRows(
       thinking++;
     }
   }
-  if (!calls && !thinking) rows.push(` ${p.dim}${NO_STEPS}${p.reset}`);
+  const running = agentRunning(agent);
+  let streaming = false;
+  if (running) {
+    if (
+      agent.liveThinking &&
+      agent.liveThinking.replace(
+        /[\s\u200b\u200c\u200d\ufeff\u2060\u00ad]/g,
+        '',
+      ).length > 0
+    ) {
+      rows.push(
+        ...thinkingLines(
+          { kind: 'thinking', id: 'live', text: agent.liveThinking },
+          { width, expanded: options.expanded, live: true },
+        ),
+      );
+      thinking++;
+    }
+    if (agent.liveStreaming?.trim()) {
+      streaming = true;
+      const lines = markdownRows(agent.liveStreaming, Math.max(20, width - 3), {
+        base: p.text,
+      });
+      lines.forEach((line, index) =>
+        rows.push((index === 0 ? ` ${p.text}●${p.reset} ` : '   ') + line),
+      );
+    }
+  }
+  if (!calls && !thinking && !streaming)
+    rows.push(` ${p.dim}${NO_STEPS}${p.reset}`);
   rows.push('');
   let facts =
     `${calls} tool calls` + (thinking ? ` · ${thinking} thinking` : '');
-  const running = agentRunning(agent);
   if (running)
     facts += ` · ${formatElapsed((now - (agent.updated ?? agent.started)) / 1000)} since the last event`;
   rows.push(` ${p.faint}${truncate(facts, width - 2)}${p.reset}`);

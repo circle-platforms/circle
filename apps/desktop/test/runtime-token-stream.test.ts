@@ -194,3 +194,60 @@ test('full resync retains latest chunk and deletion never resurrects the removed
     false,
   );
 });
+
+test('subagent token deltas hydrate agent activity and messages while keeping session history by reference', () => {
+  const full = baseline();
+  const session = full.snapshot.sessions[0];
+  full.snapshot.agents = [
+    {
+      id: 'subagent-1',
+      sessionId: session.id,
+      name: 'general-purpose: compile script',
+      description: 'general-purpose: compile script',
+      activity: 'working',
+      status: 'running',
+      model: 'sample-code-model',
+      tokens: 0,
+      messages: [],
+    },
+  ];
+  const buffer = new RuntimeTokenBuffer();
+  buffer.acceptFull(full);
+  assert.equal(
+    buffer.apply({
+      epoch: 'epoch-one',
+      seq: 1,
+      baseSeq: full.seq,
+      sessionId: 'subagent-1',
+      streamId: 'stream-sub-1',
+      parentId: null,
+      thinking: '**Checking schema**',
+      activity: 'Checking schema',
+      at: 'fixture',
+    }),
+    'applied',
+  );
+  assert.equal(
+    buffer.apply({
+      epoch: 'epoch-one',
+      seq: 2,
+      baseSeq: full.seq,
+      sessionId: 'subagent-1',
+      streamId: 'stream-sub-1',
+      parentId: null,
+      text: 'writing output',
+      activity: 'Checking schema',
+      at: 'fixture',
+    }),
+    'applied',
+  );
+  const hydrated = buffer.materialize();
+  assert.equal(hydrated.snapshot.sessions, full.snapshot.sessions);
+  assert.equal(hydrated.snapshot.sessions[0].messages, session.messages);
+  const agent = hydrated.snapshot.agents[0];
+  assert.equal(agent.activity, 'Checking schema');
+  assert.equal(agent.messages.length, 1);
+  assert.equal(agent.messages[0]!.thinking, '**Checking schema**');
+  assert.equal(agent.messages[0]!.text, 'writing output');
+  assert.equal(agent.messages[0]!.at, 'streaming');
+});
