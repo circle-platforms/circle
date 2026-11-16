@@ -118,7 +118,23 @@ jobs:
       - run: npm --prefix apps/desktop run test:runtime
         # Bound leaked native handles without forcing tests to report success.
         timeout-minutes: 20
+      # The performance suite at the end of this job runs only the build it was given a
+      # manifest of: the source before the build, then the hashes of what the build made.
+      - name: Record the source of the native performance build
+        if: matrix.target == 'darwin-arm64'
+        run: >-
+          node apps/desktop/scripts/native-build-manifest.mjs capture
+          --root "$GITHUB_WORKSPACE"
+          --output apps/desktop/artifacts/native-performance/source-receipt.json
       - run: npm --prefix apps/desktop run build
+      - name: Record the native performance build
+        if: matrix.target == 'darwin-arm64'
+        run: >-
+          node apps/desktop/scripts/native-build-manifest.mjs create
+          --root "$GITHUB_WORKSPACE"
+          --receipt apps/desktop/artifacts/native-performance/source-receipt.json
+          --app apps/desktop
+          --output apps/desktop/artifacts/native-performance/build-manifest.json
       - run: node apps/desktop/scripts/developer-toolchain.mjs
       - run: node apps/desktop/test/developer-toolchain-smoke.mjs
       - run: npm --prefix apps/desktop run test:desktop
@@ -173,6 +189,20 @@ jobs:
           export CIRCLE_DESKTOP_APP_PATH="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.app }}"
           export CIRCLE_DESKTOP_EXECUTABLE="$GITHUB_WORKSPACE/apps/desktop/out/${{ matrix.executable }}"
           npm --prefix apps/desktop run test:update
+      # Keys, pastes, clicks, terminal output, conversation and file switches and saves in
+      # the development build, against 10,000 stored messages and eight streaming agents.
+      # Last, so that a failure here leaves every check above run. On a shared runner the
+      # latency budgets are reported, not enforced (docs/development/native-development-loop.md);
+      # a missing effect, an unfinished run or an error in the window still fails.
+      - name: Measure native performance on Apple silicon
+        if: matrix.target == 'darwin-arm64'
+        timeout-minutes: 15
+        env:
+          CIRCLE_NATIVE_PERF_BUDGETS: report
+          CIRCLE_NATIVE_PERF_BUILD_MANIFEST: ${{ github.workspace }}/apps/desktop/artifacts/native-performance/build-manifest.json
+          CIRCLE_NATIVE_PERF_OUTPUT: ${{ github.workspace }}/apps/desktop/artifacts/native-performance
+        run: npm --prefix apps/desktop run test:performance
+      # The native performance evidence is in apps/desktop/artifacts/native-performance/
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

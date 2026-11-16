@@ -17,7 +17,13 @@ import {
  */
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
+import {
+  appendFile,
+  mkdtemp,
+  mkdir,
+  writeFile,
+  readFile,
+} from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -65,6 +71,14 @@ import {
   openNativeTerminalInspector,
   chooseNewLocalTerminal,
 } from './helpers/native-terminal-journey.mjs';
+import {
+  performanceBudgets as budgets,
+  performanceBudgetMode,
+  performanceBudgetWarnings,
+  performanceRunFailed,
+  performanceSummary,
+} from './helpers/native-performance-budgets.mjs';
+const budgetMode = performanceBudgetMode();
 const exec = promisify(execFile);
 const desktopRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
@@ -218,6 +232,7 @@ const report = {
   samples,
   checks,
   errors,
+  budgetMode,
   metrics: {},
   complete: false,
 };
@@ -1238,16 +1253,7 @@ try {
     taskIds.includes(task.spec.id),
   );
   await page.screenshot({ path: join(output, 'native-performance.png') });
-  for (const [metric, budget] of Object.entries({
-    inputKeystroke: 100,
-    inputPaste: 100,
-    inputClear: 100,
-    click: 100,
-    eventToFrame: 200,
-    sessionSwitch: 300,
-    fileSwitch: 300,
-    save: 500,
-  })) {
+  for (const [metric, budget] of Object.entries(budgets)) {
     assert.ok(samples[metric].length >= 20, `${metric} insufficient samples`);
     report.metrics[metric] = {
       n: samples[metric].length,
@@ -1259,10 +1265,11 @@ try {
   report.measurement =
     '40 actual keys plus20 trusted system clipboard600line pastes and20 keyboard clears require actual composer and React Send state; original-panel click feedback and session backend/route/header/visible-body require two frames; producer-to-frame uses actual xterm write callback plus two visible RAF opportunities, never a compositor pixel timestamp. AX latency is reported independently.';
   report.complete = true;
-  report.passed =
-    Object.values(report.metrics).every((metric) => metric.passed) &&
-    !errors.length &&
-    report.initialTranscriptPassed;
+  report.budgetsPassed = Object.values(report.metrics).every(
+    (metric) => metric.passed,
+  );
+  report.functionalPassed = !errors.length && report.initialTranscriptPassed;
+  report.passed = report.budgetsPassed && report.functionalPassed;
 } catch (error) {
   report.failure = String(error.stack ?? error);
   try {
@@ -1436,6 +1443,7 @@ try {
             retryPath: join(output, 'retry-clipboard'),
           };
           report.passed = false;
+          report.functionalPassed = false;
           process.exitCode = 1;
           await writePerformanceEvidence(
             report,
@@ -1471,16 +1479,7 @@ try {
       );
     }
   }
-  for (const [metric, budget] of Object.entries({
-    inputKeystroke: 100,
-    inputPaste: 100,
-    inputClear: 100,
-    click: 100,
-    eventToFrame: 200,
-    sessionSwitch: 300,
-    fileSwitch: 300,
-    save: 500,
-  })) {
+  for (const [metric, budget] of Object.entries(budgets)) {
     if (!report.metrics[metric] && samples[metric].length)
       report.metrics[metric] = {
         n: samples[metric].length,
@@ -1502,6 +1501,8 @@ try {
         output,
         complete: report.complete,
         passed: report.passed ?? false,
+        functionalPassed: report.functionalPassed ?? false,
+        budgetMode,
         metrics: report.metrics,
         failure: report.failure,
         diagnosticWriteErrors: report.diagnosticWriteErrors,
@@ -1510,5 +1511,21 @@ try {
       2,
     ),
   );
-  if (report.complete && !report.passed) process.exitCode = 1;
+  if (budgetMode === 'report')
+    for (const line of performanceBudgetWarnings(report.metrics))
+      console.log(line);
+  if (process.env.GITHUB_STEP_SUMMARY)
+    try {
+      await appendFile(
+        process.env.GITHUB_STEP_SUMMARY,
+        performanceSummary(report, budgetMode, output),
+      );
+    } catch (error) {
+      console.log(
+        `::warning title=native performance::the step summary was not written: ${error}`,
+      );
+    }
+  // An unfinished run or a missing effect fails in either mode; a p95 over its budget
+  // fails only where budgets are enforced. Nothing here sets the exit code back to 0.
+  if (performanceRunFailed(report, budgetMode)) process.exitCode = 1;
 }
