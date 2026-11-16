@@ -67,7 +67,10 @@ import {
   sessionOccupied,
   SessionOccupiedError,
 } from '../../../src/session_lock.js';
-import { CheckpointStore } from '../../../src/checkpoint_store.js';
+import {
+  CheckpointStore,
+  type Session as CheckpointSession,
+} from '../../../src/checkpoint_store.js';
 import {
   isTaskWorkspace,
   newTaskName,
@@ -1936,11 +1939,15 @@ export class RuntimeController {
       if (!this.closing) this.publish();
     });
   }
-  private taskAgentAttempts(ownerSessionId: string): {
+  /** `row`, when the caller has listed it, saves reading the session again. */
+  private taskAgentAttempts(
+    ownerSessionId: string,
+    row?: CheckpointSession,
+  ): {
     records: readonly TaskRecord[];
     archived: boolean;
   } {
-    const owner = this.store.get(ownerSessionId);
+    const owner = row ?? this.store.get(ownerSessionId);
     if (!owner) return { records: [], archived: true };
     const root = this.taskWorkspaces.get(owner.workspace) ?? owner.workspace;
     const live = this.taskServices.get(root);
@@ -1978,10 +1985,13 @@ export class RuntimeController {
       return { records: [], archived: true };
     }
   }
-  private nativeTaskAgents(inputs: HistoryInputs): AgentRecord[] {
+  private nativeTaskAgents(
+    inputs: HistoryInputs,
+    owners: readonly CheckpointSession[],
+  ): AgentRecord[] {
     const agents = new Map<string, AgentRecord>();
-    for (const owner of this.store.list(undefined, true)) {
-      const { records, archived } = this.taskAgentAttempts(owner.id);
+    for (const owner of owners) {
+      const { records, archived } = this.taskAgentAttempts(owner.id, owner);
       for (const task of records) {
         const sources = [
           {
@@ -2029,7 +2039,7 @@ export class RuntimeController {
                   : 'completed',
             model: child.model,
             tokens: 0,
-            messages: this.sessionHistory(child.id, child.head, inputs)
+            messages: this.sessionHistory(child.id, child.head, inputs, child)
               .messages,
             workspaceId: identity(child.workspace),
             resourceSessionId: child.id,
@@ -2870,6 +2880,7 @@ export class RuntimeController {
     id: string,
     head: string | null,
     inputs: HistoryInputs,
+    row?: CheckpointSession,
   ): SessionHistory {
     this.historiesRead.add(id);
     const owner =
@@ -2877,7 +2888,7 @@ export class RuntimeController {
       [...this.taskRuntimes.values()].find((task) => task.session.id === id);
     const before = this.histories.get(id);
     const { priced, showHookAllow } = inputs;
-    const attempts = this.taskAgentAttempts(id).records;
+    const attempts = this.taskAgentAttempts(id, row).records;
     const live = owner || attempts.length;
     const unchanged = [
       inputs.storeVersion,
@@ -3425,8 +3436,12 @@ export class RuntimeController {
     const inspecting = !!this.viewedSessionId;
     const defaultFolder = this.defaultWorkspace(savedSettings);
     const taskRoot = this.tasksRootFor(savedSettings);
-    // The open conversation is listed before its first message.
-    const rows = this.store.list(undefined, false, true);
+    // One listing for the sessions, the subagents and the tasks' owners: it costs a
+    // query of every session's last message (#577). Its order is total, so the root
+    // rows keep the order a listing of them alone gives, the open conversation with
+    // no message yet among them.
+    const listed = this.store.list(undefined, true);
+    const rows = listed.filter((row) => row.parent_id === null);
     const paths = this.listedFolders(rows);
     this.historiesRead.clear();
     const historyInputs: HistoryInputs = {
@@ -3435,7 +3450,7 @@ export class RuntimeController {
       showHookAllow: savedSettings.show_hook_allow,
       storeVersion: this.store.changeVersion(),
     };
-    const nativeAgents = this.nativeTaskAgents(historyInputs);
+    const nativeAgents = this.nativeTaskAgents(historyInputs, listed);
     const sessions: Session[] = rows.map((row) => {
       const owner =
         this.runtimes.get(row.id) ??
@@ -3447,7 +3462,7 @@ export class RuntimeController {
       const queue = selected
         ? owner.harness.queuedMessages
         : { steering: [], followUp: [] };
-      const history = this.sessionHistory(row.id, row.head, historyInputs);
+      const history = this.sessionHistory(row.id, row.head, historyInputs, row);
       const executionRootValid = this.validWorkspaceRoot(row.workspace);
       return {
         id: row.id,
@@ -3598,8 +3613,7 @@ export class RuntimeController {
       sessions,
       files: [],
       agents: [
-        ...this.store
-          .list(undefined, true)
+        ...listed
           .filter((row) => row.parent_id)
           .map(
             (row) =>
@@ -3622,8 +3636,12 @@ export class RuntimeController {
                     : 'completed',
                 model: row.model,
                 tokens: 0,
-                messages: this.sessionHistory(row.id, row.head, historyInputs)
-                  .messages,
+                messages: this.sessionHistory(
+                  row.id,
+                  row.head,
+                  historyInputs,
+                  row,
+                ).messages,
               }) as AgentRecord,
           ),
         ...nativeAgents,
