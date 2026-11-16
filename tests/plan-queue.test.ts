@@ -106,6 +106,44 @@ test('the plan frame stays above a card, so the plan-exit card is answered with 
   );
 });
 
+test('a burst of wheel reports over the plan moves it by each and draws once', async (t) => {
+  const root = scratch(t);
+  const settings = defaultSettings();
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings,
+    model: new ScriptedModel(),
+    headless: true,
+  });
+  cleanup(t, () => runtime.close());
+  runtime.todos = todos();
+  const app = new SessionApp(root, root, settings);
+  app.runtime = runtime;
+  const ui = app as any;
+  let rendered: string[] = [];
+  let paints = 0;
+  ui.screen.render = (rows: string[]) => {
+    rendered = rows;
+    paints++;
+  };
+  cleanup(t, () => {
+    if (ui.flashTimer) clearTimeout(ui.flashTimer);
+    ui.input.close();
+  });
+  ui.repaint();
+  const top = rendered.findIndex((row) => /^┌.*Plan/.test(stripAnsi(row)));
+  assert.ok(top >= 0);
+  assert.equal(app.state.planStart, 4);
+  const before = paints;
+  ui.dataListener(`\x1b[<65;3;${top + 2}M`.repeat(3));
+  assert.equal(paints, before + 1);
+  // twelve steps, five shown: the last start is 7
+  assert.equal(app.state.planStart, 7);
+  assert.match(stripAnsi(rendered[top + 5]!), /任务 12/);
+  assert.equal(app.state.scroll, 0);
+});
+
 test('actual session input routes wheel events to the plan and Alt+Up takes unsent messages back from the real harness', async (t) => {
   const root = scratch(t);
   const settings = defaultSettings();

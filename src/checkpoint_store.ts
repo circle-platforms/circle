@@ -273,15 +273,21 @@ export class CheckpointStore {
   // not modify them.
   private checkpointCache = new Map<string, CheckpointRows>();
   // One recent head per session, bounded independently of conversation length.
-  // SQLite's data_version covers other connections; writeVersion covers this one.
+  // SQLite's data_version covers other connections and clears it all; this connection's
+  // writes drop or move only the entry of the session they wrote, so a subagent's write
+  // does not make every other session walk its chain again. `legacy` marks a state the
+  // context_projections fallback decided, which depends on the messages of the branch.
   private contextCache = new Map<
     string,
-    { head: string | null | undefined; state: ContextState }
+    { head: string | null | undefined; state: ContextState; legacy: boolean }
   >();
-  private contextCacheVersion?: { local: number; database: number };
+  private contextCacheVersion?: number;
   // Moved on every write, so callers can tell whether a derived view of the store
   // (the subagent rows) is still current without re-querying.
   private writeVersion = 0;
+  // This connection's writes to each session. Never reset, not even when a session is
+  // deleted: a session made again under the same id must not repeat an earlier count.
+  private sessionWrites = new Map<string, number>();
   get version(): number {
     return this.writeVersion;
   }
@@ -290,6 +296,33 @@ export class CheckpointStore {
     const local = this.db.prepare('SELECT total_changes() AS n').get()?.n;
     const other = this.db.prepare('PRAGMA data_version').get()?.data_version;
     return `${this.writeVersion}:${local}:${other}`;
+  }
+  /**
+   * Moves with every write this connection makes to one session, and with nothing done
+   * to another. With databaseVersion() it tells whether what was read of that session
+   * is still current.
+   */
+  writesTo(sessionId: string): number {
+    return this.sessionWrites.get(sessionId) ?? 0;
+  }
+  /** Moves when another connection commits; this connection's own writes leave it. */
+  databaseVersion(): number {
+    const version = this.db.prepare('PRAGMA data_version').get()?.data_version;
+    if (typeof version !== 'number' || !Number.isSafeInteger(version))
+      throw new Error('database version is unavailable');
+    return version;
+  }
+  /**
+   * What was read of a session stays current while this is unchanged: no write here to
+   * that session and no commit by another connection. Pass `database` to stamp many
+   * sessions against one read of it.
+   */
+  sessionStamp(sessionId: string, database = this.databaseVersion()): string {
+    return `${this.writesTo(sessionId)}:${database}`;
+  }
+  private wrote(sessionIds: Iterable<string>): void {
+    for (const id of sessionIds)
+      this.sessionWrites.set(id, this.writesTo(id) + 1);
   }
   constructor(home?: string, hooks?: { onBusy?: () => void }) {
     this.home = home;
@@ -362,7 +395,10 @@ export class CheckpointStore {
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;
+    } finally {
+      this.wrote(ids.map(({ id }) => id));
     }
+    for (const { id } of ids) this.contextCache.delete(id);
   }
   /** Drop a session that was never written, or one whose only turn failed before a reply. */
   abandonUnanswered(sessionId: string): boolean {
@@ -389,6 +425,7 @@ export class CheckpointStore {
       }
       this.messageCache.delete(sessionId);
       this.checkpointCache.delete(sessionId);
+      this.contextCache.delete(sessionId);
       this.deferred.set(sessionId, {
         ...session,
         title: '',
@@ -400,7 +437,7 @@ export class CheckpointStore {
     return true;
   }
   dropDeferred(sessionId: string): void {
-    this.deferred.delete(sessionId);
+    if (this.deferred.delete(sessionId)) this.wrote([sessionId]);
   }
   /** Hold execution ownership through turns, background tasks and shutdown. */
   claimSession(
@@ -435,6 +472,7 @@ export class CheckpointStore {
       return operation();
     } finally {
       for (const lease of temporary.reverse()) lease.release();
+      this.wrote(sessionIds);
     }
   }
   create(
@@ -459,6 +497,7 @@ export class CheckpointStore {
         title_locked: 0,
       };
       this.deferred.set(id, session);
+      this.wrote([id]);
       return { ...session };
     }
     if (parentId && this.ownership.has(parentId))
@@ -618,6 +657,7 @@ export class CheckpointStore {
     if (pending && !this.row(id)) {
       pending.title = title;
       pending.title_locked = locked ? 1 : 0;
+      this.wrote([id]);
       return;
     }
     // Leave `updated` alone. The session list is newest-activity first, and a
@@ -628,6 +668,7 @@ export class CheckpointStore {
       .prepare('UPDATE sessions SET title = ?, title_locked = ? WHERE id = ?')
       .run(title, locked ? 1 : 0, id);
     this.writeVersion++;
+    this.wrote([id]);
   }
   private decode(row: Record<string, unknown>): Checkpoint {
     return {
@@ -822,6 +863,13 @@ export class CheckpointStore {
       const extended = current && this.extendCheckpoints(rows, written);
       if (extended) this.checkpointCache.set(sessionId, extended);
       else this.checkpointCache.delete(sessionId);
+      // An append writes no context version, so the new head has the state of the old one.
+      // A legacy summary counts only when its message is on the branch: read it again.
+      const context = this.contextCache.get(sessionId);
+      if (context?.head === session.head) {
+        if (context.legacy) this.contextCache.delete(sessionId);
+        else context.head = head;
+      }
       this.writeVersion++;
       return head;
     } catch (error) {
@@ -899,6 +947,7 @@ export class CheckpointStore {
       for (const child of this.children(id)) visit(child.id, seen);
       this.messageCache.delete(id);
       this.checkpointCache.delete(id);
+      this.contextCache.delete(id);
       this.deferred.delete(id);
       this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
     };
@@ -936,6 +985,7 @@ export class CheckpointStore {
       this.db
         .prepare('DELETE FROM labels WHERE session_id = ? AND message_id = ?')
         .run(sessionId, messageId);
+    this.wrote([sessionId]);
   }
   /** One turn's recorded file changes, oldest turn first, as `/rewind` needs them. */
   rewindLoad(sessionId: string): { turnId: string; entries: RewindEntry[] }[] {
@@ -997,6 +1047,8 @@ export class CheckpointStore {
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;
+    } finally {
+      this.wrote([sessionId]);
     }
   }
   /** A rewound turn has nothing left to offer. */
@@ -1004,6 +1056,7 @@ export class CheckpointStore {
     this.db
       .prepare('DELETE FROM file_rewind WHERE session_id = ? AND turn_id = ?')
       .run(sessionId, turnId);
+    this.wrote([sessionId]);
   }
   requireBalancedTools(messages: Message[]): void {
     const pending = new Set<string>();
@@ -1227,6 +1280,8 @@ export class CheckpointStore {
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;
+    } finally {
+      this.wrote(sessionIds.values());
     }
   }
   /**
@@ -1336,16 +1391,11 @@ export class CheckpointStore {
     // An explicit transaction may observe a different database snapshot from
     // an earlier autocommit read. Never cache that transaction's intermediate state.
     if (!session || this.db.isTransaction)
-      return this.readContextState(sessionId, selected);
-    const database = this.db.prepare('PRAGMA data_version').get()?.data_version;
-    if (typeof database !== 'number' || !Number.isSafeInteger(database))
-      throw new Error('context database version is unavailable');
-    if (
-      this.contextCacheVersion?.local !== this.writeVersion ||
-      this.contextCacheVersion.database !== database
-    ) {
+      return this.readContextState(sessionId, selected).state;
+    const database = this.databaseVersion();
+    if (this.contextCacheVersion !== database) {
       this.contextCache.clear();
-      this.contextCacheVersion = { local: this.writeVersion, database };
+      this.contextCacheVersion = database;
     }
     const cached = this.contextCache.get(sessionId);
     if (cached && cached.head === selected) {
@@ -1353,11 +1403,12 @@ export class CheckpointStore {
       this.contextCache.set(sessionId, cached);
       return structuredClone(cached.state);
     }
-    const state = this.readContextState(sessionId, selected);
+    const { state, legacy } = this.readContextState(sessionId, selected);
     this.contextCache.delete(sessionId);
     this.contextCache.set(sessionId, {
       head: selected,
       state: structuredClone(state),
+      legacy,
     });
     if (this.contextCache.size > 64)
       this.contextCache.delete(this.contextCache.keys().next().value!);
@@ -1366,7 +1417,7 @@ export class CheckpointStore {
   private readContextState(
     sessionId: string,
     head: string | null | undefined,
-  ): ContextState {
+  ): { state: ContextState; legacy: boolean } {
     let cursor = head;
     const seen = new Set<string>();
     while (cursor) {
@@ -1380,7 +1431,11 @@ export class CheckpointStore {
           'SELECT state FROM context_versions WHERE checkpoint_id = ? ORDER BY version DESC LIMIT 1',
         )
         .get(cursor);
-      if (row) return JSON.parse(String(row.state)) as ContextState;
+      if (row)
+        return {
+          state: JSON.parse(String(row.state)) as ContextState,
+          legacy: false,
+        };
       cursor = checkpoint.parent;
     }
     const legacy = this.db
@@ -1397,14 +1452,17 @@ export class CheckpointStore {
         )
       )
         return {
-          ...emptyContextState(),
-          summary: {
-            cutoffMessageId: checkpoint.message.id,
-            text: String(legacy.summary),
+          state: {
+            ...emptyContextState(),
+            summary: {
+              cutoffMessageId: checkpoint.message.id,
+              text: String(legacy.summary),
+            },
           },
+          legacy: true,
         };
     }
-    return emptyContextState();
+    return { state: emptyContextState(), legacy: Boolean(legacy) };
   }
   setContextState(
     sessionId: string,
@@ -1468,6 +1526,9 @@ export class CheckpointStore {
           throw new Error('missing compaction operation');
       }
       this.db.exec('COMMIT');
+      // Whatever head it was kept for: one later than this, cached before a select back to
+      // this one, walks through the new row.
+      this.contextCache.delete(sessionId);
       this.writeVersion++;
     } catch (error) {
       this.db.exec('ROLLBACK');

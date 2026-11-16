@@ -97,6 +97,7 @@ import { loadRemap } from '../keybindings.js';
 import { emptyUsage, type ToolCall } from '../types.js';
 import { ScreenRenderer } from '../ink/screen.js';
 import { Clipboard } from '../ink/clipboard.js';
+import { hasSelection } from '../ink/selection.js';
 import { MouseSelection } from './mouse_selection.js';
 import { type ApprovalDecision, type QueuedMessage } from '../harness.js';
 import {
@@ -386,19 +387,37 @@ export class SessionApp {
   private get undo() {
     return this.view.undo;
   }
+  // A turned wheel sends many reports in one read: the transcript moves by all of them
+  // and is drawn once, before anything else in the read and at its end.
+  private wheelBatch = false;
+  private wheelPending = false;
   private dataListener = (data: string): void => {
     if (this.externalEditor) return;
     const events = this.input.feed(data);
     let drop = false;
-    for (const event of events) {
-      if (drop && event.type === 'key') continue;
-      const open = Boolean(this.state.dialog);
-      this.handle(event);
-      // Keys already in this burst were typed at the card. Closing it must
-      // not deliver the rest as a prompt.
-      if (open && !this.state.dialog && event.type === 'key') drop = true;
+    this.wheelBatch = true;
+    try {
+      for (const event of events) {
+        if (drop && event.type === 'key') continue;
+        // a click after the wheel lands on what the wheel brought into view
+        if (event.type !== 'mouse' || event.action !== 'wheel')
+          this.flushWheel();
+        const open = Boolean(this.state.dialog);
+        this.handle(event);
+        // Keys already in this burst were typed at the card. Closing it must
+        // not deliver the rest as a prompt.
+        if (open && !this.state.dialog && event.type === 'key') drop = true;
+      }
+    } finally {
+      this.wheelBatch = false;
+      this.flushWheel();
     }
   };
+  private flushWheel(): void {
+    if (!this.wheelPending) return;
+    this.wheelPending = false;
+    this.repaint();
+  }
   // A terminal that gets shorter drops rows at the top and moves the rest up, and a width
   // change rewraps them: the previous frame no longer says what is where, so every row is
   // written again, as ctrl+l does, without clearing, which would flicker during a drag.
@@ -640,6 +659,7 @@ export class SessionApp {
     if (this.renderTimer) clearTimeout(this.renderTimer);
     this.renderTimer = undefined;
     this.renderQueued = false;
+    this.wheelPending = false;
     this.lastRenderAt = performance.now();
     if (this.runtime && !this.runtime.isClosing) {
       this.state.messages = this.undo.visible(this.runtime.harness.messages);
@@ -1032,6 +1052,10 @@ export class SessionApp {
     if (changed) this.repaint();
   }
   private projectedCompletionNotices = new WeakMap<SessionView, string[]>();
+  // The message a finished compaction's notice goes after, by the checkpoint it started
+  // from: a checkpoint never changes once written, so it is read once, not every frame.
+  // Ids are unique across sessions; the map is emptied when it grows past 256.
+  private compactionAnchors = new Map<string, string>();
   private get persistedCompletionNotices(): string[] {
     let notices = this.projectedCompletionNotices.get(this.view);
     if (!notices) {
@@ -1082,8 +1106,16 @@ export class SessionApp {
     }
     for (const snapshot of this.runtime?.compactionHistory() ?? []) {
       if (snapshot.status === 'running') continue;
-      const checkpoint = this.runtime!.store.checkpoint(snapshot.branchHead);
-      const anchor = checkpoint?.message?.id;
+      let anchor = this.compactionAnchors.get(snapshot.branchHead);
+      if (anchor === undefined) {
+        const checkpoint = this.runtime!.store.checkpoint(snapshot.branchHead);
+        anchor = checkpoint?.message?.id;
+        if (anchor) {
+          if (this.compactionAnchors.size >= 256)
+            this.compactionAnchors.clear();
+          this.compactionAnchors.set(snapshot.branchHead, anchor);
+        }
+      }
       if (!anchor || !this.state.messages.some((m) => m.id === anchor))
         continue;
       const text =
@@ -1398,7 +1430,8 @@ export class SessionApp {
       runtime,
       runtime.bus.subscribe((event) => {
         this.inView(view, () => {
-          // Stream tokens draw through the coalescing scheduler; everything else at once.
+          // Stream tokens and job progress draw through the coalescing scheduler;
+          // everything else at once.
           let coalesce = false;
           this.turns.apply(
             event,
@@ -1433,6 +1466,8 @@ export class SessionApp {
           }
           if (['job_started', 'job_updated', 'job_ended'].includes(event.kind))
             this.refreshJobsList();
+          // A background subagent reports every step on its job's row
+          if (event.kind === 'job_updated') coalesce = true;
           if (event.tags.subagent) {
             const id = String(event.tags.subagent);
             const old = this.agentActivity.get(id);
@@ -1461,7 +1496,7 @@ export class SessionApp {
               : event.kind === 'llm_token' && !event.payload.thinking
                 ? (old?.streaming ?? '') + String(event.payload.text ?? '')
                 : (old?.streaming ?? '');
-            this.agentActivity.set(id, {
+            const next = {
               state,
               name: String(event.tags.name || old?.name || 'subagent'),
               background: Boolean(event.tags.job_id) || old?.background,
@@ -1470,20 +1505,32 @@ export class SessionApp {
               tracker,
               streaming,
               updated: Date.now(),
-            });
-            if (
-              event.kind !== 'llm_token' ||
-              tracker.activity !== old?.activity ||
-              this.agents.detail === id
-            )
-              this.activityVersion++;
+            };
+            this.agentActivity.set(id, next);
+            // The rows are rebuilt only for what they show: the open page shows the live
+            // text and the clock too, the rest only these fields. What the subagent
+            // writes to its record moves the store's version instead.
+            const shown =
+              !old ||
+              this.agents.detail === id ||
+              old.state !== next.state ||
+              old.name !== next.name ||
+              old.background !== next.background ||
+              old.jobId !== next.jobId ||
+              old.activity !== next.activity;
+            if (shown) this.activityVersion++;
             if (event.kind === 'llm_end')
               for (const key of Object.keys(
                 this.state.usage,
               ) as (keyof typeof this.state.usage)[])
                 this.state.usage[key] += event.usage?.[key] ?? 0;
-            if (event.kind === 'llm_token') this.requestRender();
-            else this.repaint();
+            // Tokens and progress come many times a second and mostly change nothing on
+            // screen; the animation tick moves the clocks. A step draws on the next frame.
+            if (
+              shown ||
+              (event.kind !== 'llm_token' && event.kind !== 'tool_progress')
+            )
+              this.requestRender();
             return;
           }
           if (event.kind === 'run_start') {
@@ -1655,7 +1702,13 @@ export class SessionApp {
           if (coalesce) this.requestRender();
           else this.repaint();
         });
-        if (view !== this.selectedView) this.requestRender();
+        // Another conversation's stream and progress show nothing on this screen
+        if (
+          view !== this.selectedView &&
+          event.kind !== 'llm_token' &&
+          event.kind !== 'tool_progress'
+        )
+          this.requestRender();
       }),
     );
     return runtime;
@@ -2415,10 +2468,12 @@ export class SessionApp {
         strip?.scrollable &&
         event.y >= strip.row - 1 &&
         event.y < strip.row - 1 + strip.rows
-      )
-        // over the strip, with subagents folded away: the wheel moves the strip
+      ) {
+        // over the strip, with subagents folded away: the wheel moves the strip, one
+        // row along from the rows last drawn, so each report is drawn
+        this.flushWheel();
         this.scrollStrip(event.button === 0 ? -1 : 1);
-      else if (event.action === 'wheel') {
+      } else if (event.action === 'wheel') {
         const top = this.frameRows.findIndex((row) =>
           /^┌.*Plan \d+\//.test(stripAnsi(row)),
         );
@@ -2437,6 +2492,12 @@ export class SessionApp {
           this.plan.scroll(event.button === 0 ? -1 : 1);
           this.state.planStart = this.plan.start;
         } else this.scrollBy(event.button === 0 ? 3 : -3);
+        // A selection follows its text frame by frame, keeping the rows that leave the
+        // screen, so with one each report is drawn.
+        if (this.wheelBatch && !hasSelection(this.selection.state)) {
+          this.wheelPending = true;
+          return;
+        }
       }
       this.repaint();
       return;
