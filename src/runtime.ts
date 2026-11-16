@@ -262,6 +262,8 @@ export interface RuntimeOptions {
   userHome?: string;
   /** Where `skill_install` puts packs and `skill_run` runs them. Tests give their own. */
   localSkillsRoot?: string;
+  /** Circle's Node executable for running installed pack scripts; defaults to process.execPath under Node. */
+  nodeExecutable?: string;
   /** How long an approval card waits, and a finished turn idles, before Notification hooks hear of it (ms). */
   notificationDelays?: { permission?: number; idle?: number };
   localContext?: boolean;
@@ -1173,6 +1175,9 @@ export class AgentRuntime {
         variables: () => this.runVariables(),
         ...(this.options.localSkillsRoot
           ? { root: this.options.localSkillsRoot }
+          : {}),
+        ...(this.options.nodeExecutable
+          ? { nodeExecutable: this.options.nodeExecutable }
           : {}),
         // Paths in a pack differ in more than case (its manifest refuses others), and a case-blind disk opens
         // `tools/Convert.mjs` as `tools/convert.mjs`
@@ -3466,6 +3471,9 @@ export class AgentRuntime {
         secrets: () => this.runSecrets(),
         workspace: this.options.workspace,
         dataRoot: join(this.options.home, SKILL_DATA_FOLDER),
+        ...(this.options.nodeExecutable
+          ? { nodeExecutable: this.options.nodeExecutable }
+          : {}),
         jobs: this.jobs,
         jobOwner: (context) =>
           this.childJobOwners.get(context.sessionId) ?? {
