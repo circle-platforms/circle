@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { ContextManager } from '../src/context_middleware.js';
 import { CheckpointStore } from '../src/checkpoint_store.js';
 import {
@@ -444,4 +444,52 @@ test('repeated summary usage and prices survive restart exactly once without mod
   cleanup(t, () => resumed.close());
   assert.deepEqual(resumed.stats().usage, stats.usage);
   assert.deepEqual(resumed.stats().costs, stats.costs);
+});
+test('compaction history is read once while nothing writes; a stored running operation is read every time', async (t) => {
+  const root = scratch(t);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model: new ScriptedModel([
+      {
+        message: { id: 'summary', role: 'assistant', content: 'summary' },
+        usage: emptyUsage(),
+      },
+    ]),
+    headless: true,
+    bundledExtensions: false,
+  });
+  cleanup(t, () => runtime.close());
+  runtime.store.append(runtime.session.id, history());
+  await runtime.compact();
+  const compactions = runtime.store.compactions;
+  const operations = compactions.operations.bind(compactions);
+  let reads = 0;
+  compactions.operations = (...args) => {
+    reads++;
+    return operations(...args);
+  };
+  const first = runtime.compactionHistory();
+  assert.deepEqual(
+    first.map((record) => record.status),
+    ['succeeded'],
+  );
+  assert.equal(reads, 1);
+  first[0]!.status = 'failed';
+  assert.equal(runtime.compactionHistory()[0]!.status, 'succeeded');
+  assert.equal(runtime.compaction?.operationId, first[0]!.operationId);
+  assert.equal(reads, 1, 'nothing was written, so nothing is read again');
+
+  const running = structuredClone(operations(runtime.session.id).at(-1)!);
+  running.snapshot.operationId = randomUUID();
+  running.snapshot.status = 'running';
+  compactions.saveOperation(running);
+  reads = 0;
+  for (let i = 0; i < 3; i++)
+    assert.equal(
+      runtime.compactionHistory().at(-1)!.operationId,
+      running.snapshot.operationId,
+    );
+  assert.equal(reads, 3);
 });
