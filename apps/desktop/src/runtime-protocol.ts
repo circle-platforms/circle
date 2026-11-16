@@ -119,6 +119,7 @@ export interface RuntimeTokenDelta {
   parentId: string | null;
   text?: string;
   thinking?: string;
+  activity?: string;
   at: string;
   turn?: WorkbenchSnapshot['sessions'][number]['turn'];
   /** Progress-only update: no assistant message or conversation history. */

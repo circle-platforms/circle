@@ -149,3 +149,22 @@ test('disconnected agent never retains a live task activity claim', () => {
   assert.equal(isAgentActive(agent), false);
   assert.equal(agentActivityText(agent), 'disconnected');
 });
+
+test('thinking summaries pass through untranslated in both languages while working translates', (t) => {
+  t.after(() => setLanguage('en'));
+  const agent = taskAgent('running');
+  delete agent.task;
+  agent.status = 'running';
+  agent.activity = 'Inspecting schema for plans/1.json';
+  for (const language of ['en', 'zh-CN'] as const) {
+    setLanguage(language);
+    assert.equal(
+      agentActivityText(agent),
+      'Inspecting schema for plans/1.json',
+    );
+    assert.equal(
+      agentActivityText({ ...agent, activity: 'working' }),
+      language === 'zh-CN' ? '工作中' : 'working',
+    );
+  }
+});

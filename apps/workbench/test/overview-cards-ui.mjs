@@ -27,6 +27,7 @@ const WORDS = {
     twoMore: 'show 2 more',
     threeMore: 'show 3 more',
     less: 'show less',
+    subagentsPanel: 'subagents panel',
   },
   'zh-CN': {
     plan: '计划',
@@ -44,6 +45,7 @@ const WORDS = {
     twoMore: '再显示 2 个',
     threeMore: '再显示 3 个',
     less: '收起',
+    subagentsPanel: '子代理 面板',
   },
 };
 // How a row of the in progress card fits: anything past the row's or the card's right
@@ -530,6 +532,56 @@ try {
       [false, false, command],
     );
     assert.equal(await busyRow.getAttribute('title'), command);
+
+    // Live thinking summary shows untranslated in Overview and prioritizes in Subagents drawer list,
+    // falling back to the assigned description once finished.
+    const thinkingSummary = 'Checking schema for plans/1.json';
+    await page.evaluate(
+      (thinkingSummary) =>
+        window.readabilityFixture.runtime.change((state) => {
+          state.interactions = [];
+          state.agents = [
+            {
+              id: 'busy-agent',
+              sessionId: 'session1',
+              name: 'general-purpose: clean the build directory and rebuild',
+              description:
+                'general-purpose: clean the build directory and rebuild',
+              status: 'running',
+              activity: thinkingSummary,
+              model: 'sample-code-model',
+              tokens: 0,
+              messages: [],
+            },
+          ];
+        }),
+      thinkingSummary,
+    );
+    await busyRow
+      .locator('.overview-end-text')
+      .getByText(thinkingSummary, { exact: true })
+      .waitFor();
+    const subagentsToggle = page.getByRole('button', {
+      name: words.subagentsPanel,
+      exact: true,
+    });
+    await subagentsToggle.click();
+    const drawerRow = page.locator('.agent-row').first();
+    await drawerRow
+      .locator('.agent-row-text small')
+      .getByText(thinkingSummary, { exact: true })
+      .waitFor();
+    await page.evaluate(() =>
+      window.readabilityFixture.runtime.change((state) => {
+        state.agents[0].status = 'completed';
+        state.agents[0].activity = 'done';
+      }),
+    );
+    await drawerRow
+      .locator('.agent-row-text small')
+      .getByText('clean the build directory and rebuild', { exact: true })
+      .waitFor();
+    await subagentsToggle.click();
 
     assert.deepEqual(errors, []);
     await page.close();

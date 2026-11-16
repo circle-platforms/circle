@@ -130,7 +130,10 @@ import {
 } from './vision.js';
 import { saveMediaAttachment } from './media.js';
 import { UserShells } from './user_shell.js';
-import { toolCallLine } from './headless.js';
+import {
+  stepAgentActivity,
+  type AgentActivityState,
+} from './session_activity.js';
 import { canScreenshot, type ScreenshotOptions } from './screenshot.js';
 import { titleNeedsRefresh, userPrompts } from './session_title.js';
 import {
@@ -996,13 +999,27 @@ export class AgentRuntime {
         const childBus = new EventBus(session.id);
         let backgroundJob: Job | undefined;
         let backgroundLog: ((text: string) => void) | undefined;
+        let jobActivity: AgentActivityState | undefined;
+        let lastJobDetail: string | undefined;
+        const redactDetail = (text: string): string =>
+          this.redact(text, {}, () => written(this.store.messages(session.id)));
+        const updateJobDetail = (detail: string): void => {
+          if (!backgroundJob) return;
+          const clean = redactDetail(detail);
+          if (clean !== lastJobDetail) {
+            lastJobDetail = clean;
+            this.jobs.activity(backgroundJob.id, clean);
+          }
+        };
         const interact = async <T>(
           action: (origin: InteractionContext) => Promise<T>,
         ): Promise<T> => {
           // what the job said it was doing comes back once the answer is in
           const before = backgroundJob?.detail;
-          if (backgroundJob)
+          if (backgroundJob) {
+            lastJobDetail = 'waiting for you';
             this.jobs.activity(backgroundJob.id, 'waiting for you');
+          }
           try {
             return await action({
               jobId: backgroundJob?.id,
@@ -1011,9 +1028,9 @@ export class AgentRuntime {
             });
           } finally {
             if (backgroundJob)
-              this.jobs.activity(
-                backgroundJob.id,
-                before && before !== 'waiting for you' ? before : 'working',
+              updateJobDetail(
+                jobActivity?.lastStep ??
+                  (before && before !== 'waiting for you' ? before : 'working'),
               );
           }
         };
@@ -1024,16 +1041,17 @@ export class AgentRuntime {
             backgroundLog?.(
               `${event.payload.name}(${JSON.stringify(event.payload.args)})`,
             );
-            if (backgroundJob)
-              this.jobs.activity(
-                backgroundJob.id,
-                toolCallLine(String(event.payload.name), event.payload.args),
-              );
+            lastJobDetail = undefined;
           }
-          if (event.kind === 'llm_end')
+          if (event.kind === 'llm_end') {
             backgroundLog?.(
               String((event.payload.message as Message)?.content || ''),
             );
+            lastJobDetail = undefined;
+          }
+          jobActivity = stepAgentActivity(jobActivity, event);
+          if (event.kind !== 'run_end' && event.kind !== 'run_error')
+            updateJobDetail(jobActivity.activity);
           this.bus.emit(event.kind, {
             payload: event.payload,
             usage: event.usage,
@@ -1236,6 +1254,7 @@ export class AgentRuntime {
             { sessionId: parentSessionId, startedBy: 'model' },
             async (signal, log, job) => {
               backgroundJob = job;
+              if (jobActivity) updateJobDetail(jobActivity.activity);
               this.childJobOwners.set(session.id, {
                 sessionId: parentSessionId,
                 parent: job.id,

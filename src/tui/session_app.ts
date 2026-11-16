@@ -80,7 +80,10 @@ import { formatCosts } from '../pricing.js';
 import { SubagentNavigation, type SubagentView } from './subagents.js';
 import { TurnStatus } from './turn_status.js';
 import { PlanCompletionTracker, planVisible } from '../plan_state.js';
-import { nextAgentActivity } from '../session_activity.js';
+import {
+  stepAgentActivity,
+  type AgentActivityState,
+} from '../session_activity.js';
 import { networkSummary } from '../net.js';
 import { terminalText } from '../ink/components/markdown_renderer.js';
 import { WelcomeState } from './welcome_state.js';
@@ -331,6 +334,9 @@ export class SessionApp {
       background?: boolean;
       jobId?: string;
       activity?: string;
+      tracker?: AgentActivityState;
+      streaming?: string;
+      updated?: number;
     }
   >();
   private frameRows: string[] = [];
@@ -348,6 +354,7 @@ export class SessionApp {
     sessionId: string;
     version: number;
     activity: number;
+    detail?: string;
     views: NonNullable<ScreenState['subagents']>;
   };
   private activityVersion = 0;
@@ -746,7 +753,8 @@ export class SessionApp {
         cache.store === this.runtime.store &&
         cache.sessionId === this.runtime.session.id &&
         cache.version === this.runtime.store.version &&
-        cache.activity === this.activityVersion
+        cache.activity === this.activityVersion &&
+        cache.detail === this.agents.detail
       ) {
         this.state.subagents = cache.views;
       } else {
@@ -767,6 +775,8 @@ export class SessionApp {
               name: activity?.name || session.title.split(':')[0] || 'subagent',
               description: session.title,
               activity: activity?.activity,
+              liveThinking: activity?.tracker?.thinking || undefined,
+              liveStreaming: activity?.streaming || undefined,
               background: activity?.background,
               jobId: activity?.jobId,
               messages,
@@ -776,7 +786,7 @@ export class SessionApp {
                   ? 'done'
                   : 'interrupted'),
               started: session.created,
-              updated: session.updated,
+              updated: Math.max(session.updated, activity?.updated ?? 0),
               tokens: messages.reduce(
                 (sum, message) =>
                   sum +
@@ -792,6 +802,7 @@ export class SessionApp {
           sessionId: this.runtime.session.id,
           version: this.runtime.store.version,
           activity: this.activityVersion,
+          detail: this.agents.detail,
           views,
         };
         this.state.subagents = views;
@@ -1439,14 +1450,35 @@ export class SessionApp {
                         event.kind === 'run_start'
                       ? 'running'
                       : (old?.state ?? 'running');
+            const tracker = stepAgentActivity(old?.tracker, event);
+            const streaming = [
+              'run_start',
+              'llm_start',
+              'llm_end',
+              'run_end',
+              'run_error',
+              'steer',
+            ].includes(event.kind)
+              ? ''
+              : event.kind === 'llm_token' && !event.payload.thinking
+                ? (old?.streaming ?? '') + String(event.payload.text ?? '')
+                : (old?.streaming ?? '');
             this.agentActivity.set(id, {
               state,
               name: String(event.tags.name || old?.name || 'subagent'),
               background: Boolean(event.tags.job_id) || old?.background,
               jobId: event.tags.job_id ? String(event.tags.job_id) : old?.jobId,
-              activity: nextAgentActivity(old?.activity, event),
+              activity: tracker.activity,
+              tracker,
+              streaming,
+              updated: Date.now(),
             });
-            this.activityVersion++;
+            if (
+              event.kind !== 'llm_token' ||
+              tracker.activity !== old?.activity ||
+              this.agents.detail === id
+            )
+              this.activityVersion++;
             if (event.kind === 'llm_end')
               for (const key of Object.keys(
                 this.state.usage,

@@ -4,6 +4,8 @@ export interface SubagentView {
   name: string;
   description: string;
   activity?: string;
+  liveThinking?: string;
+  liveStreaming?: string;
   messages: Message[];
   state: 'running' | 'waiting' | 'done' | 'error' | 'interrupted';
   started: number;
