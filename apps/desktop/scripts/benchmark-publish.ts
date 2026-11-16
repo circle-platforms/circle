@@ -2,7 +2,11 @@
 // RuntimeController and LiveRuntime on a scripted model and a scratch home; never real
 // Circle data. Run it as:
 //   node --import tsx apps/desktop/scripts/benchmark-publish.ts --sessions 40 --messages 1000
+// With --subagents it then runs a turn whose subagents stream and call tools, and counts
+// what that turn publishes (#577):
+//   node --import tsx apps/desktop/scripts/benchmark-publish.ts --subagents 8 --subagent-steps 20 --children 60
 // Native IPC, contextBridge and paint are measured by benchmark-publish-native.mjs.
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,9 +17,14 @@ import { HistoryCompactor } from '../src/runtime-history-wire.ts';
 import { publishBenchmarkMessages } from './publish-benchmark-fixture.mjs';
 import { RuntimeTokenBuffer } from '../src/runtime-token-stream.ts';
 import { LiveRuntime } from '../../workbench/src/model/live.ts';
-import type { RuntimeUpdate } from '../src/runtime-protocol.ts';
+import type {
+  RuntimeTokenDelta,
+  RuntimeUpdate,
+} from '../src/runtime-protocol.ts';
 import type { DesktopBridge } from '../src/contracts.ts';
 import { CheckpointStore } from '../../../src/checkpoint_store.ts';
+import { AgentRuntime } from '../../../src/runtime.ts';
+import type { ModelRequest, ModelResponse } from '../../../src/types.ts';
 import {
   defaultSettings,
   saveSettings,
@@ -31,7 +40,17 @@ const sessions = option('sessions', 10);
 const messages = option('messages', 300);
 const publishes = option('publishes', 20);
 const toolCalls = option('tool-calls', 10);
+// Subagents the last turn starts at once, the tool calls each makes before its report,
+// the tokens each of its model calls streams, and finished subagents of the open
+// session from earlier turns, with their messages.
+const subagents = option('subagents', 0);
+const subagentSteps = option('subagent-steps', 10);
+const subagentTokens = option('subagent-tokens', 20);
+const children = option('children', 0);
+const childMessages = option('child-messages', 40);
 
+const mean = (values: number[]) =>
+  values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
 const quantile = (values: number[], q: number) =>
   [...values].sort((a, b) => a - b)[
     Math.min(values.length - 1, Math.floor(values.length * q))
@@ -61,13 +80,31 @@ for (let index = sessions - 1; index >= 0; index--) {
   store.create(workspace, 'fixture', `session ${index}`, id);
   store.append(id, publishBenchmarkMessages(id, messages));
 }
+// Finished subagents of the open session, as earlier turns leave them: rows of their own
+// under it, and named in its context so that its usage counts theirs.
+const childIds = Array.from(
+  { length: children },
+  (_, index) => `benchmark-child-${index}`,
+);
+for (const id of childIds) {
+  store.create(workspace, 'fixture', `child ${id}`, id, selected);
+  store.append(id, publishBenchmarkMessages(id, childMessages));
+}
+if (childIds.length)
+  store.setContextState(selected, {
+    ...store.contextState(selected),
+    subagentSessionIds: childIds,
+  });
 store.close();
 await writeFile(
   join(home, 'desktop-session.json'),
   JSON.stringify({ workspace, sessionId: selected }),
 );
 
-const replies = [
+const replies: (
+  | { message: ModelResponse['message']; usage: ModelResponse['usage'] }
+  | ((request: ModelRequest) => Promise<ModelResponse>)
+)[] = [
   ...Array.from({ length: toolCalls }, (_, index) => ({
     message: {
       id: `benchmark-turn-${index}`,
@@ -92,6 +129,71 @@ const replies = [
     usage: { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0 },
   },
 ];
+
+// The subagent turn: the parent starts every subagent in one reply, and reports when they
+// have. Requests of the subagents interleave, so each reply reads whose request it is.
+const subagentPrompt = 'run the benchmark subagents';
+const route = async (request: ModelRequest): Promise<ModelResponse> => {
+  const users = request.messages.filter(
+    (message) => message.role === 'user' && !message.internal,
+  );
+  const child = /^benchmark subagent (\d+)$/.exec(users[0]?.content ?? '');
+  if (!child) {
+    const last = users.at(-1)!;
+    const answered = request.messages
+      .slice(request.messages.indexOf(last))
+      .some((message) => message.role === 'tool');
+    return {
+      message: answered
+        ? { id: randomUUID(), role: 'assistant', content: 'all reported' }
+        : {
+            id: randomUUID(),
+            role: 'assistant',
+            content: '',
+            tool_calls: Array.from({ length: subagents }, (_, index) => ({
+              id: `benchmark-task-${index}`,
+              name: 'task',
+              args: {
+                description: `benchmark subagent ${index}`,
+                subagent_type: 'general-purpose',
+              },
+            })),
+          },
+      usage: { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0 },
+    };
+  }
+  const step = request.messages.filter(
+    (message) => message.role === 'tool',
+  ).length;
+  for (let index = 0; index < subagentTokens; index++)
+    request.token(`token ${index} `);
+  return {
+    message:
+      step < subagentSteps
+        ? {
+            id: randomUUID(),
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              {
+                id: `benchmark-child-${child[1]}-call-${step}`,
+                name: 'read_file',
+                args: { file_path: 'note.txt' },
+              },
+            ],
+          }
+        : {
+            id: randomUUID(),
+            role: 'assistant',
+            content: `report of subagent ${child[1]}`,
+          },
+    usage: { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0 },
+  };
+};
+if (subagents)
+  replies.push(
+    ...Array.from({ length: 2 + subagents * (subagentSteps + 1) }, () => route),
+  );
 
 const updates: RuntimeUpdate[] = [];
 let forward: (update: RuntimeUpdate) => void = () => {};
@@ -214,6 +316,100 @@ while (!ended) {
 const turnMs = performance.now() - turnStart;
 forward = () => {};
 
+// The subagent turn. Each publication goes through the same stages; the main process's
+// buffer takes every token delta as the supervisor does, and a delta it cannot apply is a
+// state request the window would wait for.
+let subagentTurn: Record<string, unknown> | undefined;
+if (subagents) {
+  let snapshots = 0;
+  const realSnapshot = controller.snapshot.bind(controller);
+  controller.snapshot = () => {
+    snapshots++;
+    return realSnapshot();
+  };
+  let stats = 0;
+  const realStats = AgentRuntime.prototype.stats;
+  AgentRuntime.prototype.stats = function (this: AgentRuntime) {
+    stats++;
+    return realStats.call(this);
+  };
+  const publishMs: number[] = [];
+  let stageMs = 0;
+  controller.publish = (event) => {
+    const start = performance.now();
+    const before = stageMs;
+    const update = realPublish(event);
+    publishMs.push(performance.now() - start - (stageMs - before));
+    return update;
+  };
+  const deltas: Record<string, number> = {};
+  controller.options.emitTokenDelta = (delta: RuntimeTokenDelta) => {
+    const result = main.apply(deserialize(serialize(delta)));
+    deltas[result] = (deltas[result] ?? 0) + 1;
+  };
+  const kinds: Record<string, number> = {};
+  let parentEnded = false;
+  let bytes = 0;
+  forward = (update) => {
+    const start = performance.now();
+    const stage = measure(update);
+    stageMs += performance.now() - start;
+    bytes += stage.bytes;
+    const kind = update.event?.kind ?? 'none';
+    kinds[kind] = (kinds[kind] ?? 0) + 1;
+    if (
+      update.event?.sessionId === selected &&
+      (kind === 'run_end' || kind === 'run_error')
+    )
+      parentEnded = true;
+  };
+  const start = performance.now();
+  const sent = await controller.dispatch({
+    id: 'benchmark-subagents',
+    name: 'prompt',
+    sessionId: selected,
+    payload: { text: subagentPrompt },
+  });
+  if (!sent.ok) throw Error(sent.error);
+  const until = Date.now() + 300_000;
+  const { active } = controller as unknown as { active: { busy: boolean } };
+  while (!parentEnded || active.busy) {
+    if (Date.now() > until) throw Error('the subagent turn did not end');
+    await new Promise((done) => setTimeout(done, 5));
+  }
+  const wallMs = performance.now() - start;
+  forward = () => {};
+  controller.options.emitTokenDelta = undefined;
+  AgentRuntime.prototype.stats = realStats;
+  const agents = main
+    .materialize()
+    .snapshot.agents.filter((agent) => !childIds.includes(agent.id));
+  if (agents.length !== subagents) throw Error(`${agents.length} subagents`);
+  const resyncs = Object.entries(deltas)
+    .filter(([result]) => result !== 'applied' && result !== 'duplicate')
+    .reduce((total, [, count]) => total + count, 0);
+  subagentTurn = {
+    subagents,
+    stepsEach: subagentSteps,
+    tokensPerModelCall: subagentTokens,
+    finishedChildren: children,
+    publications: publishMs.length,
+    kinds,
+    publishMs: {
+      mean: Number(mean(publishMs).toFixed(2)),
+      p95: Number(quantile(publishMs, 0.95).toFixed(2)),
+      total: Math.round(publishMs.reduce((a, b) => a + b, 0)),
+    },
+    snapshotCalls: snapshots,
+    statsCalls: stats,
+    megabytes: Number((bytes / 1024 / 1024).toFixed(2)),
+    tokenDeltas: deltas,
+    // Deltas the main process could not apply: each asks the worker for its state.
+    resyncs,
+    wallMs: Math.round(wallMs),
+  };
+}
+
 const sum = (values: number[]) => values.reduce((a, b) => a + b, 0);
 const perStage = {
   publishMs: summary(rows.publish),
@@ -245,6 +441,7 @@ console.log(
         ipcMs: Math.round(turn.ipcMs),
         liveRuntimeReceiveMs: Math.round(turn.receiveMs),
       },
+      ...(subagentTurn ? { subagentTurn } : {}),
       excluded: [
         'Electron IPC itself, contextBridge copy and React render: see benchmark-publish-native.mjs',
       ],

@@ -67,3 +67,12 @@ npm --prefix apps/desktop run test:performance
 ```
 
 The native journey writes evidence to `apps/desktop/artifacts/native-developer-journey/` by default; `CIRCLE_NATIVE_JOURNEY_EVIDENCE` chooses another output directory. To exercise a packaged candidate, set `CIRCLE_DESKTOP_EXECUTABLE` to its actual executable and `CIRCLE_DESKTOP_APP_PATH` to its packaged application directory before running the same journey. The `Desktop workbench` workflow has path filters for pull requests and pushes to main. Its pull-request jobs run the development journey, `test:desktop` and `test:live` in the development application, and package it and run `test:update` on the package; its non-pull-request jobs also run the packaged journey, `test:desktop` and `test:live` in the packaged application for their configured native targets. Evidence must identify the tested candidate. A development build, a storage microbenchmark or a scripted GitHub adapter does not establish packaged-platform performance or live hosted PR/CI acceptance. Remaining limits are recorded in [Known issues](../known-issues.md#desktop-application).
+
+The publication benchmarks run from the repository root on a scratch home and a scripted model. `benchmark-publish.ts` runs in Node; `benchmark-publish-native.mjs` runs Electron and needs `npm --prefix apps/desktop run build` first. Both take `--sessions` (stored sessions, default 10), `--messages` (messages in each, 300), `--publishes` (idle publications to time, 20) and `--tool-calls` (tool calls of the measured turn, 10); the native one also takes `--profile <file>` for the renderer's CPU profile and `--app <folder>` for another build of `apps/desktop`.
+
+```sh
+node --import tsx apps/desktop/scripts/benchmark-publish.ts --sessions 40 --messages 1000
+node --import tsx apps/desktop/scripts/benchmark-publish.ts --subagents 8 --subagent-steps 20 --children 60
+```
+
+With `--subagents N` the Node benchmark then runs a turn that starts N subagents at once. Each makes `--subagent-steps` tool calls (default 10) before its report and streams `--subagent-tokens` tokens in each model call (default 20). `--children N` first stores N finished subagents of the open session, with `--child-messages` messages each (default 40). For that turn it reports the publications by event, the time each took in the runtime (mean and p95), how often `snapshot()` and `AgentRuntime.stats()` ran, and what the main process's buffer did with each token delta; a delta it could not apply is a resync, a state request the windows wait for.
