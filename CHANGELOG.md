@@ -4,6 +4,8 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+## 1.18.1 - 2026-11-16
+
 ### Added
 - **Live thinking summaries.** A running subagent shows what it is thinking — the newest heading or the latest sentence of its reasoning — in the terminal's agent rows and detail view and on the desktop's Overview cards and in the Subagents drawer, instead of a bare `working` label. (#576)
 
