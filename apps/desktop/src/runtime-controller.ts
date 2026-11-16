@@ -18,6 +18,7 @@ import {
 import { commandExecutionReceipt } from '../../../src/command_process.js';
 import { canonicalPath } from '../../../src/paths.js';
 import { readPlanFolderFile } from './plan-folder.js';
+import { redactRuntimeOutput } from './runtime-exit';
 import type { ResolveInputsRequest } from '../../../src/input_outbox.js';
 import { spawnPty } from './workspace/native-pty.js';
 import { createTerminalCommandLauncher } from './workspace/command-terminal.js';
@@ -309,6 +310,33 @@ const FILE_TOOLS = [
   'delete',
   'browser_record',
 ];
+// How long a subagent's steps wait to be published together (publishSoon).
+const PUBLISH_DELAY_MS = 100;
+const schedulePublish = (run: () => void) => {
+  const timer = setTimeout(run, PUBLISH_DELAY_MS);
+  timer.unref();
+  return () => clearTimeout(timer);
+};
+// What the window must see at once, with its event: a subagent starting, ending, failing
+// or waiting for you (its card is up at the same moment), and a file it changed (the
+// window lists the folder again). The rest of its steps, and every job's progress, can
+// wait for the next publication.
+const publishesLater = (event: CircleEvent): boolean => {
+  if (event.kind === 'job_updated') return true;
+  if (!event.tags?.subagent) return false;
+  if (
+    ['run_start', 'run_end', 'run_error', 'error', 'tool_waiting'].includes(
+      event.kind,
+    )
+  )
+    return false;
+  if (event.kind === 'compaction') return event.payload.phase === 'chunks';
+  // Only tool_result names its tool; tool_end follows it.
+  return !(
+    event.kind === 'tool_result' &&
+    FILE_TOOLS.includes(String(event.payload.name ?? ''))
+  );
+};
 const TASK_STATUS_EVENTS = new Set([
   'task.queued',
   'task.preparing',
@@ -397,6 +425,9 @@ export interface ControllerOptions {
   model?: ChatModel;
   catalog?: (home: string) => ModelCatalog;
   emit: (update: RuntimeUpdate) => void;
+  /** Runs a coalesced publication later and returns what cancels it; 100 ms when not
+   * given. Tests pass their own to decide when it runs. */
+  schedulePublish?: (run: () => void) => () => void;
   /** A link an extension asked for: the window opens it in its browser panel; with no
    * window the main process opens it in the system browser. */
   openUrl?: (url: string) => void;
@@ -552,6 +583,11 @@ export class RuntimeController {
     { status: TurnStatus; started: number; waited: number; since?: number }
   >();
   private error?: string;
+  // Cancels the publication publishSoon scheduled, while one waits.
+  private publishPending?: () => void;
+  // The stream the windows hold for each session: the one the last publication carried, or
+  // the one of a token delta sent since.
+  private deltaStreams = new Map<string, string>();
   private closing = false;
   private closePromise?: Promise<void>;
   private mutation = Promise.resolve();
@@ -3923,6 +3959,13 @@ export class RuntimeController {
     return normalizeBaseUrl(endpoint.href, 'openai');
   }
   publish(event?: RuntimeUpdate['event']) {
+    this.publishPending?.();
+    this.publishPending = undefined;
+    // This publication carries every stream still open, so a later token of another
+    // stream of the same session must end it with a publication first.
+    this.deltaStreams = new Map(
+      [...this.streams].map(([id, stream]) => [id, stream.id]),
+    );
     if (this.closing) return;
     this.persistLocation();
     const update: RuntimeUpdate = {
@@ -3938,6 +3981,24 @@ export class RuntimeController {
     this.options.emit(update);
     this.refreshTerminalTabWaits();
     return update;
+  }
+  /** One publication for many events: eight subagents step many times a second, and each
+   * publication reads every session (#577). */
+  private publishSoon(): void {
+    if (this.closing || this.publishPending) return;
+    this.publishPending = (this.options.schedulePublish ?? schedulePublish)(
+      () => {
+        this.publishPending = undefined;
+        try {
+          this.publish();
+        } catch (error) {
+          // The bus swallowed a failed publication; a timer would end the process.
+          process.stderr.write(
+            `publication failed: ${redactRuntimeOutput(String(error))}\n`,
+          );
+        }
+      },
+    );
   }
   private event(
     runtime: AgentRuntime,
@@ -4141,6 +4202,17 @@ export class RuntimeController {
     if (event.kind === 'llm_token' && !this.cancelling.has(id)) {
       const stream = this.streams.get(id);
       if (stream) {
+        // A new stream after steps that wait to be published: the windows hold the last
+        // stream until a publication ends it, and would take this one as a gap. That
+        // publication comes before this token counts, which then goes as a delta.
+        const sent = this.deltaStreams.get(id);
+        if (
+          publishSnapshot &&
+          this.options.emitTokenDelta &&
+          sent !== undefined &&
+          sent !== stream.id
+        )
+          this.publish();
         if (event.payload.thinking)
           stream.thinking += String(event.payload.text ?? '');
         else stream.text += String(event.payload.text ?? '');
@@ -4217,6 +4289,7 @@ export class RuntimeController {
     ) {
       const stream = this.streams.get(id);
       if (stream) {
+        this.deltaStreams.set(id, stream.id);
         const chunk = String(event.payload.text ?? '');
         this.options.emitTokenDelta({
           epoch: this.tokenEpoch,
@@ -4237,6 +4310,10 @@ export class RuntimeController {
       }
     }
     if (!publishSnapshot) return;
+    if (publishesLater(event)) {
+      this.publishSoon();
+      return;
+    }
     this.publish({
       kind: event.kind,
       sessionId: id,
@@ -6969,6 +7046,8 @@ export class RuntimeController {
   private async closeAll(): Promise<void> {
     this.persistLocation();
     this.closing = true;
+    this.publishPending?.();
+    this.publishPending = undefined;
     await this.externalFiles?.close();
     this.externalGrantOwners.clear();
     for (const pending of this.pending.values())
