@@ -1,10 +1,14 @@
+import { lstat } from 'node:fs/promises';
+import stripAnsi from 'strip-ansi';
 import { jobLine, type JobOwner, type JobRegistry } from './jobs.js';
 import {
+  LocalSkillsError,
   prepareRun,
+  prepareScriptCommand,
   runTool,
-  scriptCommand,
   type RunToolOptions,
 } from './local_skills.js';
+import { redactSecrets } from './secrets.js';
 
 /** How a pack's script runs: the same choices as a command the model runs with execute. */
 export interface ScriptRunOptions {
@@ -34,30 +38,59 @@ export async function runScript(
   )
     throw new Error('timeout is in seconds, at most 600');
   if (jobs) {
+    signal.throwIfAborted();
     const prepared = await prepareRun(run);
-    const command = await scriptCommand(prepared);
+    const launched = await prepareScriptCommand(prepared);
     if (background) {
-      signal.throwIfAborted();
-      const job = await jobs.startShell(
-        command,
-        owner,
-        timeout,
-        signal,
-        prepared.env,
-      );
+      let job;
+      try {
+        signal.throwIfAborted();
+        job = await jobs.startShell(
+          launched.command,
+          owner,
+          timeout,
+          signal,
+          prepared.env,
+        );
+      } catch (error) {
+        await launched.cleanup();
+        throw error;
+      }
       return `In background: ${jobLine(job)}. A notice will arrive when it ends; do not poll or sleep.`;
     }
-    const result = await jobs.execute(
-      command,
-      owner,
-      signal,
-      timeout || undefined,
-      undefined,
-      prepared.env,
-    );
-    return result.job
-      ? result.output
-      : `${result.output}\nExit code: ${result.exit_code}`;
+    let result;
+    try {
+      result = await jobs.execute(
+        launched.command,
+        owner,
+        signal,
+        timeout || undefined,
+        undefined,
+        prepared.env,
+      );
+    } catch (error) {
+      await launched.cleanup();
+      throw error;
+    }
+    if (result.job) return result.output;
+    const unstarted =
+      (await lstat(launched.specPath).catch(() => null)) !== null;
+    await launched.cleanup();
+    const naturalExit =
+      !result.execution ||
+      (result.execution.status !== 'stopped' &&
+        result.execution.reason !== 'timeout');
+    if (unstarted && naturalExit) {
+      const detail = redactSecrets(stripAnsi(result.output), run.secrets ?? {})
+        .trim()
+        .slice(0, 240);
+      throw new LocalSkillsError(
+        `脚本没有启动：Node 运行时未执行脚本入口（Node: ${launched.nodeExecutable}，退出码: ${result.exit_code ?? 'none'}）` +
+          (detail ? `：${detail}` : ''),
+        '确认 Circle 自带的 node 可执行文件正常后再试',
+      );
+    }
+    return `${result.output}\nExit code: ${result.exit_code}`;
   }
   if (background) throw new Error('background runs are not available here');
   const result = await runTool({

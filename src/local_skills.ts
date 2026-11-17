@@ -8,11 +8,12 @@ import {
   realpath,
   rename,
   rm,
+  stat,
   writeFile,
 } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { StringDecoder } from 'node:string_decoder';
-import { dirname, join, relative, sep } from 'node:path';
+import { delimiter, dirname, join, relative, sep } from 'node:path';
 import { isRecord, type CircleSettings } from './settings.js';
 import { McpLoginRequired } from './mcp_auth.js';
 import { backgroundMcpConnection, buildMcpConnections } from './mcp_loader.js';
@@ -562,15 +563,29 @@ const SCRIPT_ENV =
         'LOCALAPPDATA',
       ]
     : ['PATH', 'HOME', 'TMPDIR'];
-function scriptEnvironment(): NodeJS.ProcessEnv {
+function scriptEnvironment(nodeExecutable?: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
+  let pathKey = 'PATH';
   for (const name of SCRIPT_ENV) {
     // Windows names a variable in any case
     const key = Object.keys(process.env).find(
       (item) => item.toUpperCase() === name,
     );
-    if (key !== undefined && process.env[key] !== undefined)
+    if (key !== undefined && process.env[key] !== undefined) {
       env[key] = process.env[key];
+      if (name === 'PATH') pathKey = key;
+    }
+  }
+  if (nodeExecutable) {
+    const nodeDir = dirname(nodeExecutable);
+    const current = env[pathKey] ?? '';
+    const first = current.split(delimiter)[0] ?? '';
+    const same =
+      process.platform === 'win32'
+        ? first.toLowerCase() === nodeDir.toLowerCase()
+        : first === nodeDir;
+    if (!same)
+      env[pathKey] = current ? `${nodeDir}${delimiter}${current}` : nodeDir;
   }
   if (process.platform !== 'win32') {
     env.HOME ??= '';
@@ -579,10 +594,47 @@ function scriptEnvironment(): NodeJS.ProcessEnv {
   return env;
 }
 
+/**
+ * Resolves and checks the Node executable that runs a pack's scripts. Inside an Electron process without
+ * `ELECTRON_RUN_AS_NODE=1`, `process.execPath` is the application binary (such as `Circle.exe`), which exits 0 on
+ * its single-instance lock without running the script; callers there must pass Circle's bundled `node` binary.
+ */
+export async function resolveNodeExecutable(
+  nodeExecutable?: string,
+): Promise<string> {
+  if (nodeExecutable !== undefined && nodeExecutable.trim().length === 0) {
+    throw new LocalSkillsError(
+      '没有可用的 Node 运行时（可执行路径为空）',
+      '确认 Circle 自带的 node 已完整安装后再试',
+    );
+  }
+  const executable = nodeExecutable ?? process.execPath;
+  if (
+    nodeExecutable === undefined &&
+    Boolean(process.versions.electron) &&
+    process.env.ELECTRON_RUN_AS_NODE !== '1'
+  ) {
+    throw new LocalSkillsError(
+      `当前进程不是独立的 Node 运行时（execPath: ${executable}）`,
+      '桌面端必须使用自带的 node 可执行文件运行技能脚本；确认 Circle 安装完整后再试',
+    );
+  }
+  const info = await stat(executable).catch(() => null);
+  if (info === null || !info.isFile()) {
+    throw new LocalSkillsError(
+      `找不到 Node 运行时：${executable}`,
+      '确认 Circle 自带的 node 可执行文件存在且可访问后再试',
+    );
+  }
+  return executable;
+}
+
 /** A pack's script, checked and ready to start, with its arguments, input and whole environment. */
 export interface PreparedRun {
   pack: string;
   script: string;
+  /** Verified Node executable that runs the script. */
+  nodeExecutable: string;
   /** The pack's folder, as the script finds it in `CIRCLE_SKILL_DIR`. */
   packDir: string;
   target: string;
@@ -595,6 +647,8 @@ export interface RunToolOptions {
   root?: string;
   pack: string;
   script: string;
+  /** Circle's Node executable; defaults to process.execPath when running under Node. */
+  nodeExecutable?: string;
   args?: string[];
   stdin?: string;
   variables?: Record<string, string>;
@@ -618,6 +672,7 @@ export async function prepareRun(
     root = SKILLS_ROOT,
     pack,
     script,
+    nodeExecutable: givenNode,
     args = [],
     stdin = '',
     variables = {},
@@ -649,21 +704,24 @@ export async function prepareRun(
       '只运行 TypeScript/JavaScript 脚本',
       '从 SKILL.md 照抄脚本路径',
     );
+  const nodeExecutable = await resolveNodeExecutable(givenNode);
+  const resolvedPackDir = await realpath(packDir);
   const values = { ...variables, ...secrets };
   const data = dataRoot === undefined ? undefined : join(dataRoot, pack);
   if (data !== undefined) await mkdir(data, { recursive: true, mode: 0o700 });
   return {
     pack,
     script,
-    packDir: await realpath(packDir),
+    nodeExecutable,
+    packDir: resolvedPackDir,
     target,
     args: expand ? expandVariables(args, values) : args,
     stdin: expand ? expandVariables(stdin, values) : stdin,
     env: {
-      ...scriptEnvironment(),
+      ...scriptEnvironment(nodeExecutable),
       ...variables,
       ...extraEnv,
-      CIRCLE_SKILL_DIR: await realpath(packDir),
+      CIRCLE_SKILL_DIR: resolvedPackDir,
       ...(data === undefined ? {} : { CIRCLE_SKILL_DATA: data }),
     },
   };
@@ -671,17 +729,18 @@ export async function prepareRun(
 
 // Starts a prepared script with its exact arguments and input. It is written next to them in a private folder,
 // which it removes once read, so the command a shell runs names only paths.
-const RUNNER = `import { readFileSync, rmSync } from 'node:fs';
+const RUNNER = `import { readFileSync, rmSync, unlinkSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
 const specPath = process.argv[2];
 const spec = JSON.parse(readFileSync(specPath, 'utf8'));
+try { unlinkSync(specPath); } catch {}
 try { rmSync(dirname(specPath), { recursive: true, force: true }); } catch {}
 const child = spawn(process.execPath, [spec.target, ...spec.args], { stdio: ['pipe', 'inherit', 'inherit'] });
 child.stdin.on('error', () => {});
 child.stdin.end(spec.stdin);
 for (const name of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(name, () => child.kill(name));
-child.on('error', (error) => { process.stderr.write(error.message + '\\n'); process.exit(127); });
+child.on('error', (error) => { process.stderr.write(\`skill_run spawn failed (\${process.execPath}): \${error.message}\\n\`); process.exit(127); });
 child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
 `;
 function quoteForShell(value: string): string {
@@ -689,13 +748,23 @@ function quoteForShell(value: string): string {
     ? `"${value}"`
     : `'${value.replaceAll("'", `'\\''`)}'`;
 }
-/** The shell command that runs a prepared script, for a background job to start as it starts any command. */
-export async function scriptCommand(prepared: PreparedRun): Promise<string> {
+export interface PreparedScriptCommand {
+  command: string;
+  specPath: string;
+  nodeExecutable: string;
+  cleanup: () => Promise<void>;
+}
+/** Builds the shell command and temp launcher folder for a prepared script, with explicit cleanup on failure. */
+export async function prepareScriptCommand(
+  prepared: PreparedRun,
+): Promise<PreparedScriptCommand> {
   const folder = await mkdtemp(join(tmpdir(), 'circle-script-'));
+  const runPath = join(folder, 'run.mjs');
+  const specPath = join(folder, 'spec.json');
   try {
-    await writeFile(join(folder, 'run.mjs'), RUNNER, { mode: 0o600 });
+    await writeFile(runPath, RUNNER, { mode: 0o600 });
     await writeFile(
-      join(folder, 'spec.json'),
+      specPath,
       JSON.stringify({
         target: prepared.target,
         args: prepared.args,
@@ -707,9 +776,20 @@ export async function scriptCommand(prepared: PreparedRun): Promise<string> {
     await rm(folder, { recursive: true, force: true });
     throw error;
   }
-  return [process.execPath, join(folder, 'run.mjs'), join(folder, 'spec.json')]
-    .map(quoteForShell)
-    .join(' ');
+  return {
+    command: [prepared.nodeExecutable, runPath, specPath]
+      .map(quoteForShell)
+      .join(' '),
+    specPath,
+    nodeExecutable: prepared.nodeExecutable,
+    cleanup: async () => {
+      await rm(folder, { recursive: true, force: true }).catch(() => {});
+    },
+  };
+}
+/** The shell command that runs a prepared script, for a background job to start as it starts any command. */
+export async function scriptCommand(prepared: PreparedRun): Promise<string> {
+  return (await prepareScriptCommand(prepared)).command;
 }
 
 /**
@@ -740,13 +820,17 @@ export async function runTool(
   signal?.throwIfAborted();
   const prepared = await prepareRun(options);
   return await new Promise((resolvePromise, reject) => {
-    const child = spawn(process.execPath, [prepared.target, ...prepared.args], {
-      cwd,
-      env: prepared.env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      // Its own process group, so esc and the timeout reach what it starts too
-      detached: process.platform !== 'win32',
-    });
+    const child = spawn(
+      prepared.nodeExecutable,
+      [prepared.target, ...prepared.args],
+      {
+        cwd,
+        env: prepared.env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        // Its own process group, so esc and the timeout reach what it starts too
+        detached: process.platform !== 'win32',
+      },
+    );
     let truncated = false;
     let timedOut = false;
     // Decoded as a stream, so a character split between two chunks stays whole; cut by bytes
@@ -789,8 +873,8 @@ export async function runTool(
       signal?.removeEventListener('abort', abort);
       reject(
         new LocalSkillsError(
-          `脚本没有启动：${error.message}`,
-          '确认这个包已完整安装后再试',
+          `脚本没有启动（Node: ${prepared.nodeExecutable}）：${error.message}`,
+          '确认 Circle 自带的 node 可执行文件正常且技能包已完整安装后再试',
         ),
       );
     });

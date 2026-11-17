@@ -168,4 +168,4 @@ A subagent that loads the skill itself gets the pack's tools from its next reque
 
 The tools belong to the session that loaded the skill, like its hooks: switching, importing or starting another session leaves them out until the skill is loaded there. Loading the skill again tells the model again which tools it has. Loading it adds tools to the list, so the next request does not reuse the prompt cache of the requests before.
 
-Installing and running a pack executes the publisher's Node code; a server-side scan is not a sandbox. Read the pack before installing it, and treat what runs locally as a preview: the serving side's recomputation is the evidence. Packs and skills are supported on macOS and Linux only.
+Installing and running a pack executes the publisher's Node code; a server-side scan is not a sandbox. Read the pack before installing it, and treat what runs locally as a preview: the serving side's recomputation is the evidence.

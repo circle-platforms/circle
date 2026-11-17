@@ -99,6 +99,8 @@ export interface ToolHooks {
     secrets: () => Record<string, string>;
     variables: () => Record<string, string>;
     root?: string;
+    /** Circle's Node executable for running pack scripts; defaults to process.execPath under Node. */
+    nodeExecutable?: string;
     /** The typed tool offered for this script of a pack, when its skill is loaded and the pack declares it. */
     typed?: (
       pack: string,
@@ -655,6 +657,9 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
               ...(typeof args.stdin === 'string' ? { stdin: args.stdin } : {}),
               variables: localSkills.variables(),
               secrets: localSkills.secrets(),
+              ...(localSkills.nodeExecutable
+                ? { nodeExecutable: localSkills.nodeExecutable }
+                : {}),
               ...(localSkills.home
                 ? { dataRoot: join(localSkills.home, SKILL_DATA_FOLDER) }
                 : {}),

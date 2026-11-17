@@ -425,6 +425,8 @@ export interface ControllerOptions {
   dataFolder?: string;
   workspace?: string;
   userHome?: string;
+  /** Isolated pack skills folder for tests; defaults to ~/.agents/skills. */
+  localSkillsRoot?: string;
   model?: ChatModel;
   catalog?: (home: string) => ModelCatalog;
   emit: (update: RuntimeUpdate) => void;
@@ -2583,6 +2585,12 @@ export class RuntimeController {
           await this.options.beforeDelete?.(runtime.session.id);
         },
         userHome: this.options.userHome,
+        ...(this.options.workspaceTools?.runtimeExecutable
+          ? { nodeExecutable: this.options.workspaceTools.runtimeExecutable }
+          : {}),
+        ...(this.options.localSkillsRoot
+          ? { localSkillsRoot: this.options.localSkillsRoot }
+          : {}),
         localContext: !!task || isFolderTrusted(settings, workspace),
         settings,
         model:

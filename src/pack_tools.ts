@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Ajv, type ValidateFunction } from 'ajv';
 import type { JobOwner, JobRegistry } from './jobs.js';
-import { LIMITS, verifyInstalled } from './local_skills.js';
+import { LIMITS, LocalSkillsError, verifyInstalled } from './local_skills.js';
 import { prefixedToolName } from './mcp_config.js';
 import { isSafePackPath } from './pack_files.js';
 import { identityEnvironment } from './sandbox.js';
@@ -327,6 +327,8 @@ export function packTool(options: {
   workspace: string;
   /** Where packs keep what outlives an update (`CIRCLE_SKILL_DATA`). */
   dataRoot?: string;
+  /** Circle's Node executable; defaults to process.execPath under Node. */
+  nodeExecutable?: string;
   jobs?: JobRegistry;
   jobOwner?: (context: ToolContext) => JobOwner;
 }): Tool {
@@ -364,38 +366,47 @@ export function packTool(options: {
         startedBy: 'model' as const,
       };
       const argv = packToolArgv(declaration.args, input, variables);
-      return runScript(
-        {
-          root,
-          pack,
-          script: declaration.script,
-          args: argv,
-          stdin: declaration.stdin === 'json' ? JSON.stringify(input) : '',
-          variables,
-          secrets,
-          env,
-          expand: false,
-          ...(options.dataRoot ? { dataRoot: options.dataRoot } : {}),
-        },
-        {
-          jobs: options.jobs,
-          owner: {
-            ...owner,
-            origin: {
-              ...owner.origin,
-              executionSessionId: context.sessionId,
-              toolCallId: context.callId,
-              ...(context.identity ? { identity: context.identity } : {}),
-              displayCommand: [pack, declaration.script, ...argv].join(' '),
-              description: `${pack} ${declaration.name}`,
-            },
+      try {
+        return await runScript(
+          {
+            root,
+            pack,
+            script: declaration.script,
+            args: argv,
+            stdin: declaration.stdin === 'json' ? JSON.stringify(input) : '',
+            variables,
+            secrets,
+            env,
+            expand: false,
+            ...(options.nodeExecutable
+              ? { nodeExecutable: options.nodeExecutable }
+              : {}),
+            ...(options.dataRoot ? { dataRoot: options.dataRoot } : {}),
           },
-          signal: context.signal,
-          cwd: options.workspace,
-          ...(typeof timeout === 'number' ? { timeout } : {}),
-          ...(background === true ? { background: true } : {}),
-        },
-      );
+          {
+            jobs: options.jobs,
+            owner: {
+              ...owner,
+              origin: {
+                ...owner.origin,
+                executionSessionId: context.sessionId,
+                toolCallId: context.callId,
+                ...(context.identity ? { identity: context.identity } : {}),
+                displayCommand: [pack, declaration.script, ...argv].join(' '),
+                description: `${pack} ${declaration.name}`,
+              },
+            },
+            signal: context.signal,
+            cwd: options.workspace,
+            ...(typeof timeout === 'number' ? { timeout } : {}),
+            ...(background === true ? { background: true } : {}),
+          },
+        );
+      } catch (error) {
+        if (error instanceof LocalSkillsError)
+          throw new Error(`${error.message}；${error.fix}`);
+        throw error;
+      }
     },
   };
 }
