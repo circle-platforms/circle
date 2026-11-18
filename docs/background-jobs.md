@@ -39,7 +39,9 @@ Circle does not start such a turn:
 - while a card waits for you, you are typing, a list such as `/jobs` is open, or `/tree` has taken the conversation back;
 - for a job you stopped, or one that was your own `!command`. A `!command` you moved to the background shares its output with the model when it ends, as one in the foreground does;
 - for a job of another conversation: its notice waits until that conversation is open again;
-- more than ten times in a row: then it waits for you.
+- more than ten times in a row: then it waits for you. Work that runs many jobs by design, one for each item of a long list, sets `CIRCLE_JOB_WAKES` to a higher number before Circle starts.
+
+A turn that could not start, because the model did not answer or a compaction was running, is tried again after fifteen seconds, a minute and four minutes. After the third it waits for you.
 
 The [desktop application](desktop.md) starts such a turn too, with these differences:
 

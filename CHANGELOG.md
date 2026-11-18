@@ -4,6 +4,9 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+### Changed
+- **Finished background jobs keep starting turns.** `CIRCLE_JOB_WAKES` sets how many turns in a row finished jobs may start before Circle waits for a message (ten by default): work that runs one job for each item of a long list stopped without a word after the tenth. A turn that could not start is tried again after fifteen seconds, a minute and four minutes instead of waiting for a message at once.
+
 ## 1.18.0 - 2026-11-15
 
 ### Added

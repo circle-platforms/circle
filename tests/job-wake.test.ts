@@ -1,6 +1,10 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { JobWake, answerJobsBeforeLeaving } from '../src/job_wake.js';
+import {
+  JobWake,
+  answerJobsBeforeLeaving,
+  mostWakesInARow,
+} from '../src/job_wake.js';
 
 function setup(t: TestContext) {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
@@ -108,17 +112,72 @@ test('at most ten turns in a row start by themselves, until the person writes', 
   assert.equal(state.starts, 11);
 });
 
-test('a turn that fails to start waits for the person instead of trying again', async (t) => {
+test('a turn that fails to start is tried again three times, further apart each time, and then waits for the person', async (t) => {
   const { state, wake, tick } = setup(t);
+  const settle = async () => {
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+  };
   state.start = () => Promise.reject(Error('model unavailable'));
   wake.jobEnded();
   tick();
   assert.equal(state.starts, 1);
-  await Promise.resolve();
-  await Promise.resolve();
+  await settle();
+  tick(14_000);
+  assert.equal(state.starts, 1, 'not before fifteen seconds');
+  tick(2000);
+  assert.equal(state.starts, 2);
+  await settle();
+  tick(61_000);
+  assert.equal(state.starts, 3);
+  await settle();
+  tick(241_000);
+  assert.equal(state.starts, 4);
+  await settle();
+  tick(600_000);
+  assert.equal(
+    state.starts,
+    4,
+    'after the third retry it waits for the person',
+  );
+  assert.equal(wake.snoozed, true);
+  assert.equal(
+    wake.wakesInARow,
+    1,
+    'turns that did not start are not turns in a row',
+  );
+  state.start = () => Promise.resolve();
+  wake.personSent();
   wake.jobEnded();
-  tick(5000);
-  assert.equal(state.starts, 1);
+  tick();
+  assert.equal(state.starts, 5);
+});
+
+test('a turn that starts after a failed one clears the count of failures', async (t) => {
+  const { state, wake, tick } = setup(t);
+  const settle = async () => {
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+  };
+  state.start = () => Promise.reject(Error('model unavailable'));
+  wake.jobEnded();
+  tick();
+  await settle();
+  state.start = () => Promise.resolve();
+  tick(16_000);
+  assert.equal(state.starts, 2);
+  await settle();
+  state.start = () => Promise.reject(Error('model unavailable'));
+  wake.jobEnded();
+  tick();
+  await settle();
+  tick(16_000);
+  assert.equal(state.starts, 4, 'the first wait again, not the second');
+});
+
+test('CIRCLE_JOB_WAKES sets how many turns in a row start by themselves; anything that is no whole number from one up leaves ten', () => {
+  assert.equal(mostWakesInARow({}), 10);
+  assert.equal(mostWakesInARow({ CIRCLE_JOB_WAKES: '500' }), 500);
+  for (const value of ['0', '-3', '2.5', 'many', ''])
+    assert.equal(mostWakesInARow({ CIRCLE_JOB_WAKES: value }), 10, value);
 });
 
 test('a front end with a clock of its own looks when it likes, and nothing starts before the second is up', (t) => {
