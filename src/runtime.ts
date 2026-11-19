@@ -4921,4 +4921,12 @@ It is input, not a decision: it answers no approval card, changes no mode and ad
       return undefined;
     return (await this.harness.run()).answer;
   }
+  /**
+   * Runs the turn again that a finished job's notice started and that failed: the notice is
+   * in the conversation, unanswered, so the model is asked about the conversation as it is.
+   */
+  async runJobNoticesAgain(): Promise<string | undefined> {
+    if (this.closing || this.busy) return undefined;
+    return (await this.harness.run()).answer;
+  }
 }

@@ -41,7 +41,7 @@ Circle does not start such a turn:
 - for a job of another conversation: its notice waits until that conversation is open again;
 - more than ten times in a row: then it waits for you. Work that runs many jobs by design, one for each item of a long list, sets `CIRCLE_JOB_WAKES` to a higher number before Circle starts.
 
-A turn that could not start, because the model did not answer or a compaction was running, is tried again after fifteen seconds, a minute and four minutes. After the third it waits for you.
+A turn that failed, because the model did not answer, its service broke off or a compaction was running, is tried again after fifteen seconds, a minute and four minutes. The failed turn has usually read the notice already, so the retry asks the model about the conversation as it stands. After the third it waits for you.
 
 The [desktop application](desktop.md) starts such a turn too, with these differences:
 
