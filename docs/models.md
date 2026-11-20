@@ -120,6 +120,8 @@ Additional checks protect a turn:
 - Provider finish reasons, the actual output limit where one was sent, and client repetition stops are stored with new responses. Older records stay unchanged; a missing field is not inferred from token counts.
 - An explicit provider context-window exhaustion is distinguished from an output limit. Summary attempts retain the original finish reason or provider error, request budget and available usage even when the summary cannot be used.
 
+A rate limit that lifts hours later (a quota counted over several hours) outlasts those ten minutes, and the request fails. `CIRCLE_RATE_LIMIT_PATIENCE_MS` sets a longer time: the request is then sent again every two minutes at most until that many milliseconds have passed since its first try. A workflow agent waiting that long also needs `CIRCLE_ASYNC_AGENT_STALL_TIMEOUT_MS` at least as long, or it starts over after ten minutes without output.
+
 `CIRCLE_LLM_TIMEOUT`, `CIRCLE_LLM_STALL_TIMEOUT` and `CIRCLE_LLM_REPEAT_GUARD` change timeouts and repetition checks. See [Environment variables](environment-variables.md#model-requests).
 
 ## Cost and context in the footer

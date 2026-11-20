@@ -12,6 +12,7 @@ import {
   errorKind,
   retryAfterMs,
   backoffMs,
+  rateLimitBudget,
 } from '../src/model_guard.js';
 import { GatewayModel } from '../src/model.js';
 import OpenAI from 'openai';
@@ -612,4 +613,50 @@ test('certificate and TLS failures are not retried: they fail the same way every
       undefined,
       code,
     );
+});
+
+test('a rate-limited request is sent again for as long as CIRCLE_RATE_LIMIT_PATIENCE_MS says, and for ten minutes without it', async () => {
+  assert.deepEqual(rateLimitBudget({}), BUDGETS.rate_limit);
+  assert.deepEqual(rateLimitBudget({ CIRCLE_RATE_LIMIT_PATIENCE_MS: 'soon' }), BUDGETS.rate_limit);
+  assert.deepEqual(rateLimitBudget({ CIRCLE_RATE_LIMIT_PATIENCE_MS: '60000' }), BUDGETS.rate_limit, 'no shorter than the usual budget');
+  const patient = rateLimitBudget({ CIRCLE_RATE_LIMIT_PATIENCE_MS: String(6 * 3600_000) });
+  assert.deepEqual([patient.deadlineMs, patient.capMs, patient.maxRetries], [6 * 3600_000, 120000, 188]);
+
+  // A limit that lifts after three hours: forty tries later the request is answered. The clock is the test's.
+  const run = async (budget: typeof patient, liftsAt: number) => {
+    let clock = 0;
+    let calls = 0;
+    const waits: number[] = [];
+    const guard = new ModelGuard(() => false, {
+      budgets: { ...BUDGETS, rate_limit: budget },
+      now: () => clock,
+      random: () => 0.5,
+      wait: async (milliseconds) => {
+        waits.push(milliseconds);
+        clock += milliseconds;
+      },
+    });
+    const outcome = await guard
+      .execute(request(), async () => {
+        calls++;
+        if (clock < liftsAt) throw error(429, 'the limit of five hours is reached');
+        return answer('after the limit');
+      })
+      .then(
+        (response) => String(response.message.content),
+        (failure: unknown) => (failure instanceof Error ? failure.constructor.name : 'error'),
+      );
+    return { outcome, calls, waited: clock, longest: Math.max(...waits) };
+  };
+  const waited = await run(patient, 3 * 3600_000);
+  assert.equal(waited.outcome, 'after the limit');
+  assert.equal(waited.longest, 120000, 'two minutes apart at most');
+  assert.ok(waited.calls > 80 && waited.waited < 3 * 3600_000 + 120000, JSON.stringify(waited));
+  // The limit outlasts the patience: the request fails when that time has passed.
+  const gaveUp = await run(patient, 7 * 3600_000);
+  assert.equal(gaveUp.outcome, 'RetriesExhausted');
+  assert.ok(gaveUp.waited >= 6 * 3600_000 && gaveUp.waited < 6 * 3600_000 + 120000, JSON.stringify(gaveUp));
+  // Without the variable: five more tries, then the failure.
+  const usual = await run(BUDGETS.rate_limit, 3 * 3600_000);
+  assert.deepEqual([usual.outcome, usual.calls], ['RetriesExhausted', 6]);
 });

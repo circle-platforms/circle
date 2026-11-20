@@ -56,6 +56,26 @@ export const BUDGETS: Record<RetryKind, RetryBudget> = {
     jitter: 0.1,
   },
 };
+/**
+ * The budget of a rate-limited request. With `CIRCLE_RATE_LIMIT_PATIENCE_MS` the request is sent
+ * again, two minutes apart at most, until that long has passed since its first try: for a limit
+ * that lifts hours later (a quota counted over several hours) in a run nobody watches. The count
+ * of tries is what fits in that time, so the time ends it. Without the variable, or with one no
+ * longer than the usual ten minutes, five more tries within ten minutes.
+ */
+export function rateLimitBudget(
+  env: Record<string, string | undefined> = process.env,
+): RetryBudget {
+  const usual = BUDGETS.rate_limit;
+  const patience = Number(env.CIRCLE_RATE_LIMIT_PATIENCE_MS);
+  if (!Number.isSafeInteger(patience) || patience <= usual.deadlineMs)
+    return usual;
+  return {
+    ...usual,
+    maxRetries: Math.ceil(patience / usual.capMs) + 8,
+    deadlineMs: patience,
+  };
+}
 export function envFlag(name: string): boolean {
   return !['0', 'false', 'off', 'no'].includes(
     (process.env[name] || '1').trim().toLowerCase(),
@@ -427,7 +447,10 @@ export class ModelGuard {
     const counts = new Map<RetryKind, number>();
     const now = this.options.now ?? Date.now;
     const started = now();
-    const budgets = this.options.budgets ?? BUDGETS;
+    const budgets = this.options.budgets ?? {
+      ...BUDGETS,
+      rate_limit: rateLimitBudget(),
+    };
     let drops = 0;
     let repeats = 0;
     let tries = 0;
