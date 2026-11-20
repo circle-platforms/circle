@@ -7,6 +7,36 @@ import { glob } from 'glob';
 import type { Sandbox } from './sandbox.js';
 
 export const GREP_DEFAULT_MAX_COUNT = 1000;
+/** A matching line longer than this is shown as windows around its matches; read_file slices a long line at the same length. */
+export const GREP_LINE_CHARS = 2000;
+const GREP_WINDOW_CHARS = 240;
+const GREP_WINDOWS = 5;
+/**
+ * What content mode shows of one matching line. A line of ordinary length is shown whole. A very long one (a JSON file stored
+ * on one line is one "line" of the whole file) is shown as a window around each of its first matches with the offset it is
+ * at: the whole line was 40 to 80 KB of answer for one match, and it stayed in the context for the rest of the session.
+ */
+export function matchedLine(line: string, pattern: string): string {
+  if (line.length <= GREP_LINE_CHARS) return line;
+  const windows: string[] = [];
+  let hits = 0;
+  for (
+    let at = line.indexOf(pattern);
+    at >= 0;
+    at = line.indexOf(pattern, at + Math.max(1, pattern.length))
+  ) {
+    hits++;
+    if (windows.length >= GREP_WINDOWS) continue;
+    const start = Math.max(0, at - GREP_WINDOW_CHARS);
+    const end = Math.min(line.length, at + pattern.length + GREP_WINDOW_CHARS);
+    // read_file counts characters, not UTF-16 units, from zero.
+    const offset = Array.from(line.slice(0, start)).length;
+    windows.push(
+      `    char_offset ${offset}: ${start > 0 ? '…' : ''}${line.slice(start, end)}${end < line.length ? '…' : ''}`,
+    );
+  }
+  return `[line of ${Array.from(line).length} characters with ${hits} match${hits === 1 ? '' : 'es'}${hits > windows.length ? `, the first ${windows.length} shown` : ''}; read_file with char_offset and char_limit reads more of it]\n${windows.join('\n')}`;
+}
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const RESULT_LIMIT = 20000 * 4;
 const TRUNCATION_GUIDANCE =
@@ -284,7 +314,9 @@ export async function grepSearch(
     body = paths
       .flatMap((path) => [
         `${path}:`,
-        ...results.get(path)!.map(([line, text]) => `  ${line}: ${text}`),
+        ...results
+          .get(path)!
+          .map(([line, text]) => `  ${line}: ${matchedLine(text, pattern)}`),
       ])
       .join('\n');
   body = truncate(body);
