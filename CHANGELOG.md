@@ -6,6 +6,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ### Changed
 - **Finished background jobs keep starting turns.** `CIRCLE_JOB_WAKES` sets how many turns in a row finished jobs may start before Circle waits for a message (ten by default): work that runs one job for each item of a long list stopped without a word after the tenth. A turn that could not start is tried again after fifteen seconds, a minute and four minutes instead of waiting for a message at once.
+- **A long session with many subagents no longer lags the screen.** Every repaint read the usage statistics, and the statistics read the context state and the messages of every subagent session: five hours in, with 85 subagent sessions, that reading was 85% of the process's time. A repaint now reuses the last statistics for a quarter second, or ten times what reading them cost; a turn that ends and a message the conversation itself gains still show at once.
 - **A turn a finished job started is tried again when the model's service breaks off.** The retry of a failed turn only ran while a notice still waited to be read, but the failed turn had already taken the notice into the conversation, so nothing happened and the work stopped without a word until the next job ended. The turn is now owed: it is run again after fifteen seconds, a minute and four minutes, on the conversation as it stands, and only then does Circle wait for you.
 
 ## 1.18.0 - 2026-11-15

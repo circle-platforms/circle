@@ -184,6 +184,11 @@ interface SessionView {
   // The last turn ended with an error, not a stop; the next turn clears it.
   failed?: boolean;
 }
+/** How long a repaint reuses the last usage statistics: a quarter second, or ten times what reading them cost. */
+export function statsReuseMs(costMs: number): number {
+  return Math.max(250, Math.min(10_000, costMs * 10));
+}
+
 export class SessionApp {
   private view!: SessionView;
   private selectedView!: SessionView;
@@ -620,6 +625,53 @@ export class SessionApp {
     }, 160);
     this.repaint();
   }
+  // What runtime.stats() last gave. It reads the context state and the messages of every subagent session,
+  // and a repaint comes several times a second while anything runs: in a five hour session with 85 subagent
+  // sessions that reading was 85% of the process's time and the screen lagged. The numbers are display only,
+  // so a repaint reuses them for a moment; the moment grows with what the last reading cost, which keeps the
+  // reading under a tenth of the time however large the session becomes. A turn that ends, and a message
+  // this conversation itself gained (a view-only screen follows another terminal by them), read at once.
+  private statsMemo?: {
+    session: string;
+    busy: boolean;
+    messages: number;
+    last: string | undefined;
+    at: number;
+    cost: number;
+    value: ReturnType<AgentRuntime['stats']>;
+  };
+  private runtimeStats(): ReturnType<AgentRuntime['stats']> {
+    const runtime = this.runtime!;
+    const now = performance.now();
+    const memo = this.statsMemo;
+    const own = runtime.harness.messages;
+    if (
+      !memo ||
+      memo.session !== runtime.session.id ||
+      memo.busy !== runtime.busy ||
+      memo.messages !== own.length ||
+      memo.last !== own.at(-1)?.id ||
+      now - memo.at >= statsReuseMs(memo.cost)
+    ) {
+      const value = runtime.stats();
+      this.statsMemo = {
+        session: runtime.session.id,
+        busy: runtime.busy,
+        messages: own.length,
+        last: own.at(-1)?.id,
+        at: now,
+        cost: performance.now() - now,
+        value,
+      };
+    }
+    // The caller adds the pending output to the costs it shows: it gets its own copy.
+    const value = this.statsMemo!.value;
+    return {
+      ...value,
+      usage: { ...value.usage },
+      costs: structuredClone(value.costs),
+    };
+  }
   private repaint(): void {
     // A repaint can come from work that settles after leaving (a stopped job, a late reply):
     // the session store may be closed by then.
@@ -681,7 +733,7 @@ export class SessionApp {
       this.state.acceptEdits =
         this.runtime.policy.mode(this.runtime.session.id) === 'accept-edits';
       this.state.busy = this.runtime.busy;
-      const stats = this.runtime.stats();
+      const stats = this.runtimeStats();
       this.state.usage = { ...stats.usage };
       this.state.usageUnreported =
         this.state.busy && this.state.usage.input_tokens === 0;
