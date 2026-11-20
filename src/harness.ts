@@ -1975,9 +1975,18 @@ export class Harness {
   }
   // One call: checked, approved when it must be, and run. The result comes back to be stored
   // by the caller, which keeps the results in the order of the calls.
+  /**
+   * One tool call made for this conversation by something other than its model, such as a command of a workflow
+   * script: it is checked, hooked and asked about as the model's own call is. Its result is returned and not kept
+   * in the conversation, and the call is not shown in it.
+   */
+  runToolCall(call: ToolCall, signal: AbortSignal): Promise<Message> {
+    return this.runCall(call, signal, true);
+  }
   private async runCall(
     original: ToolCall,
     signal: AbortSignal,
+    quiet = false,
   ): Promise<Message> {
     const callModel = this.model;
     let call = original;
@@ -2005,7 +2014,7 @@ export class Harness {
       /* Optional metadata cannot own tool execution. */
     }
     const modelCalls: ToolModelCall[] = [];
-    this.bus.emit('tool_call', { payload: { ...call } });
+    if (!quiet) this.bus.emit('tool_call', { payload: { ...call } });
     try {
       signal.throwIfAborted();
       // The values go in once, before anything is decided: what is checked and approved is
@@ -2294,7 +2303,7 @@ export class Harness {
       signal.throwIfAborted();
       if (this.readOnlyRefuses(call, effect) && !tool.planAsks)
         throw new Error('read-only mode: this tool cannot run');
-      this.bus.emit('tool_start', { payload: { ...call } });
+      if (!quiet) this.bus.emit('tool_start', { payload: { ...call } });
       const args = resolved;
       const readOnlyCommand =
         this.approvalMode() === 'accept-edits'
@@ -2306,8 +2315,10 @@ export class Harness {
         sessionId: this.sessionId,
         identity: this.identity(),
         callId: call.id,
-        progress: (text) =>
-          this.bus.emit('tool_progress', { payload: { id: call.id, text } }),
+        progress: (text) => {
+          if (!quiet)
+            this.bus.emit('tool_progress', { payload: { id: call.id, text } });
+        },
         ...(used.size ? { rawArgs: structuredClone(raw) } : {}),
         ...(usedSecrets.length ? { secretNames: usedSecrets } : {}),
         imageInput: callModel.imageInput,

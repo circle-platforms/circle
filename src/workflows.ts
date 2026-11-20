@@ -65,6 +65,9 @@ export interface AgentRequest {
   model?: string;
   effort?: string;
   agentType?: string;
+  /** Set for an `execute()` call: the command that runs in place of an agent, and the seconds it may take. */
+  command?: string;
+  timeout?: number;
 }
 /** What one attempt of an agent tells the run while it works. */
 export interface AttemptHooks {
@@ -82,6 +85,19 @@ export type AgentRunner = (
   request: AgentRequest,
   hooks: AttemptHooks,
 ) => Promise<unknown>;
+/**
+ * Runs one `execute()` call of a script to its end: the command's exit code (null when it was stopped at its
+ * seconds) and what it printed. A command that was not allowed to run is an `AgentCallError`.
+ */
+export type CommandRunner = (
+  request: AgentRequest,
+  signal: AbortSignal,
+) => Promise<{ code: number | null; output: string }>;
+/** The seconds a script's command may take when it names none, and the most it may name. */
+export const COMMAND_SECONDS = 120;
+export const MAX_COMMAND_SECONDS = 600;
+/** The most commands one run may start. */
+export const MAX_RUN_COMMANDS = 10_000;
 /** The call itself failed, and the script gets the error: its schema never fit, or it stalled every time. */
 export class AgentCallError extends Error {
   constructor(message: string) {
@@ -184,6 +200,8 @@ export interface WorkflowAgentView {
   error?: string;
   /** The start of what it returned. */
   result?: string;
+  /** An `execute()` call: a command of the script's own, not an agent. */
+  command?: true;
 }
 /** One run, as /workflows shows it. */
 export interface WorkflowRunView {
@@ -348,6 +366,8 @@ export interface WorkflowRunOptions {
   script: string;
   scriptFile: string;
   runner: AgentRunner;
+  /** Runs a script's `execute()` calls; without it a script has none. */
+  commandRunner?: CommandRunner;
   /** Checks an agent type before the agent starts: why it cannot be used, or nothing. */
   checkAgentType?: (name: string) => string | undefined;
   /** The run this one relaunches: its journal is replayed. */
@@ -387,6 +407,8 @@ export class WorkflowRun {
   private slots: Slots;
   private phase = '';
   private output = 0;
+  /** How many of `calls` are commands. */
+  private commands = 0;
   private closed = false;
   private ending?: Promise<void>;
   private finish?: (text: string | Error) => void;
@@ -549,7 +571,11 @@ export class WorkflowRun {
     reject: (message: string) => void,
   ): void {
     if (this.closed || this.outcome) return;
-    let parsed: { prompt: string; options: Record<string, unknown> };
+    let parsed: {
+      prompt: string;
+      command?: unknown;
+      options: Record<string, unknown>;
+    };
     try {
       parsed = JSON.parse(spec);
     } catch {
@@ -564,6 +590,11 @@ export class WorkflowRun {
       typeof options[key] === 'string' && (options[key] as string).trim()
         ? (options[key] as string).trim()
         : undefined;
+    if (parsed.command !== undefined)
+      return this.calledCommand(parsed.command, options, text, refuse, {
+        resolve,
+        reject,
+      });
     for (const key of [
       'label',
       'phase',
@@ -602,7 +633,7 @@ export class WorkflowRun {
       const why = this.options.checkAgentType?.(agentType);
       if (why) return refuse(why);
     }
-    if (this.calls.length >= MAX_RUN_AGENTS)
+    if (this.calls.length - this.commands >= MAX_RUN_AGENTS)
       return refuse(
         `this run has started ${MAX_RUN_AGENTS} agents, the most one run may start`,
       );
@@ -652,6 +683,84 @@ export class WorkflowRun {
       view,
       abort: new AbortController(),
     };
+    this.calls.push(call);
+    this.issued.push(call);
+  }
+  /** An `execute()` call, while the script runs: queued and journalled as an agent's call is. */
+  private calledCommand(
+    command: unknown,
+    options: Record<string, unknown>,
+    text: (key: string) => string | undefined,
+    refuse: (message: string) => void,
+    ends: {
+      resolve: (json?: string) => void;
+      reject: (message: string) => void;
+    },
+  ): void {
+    if (typeof command !== 'string' || !command.trim())
+      return refuse(
+        'execute() takes the command as its first argument, a string',
+      );
+    for (const key of ['label', 'phase'])
+      if (options[key] !== undefined && typeof options[key] !== 'string')
+        return refuse(`execute() option ${key} must be a string`);
+    const timeout = options.timeout;
+    if (
+      timeout !== undefined &&
+      !(
+        typeof timeout === 'number' &&
+        Number.isInteger(timeout) &&
+        timeout >= 1 &&
+        timeout <= MAX_COMMAND_SECONDS
+      )
+    )
+      return refuse(
+        `execute() option timeout must be a whole number of seconds from 1 to ${MAX_COMMAND_SECONDS}`,
+      );
+    if (!this.options.commandRunner)
+      return refuse('execute() is not available in this run');
+    if (this.commands >= MAX_RUN_COMMANDS)
+      return refuse(
+        `this run has started ${MAX_RUN_COMMANDS} commands, the most one run may start`,
+      );
+    const index = this.calls.length;
+    const phase = text('phase') ?? this.phase;
+    this.notePhase(phase);
+    const label = text('label') ?? `$ ${firstLine(command, 58)}`;
+    const request: AgentRequest = {
+      index,
+      prompt: '',
+      label,
+      phase,
+      command,
+      timeout: (timeout as number | undefined) ?? COMMAND_SECONDS,
+    };
+    // What decides whether a relaunch may hand back the saved result: the command and its seconds
+    const key = createHash('sha256')
+      .update(JSON.stringify(['command', command, request.timeout]))
+      .digest('hex');
+    const view: WorkflowAgentView = {
+      index,
+      label,
+      phase,
+      state: 'queued',
+      attempt: 0,
+      endings: [],
+      tokens: 0,
+      command: true,
+    };
+    this.view.agents.push(view);
+    const call: Call = {
+      index,
+      key,
+      request,
+      stallMs: this.stallMs(),
+      resolve: ends.resolve,
+      reject: ends.reject,
+      view,
+      abort: new AbortController(),
+    };
+    this.commands++;
     this.calls.push(call);
     this.issued.push(call);
   }
@@ -770,8 +879,11 @@ export class WorkflowRun {
     let outcome:
       { value: unknown } | { nothing: string } | { error: string } | undefined;
     try {
-      await this.slots.take(call.abort.signal);
-      placed = true;
+      // A command takes no agent's place: a script that runs one between its agents does not wait for them
+      if (call.request.command === undefined) {
+        await this.slots.take(call.abort.signal);
+        placed = true;
+      }
       call.view.state = 'running';
       call.view.started = Date.now();
       this.progress(`${call.view.label}: started`);
@@ -847,6 +959,23 @@ export class WorkflowRun {
   }
   /** One agent's attempts: a stalled one starts over without its transcript, five times at most. */
   private async attempts(call: Call): Promise<unknown> {
+    if (call.request.command !== undefined) {
+      call.view.attempt = 1;
+      this.changed();
+      try {
+        return await this.options.commandRunner!(
+          call.request,
+          call.abort.signal,
+        );
+      } catch (error) {
+        // A command that did not run is the script's to hear of: it gets the error, never null for a result
+        if (this.closed || call.stopped || error instanceof AgentCallError)
+          throw error;
+        throw new AgentCallError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
     const endings: string[] = [];
     for (let attempt = 1; ; attempt++) {
       const controller = new AbortController();
@@ -974,7 +1103,9 @@ export class WorkflowRun {
 /** One line for the strip and the run list: the phase it is in and how its agents stand. */
 export function workflowSummary(view: WorkflowRunView): string {
   const count = (...states: WorkflowAgentView['state'][]): number =>
-    view.agents.filter((agent) => states.includes(agent.state)).length;
+    view.agents.filter(
+      (agent) => !agent.command && states.includes(agent.state),
+    ).length;
   const running = count('running');
   const waiting = count('queued');
   const done = count('done', 'cached');

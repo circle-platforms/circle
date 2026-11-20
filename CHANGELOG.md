@@ -4,6 +4,9 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 
 ## Unreleased
 
+### Added
+- **A workflow script can run commands.** `execute(command, options)` runs a shell command and gives the script its exit code and what it printed. A job whose steps a tool decides (ask the tool what to start, start those agents, ask again when one ends) needed a model between every two steps to run the tool: three hundred requests of one conversation in a measured job, each reading the whole conversation again, which was more than a third of all the tokens the job used. A script now runs such a loop itself. A command is decided by the same rules, hooks and approval mode as the conversation's own `execute` call, takes `%NAME%` values the same way, takes no agent's place, and is stopped after its seconds (120, or up to 600). It is not shown or kept in the conversation; the run's log and journal have it. See [Workflows](docs/workflows.md#commands-of-the-script).
+
 ### Changed
 - **Finished background jobs keep starting turns.** `CIRCLE_JOB_WAKES` sets how many turns in a row finished jobs may start before Circle waits for a message (ten by default): work that runs one job for each item of a long list stopped without a word after the tenth. A turn that could not start is tried again after fifteen seconds, a minute and four minutes instead of waiting for a message at once.
 - **The notice of a finished subagent carries its report, once.** It carried the last 32 KB of the subagent's output file: every tool call it made, with arguments, and then the report twice. With ninety subagents that was half of what the agent that started them had in its context (median 3.8 KB a notice, some 17 KB), read again with every later request. The notice now gives the report (the first 8 KB of a longer one, with where the rest is); a subagent that failed or was stopped gave none, and its notice shows the last 4 KB of its output.

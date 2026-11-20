@@ -135,6 +135,7 @@ import {
 } from './workflow_script.js';
 import {
   AgentCallError,
+  COMMAND_SECONDS,
   RUN_ID,
   WorkflowRun,
   agentStallMs,
@@ -2250,6 +2251,11 @@ export class AgentRuntime {
             (phase) => phase.title === request.phase,
           )?.model,
         }),
+      commandRunner: (request, signal) =>
+        this.runWorkflowCommand(request, signal, {
+          run: id,
+          sessionId: options.sessionId,
+        }),
       checkAgentType: (name) => this.workflowAgentType(name),
       maxConcurrent: maxWorkflowAgents(),
       stallMs: agentStallMs(),
@@ -2303,6 +2309,44 @@ export class AgentRuntime {
     ].join('\n');
   }
   /** One attempt of one workflow agent, through the path `task` takes. */
+  /**
+   * One `execute()` call of a workflow script. The command runs as the conversation's own `execute` call would:
+   * the same rules, hooks and approval decide it, and `%NAME%` values go in the same way. It runs to its end
+   * within its seconds; it is never moved to the background, since the script waits for what it prints.
+   */
+  private async runWorkflowCommand(
+    request: AgentRequest,
+    signal: AbortSignal,
+    run: { run: string; sessionId: string },
+  ): Promise<{ code: number | null; output: string }> {
+    if (this.harness.sessionId !== run.sessionId)
+      throw new AgentCallError(
+        'the conversation that started this workflow is not the open one, so its commands cannot run',
+      );
+    const result = await this.harness.runToolCall(
+      {
+        id: `${run.run}-${request.index}`,
+        name: 'execute',
+        args: {
+          command: request.command ?? '',
+          description: request.label,
+          timeout: request.timeout ?? COMMAND_SECONDS,
+        },
+      },
+      signal,
+    );
+    const text = String(result.content ?? '');
+    const exit = [
+      ...text.matchAll(/(?:^|\n)Exit code: (\d+|none)(?=\n|$)/g),
+    ].at(-1);
+    // No exit code: the command did not run. A rule, a hook or the person refused it, or it could not start.
+    if (!exit)
+      throw new AgentCallError(text.trim() || 'the command did not run');
+    return {
+      code: exit[1] === 'none' ? null : Number(exit[1]),
+      output: text.slice(0, exit.index).trimEnd(),
+    };
+  }
   private async runWorkflowAgent(
     request: AgentRequest,
     hooks: AttemptHooks,

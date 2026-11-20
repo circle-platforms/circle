@@ -7,7 +7,7 @@ ends. Do not poll or sleep. The user approves a run before it starts, unless a r
 Give one of name (a saved workflow listed below, with args when it takes input), script (a
 script written for this task) or script_path (a script file, such as an earlier run's script
 after you edited it). resume_from_run_id relaunches an earlier run of this conversation: the
-agent() calls made as before return that run's saved results at once; the first call that
+agent() and execute() calls made as before return that run's saved results at once; the first call that
 differs, failed or did not finish, and every call after it, runs again.
 
 A script:
@@ -36,6 +36,11 @@ not TypeScript, with top-level await and return. What it returns is the run's re
   to null when the agent was stopped or its model failed. Options: label, phase (its progress
   group; use it inside parallel work instead of phase()), schema, model, effort, agentType (a
   subagent type task takes; the default is a workflow agent whose final text is data), stallMs.
+- execute(command, options) runs a shell command as your own execute call would run: the same
+  rules and hooks decide it. It resolves to { code, output } once the command has ended, and
+  rejects when the command was not allowed to run. Options: label, phase, timeout (seconds, 120
+  unless given, 600 at most). It is for the script's own bookkeeping, such as a tool that says
+  what to start next; work that needs judgment is an agent's.
 - parallel(tasks) runs a list of functions at once and waits for all of them; one that throws
   gives null in its place.
 - pipeline(items, stage1, stage2, ...) runs each item through the stages without waiting for
@@ -44,8 +49,8 @@ not TypeScript, with top-level await and return. What it returns is the run's re
 - phase(title), log(message), args (the args of this call, as given) and budget.spent().
 
 Date.now(), Math.random() and new Date() without an argument throw, so that a relaunch repeats
-the same calls: pass a time in through args. The script cannot read or write files, run
-commands or import; its agents do that. At most 16 agents run at once, 1000 in a run, and 4096
+the same calls: pass a time in through args. The script cannot read or write files or
+import; its agents and execute() do that. At most 16 agents run at once, 1000 in a run, and 4096
 items go to one parallel() or pipeline(). An agent whose model sends nothing for a long time
 starts over, five times at most; a schema still not met after five tries fails the call. A run
 asks the user nothing, though its agents' calls can wait for approval.
