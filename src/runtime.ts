@@ -146,6 +146,7 @@ import {
   realStallTimer,
   savedRuns,
   structuredOutputAttempts,
+  workflowArgs,
   workflowSummary,
   type AgentRequest,
   type AttemptHooks,
@@ -2207,7 +2208,7 @@ export class AgentRuntime {
     ): Promise<string> =>
       this.startWorkflow(prepared, {
         sessionId: approved.sessionId,
-        ...(args.args !== undefined ? { args: args.args } : {}),
+        ...(args.args !== undefined ? { args: workflowArgs(args.args) } : {}),
         ...(path ? { path } : {}),
         ...(previous ? { previous } : {}),
       });

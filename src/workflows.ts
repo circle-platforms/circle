@@ -1128,6 +1128,23 @@ export function workflowSummary(view: WorkflowRunView): string {
       .join(' · ') || 'starting'
   );
 }
+/**
+ * The args of a workflow call as its script reads them. A list or an object written as JSON text is that list or
+ * object: the tool's `args` takes any value, so its schema names no type, and some models write a value without a
+ * type as text whatever they mean by it. A script that asked for an object then got a string it could not read.
+ * Any other text stays text.
+ */
+export function workflowArgs(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  const text = value.trim();
+  if (!/^[[{]/.test(text)) return value;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed !== null && typeof parsed === 'object' ? parsed : value;
+  } catch {
+    return value;
+  }
+}
 /** A run's id: `w` and eight hexadecimal digits, the folder its files are kept in. */
 export const RUN_ID = /^w[0-9a-f]{8}$/;
 /** Whether a name is one a workflow can have. */

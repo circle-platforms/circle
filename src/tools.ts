@@ -927,7 +927,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         ),
         args: {
           description:
-            'The value the script reads as its args global, as JSON data: a list or an object stays one.',
+            'The value the script reads as its args global, as JSON data: a list or an object stays one, and one written as JSON text is read as that list or object.',
         },
         resume_from_run_id: text(
           'An earlier run of this conversation to relaunch: agents called as in that run return its saved results.',

@@ -359,3 +359,53 @@ return { first, second }
     ['cached', 'done'],
   );
 });
+
+test('args a model wrote as JSON text reach the script as the list or object they spell, and other text stays text', async (t) => {
+  const paths = folders(t);
+  const script =
+    META('reads-args') +
+    `return { kind: Array.isArray(args) ? 'list' : typeof args, word: args.word ?? null, first: args[0] ?? null, text: typeof args === 'string' ? args : null }`;
+  const notices: string[] = [];
+  const read: AskerReply = (request) => {
+    notices.push(request.messages.at(-1)!.content);
+    return reply('read');
+  };
+  const model = modelByAsker({
+    go: [
+      workflowCall('a1', { script, args: '{"word": "object as text"}' }),
+      workflowCall('a2', { script, args: ' ["list as text"] ' }),
+      workflowCall('a3', { script, args: 'just words {not json}' }),
+      workflowCall('a4', { script, args: { word: 'an object' } }),
+      reply('started'),
+      read,
+      read,
+      read,
+      read,
+    ],
+  });
+  const runtime = runtimeFor(t, paths, model);
+  await runtime.initialize();
+  await runtime.harness.run('go');
+  for (const id of ['a1', 'a2', 'a3', 'a4'])
+    assert.equal(
+      (await finished(runtime, started(runtime, id).job)).status,
+      'done',
+    );
+  while (notices.length < 4 && (await runtime.runJobNotices()) !== undefined);
+  // The four results may come in one notice: each is the JSON after its job's "Result:"
+  const results = notices
+    .flatMap((notice) => [...notice.matchAll(/Result:\n(\{\n[\s\S]*?\n\})/g)])
+    .map((found) => JSON.parse(found[1]!) as Record<string, unknown>);
+  assert.equal(results.length, 4, JSON.stringify(notices).slice(0, 600));
+  assert.deepEqual(
+    results
+      .map((result) => [result.kind, result.word, result.first, result.text])
+      .sort(),
+    [
+      ['list', null, 'list as text', null],
+      ['object', 'an object', null, null],
+      ['object', 'object as text', null, null],
+      ['string', null, 'j', 'just words {not json}'],
+    ].sort(),
+  );
+});

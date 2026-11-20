@@ -76,7 +76,7 @@ The body is plain JavaScript, not TypeScript, run as an async function: it can `
 | `pipeline(items, stage1, stage2, …)` | Runs each item through the stages without waiting for the other items. A stage gets the previous stage's result, the item and its index; one that throws gives `null` for that item and skips its later stages. |
 | `phase(title)` | The agents started after it are grouped under that title. |
 | `log(message)` | A line for `/workflows` and the run's output. `console.log` does the same. |
-| `args` | The `args` the call gave, as data, or `undefined`. |
+| `args` | The `args` the call gave, as data, or `undefined`. A list or an object the model wrote as JSON text is read as that list or object: some models write a tool argument that has no type as text. |
 | `budget` | `budget.spent()` is the output tokens this run's agents have used; `budget.total` is `null` and `budget.remaining()` is `Infinity`. |
 
 The options of `agent()`:
