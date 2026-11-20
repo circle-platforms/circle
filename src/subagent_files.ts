@@ -61,6 +61,11 @@ export interface SubagentFileInfo {
   hooks?: HookDefinition[];
   /** It runs as a background job when the conversation starts it. */
   background?: boolean;
+  /**
+   * False: it keeps its own prompt and is not given the conversation's (how to talk and work, the project's
+   * instructions, skills, servers' notes); it is still told where it runs, how paths are read and the variables.
+   */
+  sessionPrompt?: boolean;
   /** Read and shown, and not applied yet. */
   memory?: (typeof MEMORY_SCOPES)[number];
   isolation?: 'worktree';
@@ -164,6 +169,7 @@ const KEYS = [
   'hooks',
   'memory',
   'background',
+  'sessionPrompt',
   'isolation',
   'color',
 ] as const;
@@ -344,6 +350,13 @@ function readFields(
     if (memory.value) found.memory = memory.value;
     if (isolation.value) found.isolation = isolation.value;
     if (color.value) found.color = color.value;
+    const sessionPrompt = value('sessionPrompt');
+    if (given(sessionPrompt)) {
+      if (sessionPrompt === false || sessionPrompt === 'false')
+        found.sessionPrompt = false;
+      else if (sessionPrompt !== true && sessionPrompt !== 'true')
+        return `sessionPrompt must be true or false, not ${JSON.stringify(sessionPrompt)}`;
+    }
     const background = value('background');
     if (given(background)) {
       if (background === true || background === 'true') found.background = true;

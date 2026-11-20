@@ -37,6 +37,7 @@ the file and the line. Change nothing.
 | `skills` | no | skills loaded into its conversation in full before its task, as if it had loaded them with `skill`, up to 32 names. One that is not installed is left out, and `/agents <name>` names it |
 | `mcpServers` | no | MCP servers it gets the tools of, by the names they are configured under, beside what `tools` lists. See [MCP servers](#mcp-servers) |
 | `hooks` | no | [hooks](hooks.md) that run only for this subagent, while it runs. See [Its own hooks](#its-own-hooks) |
+| `sessionPrompt` | no | `false`: it keeps its own prompt and is not given the conversation's. Without the key a subagent's prompt is followed by everything the conversation is told: how to talk to you and work on code, the project's instructions, your memory, the skills, the servers' notes. That is right for a subagent that does the conversation's kind of work, and it is thousands of tokens with every request of one whose definition already says all it needs. With `false` it is told only how paths are read, where it runs and your variables |
 | `background` | no | `true`: it runs as a [background job](background-jobs.md#background-subagents) whenever the conversation starts it, also when the call does not ask for one |
 | `memory`, `isolation`, `color` | no | read, and not applied yet: `/agents` lists them under `Not supported yet:`. See [Known issues](known-issues.md#subagents-and-tools) |
 

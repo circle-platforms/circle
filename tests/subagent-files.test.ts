@@ -444,6 +444,7 @@ test('the new keys are read from YAML, and a value a key does not take keeps the
       'isolation: worktree',
       'color: red',
       'background: true',
+      'sessionPrompt: false',
       '',
     ].join('\n'),
   );
@@ -459,6 +460,7 @@ test('the new keys are read from YAML, and a value a key does not take keeps the
     ['isolated', 'isolation: container\n'],
     ['remembers', 'memory: everywhere\n'],
     ['later', 'background: maybe\n'],
+    ['noisy', 'sessionPrompt: sometimes\n'],
     ['none', 'tools: []\n'],
     [
       'inline',
@@ -489,8 +491,14 @@ test('the new keys are read from YAML, and a value a key does not take keeps the
   );
   assert.equal(full.hooks![0]!.sourceLabel, 'agent:full');
   assert.deepEqual(
-    [full.memory, full.isolation, full.color, full.background],
-    ['project', 'worktree', 'red', true],
+    [
+      full.memory,
+      full.isolation,
+      full.color,
+      full.background,
+      full.sessionPrompt,
+    ],
+    ['project', 'worktree', 'red', true, false],
   );
   const plain = agents.find((item) => item.spec.name === 'plain')!;
   assert.deepEqual(
@@ -509,6 +517,7 @@ test('the new keys are read from YAML, and a value a key does not take keeps the
     /isolated\.md: isolation 'container' is not one of worktree/,
     /remembers\.md: memory 'everywhere' is not one of user, project, local/,
     /later\.md: background must be true or false/,
+    /noisy\.md: sessionPrompt must be true or false, not "sometimes"/,
     /none\.md: tools lists no tool/,
     /inline\.md: mcpServers: playwright is defined inline, which Circle does not support yet/,
     /badhook\.md: hooks: .*http hooks are not supported in Circle yet/,

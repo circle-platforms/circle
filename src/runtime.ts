@@ -55,6 +55,7 @@ import {
 import { mcpAuthPath } from './mcp_auth.js';
 import {
   buildSystemPrompt,
+  ownPromptContext,
   planModePrompt,
   type ContextInstruction,
 } from './system_prompt.js';
@@ -1689,7 +1690,19 @@ export class AgentRuntime {
               : builtinSubagentPrompt(name))) +
           (launch?.schema ? '\n\n' + STRUCTURED_OUTPUT_PROMPT : '') +
           '\n' +
-          this.harness.system +
+          // A definition that keeps its own prompt is told where it runs, and not what the conversation is told
+          (file?.sessionPrompt === false
+            ? ownPromptContext(
+                this.options.workspace,
+                ownModel ?? caller.model.model,
+                this.options.settings.auth.protocol,
+                {
+                  outputFolder: this.commandOutputFolder(),
+                  variables: this.runVariables(),
+                  secrets: Object.keys(this.runSecrets()).sort(),
+                },
+              )
+            : this.harness.system) +
           this.subagentContextSuffix(
             root,
             ownedChildTools,

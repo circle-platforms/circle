@@ -287,6 +287,63 @@ test('maxTurns stops a subagent with what it has, marked partial, after that man
   );
 });
 
+test('sessionPrompt: false gives a subagent its own prompt with where it runs and the variables, and not what the conversation is told', async (t) => {
+  const paths = folders(t);
+  agent(
+    join(paths.home, 'agents'),
+    'narrow',
+    'sessionPrompt: false\n',
+    'You only count lines.',
+  );
+  agent(join(paths.home, 'agents'), 'wide', '', 'You do anything.');
+  const model = modelByAsker({
+    go: [
+      reply('', [
+        task('n', 'count the lines', 'narrow'),
+        task('w', 'do the rest', 'wide'),
+      ]),
+      reply('done'),
+    ],
+    'count the lines': [reply('three')],
+    'do the rest': [reply('finished')],
+  });
+  const runtime = runtimeFor(t, paths, model, {
+    settings: { ...defaultSettings(), variables: { REGION: 'north' } },
+  });
+  runtime.policy.setYolo(runtime.session.id, true);
+  await runtime.harness.run('go');
+  const systemOf = (key: string): string =>
+    model.requests.find((request) => askedBy(request, key))!.system;
+  const narrow = systemOf('count the lines');
+  const wide = systemOf('do the rest');
+  // Its own prompt, then the facts: how paths are read, where it runs, the variables
+  assert.ok(narrow.startsWith('You only count lines.\n'), narrow.slice(0, 80));
+  assert.match(narrow, /# Paths \(Circle\)/);
+  assert.ok(
+    narrow.includes(`<env>\n  Working directory: ${paths.workspace}\n`),
+  );
+  assert.match(
+    narrow,
+    /<variables>[\s\S]*- REGION = north[\s\S]*<\/variables>/,
+  );
+  // Nothing of what the conversation is told about talking and working, which the other subagent carries whole
+  const conversation = runtime.harness.system;
+  assert.ok(conversation.length > 4000);
+  assert.ok(wide.includes(conversation));
+  assert.ok(!narrow.includes(conversation));
+  for (const part of ['# Tone and style', '# Doing tasks'])
+    assert.ok(conversation.includes(part) && !narrow.includes(part), part);
+  assert.ok(
+    narrow.length * 3 < wide.length,
+    `${narrow.length} of ${wide.length}`,
+  );
+  // Both are still told what a subagent is told of itself, after what differs
+  assert.equal(
+    narrow.slice(narrow.lastIndexOf('</variables>') + '</variables>'.length),
+    wide.slice(wide.indexOf(conversation) + conversation.length),
+  );
+});
+
 test('the skills a definition names are in its conversation before its task, and one not installed is left out and named', async (t) => {
   const paths = folders(t);
   const skill = join(paths.home, 'skills', 'conventions');
