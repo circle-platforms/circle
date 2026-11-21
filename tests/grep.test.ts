@@ -9,11 +9,11 @@ import { ScriptedModel } from '../src/testing.js';
 import { prepareToolCall } from '../src/tool_call_compat.js';
 import { buildTools } from '../src/tools.js';
 import {
-  GREP_LINE_CHARS,
   GREP_TRUNCATION_NOTE,
   matchedLine,
   readSearchableFile,
 } from '../src/grep_tool.js';
+import { MAX_LINE_CHARS } from '../src/file_read.js';
 import { cleanup, scratch } from './helpers.js';
 
 function project(t: { after(fn: () => void): void }): string {
@@ -323,7 +323,6 @@ test('task requires subagent_type, and a call without it starts nothing', async 
 
 test('a match in a very long line is shown as windows around the matches, with offsets read_file takes; a line of ordinary length is shown whole', async (t) => {
   const root = realpathSync(scratch(t));
-  // A JSON file stored on one line: the whole file is one "line".
   const cell = (n: number) =>
     `{"id":${n},"title":"节点 ${n} needle-${n}","text":"${'填充'.repeat(400)}"}`;
   const oneLine =
@@ -346,7 +345,6 @@ test('a match in a very long line is shown as windows around the matches, with o
     answer.length < 5000,
     `the answer is ${answer.length} characters, not the whole line`,
   );
-  // Each offset is where read_file starts when given it: the window read there holds the match.
   const tools = buildTools(new Sandbox(root));
   const context = { signal: new AbortController().signal, sessionId: 'test' };
   for (const [index, window] of windows.entries()) {
@@ -369,11 +367,25 @@ test('a match in a very long line is shown as windows around the matches, with o
     );
   }
   assert.equal(
-    matchedLine('x'.repeat(GREP_LINE_CHARS), 'x'),
-    'x'.repeat(GREP_LINE_CHARS),
+    matchedLine('x'.repeat(MAX_LINE_CHARS), 'x'),
+    'x'.repeat(MAX_LINE_CHARS),
   );
   assert.match(
-    matchedLine('y'.repeat(GREP_LINE_CHARS) + 'needle', 'needle'),
+    matchedLine('y'.repeat(MAX_LINE_CHARS) + 'needle', 'needle'),
     /^\[line of 2006 characters with 1 match; /,
   );
+});
+
+test('a window of a very long line does not cut a character in two', () => {
+  const line =
+    'y'.repeat(2100) +
+    '😀' +
+    'z'.repeat(239) +
+    'needle' +
+    'z'.repeat(239) +
+    '😀' +
+    'w'.repeat(100);
+  const shown = matchedLine(line, 'needle');
+  assert.equal(Buffer.from(shown).toString(), shown);
+  assert.match(shown, /\n {4}char_offset 2100: …😀z{239}needlez{239}😀…$/);
 });

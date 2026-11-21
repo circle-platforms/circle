@@ -313,7 +313,6 @@ test('a subagent is told once how many requests it has left, with a fifth of its
   assert.deepEqual(reminders('reader'), [
     '<system-reminder data-source="turn-limit">\nThis session can make 2 more model requests of its 10. When they are spent it ends with what it has written to files and said by then, and anything learned and not written down is lost. Write the result the task asks for now; use the requests that remain to check and correct it.\n</system-reminder>',
   ]);
-  // It is in the ninth request, the first of the two that are left, and not before
   const asked = model.requests.filter((request) => askedBy(request, 'read on'));
   assert.equal(asked.length, 10);
   const told = (request: (typeof asked)[number]) =>
@@ -330,7 +329,6 @@ test('a subagent is told once how many requests it has left, with a fifth of its
     true,
     true,
   ]);
-  // A limit of a few requests gets none
   assert.deepEqual(reminders('brief'), []);
 });
 
@@ -363,7 +361,6 @@ test('sessionPrompt: false gives a subagent its own prompt with where it runs an
     model.requests.find((request) => askedBy(request, key))!.system;
   const narrow = systemOf('count the lines');
   const wide = systemOf('do the rest');
-  // Its own prompt, then the facts: how paths are read, where it runs, the variables
   assert.ok(narrow.startsWith('You only count lines.\n'), narrow.slice(0, 80));
   assert.match(narrow, /# Paths \(Circle\)/);
   assert.ok(
@@ -373,7 +370,6 @@ test('sessionPrompt: false gives a subagent its own prompt with where it runs an
     narrow,
     /<variables>[\s\S]*- REGION = north[\s\S]*<\/variables>/,
   );
-  // Nothing of what the conversation is told about talking and working, which the other subagent carries whole
   const conversation = runtime.harness.system;
   assert.ok(conversation.length > 4000);
   assert.ok(wide.includes(conversation));
@@ -384,7 +380,6 @@ test('sessionPrompt: false gives a subagent its own prompt with where it runs an
     narrow.length * 3 < wide.length,
     `${narrow.length} of ${wide.length}`,
   );
-  // Both are still told what a subagent is told of itself, after what differs
   assert.equal(
     narrow.slice(narrow.lastIndexOf('</variables>') + '</variables>'.length),
     wide.slice(wide.indexOf(conversation) + conversation.length),
@@ -988,6 +983,11 @@ test('subagents receive active plan file path, deny rules, and guard hook bounda
           pattern: '.env*',
           effect: 'deny',
         },
+        {
+          tool: 'terminal',
+          pattern: 'device-only *',
+          effect: 'deny',
+        },
       ],
     }),
   );
@@ -1003,7 +1003,7 @@ test('subagents receive active plan file path, deny rules, and guard hook bounda
             hooks: [
               {
                 type: 'command',
-                command: `${process.execPath} ${hookScriptPath}`,
+                command: `${JSON.stringify(process.execPath)} ${JSON.stringify(hookScriptPath)}`,
               },
             ],
           },
@@ -1032,6 +1032,10 @@ test('subagents receive active plan file path, deny rules, and guard hook bounda
   );
   assert.match(guardedSystem, /git push \*/);
   assert.match(guardedSystem, /\.env\*/);
+  assert.ok(
+    !guardedSystem.includes('device-only'),
+    'a rule for tools it does not have is left out',
+  );
   assert.match(guardedSystem, /PreToolUse guard active for matcher "execute"/);
   assert.ok(
     !guardedSystem.includes('guard-secret-hook-name.mjs'),

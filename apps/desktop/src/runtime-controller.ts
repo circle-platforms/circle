@@ -2749,8 +2749,8 @@ export class RuntimeController {
               runtime.options.settings,
               runtime.options.workspace,
             ),
-          start: () => {
-            const run = runtime.runJobNotices();
+          start: (owed) => {
+            const run = runtime.runJobNotices(owed);
             this.track(run, runtime);
             return run;
           },

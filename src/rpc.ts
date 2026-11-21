@@ -34,18 +34,8 @@ export async function runRpc(
     hasNotice: () => runtime.jobs.hasNotices(runtime.session.id, true),
     occupied: () => runtime.busy,
     closed: () => ended,
-    start: () => {
-      const run = runtime.runJobNotices();
-      running = run
-        .then(
-          () => {},
-          () => {},
-        )
-        .finally(() => send({ type: 'agent_settled' }));
-      return run;
-    },
-    again: () => {
-      const run = runtime.runJobNoticesAgain();
+    start: (owed) => {
+      const run = runtime.runJobNotices(owed);
       running = run
         .then(
           () => {},

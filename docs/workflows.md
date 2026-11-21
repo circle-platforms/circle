@@ -71,7 +71,7 @@ The body is plain JavaScript, not TypeScript, run as an async function: it can `
 | Name | What it is |
 |---|---|
 | `agent(prompt, options)` | Starts one subagent and resolves to its final text, or, with `schema`, to the object it returned. Resolves to `null` when you stopped the agent or its model failed for good. |
-| `execute(command, options)` | Runs a shell command in the workspace and resolves, once it has ended, to `{ code, output }`: its exit code (`null` when it was stopped at its seconds) and what it printed. See [Commands of the script](#commands-of-the-script). |
+| `execute(command, options)` | Runs a shell command in the workspace and resolves, once it has ended, to `{ code, output }`: its exit code and what it printed. One stopped when its seconds were over has a non-zero code, and its output ends with `Command ended: timeout`. See [Commands of the script](#commands-of-the-script). |
 | `parallel(tasks)` | Runs a list of functions at once and resolves when all have ended, to their results in order; one that throws gives `null`. A value that is not a function is taken as it is. |
 | `pipeline(items, stage1, stage2, …)` | Runs each item through the stages without waiting for the other items. A stage gets the previous stage's result, the item and its index; one that throws gives `null` for that item and skips its later stages. |
 | `phase(title)` | The agents started after it are grouped under that title. |
@@ -97,7 +97,7 @@ A run is meant to be repeatable: `Date.now()`, `Math.random()`, `Date()` and `ne
 
 `execute(command, options)` is for the script's own bookkeeping: a tool that keeps the state of a long job and says what to start next, a check of what an agent wrote. Work that needs judgment stays with agents. With it a script can run a loop that needs no model between its steps: ask the tool, start the agents it names, ask again when one ends.
 
-A command runs as the conversation's own `execute` call would. The same rules, hooks and approval mode decide it, `%NAME%` takes its value from your variables and secrets the same way, and a secret's value in what it printed is shown as its name. It is not shown in the conversation and its result is not kept there: the run's log has a line when it starts and when it ends, and the run's journal has what it gave.
+A command runs as the conversation's own `execute` call would. The same rules, hooks and approval mode decide it, `%NAME%` takes its value from your variables and secrets the same way, and a secret's value in what it printed is shown as its name. The script receives the command's result. Hook notices and replacements apply to the conversation's tool output. It is not shown in the conversation and its result is not kept there: the run's log has a line when it starts and when it ends, and the run's journal has what it gave.
 
 The call rejects when the command did not run: a rule or a hook refused it, or you did. A command that ran and failed is a result, with its exit code. A command takes no agent's place, so it runs while every place is taken. It has 120 seconds unless `timeout` names others, 600 at most, and is stopped when they are over; a job that takes longer is an agent's to start in the background, or the conversation's.
 

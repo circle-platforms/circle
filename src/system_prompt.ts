@@ -196,7 +196,6 @@ function skillLine(skill: { name: string; description: string }): string {
       : description;
   return `- ${skill.name}: ${brief}`;
 }
-/** Where a session runs and on what: the facts every prompt gives. */
 function environmentSection(
   workspace: string,
   model: string,
@@ -204,7 +203,9 @@ function environmentSection(
 ): string {
   return `<env>\n  Working directory: ${workspace}\n  Platform: ${platform()}\n  Today's date: ${new Date().toISOString().slice(0, 10)}\n  Is directory a git repo: ${currentBranch(workspace) ? 'yes' : 'no'}\n  Model: ${model}\n  Protocol: ${protocol}\n</env>`;
 }
-/** The user's variables with their values and the secrets by name, with how %NAME% is used; nothing when there are none. */
+function outputFolderSection(folder: string): string {
+  return `Your file tools read only the working directory, Circle's own folders and files the user granted. Have a command write output you will read into ${folder}, not /tmp, and quote that path.`;
+}
 function variablesSection(
   given: Record<string, string> | undefined,
   secrets: string[] | undefined,
@@ -224,13 +225,6 @@ function variablesSection(
     '\n</variables>'
   );
 }
-/**
- * What a subagent that keeps its own prompt (`sessionPrompt: false` in its definition) is told beside it: how paths
- * are read, where it runs, where a command's output goes when the file tools read no /tmp, and the variables. The
- * conversation's prompt gives these among everything else: how to talk to a person, how to work on code, the project's
- * instructions, the skills, the servers' notes. A subagent whose definition says all it needs carried that with every
- * request it made.
- */
 export function ownPromptContext(
   workspace: string,
   model: string,
@@ -240,9 +234,7 @@ export function ownPromptContext(
   return [
     readPrompt('circle_paths.md'),
     environmentSection(workspace, model, protocol),
-    catalog.outputFolder
-      ? `Your file tools read only the working directory, Circle's own folders and files the user granted. Have a command write output you will read into ${catalog.outputFolder}, not /tmp, and quote that path.`
-      : undefined,
+    catalog.outputFolder && outputFolderSection(catalog.outputFolder),
     variablesSection(catalog.variables, catalog.secrets),
   ]
     .filter(Boolean)
@@ -306,9 +298,7 @@ export function buildSystemPrompt(
     );
   sections.push(environmentSection(workspace, model, protocol));
   if (catalog.outputFolder)
-    sections.push(
-      `Your file tools read only the working directory, Circle's own folders and files the user granted. Have a command write output you will read into ${catalog.outputFolder}, not /tmp, and quote that path.`,
-    );
+    sections.push(outputFolderSection(catalog.outputFolder));
   if (catalog.attribution && currentBranch(workspace))
     sections.push(
       attributionSection(catalog.attribution, Boolean(catalog.headless), () =>

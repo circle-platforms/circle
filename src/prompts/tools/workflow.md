@@ -7,8 +7,8 @@ ends. Do not poll or sleep. The user approves a run before it starts, unless a r
 Give one of name (a saved workflow listed below, with args when it takes input), script (a
 script written for this task) or script_path (a script file, such as an earlier run's script
 after you edited it). resume_from_run_id relaunches an earlier run of this conversation: the
-agent() and execute() calls made as before return that run's saved results at once; the first call that
-differs, failed or did not finish, and every call after it, runs again.
+agent() and execute() calls made as before return that run's saved results at once; the first
+call that differs, failed or did not finish, and every call after it, runs again.
 
 A script:
 
@@ -49,8 +49,8 @@ not TypeScript, with top-level await and return. What it returns is the run's re
 - phase(title), log(message), args (the args of this call, as given) and budget.spent().
 
 Date.now(), Math.random() and new Date() without an argument throw, so that a relaunch repeats
-the same calls: pass a time in through args. The script cannot read or write files or
-import; its agents and execute() do that. At most 16 agents run at once, 1000 in a run, and 4096
-items go to one parallel() or pipeline(). An agent whose model sends nothing for a long time
-starts over, five times at most; a schema still not met after five tries fails the call. A run
-asks the user nothing, though its agents' calls can wait for approval.
+the same calls: pass a time in through args. The script cannot read or write files or import;
+its agents and execute() do that. At most 16 agents run at once, 1000 in a run, and 4096 items
+go to one parallel() or pipeline(). An agent whose model sends nothing for a long time starts
+over, five times at most; a schema still not met after five tries fails the call. A run asks
+the user nothing, though the calls of its agents and commands can wait for approval.

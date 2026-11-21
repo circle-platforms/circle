@@ -23,15 +23,20 @@ function patchLines(patch: string): string[] {
   return lines;
 }
 
+export function patchPaths(patch: string): string[] {
+  return patchLines(patch).flatMap(
+    (line) =>
+      /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/.exec(
+        line,
+      )?.[1] ?? [],
+  );
+}
+
 /** Paths needed to prepare a patch; this performs no reads or writes. */
 export function patchFilePaths(patch: string, sandbox: Sandbox): string[] {
   const paths = new Set<string>();
-  for (const line of patchLines(patch)) {
-    const match = line.match(
-      /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/,
-    );
-    if (!match) continue;
-    const path = sandbox.resolvePath(match[1]!);
+  for (const given of patchPaths(patch)) {
+    const path = sandbox.resolvePath(given);
     sandbox.checkMutablePath(path);
     paths.add(path);
   }
@@ -200,10 +205,7 @@ export function patchSummary(changes: PatchChange[]): string {
   );
 }
 
-export function applyPatchChanges(
-  patch: string,
-  sandbox: Sandbox,
-): PatchChange[] {
+export function applyPatch(patch: string, sandbox: Sandbox): PatchChange[] {
   const changes = planPatch(patch, sandbox);
   const completed: PatchChange[] = [];
   try {
@@ -224,8 +226,4 @@ export function applyPatchChanges(
     throw error;
   }
   return changes;
-}
-
-export function applyPatch(patch: string, sandbox: Sandbox): string {
-  return patchSummary(applyPatchChanges(patch, sandbox));
 }

@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { GatewayModel } from '../src/model.js';
+import { AgentRuntime } from '../src/runtime.js';
 import {
   defaultSettings,
   saveSettings,
@@ -120,6 +121,70 @@ test('OpenAI streaming joins split tool arguments and records usage from the fin
   });
   assert.equal(result.message.cache_reported, undefined);
   assert.equal(requestBody.model, 'gateway');
+});
+test('a gateway that requires typed enums accepts the knowledge tools on the first request', async (t) => {
+  const fields = [
+    ['knowledge_search', 'status'],
+    ['memory_write', 'state'],
+  ] as const;
+  const base = await server(t, (_request, response, body) => {
+    const tools = body.tools as {
+      function: {
+        name: string;
+        parameters: { properties: Record<string, { type?: string }> };
+      };
+    }[];
+    const invalid = fields.filter(([name, property]) => {
+      const tool = tools?.find((entry) => entry.function.name === name);
+      return tool?.function.parameters.properties[property]?.type !== 'string';
+    });
+    if (invalid.length) {
+      response.writeHead(400, { 'Content-Type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          error: {
+            message: invalid
+              .map(
+                ([name, property]) =>
+                  `${name}.properties.${property}: expected type string`,
+              )
+              .join(', '),
+          },
+        }),
+      );
+      return;
+    }
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    sse(response, {
+      choices: [
+        { index: 0, delta: { content: 'accepted' }, finish_reason: 'stop' },
+      ],
+    });
+    response.end('data: [DONE]\n\n');
+  });
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const settings = defaultSettings();
+  settings.auth = {
+    ...settings.auth,
+    base_url: base + '/v1',
+    model: 'gateway',
+  };
+  saveCredentials({ api_key: 'test-key' }, home);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home,
+    userHome: root,
+    localContext: true,
+    headless: true,
+    model: new GatewayModel(settings, home),
+    settings,
+  });
+  try {
+    assert.equal((await runtime.harness.run('hello')).answer, 'accepted');
+  } finally {
+    await runtime.close();
+  }
 });
 test('Anthropic streaming preserves thinking signatures and tool payloads for the next request', async (t) => {
   const base = await server(t, (_request, response) => {
@@ -359,6 +424,12 @@ test('OpenAI Chat Completions folds internal reminders instead of emitting synth
         content: '<hook-notice>allowed</hook-notice>',
         internal: 'hook_notice',
       },
+      {
+        id: 'mr',
+        role: 'user',
+        content: '<system-reminder>\nstop repeating\n</system-reminder>',
+        internal: 'model-retry',
+      },
     ],
     tools: [],
     signal: new AbortController().signal,
@@ -375,4 +446,5 @@ test('OpenAI Chat Completions folds internal reminders instead of emitting synth
   assert.match(toolMessage.content, /data-source="loop-guard"/);
   assert.match(toolMessage.content, /data-source="circle-plan"/);
   assert.match(toolMessage.content, /<hook-notice>allowed<\/hook-notice>/);
+  assert.match(toolMessage.content, /stop repeating/);
 });

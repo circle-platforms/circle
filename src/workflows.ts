@@ -11,6 +11,7 @@ import { availableParallelism } from 'node:os';
 import { join } from 'node:path';
 import { Ajv } from 'ajv';
 import { EFFORT_LEVELS } from './effort.js';
+import { parseToolInput } from './tool_call_compat.js';
 import {
   ScriptWorker,
   WORKFLOW_NAME,
@@ -65,7 +66,6 @@ export interface AgentRequest {
   model?: string;
   effort?: string;
   agentType?: string;
-  /** Set for an `execute()` call: the command that runs in place of an agent, and the seconds it may take. */
   command?: string;
   timeout?: number;
 }
@@ -85,19 +85,13 @@ export type AgentRunner = (
   request: AgentRequest,
   hooks: AttemptHooks,
 ) => Promise<unknown>;
-/**
- * Runs one `execute()` call of a script to its end: the command's exit code (null when it was stopped at its
- * seconds) and what it printed. A command that was not allowed to run is an `AgentCallError`.
- */
 export type CommandRunner = (
   request: AgentRequest,
   signal: AbortSignal,
 ) => Promise<{ code: number | null; output: string }>;
-/** The seconds a script's command may take when it names none, and the most it may name. */
 export const COMMAND_SECONDS = 120;
-export const MAX_COMMAND_SECONDS = 600;
-/** The most commands one run may start. */
-export const MAX_RUN_COMMANDS = 10_000;
+const MAX_COMMAND_SECONDS = 600;
+const MAX_RUN_COMMANDS = 10_000;
 /** The call itself failed, and the script gets the error: its schema never fit, or it stalled every time. */
 export class AgentCallError extends Error {
   constructor(message: string) {
@@ -200,7 +194,6 @@ export interface WorkflowAgentView {
   error?: string;
   /** The start of what it returned. */
   result?: string;
-  /** An `execute()` call: a command of the script's own, not an agent. */
   command?: true;
 }
 /** One run, as /workflows shows it. */
@@ -366,7 +359,6 @@ export interface WorkflowRunOptions {
   script: string;
   scriptFile: string;
   runner: AgentRunner;
-  /** Runs a script's `execute()` calls; without it a script has none. */
   commandRunner?: CommandRunner;
   /** Checks an agent type before the agent starts: why it cannot be used, or nothing. */
   checkAgentType?: (name: string) => string | undefined;
@@ -407,7 +399,6 @@ export class WorkflowRun {
   private slots: Slots;
   private phase = '';
   private output = 0;
-  /** How many of `calls` are commands. */
   private commands = 0;
   private closed = false;
   private ending?: Promise<void>;
@@ -663,39 +654,19 @@ export class WorkflowRun {
         ]),
       )
       .digest('hex');
-    const view: WorkflowAgentView = {
-      index,
-      label,
-      phase,
-      state: 'queued',
-      attempt: 0,
-      endings: [],
-      tokens: 0,
-    };
-    this.view.agents.push(view);
-    const call: Call = {
-      index,
-      key,
+    this.issue(
       request,
-      stallMs: (options.stallMs as number | undefined) ?? this.stallMs(),
-      resolve,
-      reject,
-      view,
-      abort: new AbortController(),
-    };
-    this.calls.push(call);
-    this.issued.push(call);
+      key,
+      (options.stallMs as number | undefined) ?? this.stallMs(),
+      { resolve, reject },
+    );
   }
-  /** An `execute()` call, while the script runs: queued and journalled as an agent's call is. */
   private calledCommand(
     command: unknown,
     options: Record<string, unknown>,
     text: (key: string) => string | undefined,
     refuse: (message: string) => void,
-    ends: {
-      resolve: (json?: string) => void;
-      reject: (message: string) => void;
-    },
+    ends: Pick<Call, 'resolve' | 'reject'>,
   ): void {
     if (typeof command !== 'string' || !command.trim())
       return refuse(
@@ -735,32 +706,38 @@ export class WorkflowRun {
       command,
       timeout: (timeout as number | undefined) ?? COMMAND_SECONDS,
     };
-    // What decides whether a relaunch may hand back the saved result: the command and its seconds
     const key = createHash('sha256')
       .update(JSON.stringify(['command', command, request.timeout]))
       .digest('hex');
+    this.commands++;
+    this.issue(request, key, this.stallMs(), ends);
+  }
+  private issue(
+    request: AgentRequest,
+    key: string,
+    stallMs: number,
+    ends: Pick<Call, 'resolve' | 'reject'>,
+  ): void {
     const view: WorkflowAgentView = {
-      index,
-      label,
-      phase,
+      index: request.index,
+      label: request.label,
+      phase: request.phase,
       state: 'queued',
       attempt: 0,
       endings: [],
       tokens: 0,
-      command: true,
+      ...(request.command !== undefined ? { command: true as const } : {}),
     };
     this.view.agents.push(view);
     const call: Call = {
-      index,
+      index: request.index,
       key,
       request,
-      stallMs: this.stallMs(),
-      resolve: ends.resolve,
-      reject: ends.reject,
+      stallMs,
+      ...ends,
       view,
       abort: new AbortController(),
     };
-    this.commands++;
     this.calls.push(call);
     this.issued.push(call);
   }
@@ -879,7 +856,6 @@ export class WorkflowRun {
     let outcome:
       { value: unknown } | { nothing: string } | { error: string } | undefined;
     try {
-      // A command takes no agent's place: a script that runs one between its agents does not wait for them
       if (call.request.command === undefined) {
         await this.slots.take(call.abort.signal);
         placed = true;
@@ -968,7 +944,6 @@ export class WorkflowRun {
           call.abort.signal,
         );
       } catch (error) {
-        // A command that did not run is the script's to hear of: it gets the error, never null for a result
         if (this.closed || call.stopped || error instanceof AgentCallError)
           throw error;
         throw new AgentCallError(
@@ -1128,22 +1103,10 @@ export function workflowSummary(view: WorkflowRunView): string {
       .join(' · ') || 'starting'
   );
 }
-/**
- * The args of a workflow call as its script reads them. A list or an object written as JSON text is that list or
- * object: the tool's `args` takes any value, so its schema names no type, and some models write a value without a
- * type as text whatever they mean by it. A script that asked for an object then got a string it could not read.
- * Any other text stays text.
- */
 export function workflowArgs(value: unknown): unknown {
-  if (typeof value !== 'string') return value;
-  const text = value.trim();
-  if (!/^[[{]/.test(text)) return value;
-  try {
-    const parsed: unknown = JSON.parse(text);
-    return parsed !== null && typeof parsed === 'object' ? parsed : value;
-  } catch {
-    return value;
-  }
+  if (typeof value !== 'string' || !/^\s*[[{]/.test(value)) return value;
+  const parsed = parseToolInput(value);
+  return parsed !== null && typeof parsed === 'object' ? parsed : value;
 }
 /** A run's id: `w` and eight hexadecimal digits, the folder its files are kept in. */
 export const RUN_ID = /^w[0-9a-f]{8}$/;

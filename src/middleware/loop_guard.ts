@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { posix } from 'node:path';
 import type { Message } from '../types.js';
 import { envFlag } from '../model_guard.js';
+import { patchPaths } from '../apply_patch.js';
+import { argumentOf } from '../tool_call_compat.js';
 function ordered(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(ordered);
   if (value && typeof value === 'object')
@@ -57,9 +59,7 @@ const READ_PAGE_KEYS = new Set([
 
 const MUTATING_FILE_TOOLS = new Set([
   'write_file',
-  'write',
   'edit_file',
-  'edit',
   'delete',
   'apply_patch',
 ]);
@@ -85,24 +85,20 @@ function normalizePath(value: unknown): string {
   return posix.normalize(trimmed.replace(/\\/gu, '/'));
 }
 
+const targetPath = (args: Record<string, unknown>): string =>
+  normalizePath(argumentOf(args, 'file_path'));
+
 function mutatedPaths(name: string, args: Record<string, unknown>): string[] {
-  const lower = name.toLowerCase();
-  if (!MUTATING_FILE_TOOLS.has(lower)) return [];
-  if (lower === 'apply_patch') {
-    // The tool's own argument is patchText; patch is the alias a model may still write.
-    const given = args.patchText ?? args.patch;
-    const patch = typeof given === 'string' ? given : '';
-    const found = new Set<string>();
-    for (const match of patch.matchAll(
-      /^\*\*\* (?:Add|Update|Delete) File: (.+)$|^\*\*\* Move to: (.+)$/gmu,
-    )) {
-      const normalized = normalizePath(match[1] ?? match[2]);
-      if (normalized) found.add(normalized);
-    }
-    return [...found];
+  if (!MUTATING_FILE_TOOLS.has(name)) return [];
+  if (name !== 'apply_patch') return [targetPath(args)].filter(Boolean);
+  const patch = argumentOf(args, 'patchText');
+  try {
+    return typeof patch === 'string'
+      ? patchPaths(patch).map(normalizePath).filter(Boolean)
+      : [];
+  } catch {
+    return [];
   }
-  const normalized = normalizePath(args.file_path ?? args.path);
-  return normalized ? [normalized] : [];
 }
 
 export function analyze(messages: Message[], window = 8): LoopStats {
@@ -129,11 +125,9 @@ export function analyze(messages: Message[], window = 8): LoopStats {
     if (message.tool_calls?.length) rounds.push([]);
     for (const call of message.tool_calls ?? []) {
       const lower = call.name.toLowerCase();
-      const targetPath = normalizePath(call.args.file_path ?? call.args.path);
+      const path = targetPath(call.args);
       const revision =
-        lower.includes('read') && targetPath
-          ? (fileRevisions.get(targetPath) ?? 0)
-          : 0;
+        lower.includes('read') && path ? (fileRevisions.get(path) ?? 0) : 0;
       calls.push(
         revision
           ? fingerprint(call.name, { ...call.args, __rev: revision })
@@ -145,7 +139,7 @@ export function analyze(messages: Message[], window = 8): LoopStats {
         );
         loose.push({
           key: fingerprint('loose::' + call.name, args),
-          path: targetPath,
+          path,
           offset: finiteNumber(
             call.args.offset || call.args.page || call.args.start_line || 0,
           ),
@@ -153,14 +147,10 @@ export function analyze(messages: Message[], window = 8): LoopStats {
         });
       } else loose.push({ key: '', path: '', offset: 0, charOffset: 0 });
       if (!failedCallIds.has(call.id)) {
-        const modified = mutatedPaths(call.name, call.args);
-        if (modified.length) {
-          const modifiedSet = new Set(modified);
-          for (const path of modifiedSet)
-            fileRevisions.set(path, (fileRevisions.get(path) ?? 0) + 1);
-          for (const entry of loose)
-            if (entry.path && modifiedSet.has(entry.path)) entry.key = '';
-        }
+        const modified = new Set(mutatedPaths(call.name, call.args));
+        for (const changed of modified)
+          fileRevisions.set(changed, (fileRevisions.get(changed) ?? 0) + 1);
+        for (const entry of loose) if (modified.has(entry.path)) entry.key = '';
       }
     }
     if (message.role === 'tool' && rounds.length)

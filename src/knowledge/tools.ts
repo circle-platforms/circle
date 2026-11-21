@@ -76,11 +76,11 @@ export function knowledgeTools(
           type: 'string',
           pattern: '^/',
           description:
-            "Logical folder path inside local personal knowledge (not a disk or Hub download path); defaults to '/' and must start with '/'.",
+            "Logical folder path inside local personal knowledge, not a path on disk; defaults to '/' and must start with '/'.",
           examples: ['/', '/notes'],
         },
         kind: text,
-        status: { enum: ['verified', 'unverified'] },
+        status: { type: 'string', enum: ['verified', 'unverified'] },
         limit: { type: 'integer', minimum: 1, maximum: 100 },
         cursor: text,
       },
@@ -93,7 +93,7 @@ export function knowledgeTools(
           result.snapshot === null
             ? {
                 ...result,
-                note: 'Local personal knowledge space is empty (no commits yet). Do not retry knowledge_search for workspace or Hub-downloaded files; use read_file, glob, grep, or available Hub/MCP tools instead.',
+                note: 'Local personal knowledge space is empty (no commits yet). Do not retry knowledge_search for files in the workspace or elsewhere on disk; use read_file, glob, grep or the MCP tools available instead.',
               }
             : result,
         );
@@ -178,7 +178,7 @@ export function knowledgeTools(
         directory_id: text,
         title: text,
         markdown: text,
-        state: { enum: ['enabled', 'disabled'] },
+        state: { type: 'string', enum: ['enabled', 'disabled'] },
         delete: { type: 'boolean' },
       },
       ['expected_head'],

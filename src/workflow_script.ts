@@ -447,10 +447,6 @@ function prepare(source: string, filename: string): PreparedScript {
 
 /** What a running script tells the runtime, as it happens. */
 export interface ScriptHost {
-  /**
-   * An `agent()` call: `spec` is `{ prompt, options }` as JSON; answer it with `settle(id, …)`. An `execute()`
-   * call comes the same way, its `spec` being `{ command, options }`.
-   */
   agent(id: number, spec: string): void;
   phase(title: string): void;
   log(message: string): void;

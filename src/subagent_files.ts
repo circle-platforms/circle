@@ -61,10 +61,6 @@ export interface SubagentFileInfo {
   hooks?: HookDefinition[];
   /** It runs as a background job when the conversation starts it. */
   background?: boolean;
-  /**
-   * False: it keeps its own prompt and is not given the conversation's (how to talk and work, the project's
-   * instructions, skills, servers' notes); it is still told where it runs, how paths are read and the variables.
-   */
   sessionPrompt?: boolean;
   /** Read and shown, and not applied yet. */
   memory?: (typeof MEMORY_SCOPES)[number];
@@ -256,6 +252,15 @@ function readFields(
       ? { value: text as T }
       : { error: `${key} '${text}' is not one of ${allowed.join(', ')}` };
   };
+  const flag = (key: Key): { value?: boolean; error?: string } => {
+    const raw = value(key);
+    if (!given(raw)) return {};
+    if (raw === true || raw === 'true') return { value: true };
+    if (raw === false || raw === 'false') return { value: false };
+    return {
+      error: `${key} must be true or false, not ${JSON.stringify(raw)}`,
+    };
+  };
   try {
     const ignored = pack ? NOT_FOR_PACKS.filter(written) : [];
     if (ignored.length) found.ignored = [...ignored];
@@ -350,19 +355,12 @@ function readFields(
     if (memory.value) found.memory = memory.value;
     if (isolation.value) found.isolation = isolation.value;
     if (color.value) found.color = color.value;
-    const sessionPrompt = value('sessionPrompt');
-    if (given(sessionPrompt)) {
-      if (sessionPrompt === false || sessionPrompt === 'false')
-        found.sessionPrompt = false;
-      else if (sessionPrompt !== true && sessionPrompt !== 'true')
-        return `sessionPrompt must be true or false, not ${JSON.stringify(sessionPrompt)}`;
-    }
-    const background = value('background');
-    if (given(background)) {
-      if (background === true || background === 'true') found.background = true;
-      else if (background !== false && background !== 'false')
-        return `background must be true or false, not ${JSON.stringify(background)}`;
-    }
+    const sessionPrompt = flag('sessionPrompt');
+    const background = flag('background');
+    for (const read of [sessionPrompt, background])
+      if (read.error) return read.error;
+    if (sessionPrompt.value === false) found.sessionPrompt = false;
+    if (background.value) found.background = true;
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }

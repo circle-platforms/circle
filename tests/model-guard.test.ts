@@ -634,7 +634,6 @@ test('a rate-limited request is sent again for as long as CIRCLE_RATE_LIMIT_PATI
     [6 * 3600_000, 120000, 188],
   );
 
-  // A limit that lifts after three hours: forty tries later the request is answered. The clock is the test's.
   const run = async (budget: typeof patient, liftsAt: number) => {
     let clock = 0;
     let calls = 0;
@@ -669,14 +668,12 @@ test('a rate-limited request is sent again for as long as CIRCLE_RATE_LIMIT_PATI
     waited.calls > 80 && waited.waited < 3 * 3600_000 + 120000,
     JSON.stringify(waited),
   );
-  // The limit outlasts the patience: the request fails when that time has passed.
   const gaveUp = await run(patient, 7 * 3600_000);
   assert.equal(gaveUp.outcome, 'RetriesExhausted');
   assert.ok(
     gaveUp.waited >= 6 * 3600_000 && gaveUp.waited < 6 * 3600_000 + 120000,
     JSON.stringify(gaveUp),
   );
-  // Without the variable: five more tries, then the failure.
   const usual = await run(BUDGETS.rate_limit, 3 * 3600_000);
   assert.deepEqual([usual.outcome, usual.calls], ['RetriesExhausted', 6]);
 });

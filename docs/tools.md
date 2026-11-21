@@ -13,7 +13,7 @@ The main agent has these twenty-one core tools, and `vision` when a [side vision
 | Tool | What it does | Asks | Limits |
 |---|---|---|---|
 | `ls` | List a folder. Folders end in `/`. | no | |
-| `knowledge_search` | Search local personal knowledge for clues using `'/'`-prefixed logical paths; locked tasks require explicit addresses. Does not inspect workspace or Hub-downloaded files on disk; no network or sync. | no | Local personal space only; nothing is sent to a sync server by the call. Returns a note when `snapshot` is `null` (empty store). |
+| `knowledge_search` | Search local personal knowledge for clues using `'/'`-prefixed logical paths; locked tasks require explicit addresses. Does not inspect workspace or other files on disk; no network or sync. | no | Local personal space only; nothing is sent to a sync server by the call. Returns a note when `snapshot` is `null` (empty store). |
 | `knowledge_read` | Read an object within an explicit local snapshot, with a bounded window and local verification observation. | no | Local personal space only; nothing is sent to a sync server by the call. |
 | `knowledge_write` | Propose canonical revisions and byte chunks against expected_head. Inventories are generated locally. Every change needs person confirmation, including auto mode. | always | Local personal space only; nothing is sent to a sync server by the call. |
 | `knowledge_share` | Share the current synced, qualified knowledge or memory as an independent team copy. Always requires person confirmation; local-only mode and missing mappings refuse sharing. | always | Selected MCP connection only; exact current mapping and qualified source required. |

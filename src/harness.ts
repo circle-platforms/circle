@@ -11,6 +11,7 @@ import type {
   ToolCall,
   Usage,
   MediaAttachment,
+  CommandResult,
   ToolContext,
   ToolModelCall,
 } from './types.js';
@@ -330,11 +331,7 @@ function escapeReminder(text: string): string {
   return text.replace(/<(\/?system-reminder)/gi, '&lt;$1');
 }
 
-/**
- * With how many requests left a subagent is reminded of its `maxTurns`: a fifth of them, twenty at
- * most. A limit under ten gets no reminder: there is nothing to do differently in one or two requests.
- */
-export function turnsLeftReminder(maxTurns: number): number {
+function turnsLeftToRemind(maxTurns: number): number {
   return maxTurns < 10 ? 0 : Math.min(20, Math.floor(maxTurns / 5));
 }
 
@@ -434,7 +431,6 @@ export class Harness {
   /** Model requests made so far, counted against `maxTurns`. */
   private turnsTaken = 0;
   private turnLimitHit = false;
-  /** The subagent has been told once how many of its requests are left. */
   private turnLimitSaid = false;
   /** The last run ended because `maxTurns` was spent, not with an answer of the model's own. */
   get stoppedAtTurnLimit(): boolean {
@@ -1279,11 +1275,9 @@ export class Harness {
           this.flushTitle();
           return { answer, usage };
         }
-        // Told once, with a fifth of its requests left (twenty at most): what a subagent has learned
-        // and not written is lost when they are spent, and one that only read hands back nothing
         if (this.options.maxTurns !== undefined && !this.turnLimitSaid) {
           const left = this.options.maxTurns - this.turnsTaken;
-          if (left <= turnsLeftReminder(this.options.maxTurns)) {
+          if (left <= turnsLeftToRemind(this.options.maxTurns)) {
             this.turnLimitSaid = true;
             this.save({
               id: randomUUID(),
@@ -2000,20 +1994,23 @@ export class Harness {
       return false;
     }
   }
+  async runCommandCall(
+    call: ToolCall,
+    signal: AbortSignal,
+  ): Promise<{ message: Message; command: CommandResult | undefined }> {
+    let command: CommandResult | undefined;
+    const message = await this.runCall(call, signal, true, (result) => {
+      command = result;
+    });
+    return { message, command };
+  }
   // One call: checked, approved when it must be, and run. The result comes back to be stored
   // by the caller, which keeps the results in the order of the calls.
-  /**
-   * One tool call made for this conversation by something other than its model, such as a command of a workflow
-   * script: it is checked, hooked and asked about as the model's own call is. Its result is returned and not kept
-   * in the conversation, and the call is not shown in it.
-   */
-  runToolCall(call: ToolCall, signal: AbortSignal): Promise<Message> {
-    return this.runCall(call, signal, true);
-  }
   private async runCall(
     original: ToolCall,
     signal: AbortSignal,
     quiet = false,
+    onCommandResult?: (result: CommandResult) => void,
   ): Promise<Message> {
     const callModel = this.model;
     let call = original;
@@ -2337,6 +2334,17 @@ export class Harness {
           ? this.options.policy.readOnlyCommand(call.name, resolved)?.command
           : undefined;
       const context: ToolContext = {
+        ...(onCommandResult
+          ? {
+              onCommandResult: (result) =>
+                onCommandResult({
+                  code: result.code,
+                  output: this.redact(result.output, secrets, () =>
+                    written(this.messages),
+                  ).trimEnd(),
+                }),
+            }
+          : {}),
         signal,
         ...(readOnlyCommand ? { readOnlyCommand } : {}),
         sessionId: this.sessionId,

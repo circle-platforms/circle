@@ -1913,7 +1913,6 @@ function runRows(run: WorkflowRunView, only?: string): PickerItem[] {
   ].filter((title, index, all) => all.indexOf(title) === index);
   for (const title of titles) {
     if (only !== undefined && title !== only) continue;
-    // A script's commands are its own bookkeeping: one is listed while it runs, or when it could not run
     const agents = run.agents.filter(
       (agent) =>
         agent.phase === title &&

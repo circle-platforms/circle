@@ -147,6 +147,7 @@ const INTERNAL_REMINDERS = new Set([
   'hook_notice',
   'hook_context',
   'mode-boundary',
+  'model-retry',
   'skill',
   'turn_limit',
 ]);
@@ -725,8 +726,6 @@ export class GatewayModel implements ChatModel {
       if (isInternalReminder(message)) {
         const content = commandExecutionModelContent(message);
         if (!content.trim()) continue;
-        // Fold harness reminders into the adjacent tool output or user turn
-        // rather than emitting synthetic user turns on Chat Completions endpoints.
         if (!attachNote(content, !toolMedia.length)) pendingNotes.push(content);
         continue;
       }
@@ -771,9 +770,8 @@ export class GatewayModel implements ChatModel {
         });
       } else {
         const text = commandExecutionModelContent(message);
-        if (!message.attachments?.length && !text.trim())
-          // An empty prompt says nothing, and strict gateways reject it.
-          continue;
+        // An empty prompt says nothing, and strict gateways reject it.
+        if (!message.attachments?.length && !text.trim()) continue;
         const notes = pendingNotes.splice(0);
         messages.push({
           role: 'user',

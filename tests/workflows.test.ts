@@ -17,7 +17,7 @@ import {
   type ModelRequest,
   type ModelResponse,
 } from '../src/types.js';
-import { readJournal } from '../src/workflows.js';
+import { readJournal, workflowSummary } from '../src/workflows.js';
 import { approvalRequest } from '../src/tui/approval_preview.js';
 import {
   askedBy,
@@ -162,6 +162,29 @@ function envFor(t: Parameters<typeof scratch>[0], name: string) {
     process.env[name] = value;
   };
 }
+function commandFiles(workspace: string): void {
+  writeFileSync(
+    join(workspace, 'emit.mjs'),
+    "const [text, code = '0'] = process.argv.slice(2);\nprocess.stdout.write(text);\nprocess.exit(Number(code));\n",
+  );
+  writeFileSync(
+    join(workspace, 'note.mjs'),
+    "import { appendFileSync } from 'node:fs';\nconst [file, line, text = ''] = process.argv.slice(2);\nappendFileSync(file, line + '\\n');\nprocess.stdout.write(text);\n",
+  );
+}
+const noticeResult = (notice: string): unknown => {
+  const text = notice.slice(notice.indexOf('Result:\n') + 8);
+  for (
+    let end = text.indexOf('\n}');
+    end >= 0;
+    end = text.indexOf('\n}', end + 1)
+  ) {
+    try {
+      return JSON.parse(text.slice(0, end + 2));
+    } catch {}
+  }
+  throw new Error(`no result in ${notice}`);
+};
 
 test('a workflow starts in the background, its agents run as subagents on the path task takes, and its result reaches the next model request', async (t) => {
   const paths = folders(t);
@@ -1270,5 +1293,299 @@ test('an agent of a workflow takes the skills its definition names, not those th
   assert.ok(
     !users.some((text) => text.includes('Follow the loaded checklist.')),
     'the conversation’s skill is not carried to each agent of a run',
+  );
+});
+
+test("a script's command gives it the exit code and what was printed, runs while every agent place is taken, and is not kept in the conversation", async (t) => {
+  const paths = folders(t);
+  commandFiles(paths.workspace);
+  envFor(t, 'CIRCLE_WORKFLOW_MAX_CONCURRENT_AGENTS')('1');
+  const script =
+    META('book-keeping', ['Work']) +
+    `phase('Work')
+const first = await execute('node emit.mjs %WORD% 3')
+const working = agent('do the work')
+const second = await execute('node emit.mjs two', { label: 'second', timeout: 30 })
+log('second done')
+const worked = await working
+return { first, second, worked }
+`;
+  const gate = deferred();
+  t.after(() => gate.open());
+  const held: AskerReply = async () => {
+    await gate.promise;
+    return reply('worked');
+  };
+  let notice = '';
+  const model = modelByAsker({
+    go: [
+      workflowCall('w1', { script }),
+      reply('started'),
+      (request) => {
+        notice = request.messages.at(-1)!.content;
+        return reply('read');
+      },
+    ],
+    'do the work': [held],
+  });
+  const runtime = runtimeFor(t, paths, model, {
+    settings: { ...defaultSettings(), variables: { WORD: 'one' } },
+  });
+  await runtime.initialize();
+  await runtime.harness.run('go');
+  const { run, job } = started(runtime, 'w1');
+  const view = () => runtime.workflowRunViews()[0]!;
+  await until(() => view().logs.includes('second done'), { timeout: 20_000 });
+  assert.equal(runtime.jobs.get(job)!.status, 'running');
+  assert.deepEqual(
+    view().agents.map((agent) => [
+      agent.label,
+      agent.command ?? false,
+      agent.state,
+    ]),
+    [
+      ['$ node emit.mjs one 3', true, 'done'],
+      ['do the work', false, 'running'],
+      ['second', true, 'done'],
+    ],
+  );
+  assert.equal(workflowSummary(view()), 'Work · 1 running');
+  gate.open();
+  assert.equal((await finished(runtime, job)).status, 'done');
+  assert.equal(await runtime.runJobNotices(), 'read');
+  assert.deepEqual(noticeResult(notice), {
+    first: { code: 3, output: 'one' },
+    second: { code: 0, output: 'two' },
+    worked: 'worked',
+  });
+  const kept = runtime.store.messages(runtime.session.id);
+  assert.ok(!kept.some((message) => message.name === 'execute'));
+  assert.ok(
+    !kept.some((message) =>
+      message.tool_calls?.some((call) => call.name === 'execute'),
+    ),
+  );
+  const journal = readJournal(
+    join(runtime.workflowRunsFolder, run, 'journal.jsonl'),
+  );
+  assert.deepEqual(
+    journal
+      .filter((event) => event.t === 'end')
+      .map((event) => [event.i, event.status, event.result]),
+    [
+      [0, 'done', { code: 3, output: 'one' }],
+      [2, 'done', { code: 0, output: 'two' }],
+      [1, 'done', 'worked'],
+    ],
+  );
+});
+
+test("a command is decided as the conversation's own call is: a hook that denies it gives the script the refusal and nothing runs, and options out of range are refused", async (t) => {
+  const paths = folders(t);
+  commandFiles(paths.workspace);
+  const deny = join(paths.root, 'deny.mjs');
+  writeFileSync(
+    deny,
+    `import { readFileSync } from 'node:fs';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+if (String(input.tool_input?.command ?? '').includes('forbidden'))
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'no forbidden commands' } }));
+`,
+  );
+  writeFileSync(
+    join(paths.home, 'settings.json'),
+    JSON.stringify({
+      hooks: {
+        PostToolUse: [
+          {
+            matcher: 'execute',
+            hooks: [
+              {
+                type: 'command',
+                command:
+                  process.execPath +
+                  ' -e ' +
+                  JSON.stringify(
+                    "console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: 'Exit code: 55' } }))",
+                  ),
+              },
+            ],
+          },
+        ],
+        PreToolUse: [
+          {
+            matcher: 'execute',
+            hooks: [
+              {
+                type: 'command',
+                command: `${JSON.stringify(process.execPath)} ${JSON.stringify(deny)}`,
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  );
+  const script =
+    META('refused') +
+    `const message = (call) => call.then(() => 'ran', (error) => error.message)
+const denied = await message(execute('node note.mjs marker.txt forbidden'))
+const allowed = await execute('node note.mjs allowed.txt fine')
+const long = await message(execute('true', { timeout: 601 }))
+const empty = await message(execute('  '))
+const label = await message(execute('true', { label: 7 }))
+return { denied, allowed, long, empty, label }
+`;
+  let notice = '';
+  const model = modelByAsker({
+    go: [
+      workflowCall('w1', { script }),
+      reply('started'),
+      (request) => {
+        notice = request.messages.at(-1)!.content;
+        return reply('read');
+      },
+    ],
+  });
+  const runtime = runtimeFor(t, paths, model);
+  await runtime.initialize();
+  await runtime.harness.run('go');
+  const { job } = started(runtime, 'w1');
+  assert.equal((await finished(runtime, job)).status, 'done');
+  await runtime.runJobNotices();
+  const result = noticeResult(notice) as Record<string, unknown>;
+  assert.match(String(result.denied), /no forbidden commands/);
+  assert.ok(!existsSync(join(paths.workspace, 'marker.txt')));
+  assert.deepEqual(result.allowed, { code: 0, output: '' });
+  assert.equal(
+    readFileSync(join(paths.workspace, 'allowed.txt'), 'utf8'),
+    'fine\n',
+  );
+  assert.equal(
+    result.long,
+    'execute() option timeout must be a whole number of seconds from 1 to 600',
+  );
+  assert.equal(
+    result.empty,
+    'execute() takes the command as its first argument, a string',
+  );
+  assert.equal(result.label, 'execute() option label must be a string');
+  assert.deepEqual(
+    runtime.workflowRunViews()[0]!.agents.map((agent) => agent.state),
+    ['failed', 'done'],
+  );
+});
+
+test("a relaunch hands back a command's saved result without running it again, and runs a changed command", async (t) => {
+  const paths = folders(t);
+  commandFiles(paths.workspace);
+  const script = (word: string) =>
+    META('once') +
+    `const first = await execute('node note.mjs runs.txt ran first')
+const second = await execute('node note.mjs runs.txt ${word} ${word}')
+return { first, second }
+`;
+  let notice = '';
+  const model = modelByAsker({
+    go: [
+      workflowCall('r1', { script: script('second') }),
+      reply('started'),
+      (request) => {
+        const run = /as run (w[0-9a-f]{8})/.exec(
+          request.messages.find((message) => message.tool_call_id === 'r1')!
+            .content,
+        )![1]!;
+        writeFileSync(
+          join(runtime.workflowRunsFolder, run, 'script.js'),
+          script('%WORD%'),
+        );
+        return workflowCall('r2', {
+          script_path: `/workflow_runs/${run}/script.js`,
+          resume_from_run_id: run,
+        });
+      },
+      reply('relaunched'),
+      (request) => {
+        notice = request.messages.at(-1)!.content;
+        return reply('read');
+      },
+    ],
+  });
+  const runtime = runtimeFor(t, paths, model, {
+    settings: { ...defaultSettings(), variables: { WORD: 'changed' } },
+  });
+  await runtime.initialize();
+  await runtime.harness.run('go');
+  assert.equal(
+    (await finished(runtime, started(runtime, 'r1').job)).status,
+    'done',
+  );
+  await runtime.runJobNotices();
+  const second = started(runtime, 'r2');
+  assert.equal((await finished(runtime, second.job)).status, 'done');
+  await runtime.runJobNotices();
+  assert.deepEqual(noticeResult(notice), {
+    first: { code: 0, output: 'first' },
+    second: { code: 0, output: 'changed' },
+  });
+  assert.equal(
+    readFileSync(join(paths.workspace, 'runs.txt'), 'utf8'),
+    'ran\nsecond\nchanged\n',
+  );
+  assert.deepEqual(
+    runtime
+      .workflowRunViews()
+      .find((view) => view.id === second.run)!
+      .agents.map((agent) => agent.state),
+    ['cached', 'done'],
+  );
+});
+
+test('args a model wrote as JSON text reach the script as the list or object they spell, and other text stays text', async (t) => {
+  const paths = folders(t);
+  const script =
+    META('reads-args') +
+    `return { kind: Array.isArray(args) ? 'list' : typeof args, word: args.word ?? null, first: args[0] ?? null, text: typeof args === 'string' ? args : null }`;
+  const notices: string[] = [];
+  const read: AskerReply = (request) => {
+    notices.push(request.messages.at(-1)!.content);
+    return reply('read');
+  };
+  const model = modelByAsker({
+    go: [
+      workflowCall('a1', { script, args: '{"word": "object as text"}' }),
+      workflowCall('a2', { script, args: ' ["list as text"] ' }),
+      workflowCall('a3', { script, args: 'just words {not json}' }),
+      workflowCall('a4', { script, args: { word: 'an object' } }),
+      reply('started'),
+      read,
+      read,
+      read,
+      read,
+    ],
+  });
+  const runtime = runtimeFor(t, paths, model);
+  await runtime.initialize();
+  await runtime.harness.run('go');
+  for (const id of ['a1', 'a2', 'a3', 'a4'])
+    assert.equal(
+      (await finished(runtime, started(runtime, id).job)).status,
+      'done',
+    );
+  while (notices.length < 4 && (await runtime.runJobNotices()) !== undefined);
+  const results = notices
+    .flatMap((notice) => [...notice.matchAll(/Result:\n(\{\n[\s\S]*?\n\})/g)])
+    .map((found) => JSON.parse(found[1]!) as Record<string, unknown>);
+  assert.equal(results.length, 4, JSON.stringify(notices).slice(0, 600));
+  assert.deepEqual(
+    results
+      .map((result) => [result.kind, result.word, result.first, result.text])
+      .sort(),
+    [
+      ['list', null, 'list as text', null],
+      ['object', 'an object', null, null],
+      ['object', 'object as text', null, null],
+      ['string', null, 'j', 'just words {not json}'],
+    ].sort(),
   );
 });

@@ -37,6 +37,16 @@ function resolveFieldName(
   }
   return matched.size === 1 ? [...matched][0] : undefined;
 }
+export function argumentOf(
+  args: Record<string, unknown>,
+  field: string,
+): unknown {
+  if (Object.hasOwn(args, field)) return args[field];
+  const key = Object.keys(args).find(
+    (key) => resolveFieldName(key, [field]) === field,
+  );
+  return key === undefined ? undefined : args[key];
+}
 export function resolveName(
   name: string,
   candidates: string[],

@@ -13,19 +13,24 @@ function setup(t: TestContext) {
     occupied: false,
     closed: false,
     starts: 0,
+    owed: 0,
     start: (): Promise<unknown> => Promise.resolve(),
   };
   const wake = new JobWake({
     hasNotice: () => state.notice,
     occupied: () => state.occupied,
     closed: () => state.closed,
-    start: () => {
+    start: (owed) => {
       state.starts++;
+      if (owed) state.owed++;
       return state.start();
     },
   });
   return { state, wake, tick: (ms = 1000) => t.mock.timers.tick(ms) };
 }
+const settle = async () => {
+  for (let i = 0; i < 4; i++) await Promise.resolve();
+};
 
 test('a job that ended starts a turn a second later, and jobs ending within that second share it', (t) => {
   const { state, wake, tick } = setup(t);
@@ -114,9 +119,6 @@ test('at most ten turns in a row start by themselves, until the person writes', 
 
 test('a turn that fails to start is tried again three times, further apart each time, and then waits for the person', async (t) => {
   const { state, wake, tick } = setup(t);
-  const settle = async () => {
-    for (let i = 0; i < 4; i++) await Promise.resolve();
-  };
   state.start = () => Promise.reject(Error('model unavailable'));
   wake.jobEnded();
   tick();
@@ -154,9 +156,6 @@ test('a turn that fails to start is tried again three times, further apart each 
 
 test('a turn that starts after a failed one clears the count of failures', async (t) => {
   const { state, wake, tick } = setup(t);
-  const settle = async () => {
-    for (let i = 0; i < 4; i++) await Promise.resolve();
-  };
   state.start = () => Promise.reject(Error('model unavailable'));
   wake.jobEnded();
   tick();
@@ -272,78 +271,46 @@ test('before leaving, carrying on no longer ends the wait without a turn', async
 });
 
 test('a turn that took its notice and then failed is run again, though no notice waits any more', async (t) => {
-  // What happened in a real run: two jobs ended, each wake took its notice into the conversation
-  // and the model's service broke off; nothing waited to be read, so no turn started again.
-  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
-  const state = { notice: true, starts: 0, agains: 0, fail: true };
-  const wake = new JobWake({
-    hasNotice: () => state.notice,
-    occupied: () => false,
-    closed: () => false,
-    start: () => {
-      state.starts++;
-      // The turn reads the notice before it asks the model.
-      state.notice = false;
-      return state.fail
-        ? Promise.reject(Error('model service broke off'))
-        : Promise.resolve();
-    },
-    again: () => {
-      state.agains++;
-      return state.fail
-        ? Promise.reject(Error('model service broke off'))
-        : Promise.resolve();
-    },
-  });
-  const tick = (ms = 1000) => t.mock.timers.tick(ms);
-  const settle = async () => {
-    for (let i = 0; i < 4; i++) await Promise.resolve();
+  const { state, wake, tick } = setup(t);
+  let fail = true;
+  state.start = () => {
+    state.notice = false;
+    return fail
+      ? Promise.reject(Error('model service broke off'))
+      : Promise.resolve();
   };
   wake.jobEnded();
   tick();
-  assert.equal(state.starts, 1);
+  assert.deepEqual([state.starts, state.owed], [1, 0]);
   await settle();
   tick(14_000);
-  assert.equal(state.agains, 0, 'not before fifteen seconds');
+  assert.equal(state.starts, 1, 'not before fifteen seconds');
   tick(2000);
-  assert.equal(state.agains, 1, 'the turn owed is run again without a notice');
-  assert.equal(state.starts, 1, 'the notice is not read twice');
+  assert.deepEqual(
+    [state.starts, state.owed],
+    [2, 1],
+    'the turn owed is run again without a notice',
+  );
   await settle();
-  state.fail = false;
+  fail = false;
   tick(61_000);
-  assert.equal(state.agains, 2);
+  assert.deepEqual([state.starts, state.owed], [3, 2]);
   await settle();
   tick(600_000);
-  assert.equal(state.agains, 2, 'once the turn has run nothing is owed');
+  assert.equal(state.starts, 3, 'once the turn has run nothing is owed');
   assert.equal(wake.snoozed, false);
   assert.equal(wake.wakesInARow, 1, 'the failed tries are not turns in a row');
-  // A later job is an ordinary wake again.
   state.notice = true;
   wake.jobEnded();
   tick();
-  assert.equal(state.starts, 2);
+  assert.deepEqual([state.starts, state.owed], [4, 2]);
 });
 
 test('a turn owed that keeps failing waits for the person after the last retry, and a message clears it', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
-  const state = { notice: true, starts: 0, agains: 0 };
-  const wake = new JobWake({
-    hasNotice: () => state.notice,
-    occupied: () => false,
-    closed: () => false,
-    start: () => {
-      state.starts++;
-      state.notice = false;
-      return Promise.reject(Error('broke off'));
-    },
-    again: () => {
-      state.agains++;
-      return Promise.reject(Error('broke off'));
-    },
-  });
-  const tick = (ms = 1000) => t.mock.timers.tick(ms);
-  const settle = async () => {
-    for (let i = 0; i < 4; i++) await Promise.resolve();
+  const { state, wake, tick } = setup(t);
+  state.start = () => {
+    state.notice = false;
+    return Promise.reject(Error('broke off'));
   };
   wake.jobEnded();
   tick();
@@ -352,31 +319,15 @@ test('a turn owed that keeps failing waits for the person after the last retry, 
     tick(wait);
   }
   await settle();
-  assert.equal(state.agains, 3, 'three retries, further apart each time');
+  assert.equal(state.owed, 3, 'three retries, further apart each time');
   assert.equal(wake.snoozed, true);
   tick(600_000);
-  assert.equal(state.agains, 3);
+  assert.equal(state.owed, 3);
   wake.personSent();
   tick(5000);
   assert.equal(
-    state.agains,
+    state.owed,
     3,
     'the message of the person is the next turn; nothing is owed',
   );
-});
-
-test('a front end without a way to run the turn again starts the ordinary turn, which finds nothing to read', async (t) => {
-  const { state, wake, tick } = setup(t);
-  state.start = () => {
-    state.notice = false;
-    return Promise.reject(Error('broke off'));
-  };
-  wake.jobEnded();
-  tick();
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  state.start = () => Promise.resolve();
-  tick(16_000);
-  assert.equal(state.starts, 2);
 });

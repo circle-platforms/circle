@@ -565,10 +565,8 @@ export class SessionApp {
           !!this.state.jobDetail ||
           !!this.state.draft,
         closed: () => !this.runtime || this.ended,
-        start: () =>
-          this.runtime!.runJobNotices().finally(() => this.repaint()),
-        again: () =>
-          this.runtime!.runJobNoticesAgain().finally(() => this.repaint()),
+        start: (owed) =>
+          this.runtime!.runJobNotices(owed).finally(() => this.repaint()),
       },
       { timed: false },
     );

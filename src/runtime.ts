@@ -38,10 +38,11 @@ import {
 import {
   defaultPolicy,
   DEFAULT_CREDENTIAL_FILES,
+  ruleTool,
   type ApprovalMode,
   type SessionMode,
 } from './approvals.js';
-import { ruleSources, ruleWhere } from './approval_rules.js';
+import { ruleNames, ruleSources, ruleWhere } from './approval_rules.js';
 import { Sandbox, WORKFLOW_RUNS_FOLDER } from './sandbox.js';
 import { EditorBridge } from './editor_bridge.js';
 import { buildTools, type Todo } from './tools.js';
@@ -541,6 +542,17 @@ export function builtinSubagentPrompt(
       `the built-in ${name} subagent has no prompt: prompts/agent/${file} is missing`,
     );
   }
+}
+function uniqueSkillNames(names: string[]): string[] {
+  const seen = new Set<string>();
+  return names
+    .map((name) => name.trim())
+    .filter((name) => {
+      const key = name.toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 export class AgentRuntime {
   private readonly searches = new WebSearchService();
@@ -1738,7 +1750,6 @@ export class AgentRuntime {
               : builtinSubagentPrompt(name))) +
           (launch?.schema ? '\n\n' + STRUCTURED_OUTPUT_PROMPT : '') +
           '\n' +
-          // A definition that keeps its own prompt is told where it runs, and not what the conversation is told
           (file?.sessionPrompt === false
             ? ownPromptContext(
                 this.options.workspace,
@@ -1842,11 +1853,8 @@ export class AgentRuntime {
           signal.throwIfAborted();
           // SubagentStart hooks (#557): what they say back starts its conversation
           await this.subagentStartHooks(child, agent, description, signal);
-          // The skills its definition names, then those the one that started it has loaded, are in its conversation
-          // before its task, as if it had loaded them. An agent of a workflow takes only its definition's: the
-          // script chooses the agent type, so a run of many agents does not carry the caller's skills to each
           await this.preloadSkills(
-            this.uniqueSkillNames([
+            uniqueSkillNames([
               ...(file?.skills ?? []),
               ...(launch ? [] : this.callerLoadedSkills(context.sessionId)),
             ]),
@@ -1947,11 +1955,6 @@ export class AgentRuntime {
       throw error;
     }
   }
-  /**
-   * Compact inherited context for a subagent: active session plan file,
-   * read-only/permission boundaries, deny rules, and active tool guard hooks.
-   * Returns '' when none apply so bare runs carry zero extra prompt overhead.
-   */
   private subagentContextSuffix(
     root: string,
     childTools: Tool[],
@@ -1981,7 +1984,9 @@ export class AgentRuntime {
         '- Permission mode (dontAsk): unapproved write or execute actions are automatically refused.',
       );
     }
-    const owned = new Set(childTools.map((tool) => tool.name));
+    const ruleTools = [
+      ...new Set(childTools.map((tool) => ruleTool(tool.name))),
+    ];
     const seenDeny = new Set<string>();
     const denyLines: string[] = [];
     for (const source of ruleSources(
@@ -1989,11 +1994,11 @@ export class AgentRuntime {
       this.options.workspace,
     )) {
       for (const rule of source.rules) {
-        if (rule.effect !== 'deny') continue;
         if (
-          rule.tool !== '*' &&
-          !owned.has(rule.tool) &&
-          !(rule.tool === 'terminal' && owned.has('execute'))
+          rule.effect !== 'deny' ||
+          !ruleTools.some((tool) =>
+            ruleNames(rule, tool, this.mcp.mcpTool(tool), source.layer),
+          )
         )
           continue;
         const key = `${rule.tool}\0${rule.pattern}`;
@@ -2038,19 +2043,6 @@ export class AgentRuntime {
     return (
       '\n\n' + this.redact(block, {}, () => written(this.store.messages(root)))
     );
-  }
-  /** Deduplicate skill names case-insensitively while preserving order. */
-  private uniqueSkillNames(names: string[]): string[] {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const raw of names) {
-      const trimmed = raw.trim();
-      const key = trimmed.toLowerCase();
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      out.push(trimmed);
-    }
-    return out;
   }
   /**
    * The skills a definition preloads, in its conversation before its task: each loaded as the `skill` tool loads it,
@@ -2370,12 +2362,6 @@ export class AgentRuntime {
       `In background: ${jobLine(job)}. The result arrives as a notice when the run ends; do not poll or sleep.`,
     ].join('\n');
   }
-  /** One attempt of one workflow agent, through the path `task` takes. */
-  /**
-   * One `execute()` call of a workflow script. The command runs as the conversation's own `execute` call would:
-   * the same rules, hooks and approval decide it, and `%NAME%` values go in the same way. It runs to its end
-   * within its seconds; it is never moved to the background, since the script waits for what it prints.
-   */
   private async runWorkflowCommand(
     request: AgentRequest,
     signal: AbortSignal,
@@ -2385,7 +2371,7 @@ export class AgentRuntime {
       throw new AgentCallError(
         'the conversation that started this workflow is not the open one, so its commands cannot run',
       );
-    const result = await this.harness.runToolCall(
+    const { message, command } = await this.harness.runCommandCall(
       {
         id: `${run.run}-${request.index}`,
         name: 'execute',
@@ -2397,18 +2383,13 @@ export class AgentRuntime {
       },
       signal,
     );
-    const text = String(result.content ?? '');
-    const exit = [
-      ...text.matchAll(/(?:^|\n)Exit code: (\d+|none)(?=\n|$)/g),
-    ].at(-1);
-    // No exit code: the command did not run. A rule, a hook or the person refused it, or it could not start.
-    if (!exit)
-      throw new AgentCallError(text.trim() || 'the command did not run');
-    return {
-      code: exit[1] === 'none' ? null : Number(exit[1]),
-      output: text.slice(0, exit.index).trimEnd(),
-    };
+    if (!command)
+      throw new AgentCallError(
+        message.content.trim() || 'the command did not run',
+      );
+    return command;
   }
+  /** One attempt of one workflow agent, through the path `task` takes. */
   private async runWorkflowAgent(
     request: AgentRequest,
     hooks: AttemptHooks,
@@ -3488,49 +3469,43 @@ export class AgentRuntime {
   }
   /** Skills whose hooks are armed for the current session. */
   private armedSkills = new Set<string>();
-  /** The skills each session has loaded, so a subagent starts with those of the one that started it and not a sibling's. */
   private sessionSkills = new Map<string, string[]>();
   private recordSessionSkill(
     sessionId: string | undefined,
     name: string,
   ): void {
-    const trimmed = name.trim();
-    const key = trimmed.toLowerCase();
-    if (!key) return;
     const target = sessionId ?? this.session.id;
-    const canonical =
-      this.skills.find((item) => item.name.toLowerCase() === key)?.name ??
-      trimmed;
-    // What the session's record already holds comes first, so a skill loaded before a resume is not lost
-    const list = this.callerLoadedSkills(target);
-    if (list.some((item) => item.toLowerCase() === key)) return;
-    this.sessionSkills.set(target, [...list, canonical]);
+    const key = name.trim().toLowerCase();
+    const known = this.skills.find((item) => item.name.toLowerCase() === key);
+    this.sessionSkills.set(
+      target,
+      uniqueSkillNames([
+        ...this.callerLoadedSkills(target),
+        known?.name ?? name,
+      ]),
+    );
   }
-  /** The skills a session has loaded: those noted this run, else those its record shows. */
   private callerLoadedSkills(sessionId: string): string[] {
-    const cached = this.sessionSkills.get(sessionId);
-    if (cached) return cached;
-    const restored: string[] = [];
-    for (const message of this.store.messages(sessionId)) {
-      if (
-        message.internal !== 'skill' &&
-        !(message.role === 'tool' && message.name === 'skill')
-      )
-        continue;
-      const match = String(message.content ?? '').match(
-        /<skill_content name="([^"]+)">/,
+    let loaded = this.sessionSkills.get(sessionId);
+    if (!loaded) {
+      loaded = uniqueSkillNames(
+        this.store
+          .messages(sessionId)
+          .filter(
+            (message) =>
+              message.internal === 'skill' ||
+              (message.role === 'tool' && message.name === 'skill'),
+          )
+          .map(
+            (message) =>
+              /<skill_content name="([^"]+)">/.exec(
+                String(message.content ?? ''),
+              )?.[1] ?? '',
+          ),
       );
-      if (match?.[1]) {
-        const name = match[1].trim();
-        if (
-          name &&
-          !restored.some((item) => item.toLowerCase() === name.toLowerCase())
-        )
-          restored.push(name);
-      }
+      this.sessionSkills.set(sessionId, loaded);
     }
-    this.sessionSkills.set(sessionId, restored);
-    return restored;
+    return loaded;
   }
   private ensureHooks(): HookRunner {
     if (!this.hookRunner) {
@@ -5046,21 +5021,13 @@ It is input, not a decision: it answers no approval card, changes no mode and ad
       });
     this.store.close();
   }
-  async runJobNotices(): Promise<string | undefined> {
+  async runJobNotices(owed = false): Promise<string | undefined> {
     if (
       this.closing ||
       this.busy ||
-      !this.jobs.hasNotices(this.session.id, true)
+      (!owed && !this.jobs.hasNotices(this.session.id, true))
     )
       return undefined;
-    return (await this.harness.run()).answer;
-  }
-  /**
-   * Runs the turn again that a finished job's notice started and that failed: the notice is
-   * in the conversation, unanswered, so the model is asked about the conversation as it is.
-   */
-  async runJobNoticesAgain(): Promise<string | undefined> {
-    if (this.closing || this.busy) return undefined;
     return (await this.harness.run()).answer;
   }
 }

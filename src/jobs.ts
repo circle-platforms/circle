@@ -68,7 +68,6 @@ export interface Job extends JobOwner {
   id: string;
   kind: 'shell' | 'adopted' | 'agent' | 'watch' | 'call';
   title: string;
-  /** What a subagent job answered, kept for its notice: the answer, not the tail of what it did. */
   report?: string;
   status: 'running' | 'done' | 'failed' | 'stopped';
   reason: string;
@@ -134,7 +133,6 @@ interface Entry {
   settle: () => void;
   finished: boolean;
   interrupt?: () => void;
-  /** A subagent job's answer, once it has given one. */
   report?: string;
 }
 /** What a shell started, kept so that it can be ended after the shell has ended. */
@@ -241,14 +239,17 @@ export function noticeLine(job: Job): string {
   const chars = Array.from(title);
   return `◆ ${job.id} ${outcomeWords(job)} · ${chars.length > 60 ? chars.slice(0, 59).join('') + '…' : title} · ${elapsed(job)}`;
 }
+export function commandAnswer(
+  output: string,
+  exitCode: number | null | undefined,
+  timedOut = false,
+): string {
+  const text = `${output}\nExit code: ${exitCode ?? 'none'}`;
+  if (timedOut || exitCode !== 0) throw new Error(text);
+  return text;
+}
 /** The most of a workflow's result its notice carries; the rest stays in its file. */
 const RESULT_NOTICE_BYTES = 32_768;
-/**
- * The most of a subagent's report its notice carries, and the most of its output a subagent job without a report shows.
- * The notice of a finished subagent used to carry the last 32 KB of its output file, which holds every tool call it made
- * with its arguments and then the report twice: across ninety subagents that was half of what the agent that started them
- * had in its context (median 3.8 KB a notice, some 17 KB), read again with every later request.
- */
 export const REPORT_NOTICE_CHARS = 8_192;
 const REPORT_KEPT_CHARS = 65_536;
 const AGENT_TAIL_BYTES = 4_096;
@@ -266,7 +267,6 @@ export function jobNotice(job: Job): string {
     } catch {
       /* Its output says how it ended. */
     }
-  // A subagent that answered: its answer, once. What it did on the way is in its output file and its own conversation.
   if (job.kind === 'agent' && job.report !== undefined) {
     const report = job.report.trimEnd();
     const chars = Array.from(report);
@@ -286,7 +286,6 @@ export function jobNotice(job: Job): string {
           ? plainJobOutput(readFileSync(job.outputPath, 'utf8')).trimEnd()
           : outputTail(
               job.outputPath,
-              // A subagent that gave no report (it failed or was stopped): the end of what it did says why.
               job.kind === 'watch'
                 ? 4096
                 : job.kind === 'agent'

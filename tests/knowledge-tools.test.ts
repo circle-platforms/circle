@@ -696,5 +696,5 @@ test('knowledge_search rejects non-logical paths recoverably and explains when t
   );
   assert.equal(empty.snapshot, null);
   assert.deepEqual(empty.items, []);
-  assert.match(empty.note, /empty.*read_file.*Hub/s);
+  assert.match(empty.note, /empty.*read_file.*MCP/s);
 });

@@ -15,13 +15,9 @@ import { glob } from 'glob';
 import type { Tool, ToolContext } from './types.js';
 import { Sandbox, identityEnvironment } from './sandbox.js';
 import { loadToolPrompt } from './system_prompt.js';
-import {
-  applyPatchChanges,
-  patchFilePaths,
-  patchSummary,
-} from './apply_patch.js';
+import { applyPatch, patchFilePaths, patchSummary } from './apply_patch.js';
 import { QUESTION_SCHEMA } from './questions.js';
-import { JobRegistry, jobLine, jobNotice } from './jobs.js';
+import { JobRegistry, commandAnswer, jobLine, jobNotice } from './jobs.js';
 import {
   MAX_LINE_CHARS,
   readTextWindow,
@@ -146,15 +142,6 @@ const integer = (description: string, minimum = 1) => ({
   minimum,
   description,
 });
-const finishCommand = (
-  output: string,
-  exitCode: number | undefined,
-  timedOut = false,
-): string => {
-  const text = `${output}\nExit code: ${exitCode ?? 'none'}`;
-  if (timedOut || exitCode !== 0) throw new Error(text);
-  return text;
-};
 export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
   const readBySession = new Map<string, Set<string>>();
   const sessionRead = (context: ToolContext): Set<string> => {
@@ -409,7 +396,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         return (await mutations.preparePatch(args, context))(args, context);
       const seen = sessionRead(context);
       const apply = (): string => {
-        const changes = applyPatchChanges(patch, sandbox);
+        const changes = applyPatch(patch, sandbox);
         for (const change of changes) {
           if (change.content === null) seen.delete(change.path);
           else seen.add(change.path);
@@ -564,7 +551,11 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
           args.timeout === undefined ? undefined : Number(args.timeout),
         );
         if (result.job) return result.output;
-        return finishCommand(result.output, result.exit_code);
+        context.onCommandResult?.({
+          code: result.exit_code ?? null,
+          output: result.output,
+        });
+        return commandAnswer(result.output, result.exit_code);
       }
       if (args.background === true)
         throw new Error('background commands are not available here');
@@ -574,7 +565,11 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         Math.max(1, Number(args.timeout) || 120) * 1000,
         context.identity,
       );
-      return finishCommand(result.output, result.exit_code, result.timed_out);
+      context.onCommandResult?.({
+        code: result.exit_code ?? null,
+        output: result.output,
+      });
+      return commandAnswer(result.output, result.exit_code, result.timed_out);
     },
   );
   if (hooks.localSkills) {

@@ -376,7 +376,6 @@ test('the notice of a finished subagent carries its report once, not the tail of
     outputTail(ended.outputPath).includes('edit_file'),
     'the output file still holds it',
   );
-  // A long report is cut at the limit and says where the rest is.
   const long = jobs.startAgent('analysis', { sessionId: 'lead' }, async () =>
     '析'.repeat(REPORT_NOTICE_CHARS + 500),
   );
@@ -389,7 +388,6 @@ test('the notice of a finished subagent carries its report once, not the tail of
     ),
   );
   assert.equal(cut.includes('析'.repeat(REPORT_NOTICE_CHARS + 1)), false);
-  // A subagent that failed gave no report: the end of its output says why, a few kilobytes at most.
   const failed = jobs.startAgent(
     'broken',
     { sessionId: 'lead' },

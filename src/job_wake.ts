@@ -8,35 +8,19 @@ export interface JobWakeHost {
   occupied(): boolean;
   /** The conversation can no longer run a turn. */
   closed(): boolean;
-  /** Starts the turn that reads the notices. */
-  start(): Promise<unknown>;
-  /**
-   * Runs a turn again after one that a notice started has failed. The failed turn took the
-   * notices into the conversation before the model was asked, so nothing waits to be read:
-   * the model is asked again about the conversation as it stands.
-   */
-  again?(): Promise<unknown>;
+  /** Starts the turn that reads the notices; `owed` runs it with none left, for a turn that failed after reading them. */
+  start(owed: boolean): Promise<unknown>;
 }
 
 // Notices that arrive within this of each other go in one turn. A turn or a card that
 // holds the conversation is looked at again this often, for as long as a notice waits.
 const SETTLE_MS = 1000;
-/**
- * How many turns in a row finished jobs may start before the wake waits for the person. Ten
- * stops a model that starts jobs in a loop; work that runs many jobs by design, one for each
- * item of a long list, sets CIRCLE_JOB_WAKES to a higher number.
- */
 export function mostWakesInARow(
   env: Record<string, string | undefined> = process.env,
 ): number {
   const configured = Number(env.CIRCLE_JOB_WAKES);
   return Number.isInteger(configured) && configured >= 1 ? configured : 10;
 }
-// A turn that failed (the model did not answer or its service broke off, a compaction was
-// running) is tried again after these waits. A notice that is never answered stops the work
-// the person asked for without a word, so the wake gives up, and waits for the person, only
-// after the last one. The failed turn has usually taken the notice into the conversation
-// already: the retry is owed whether or not a notice still waits.
 const RETRY_AFTER_MS = [15_000, 60_000, 240_000];
 
 /**
@@ -53,7 +37,6 @@ export class JobWake {
   private held = false;
   private failures = 0;
   private retryAt = 0;
-  /** A turn a notice started has failed and has not been answered since. */
   private owed = false;
   private readonly most = mostWakesInARow();
   constructor(
@@ -100,12 +83,7 @@ export class JobWake {
       return;
     }
     this.wakes++;
-    // With a notice waiting the ordinary turn reads it; without one, the turn owed is run again.
-    const turn =
-      !this.host.hasNotice() && this.host.again
-        ? this.host.again()
-        : this.host.start();
-    void turn.then(
+    void this.host.start(this.owed).then(
       () => {
         this.failures = 0;
         this.owed = false;
@@ -117,7 +95,6 @@ export class JobWake {
           this.owed = false;
           return;
         }
-        // A turn that failed is not one of the turns in a row.
         this.wakes--;
         this.owed = true;
         this.retryAt = Date.now() + wait;
