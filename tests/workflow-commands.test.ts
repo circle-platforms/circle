@@ -56,7 +56,22 @@ function folders(t: Parameters<typeof scratch>[0]) {
     packs: join(root, 'packs'),
   };
   for (const path of Object.values(paths)) mkdirSync(path, { recursive: true });
+  commandFiles(paths.workspace);
   return paths;
+}
+
+// The commands of these tests are two node scripts in the workspace, so that a command reads the same in every shell:
+// emit.mjs prints its first argument and exits with the second; note.mjs appends a line to a file and prints what follows.
+function commandFiles(workspace: string): void {
+  mkdirSync(workspace, { recursive: true });
+  writeFileSync(
+    join(workspace, 'emit.mjs'),
+    "const [text, code = '0'] = process.argv.slice(2);\nprocess.stdout.write(text);\nprocess.exit(Number(code));\n",
+  );
+  writeFileSync(
+    join(workspace, 'note.mjs'),
+    "import { appendFileSync } from 'node:fs';\nconst [file, line, text = ''] = process.argv.slice(2);\nappendFileSync(file, line + '\\n');\nprocess.stdout.write(text);\n",
+  );
 }
 function runtimeFor(
   t: Parameters<typeof scratch>[0],
@@ -130,9 +145,9 @@ test("a script's command gives it the exit code and what was printed, runs while
   const script =
     META('book-keeping', ['Work']) +
     `phase('Work')
-const first = await execute('printf %WORD%; exit 3')
+const first = await execute('node emit.mjs %WORD% 3')
 const working = agent('do the work')
-const second = await execute('printf two', { label: 'second', timeout: 30 })
+const second = await execute('node emit.mjs two', { label: 'second', timeout: 30 })
 log('second done')
 const worked = await working
 return { first, second, worked }
@@ -173,7 +188,7 @@ return { first, second, worked }
     ]),
     [
       // A script written in the call had the value put in with the call's other arguments
-      ['$ printf one; exit 3', true, 'done'],
+      ['$ node emit.mjs one 3', true, 'done'],
       ['do the work', false, 'running'],
       ['second', true, 'done'],
     ],
@@ -245,8 +260,8 @@ if (String(input.tool_input?.command ?? '').includes('forbidden'))
   const script =
     META('refused') +
     `const message = (call) => call.then(() => 'ran', (error) => error.message)
-const denied = await message(execute('echo forbidden > marker.txt'))
-const allowed = await execute('echo fine > allowed.txt')
+const denied = await message(execute('node note.mjs marker.txt forbidden'))
+const allowed = await execute('node note.mjs allowed.txt fine')
 const long = await message(execute('true', { timeout: 601 }))
 const empty = await message(execute('  '))
 const label = await message(execute('true', { label: 7 }))
@@ -298,8 +313,8 @@ test("a relaunch hands back a command's saved result without running it again, a
   // The relaunch runs the script from its file: a %NAME% in a command there gets its value when the command runs
   const script = (word: string) =>
     META('once') +
-    `const first = await execute('echo ran >> runs.txt; printf first')
-const second = await execute('echo ${word} >> runs.txt; printf ${word}')
+    `const first = await execute('node note.mjs runs.txt ran first')
+const second = await execute('node note.mjs runs.txt ${word} ${word}')
 return { first, second }
 `;
   let notice = '';
