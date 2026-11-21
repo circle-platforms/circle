@@ -10,12 +10,34 @@ export interface JobWakeHost {
   closed(): boolean;
   /** Starts the turn that reads the notices. */
   start(): Promise<unknown>;
+  /**
+   * Runs a turn again after one that a notice started has failed. The failed turn took the
+   * notices into the conversation before the model was asked, so nothing waits to be read:
+   * the model is asked again about the conversation as it stands.
+   */
+  again?(): Promise<unknown>;
 }
 
 // Notices that arrive within this of each other go in one turn. A turn or a card that
 // holds the conversation is looked at again this often, for as long as a notice waits.
 const SETTLE_MS = 1000;
-const MOST_WAKES_IN_A_ROW = 10;
+/**
+ * How many turns in a row finished jobs may start before the wake waits for the person. Ten
+ * stops a model that starts jobs in a loop; work that runs many jobs by design, one for each
+ * item of a long list, sets CIRCLE_JOB_WAKES to a higher number.
+ */
+export function mostWakesInARow(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const configured = Number(env.CIRCLE_JOB_WAKES);
+  return Number.isInteger(configured) && configured >= 1 ? configured : 10;
+}
+// A turn that failed (the model did not answer or its service broke off, a compaction was
+// running) is tried again after these waits. A notice that is never answered stops the work
+// the person asked for without a word, so the wake gives up, and waits for the person, only
+// after the last one. The failed turn has usually taken the notice into the conversation
+// already: the retry is owed whether or not a notice still waits.
+const RETRY_AFTER_MS = [15_000, 60_000, 240_000];
 
 /**
  * Starts a turn when a background job of one conversation ends and nothing runs, because
@@ -29,6 +51,11 @@ export class JobWake {
   private settleAt = 0;
   private wakes = 0;
   private held = false;
+  private failures = 0;
+  private retryAt = 0;
+  /** A turn a notice started has failed and has not been answered since. */
+  private owed = false;
+  private readonly most = mostWakesInARow();
   constructor(
     private readonly host: JobWakeHost,
     private readonly options: { timed: boolean } = { timed: true },
@@ -51,6 +78,9 @@ export class JobWake {
   personSent(): void {
     this.held = false;
     this.wakes = 0;
+    this.failures = 0;
+    this.retryAt = 0;
+    this.owed = false;
   }
   /** For a wake the front end ran itself, such as the last ones before leaving. */
   countWake(): void {
@@ -60,18 +90,40 @@ export class JobWake {
     if (
       this.host.closed() ||
       this.held ||
-      this.wakes >= MOST_WAKES_IN_A_ROW ||
-      !this.host.hasNotice()
+      this.wakes >= this.most ||
+      (!this.host.hasNotice() && !this.owed)
     )
       return;
-    if (Date.now() < this.settleAt || this.host.occupied()) {
+    const now = Date.now();
+    if (now < this.settleAt || now < this.retryAt || this.host.occupied()) {
       this.look();
       return;
     }
     this.wakes++;
-    void this.host.start().catch(() => {
-      this.held = true;
-    });
+    // With a notice waiting the ordinary turn reads it; without one, the turn owed is run again.
+    const turn =
+      !this.host.hasNotice() && this.host.again
+        ? this.host.again()
+        : this.host.start();
+    void turn.then(
+      () => {
+        this.failures = 0;
+        this.owed = false;
+      },
+      () => {
+        const wait = RETRY_AFTER_MS[this.failures++];
+        if (wait === undefined) {
+          this.held = true;
+          this.owed = false;
+          return;
+        }
+        // A turn that failed is not one of the turns in a row.
+        this.wakes--;
+        this.owed = true;
+        this.retryAt = Date.now() + wait;
+        this.look();
+      },
+    );
   }
   private look(): void {
     if (!this.options.timed) return;
@@ -108,7 +160,7 @@ export async function answerJobsBeforeLeaving(
   let wakes = options.wakesSoFar ?? 0;
   while (Date.now() < deadline && carryOn()) {
     if (runtime.jobs.hasNotices(runtime.session.id, true)) {
-      if (wakes >= MOST_WAKES_IN_A_ROW) return;
+      if (wakes >= mostWakesInARow()) return;
       await options.delay(SETTLE_MS);
       if (!carryOn()) return;
       wakes++;

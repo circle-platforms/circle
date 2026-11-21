@@ -330,6 +330,14 @@ function escapeReminder(text: string): string {
   return text.replace(/<(\/?system-reminder)/gi, '&lt;$1');
 }
 
+/**
+ * With how many requests left a subagent is reminded of its `maxTurns`: a fifth of them, twenty at
+ * most. A limit under ten gets no reminder: there is nothing to do differently in one or two requests.
+ */
+export function turnsLeftReminder(maxTurns: number): number {
+  return maxTurns < 10 ? 0 : Math.min(20, Math.floor(maxTurns / 5));
+}
+
 export class Harness {
   private hooksAnnounced = false;
   /** Whether this conversation's hooks have started: its SessionStart ran, or would have. */
@@ -426,6 +434,8 @@ export class Harness {
   /** Model requests made so far, counted against `maxTurns`. */
   private turnsTaken = 0;
   private turnLimitHit = false;
+  /** The subagent has been told once how many of its requests are left. */
+  private turnLimitSaid = false;
   /** The last run ended because `maxTurns` was spent, not with an answer of the model's own. */
   get stoppedAtTurnLimit(): boolean {
     return this.turnLimitHit;
@@ -1269,6 +1279,23 @@ export class Harness {
           this.flushTitle();
           return { answer, usage };
         }
+        // Told once, with a fifth of its requests left (twenty at most): what a subagent has learned
+        // and not written is lost when they are spent, and one that only read hands back nothing
+        if (this.options.maxTurns !== undefined && !this.turnLimitSaid) {
+          const left = this.options.maxTurns - this.turnsTaken;
+          if (left <= turnsLeftReminder(this.options.maxTurns)) {
+            this.turnLimitSaid = true;
+            this.save({
+              id: randomUUID(),
+              role: 'user',
+              internal: 'turn_limit',
+              content:
+                '<system-reminder data-source="turn-limit">\n' +
+                `This session can make ${left} more model ${left === 1 ? 'request' : 'requests'} of its ${this.options.maxTurns}. When they are spent it ends with what it has written to files and said by then, and anything learned and not written down is lost. Write the result the task asks for now; use the requests that remain to check and correct it.\n` +
+                '</system-reminder>',
+            });
+          }
+        }
         // The step starts here: a steerNow while the messages before are read stops it
         const stepControl = new AbortController();
         this.step = stepControl;
@@ -1975,9 +2002,18 @@ export class Harness {
   }
   // One call: checked, approved when it must be, and run. The result comes back to be stored
   // by the caller, which keeps the results in the order of the calls.
+  /**
+   * One tool call made for this conversation by something other than its model, such as a command of a workflow
+   * script: it is checked, hooked and asked about as the model's own call is. Its result is returned and not kept
+   * in the conversation, and the call is not shown in it.
+   */
+  runToolCall(call: ToolCall, signal: AbortSignal): Promise<Message> {
+    return this.runCall(call, signal, true);
+  }
   private async runCall(
     original: ToolCall,
     signal: AbortSignal,
+    quiet = false,
   ): Promise<Message> {
     const callModel = this.model;
     let call = original;
@@ -2005,7 +2041,7 @@ export class Harness {
       /* Optional metadata cannot own tool execution. */
     }
     const modelCalls: ToolModelCall[] = [];
-    this.bus.emit('tool_call', { payload: { ...call } });
+    if (!quiet) this.bus.emit('tool_call', { payload: { ...call } });
     try {
       signal.throwIfAborted();
       // The values go in once, before anything is decided: what is checked and approved is
@@ -2294,7 +2330,7 @@ export class Harness {
       signal.throwIfAborted();
       if (this.readOnlyRefuses(call, effect) && !tool.planAsks)
         throw new Error('read-only mode: this tool cannot run');
-      this.bus.emit('tool_start', { payload: { ...call } });
+      if (!quiet) this.bus.emit('tool_start', { payload: { ...call } });
       const args = resolved;
       const readOnlyCommand =
         this.approvalMode() === 'accept-edits'
@@ -2306,8 +2342,10 @@ export class Harness {
         sessionId: this.sessionId,
         identity: this.identity(),
         callId: call.id,
-        progress: (text) =>
-          this.bus.emit('tool_progress', { payload: { id: call.id, text } }),
+        progress: (text) => {
+          if (!quiet)
+            this.bus.emit('tool_progress', { payload: { id: call.id, text } });
+        },
         ...(used.size ? { rawArgs: structuredClone(raw) } : {}),
         ...(usedSecrets.length ? { secretNames: usedSecrets } : {}),
         imageInput: callModel.imageInput,

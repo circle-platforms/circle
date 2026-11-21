@@ -55,9 +55,10 @@ export async function runScript(
       undefined,
       prepared.env,
     );
-    return result.job
-      ? result.output
-      : `${result.output}\nExit code: ${result.exit_code}`;
+    if (result.job) return result.output;
+    const text = `${result.output}\nExit code: ${result.exit_code}`;
+    if (result.exit_code !== 0) throw new Error(text);
+    return text;
   }
   if (background) throw new Error('background runs are not available here');
   const result = await runTool({
@@ -66,7 +67,7 @@ export async function runScript(
     signal,
     timeoutMs: (timeout || 120) * 1000,
   });
-  return [
+  const text = [
     result.stdout,
     result.stderr ? `${result.stdout ? '\n' : ''}${result.stderr}` : '',
     result.timed_out
@@ -75,4 +76,6 @@ export async function runScript(
     result.truncated && !result.timed_out ? '\nOutput was cut.' : '',
     `\nExit code: ${result.exit_code ?? 'none'}`,
   ].join('');
+  if (result.timed_out || result.exit_code !== 0) throw new Error(text);
+  return text;
 }

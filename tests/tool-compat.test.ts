@@ -356,3 +356,74 @@ test('a pattern failure gives examples alone, only string ones, and cuts a long 
     },
   );
 });
+test('unambiguous parameter synonyms normalize before schema checks, and unexpected fields name themselves and allowed keys', async (t) => {
+  const root = scratch(t);
+  writeFileSync(join(root, 'note.txt'), 'hello\n');
+  const tools = buildTools(new Sandbox(root));
+
+  const readCall = prepareToolCall(
+    { id: 'r1', name: 'read_file', args: { path: 'note.txt' } },
+    tools,
+  );
+  assert.deepEqual(readCall.call.args, { file_path: 'note.txt' });
+
+  const editCall = prepareToolCall(
+    {
+      id: 'e1',
+      name: 'edit_file',
+      args: { path: 'note.txt', old_text: 'hello', new_text: 'world' },
+    },
+    tools,
+  );
+  assert.deepEqual(editCall.call.args, {
+    file_path: 'note.txt',
+    old_string: 'hello',
+    new_string: 'world',
+  });
+
+  const lsCall = prepareToolCall(
+    { id: 'l1', name: 'ls', args: { directory: '.' } },
+    tools,
+  );
+  assert.deepEqual(lsCall.call.args, { path: '.' });
+
+  const execCall = prepareToolCall(
+    { id: 'x1', name: 'execute', args: { cmd: 'echo hi' } },
+    tools,
+  );
+  assert.deepEqual(execCall.call.args, { command: 'echo hi' });
+
+  assert.throws(
+    () =>
+      prepareToolCall(
+        {
+          id: 'dup',
+          name: 'read_file',
+          args: { path: 'note.txt', file_path: 'note.txt' },
+        },
+        tools,
+      ),
+    /ambiguous aliases for field file_path/,
+  );
+
+  assert.throws(
+    () =>
+      prepareToolCall(
+        {
+          id: 'extra',
+          name: 'execute',
+          args: { command: 'echo hi', bogus_flag: 'secret-value-not-shown' },
+        },
+        tools,
+      ),
+    (error) => {
+      assert.ok(error instanceof RecoverableToolError);
+      assert.match(
+        error.message,
+        /<root>\.bogus_flag: unexpected property 'bogus_flag'; allowed properties: command, description, timeout, background/,
+      );
+      assert.ok(!error.message.includes('secret-value-not-shown'));
+      return true;
+    },
+  );
+});

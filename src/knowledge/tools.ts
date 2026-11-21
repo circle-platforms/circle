@@ -1,5 +1,6 @@
 import type { Tool, ToolCall, Message, PreparedRun } from '../types.js';
 import { loadToolPrompt } from '../system_prompt.js';
+import { RecoverableToolError } from '../tool_call_compat.js';
 import { KnowledgeService, type ChangeInput } from './service.js';
 import { knowledgeAsset } from '../knowledge_assets.js';
 import type { PreparedKnowledgeShare } from './sharing.js';
@@ -71,7 +72,13 @@ export function knowledgeTools(
     schema(
       {
         query: text,
-        path: text,
+        path: {
+          type: 'string',
+          pattern: '^/',
+          description:
+            "Logical folder path inside local personal knowledge (not a disk or Hub download path); defaults to '/' and must start with '/'.",
+          examples: ['/', '/notes'],
+        },
         kind: text,
         status: { enum: ['verified', 'unverified'] },
         limit: { type: 'integer', minimum: 1, maximum: 100 },
@@ -79,7 +86,25 @@ export function knowledgeTools(
       },
       ['query'],
     ),
-    async (args) => JSON.stringify(service.search(String(args.query), args)),
+    async (args) => {
+      try {
+        const result = service.search(String(args.query), args);
+        return JSON.stringify(
+          result.snapshot === null
+            ? {
+                ...result,
+                note: 'Local personal knowledge space is empty (no commits yet). Do not retry knowledge_search for workspace or Hub-downloaded files; use read_file, glob, grep, or available Hub/MCP tools instead.',
+              }
+            : result,
+        );
+      } catch (error) {
+        if (error instanceof TypeError || error instanceof RangeError)
+          throw new RecoverableToolError(
+            `${error.message}; pass a '/' logical path inside local personal knowledge (for example '/')`,
+          );
+        throw error;
+      }
+    },
   );
   const read = make(
     'knowledge_read',

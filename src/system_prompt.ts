@@ -196,6 +196,58 @@ function skillLine(skill: { name: string; description: string }): string {
       : description;
   return `- ${skill.name}: ${brief}`;
 }
+/** Where a session runs and on what: the facts every prompt gives. */
+function environmentSection(
+  workspace: string,
+  model: string,
+  protocol: string,
+): string {
+  return `<env>\n  Working directory: ${workspace}\n  Platform: ${platform()}\n  Today's date: ${new Date().toISOString().slice(0, 10)}\n  Is directory a git repo: ${currentBranch(workspace) ? 'yes' : 'no'}\n  Model: ${model}\n  Protocol: ${protocol}\n</env>`;
+}
+/** The user's variables with their values and the secrets by name, with how %NAME% is used; nothing when there are none. */
+function variablesSection(
+  given: Record<string, string> | undefined,
+  secrets: string[] | undefined,
+): string | undefined {
+  const variables = Object.entries(given ?? {});
+  if (!variables.length && !secrets?.length) return undefined;
+  return (
+    '<variables>\n' +
+    "Variables the user keeps in Circle. Write %NAME% in a tool's arguments (a command, a browser field, an MCP tool's input) and Circle puts the value in when the tool runs. Files you write keep %NAME% as text." +
+    (variables.length
+      ? '\n' +
+        variables.map(([name, value]) => `- ${name} = ${value}`).join('\n')
+      : '') +
+    (secrets?.length
+      ? `\nSecrets, which you know only by name: ${secrets.join(', ')}. Use them the same way; where a tool's output has a secret's value you read %NAME% instead, unless that value is text you or the user wrote in this conversation.`
+      : '') +
+    '\n</variables>'
+  );
+}
+/**
+ * What a subagent that keeps its own prompt (`sessionPrompt: false` in its definition) is told beside it: how paths
+ * are read, where it runs, where a command's output goes when the file tools read no /tmp, and the variables. The
+ * conversation's prompt gives these among everything else: how to talk to a person, how to work on code, the project's
+ * instructions, the skills, the servers' notes. A subagent whose definition says all it needs carried that with every
+ * request it made.
+ */
+export function ownPromptContext(
+  workspace: string,
+  model: string,
+  protocol: string,
+  catalog: Pick<PromptCatalog, 'outputFolder' | 'variables' | 'secrets'> = {},
+): string {
+  return [
+    readPrompt('circle_paths.md'),
+    environmentSection(workspace, model, protocol),
+    catalog.outputFolder
+      ? `Your file tools read only the working directory, Circle's own folders and files the user granted. Have a command write output you will read into ${catalog.outputFolder}, not /tmp, and quote that path.`
+      : undefined,
+    variablesSection(catalog.variables, catalog.secrets),
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
 export function buildSystemPrompt(
   workspace: string,
   model: string,
@@ -252,9 +304,7 @@ export function buildSystemPrompt(
     sections.push(
       'Do not call read_file to discover instruction files (AGENTS.md, CLAUDE.md, AGENTS.override.md, MEMORY.md). Any of those that exist are already included in this prompt.',
     );
-  sections.push(
-    `<env>\n  Working directory: ${workspace}\n  Platform: ${platform()}\n  Today's date: ${new Date().toISOString().slice(0, 10)}\n  Is directory a git repo: ${currentBranch(workspace) ? 'yes' : 'no'}\n  Model: ${model}\n  Protocol: ${protocol}\n</env>`,
-  );
+  sections.push(environmentSection(workspace, model, protocol));
   if (catalog.outputFolder)
     sections.push(
       `Your file tools read only the working directory, Circle's own folders and files the user granted. Have a command write output you will read into ${catalog.outputFolder}, not /tmp, and quote that path.`,
@@ -274,20 +324,8 @@ export function buildSystemPrompt(
       'Available skills:\n' +
         catalog.skills.map((skill) => skillLine(skill)).join('\n'),
     );
-  const variables = Object.entries(catalog.variables ?? {});
-  if (variables.length || catalog.secrets?.length)
-    sections.push(
-      '<variables>\n' +
-        "Variables the user keeps in Circle. Write %NAME% in a tool's arguments (a command, a browser field, an MCP tool's input) and Circle puts the value in when the tool runs. Files you write keep %NAME% as text." +
-        (variables.length
-          ? '\n' +
-            variables.map(([name, value]) => `- ${name} = ${value}`).join('\n')
-          : '') +
-        (catalog.secrets?.length
-          ? `\nSecrets, which you know only by name: ${catalog.secrets.join(', ')}. Use them the same way; where a tool's output has a secret's value you read %NAME% instead, unless that value is text you or the user wrote in this conversation.`
-          : '') +
-        '\n</variables>',
-    );
+  const variables = variablesSection(catalog.variables, catalog.secrets);
+  if (variables) sections.push(variables);
   if (catalog.extensionTools?.length)
     sections.push(
       'Extension tools:\n' +

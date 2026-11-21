@@ -8,7 +8,12 @@ import { defaultSettings } from '../src/settings.js';
 import { ScriptedModel } from '../src/testing.js';
 import { prepareToolCall } from '../src/tool_call_compat.js';
 import { buildTools } from '../src/tools.js';
-import { GREP_TRUNCATION_NOTE, readSearchableFile } from '../src/grep_tool.js';
+import {
+  GREP_LINE_CHARS,
+  GREP_TRUNCATION_NOTE,
+  matchedLine,
+  readSearchableFile,
+} from '../src/grep_tool.js';
 import { cleanup, scratch } from './helpers.js';
 
 function project(t: { after(fn: () => void): void }): string {
@@ -314,4 +319,61 @@ test('task requires subagent_type, and a call without it starts nothing', async 
   assert.equal(result.role, 'tool');
   assert.match(result.content, /subagent_type/);
   assert.match(result.content, /no work was done/);
+});
+
+test('a match in a very long line is shown as windows around the matches, with offsets read_file takes; a line of ordinary length is shown whole', async (t) => {
+  const root = realpathSync(scratch(t));
+  // A JSON file stored on one line: the whole file is one "line".
+  const cell = (n: number) =>
+    `{"id":${n},"title":"节点 ${n} needle-${n}","text":"${'填充'.repeat(400)}"}`;
+  const oneLine =
+    '[' + Array.from({ length: 7 }, (_, n) => cell(n)).join(',') + ']';
+  writeFileSync(join(root, 'subject.json'), oneLine + '\n');
+  writeFileSync(join(root, 'short.txt'), 'a needle- on a short line\n');
+  const run = grep(root);
+  const answer = await run({ pattern: 'needle-', output_mode: 'content' });
+  assert.match(answer, /short\.txt:\n {2}1: a needle- on a short line/);
+  const chars = Array.from(oneLine).length;
+  assert.match(
+    answer,
+    new RegExp(
+      `subject\\.json:\\n  1: \\[line of ${chars} characters with 7 matches, the first 5 shown; read_file with char_offset and char_limit reads more of it\\]`,
+    ),
+  );
+  const windows = [...answer.matchAll(/^ {4}char_offset (\d+): (.*)$/gm)];
+  assert.equal(windows.length, 5);
+  assert.ok(
+    answer.length < 5000,
+    `the answer is ${answer.length} characters, not the whole line`,
+  );
+  // Each offset is where read_file starts when given it: the window read there holds the match.
+  const tools = buildTools(new Sandbox(root));
+  const context = { signal: new AbortController().signal, sessionId: 'test' };
+  for (const [index, window] of windows.entries()) {
+    assert.match(window[2]!, new RegExp(`needle-${index}`));
+    const call = prepareToolCall(
+      {
+        id: 'read',
+        name: 'read_file',
+        args: {
+          file_path: 'subject.json',
+          char_offset: Number(window[1]),
+          char_limit: 600,
+        },
+      },
+      tools,
+    );
+    assert.match(
+      await call.tool.run(call.call.args, context),
+      new RegExp(`needle-${index}`),
+    );
+  }
+  assert.equal(
+    matchedLine('x'.repeat(GREP_LINE_CHARS), 'x'),
+    'x'.repeat(GREP_LINE_CHARS),
+  );
+  assert.match(
+    matchedLine('y'.repeat(GREP_LINE_CHARS) + 'needle', 'needle'),
+    /^\[line of 2006 characters with 1 match; /,
+  );
 });

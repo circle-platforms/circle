@@ -1,1 +1,1 @@
-Search local knowledge for clues; locked tasks require explicit addresses. No network or sync.
+Search local personal knowledge for clues; locked tasks require explicit addresses. Does not search workspace files, Hub-downloaded files on disk, or remote servers. Use `'/'`-prefixed logical folder paths such as `'/'` or `'/notes'`. When `snapshot` is `null`, the local space is empty—do not retry; use file tools or Hub/MCP tools instead.

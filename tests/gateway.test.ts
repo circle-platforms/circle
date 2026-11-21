@@ -296,3 +296,83 @@ test('CLI runs two real HTTP requests with a file side effect and resumes persis
   );
   assert.equal(messages.at(-1)!.content, 'next');
 });
+test('OpenAI Chat Completions folds internal reminders instead of emitting synthetic user turns', async (t) => {
+  let requestBody: Record<string, unknown> = {};
+  const base = await server(t, (_request, response, body) => {
+    requestBody = body;
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    sse(response, {
+      choices: [{ index: 0, delta: { content: 'ok' }, finish_reason: 'stop' }],
+    });
+    response.end('data: [DONE]\n\n');
+  });
+  const home = scratch(t);
+  const settings = defaultSettings();
+  settings.auth = {
+    ...settings.auth,
+    base_url: base + '/v1',
+    model: 'gateway',
+  };
+  saveCredentials({ api_key: 'test-key' }, home);
+  const model = new GatewayModel(settings, home);
+  await model.complete({
+    system: 'system',
+    messages: [
+      {
+        id: 'h0',
+        role: 'user',
+        content: '<session-hook>rules</session-hook>',
+        internal: 'hook_context',
+      },
+      { id: 'u1', role: 'user', content: 'fix bug' },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'c1', name: 'read_file', args: { file_path: 'a.ts' } },
+        ],
+      },
+      {
+        id: 't1',
+        role: 'tool',
+        tool_call_id: 'c1',
+        content: 'const x = 1;',
+      },
+      {
+        id: 'lg',
+        role: 'user',
+        content:
+          '<system-reminder data-source="loop-guard">note</system-reminder>',
+        internal: 'loop-guard',
+      },
+      {
+        id: 'pr',
+        role: 'user',
+        content:
+          '<system-reminder data-source="circle-plan">todo</system-reminder>',
+        internal: 'plan-reminder',
+      },
+      {
+        id: 'hn',
+        role: 'user',
+        content: '<hook-notice>allowed</hook-notice>',
+        internal: 'hook_notice',
+      },
+    ],
+    tools: [],
+    signal: new AbortController().signal,
+    token: () => {},
+  });
+  const sent = requestBody.messages as { role: string; content: string }[];
+  const userMessages = sent.filter((message) => message.role === 'user');
+  assert.equal(userMessages.length, 1);
+  assert.match(userMessages[0]!.content, /<session-hook>rules<\/session-hook>/);
+  assert.match(userMessages[0]!.content, /fix bug/);
+  const toolMessage = sent.find((message) => message.role === 'tool');
+  assert.ok(toolMessage);
+  assert.match(toolMessage.content, /const x = 1;/);
+  assert.match(toolMessage.content, /data-source="loop-guard"/);
+  assert.match(toolMessage.content, /data-source="circle-plan"/);
+  assert.match(toolMessage.content, /<hook-notice>allowed<\/hook-notice>/);
+});

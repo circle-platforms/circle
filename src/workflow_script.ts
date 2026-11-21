@@ -447,7 +447,10 @@ function prepare(source: string, filename: string): PreparedScript {
 
 /** What a running script tells the runtime, as it happens. */
 export interface ScriptHost {
-  /** An `agent()` call: `spec` is `{ prompt, options }` as JSON; answer it with `settle(id, …)`. */
+  /**
+   * An `agent()` call: `spec` is `{ prompt, options }` as JSON; answer it with `settle(id, …)`. An `execute()`
+   * call comes the same way, its `spec` being `{ command, options }`.
+   */
   agent(id: number, spec: string): void;
   phase(title: string): void;
   log(message: string): void;
@@ -524,6 +527,20 @@ const BOOTSTRAP = String.raw`(function (host, argsJson, fanOut, fileName) {
         (message) => reject(new Error(message)));
     });
   }
+  function execute(command, options) {
+    if (typeof command !== 'string' || !command.trim())
+      return Promise.reject(new TypeError('execute() takes the command as its first argument, a string'));
+    if (options !== undefined && (options === null || typeof options !== 'object' || Array.isArray(options)))
+      return Promise.reject(new TypeError('execute() takes its options as an object'));
+    let spec;
+    try { spec = stringify({ command, options: options === undefined ? {} : options }); }
+    catch (error) { return Promise.reject(new TypeError('execute() options must be plain data: ' + error.message)); }
+    return new Promise((resolve, reject) => {
+      call('agent', spec,
+        (json) => resolve(json === undefined ? null : parse(json)),
+        (message) => reject(new Error(message)));
+    });
+  }
   function parallel(tasks) {
     if (!Array.isArray(tasks))
       return Promise.reject(new TypeError('parallel() takes a list of functions, each starting one task'));
@@ -565,7 +582,7 @@ const BOOTSTRAP = String.raw`(function (host, argsJson, fanOut, fileName) {
   function workflow() {
     return Promise.reject(new Error('workflow() is not available in Circle yet: run the other workflow as a step of its own'));
   }
-  const api = { agent, parallel, pipeline, phase, log, workflow };
+  const api = { agent, execute, parallel, pipeline, phase, log, workflow };
   for (const [name, value] of Object.entries(api))
     Object.defineProperty(G, name, { value, writable: true, configurable: true });
   G.budget = Object.freeze({

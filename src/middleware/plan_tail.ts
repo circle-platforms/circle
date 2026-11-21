@@ -14,6 +14,7 @@ export function planTail(todos: Todo[]): string {
   const window = items.slice(start, start + 15);
   const markers = { completed: '[x]', in_progress: '[>]', pending: '[ ]' };
   return [
+    '<system-reminder data-source="circle-plan">',
     'This is a Circle automatically added reminder, not a user message. This is your current write_todos plan; privately update each step with write_todos when you finish it. Do not reply to this reminder.',
     ...(start ? [`… ${start} earlier steps`] : []),
     ...window.map((todo) => {
@@ -23,6 +24,7 @@ export function planTail(todos: Todo[]): string {
     ...(start + window.length < items.length
       ? [`… ${items.length - start - window.length} later steps`]
       : []),
+    '</system-reminder>',
   ].join('\n');
 }
 export function planReminder(

@@ -287,6 +287,110 @@ test('maxTurns stops a subagent with what it has, marked partial, after that man
   );
 });
 
+test('a subagent is told once how many requests it has left, with a fifth of its maxTurns to go', async (t) => {
+  const paths = folders(t);
+  agent(join(paths.home, 'agents'), 'reader', 'maxTurns: 10\n');
+  agent(join(paths.home, 'agents'), 'brief', 'maxTurns: 5\n');
+  const step = (n: number) =>
+    reply(`step ${n}`, [{ id: `ls${n}`, name: 'ls', args: { path: '.' } }]);
+  const model = modelByAsker({
+    go: [
+      reply('', [task('r', 'read on', 'reader')]),
+      reply('', [task('b', 'be brief', 'brief')]),
+      reply('done'),
+    ],
+    'read on': Array.from({ length: 12 }, (_, n) => step(n + 1)),
+    'be brief': Array.from({ length: 6 }, (_, n) => step(n + 1)),
+  });
+  const runtime = runtimeFor(t, paths, model);
+  runtime.policy.setYolo(runtime.session.id, true);
+  await runtime.harness.run('go');
+  const reminders = (name: string) =>
+    runtime.store
+      .messages(sessionOf(runtime, name))
+      .filter((message) => message.internal === 'turn_limit')
+      .map((message) => String(message.content));
+  assert.deepEqual(reminders('reader'), [
+    '<system-reminder data-source="turn-limit">\nThis session can make 2 more model requests of its 10. When they are spent it ends with what it has written to files and said by then, and anything learned and not written down is lost. Write the result the task asks for now; use the requests that remain to check and correct it.\n</system-reminder>',
+  ]);
+  // It is in the ninth request, the first of the two that are left, and not before
+  const asked = model.requests.filter((request) => askedBy(request, 'read on'));
+  assert.equal(asked.length, 10);
+  const told = (request: (typeof asked)[number]) =>
+    JSON.stringify(request.messages).includes('data-source=\\"turn-limit\\"');
+  assert.deepEqual(asked.map(told), [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+    true,
+  ]);
+  // A limit of a few requests gets none
+  assert.deepEqual(reminders('brief'), []);
+});
+
+test('sessionPrompt: false gives a subagent its own prompt with where it runs and the variables, and not what the conversation is told', async (t) => {
+  const paths = folders(t);
+  agent(
+    join(paths.home, 'agents'),
+    'narrow',
+    'sessionPrompt: false\n',
+    'You only count lines.',
+  );
+  agent(join(paths.home, 'agents'), 'wide', '', 'You do anything.');
+  const model = modelByAsker({
+    go: [
+      reply('', [
+        task('n', 'count the lines', 'narrow'),
+        task('w', 'do the rest', 'wide'),
+      ]),
+      reply('done'),
+    ],
+    'count the lines': [reply('three')],
+    'do the rest': [reply('finished')],
+  });
+  const runtime = runtimeFor(t, paths, model, {
+    settings: { ...defaultSettings(), variables: { REGION: 'north' } },
+  });
+  runtime.policy.setYolo(runtime.session.id, true);
+  await runtime.harness.run('go');
+  const systemOf = (key: string): string =>
+    model.requests.find((request) => askedBy(request, key))!.system;
+  const narrow = systemOf('count the lines');
+  const wide = systemOf('do the rest');
+  // Its own prompt, then the facts: how paths are read, where it runs, the variables
+  assert.ok(narrow.startsWith('You only count lines.\n'), narrow.slice(0, 80));
+  assert.match(narrow, /# Paths \(Circle\)/);
+  assert.ok(
+    narrow.includes(`<env>\n  Working directory: ${paths.workspace}\n`),
+  );
+  assert.match(
+    narrow,
+    /<variables>[\s\S]*- REGION = north[\s\S]*<\/variables>/,
+  );
+  // Nothing of what the conversation is told about talking and working, which the other subagent carries whole
+  const conversation = runtime.harness.system;
+  assert.ok(conversation.length > 4000);
+  assert.ok(wide.includes(conversation));
+  assert.ok(!narrow.includes(conversation));
+  for (const part of ['# Tone and style', '# Doing tasks'])
+    assert.ok(conversation.includes(part) && !narrow.includes(part), part);
+  assert.ok(
+    narrow.length * 3 < wide.length,
+    `${narrow.length} of ${wide.length}`,
+  );
+  // Both are still told what a subagent is told of itself, after what differs
+  assert.equal(
+    narrow.slice(narrow.lastIndexOf('</variables>') + '</variables>'.length),
+    wide.slice(wide.indexOf(conversation) + conversation.length),
+  );
+});
+
 test('the skills a definition names are in its conversation before its task, and one not installed is left out and named', async (t) => {
   const paths = folders(t);
   const skill = join(paths.home, 'skills', 'conventions');
@@ -727,4 +831,211 @@ test('a subagent started by a dontAsk subagent works in its own mode, or the con
   assert.ok(!existsSync(join(paths.workspace, 'own.md')));
   assert.ok(existsSync(join(paths.workspace, 'nested.md')));
   assert.deepEqual(asked, ['card']);
+});
+
+test('a subagent starts with the skills the one that started it has loaded, after those its definition names, and not a sibling’s', async (t) => {
+  const paths = folders(t);
+  for (const [name, text] of [
+    ['workflow', 'Follow workflow checklist.'],
+    ['extra', 'Verify edge cases before reporting.'],
+    ['child-only', 'Internal child guideline.'],
+  ] as const) {
+    const dir = join(paths.home, 'skills', name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: Skill ${name}\n---\n${text}\n`,
+    );
+  }
+  agent(join(paths.home, 'agents'), 'checker', 'skills:\n  - extra\n');
+  const model = modelByAsker({
+    go: [
+      reply('', [{ id: 'load-wf', name: 'skill', args: { name: 'workflow' } }]),
+      reply('', [task('t1', 'first child task', 'checker')]),
+      reply('', [task('t2', 'second sibling task', 'explore')]),
+      reply('done'),
+    ],
+    'first child task': [
+      reply('', [
+        { id: 'load-co', name: 'skill', args: { name: 'child-only' } },
+      ]),
+      reply('', [task('g1', 'grandchild task', 'explore')]),
+      reply('first done'),
+    ],
+    'grandchild task': [reply('grandchild done')],
+    'second sibling task': [reply('second done')],
+  });
+  const runtime = runtimeFor(t, paths, model);
+  await runtime.harness.run('go');
+  const usersOf = (key: string): string[] =>
+    model.requests
+      .find((request) => askedBy(request, key))!
+      .messages.filter((message) => message.role === 'user')
+      .map((message) => message.content);
+  const has = (users: string[], text: string): boolean =>
+    users.some((item) => item.includes(text));
+  const first = usersOf('first child task');
+  assert.ok(has(first, 'Follow workflow checklist.'), 'the loaded skill');
+  assert.ok(has(first, 'Verify edge cases before reporting.'), 'its own');
+  assert.ok(
+    first.findIndex((item) => item.includes('Verify edge cases')) <
+      first.findIndex((item) => item.includes('Follow workflow checklist.')),
+    'the definition names come first',
+  );
+  assert.ok(
+    first.findIndex((item) => item.includes('Follow workflow checklist.')) <
+      first.indexOf('first child task'),
+    'before its task',
+  );
+  const grandchild = usersOf('grandchild task');
+  for (const text of [
+    'Follow workflow checklist.',
+    'Verify edge cases before reporting.',
+    'Internal child guideline.',
+  ])
+    assert.ok(has(grandchild, text), `a subagent's subagent has: ${text}`);
+  const second = usersOf('second sibling task');
+  assert.ok(has(second, 'Follow workflow checklist.'), 'the loaded skill');
+  assert.ok(!has(second, 'Internal child guideline.'), 'not a sibling’s');
+  assert.ok(!has(second, 'Verify edge cases before reporting.'), 'not theirs');
+});
+
+test('a skill loaded before a resume still reaches a subagent after another is loaded', async (t) => {
+  const paths = folders(t);
+  for (const [name, text] of [
+    ['early', 'Follow the early checklist.'],
+    ['late', 'Follow the late checklist.'],
+  ] as const) {
+    const dir = join(paths.home, 'skills', name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: Skill ${name}\n---\n${text}\n`,
+    );
+  }
+  const before = new AgentRuntime({
+    home: paths.home,
+    workspace: paths.workspace,
+    userHome: paths.userHome,
+    settings: defaultSettings(),
+    model: modelByAsker({
+      go: [
+        reply('', [
+          { id: 'load-early', name: 'skill', args: { name: 'early' } },
+        ]),
+        reply('loaded'),
+      ],
+    }),
+  });
+  await before.harness.run('go');
+  const earlier = before.session.id;
+  await before.close();
+  const model = modelByAsker({
+    again: [
+      reply('', [{ id: 'load-late', name: 'skill', args: { name: 'late' } }]),
+      reply('', [task('t', 'child after resume', 'explore')]),
+      reply('done'),
+    ],
+    'child after resume': [reply('ok')],
+  });
+  const runtime = runtimeFor(t, paths, model);
+  await runtime.switchSession(earlier);
+  await runtime.harness.run('again');
+  const users = model.requests
+    .find((request) => askedBy(request, 'child after resume'))!
+    .messages.filter((message) => message.role === 'user')
+    .map((message) => message.content);
+  for (const text of [
+    'Follow the early checklist.',
+    'Follow the late checklist.',
+  ])
+    assert.ok(
+      users.some((item) => item.includes(text)),
+      text,
+    );
+});
+
+test('subagents receive active plan file path, deny rules, and guard hook boundaries while bare runs omit them', async (t) => {
+  const barePaths = folders(t);
+  const bareModel = modelByAsker({
+    go: [reply('', [task('b', 'bare look', 'explore')]), reply('done')],
+    'bare look': [reply('ok')],
+  });
+  const bareRuntime = runtimeFor(t, barePaths, bareModel);
+  await bareRuntime.harness.run('go');
+  const bareSystem = bareModel.requests.find((request) =>
+    askedBy(request, 'bare look'),
+  )!.system;
+  assert.ok(
+    !bareSystem.includes('<subagent_context>'),
+    'bare general workspace should not emit subagent_context',
+  );
+
+  const guardedPaths = folders(t);
+  mkdirSync(join(guardedPaths.workspace, '.circle'), { recursive: true });
+  writeFileSync(
+    join(guardedPaths.workspace, '.circle', 'approvals.json'),
+    JSON.stringify({
+      rules: [
+        {
+          tool: 'execute',
+          pattern: 'git push *',
+          effect: 'deny',
+          label: 'no push',
+        },
+        {
+          tool: 'write_file',
+          pattern: '.env*',
+          effect: 'deny',
+        },
+      ],
+    }),
+  );
+  const hookScriptPath = join(guardedPaths.root, 'guard-secret-hook-name.mjs');
+  writeFileSync(hookScriptPath, 'process.exit(0);\n');
+  writeFileSync(
+    join(guardedPaths.home, 'settings.json'),
+    JSON.stringify({
+      hooks: {
+        PreToolUse: [
+          {
+            matcher: 'execute',
+            hooks: [
+              {
+                type: 'command',
+                command: `${process.execPath} ${hookScriptPath}`,
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  );
+  const guardedModel = modelByAsker({
+    go: [
+      reply('', [task('g', 'guarded work', 'general-purpose')]),
+      reply('done'),
+    ],
+    'guarded work': [reply('ok')],
+  });
+  const guardedRuntime = runtimeFor(t, guardedPaths, guardedModel);
+  guardedRuntime.harness.planMode = true;
+  const planPath = guardedRuntime.planFile.file;
+  await guardedRuntime.harness.run('go');
+  const guardedSystem = guardedModel.requests.find((request) =>
+    askedBy(request, 'guarded work'),
+  )!.system;
+  assert.match(guardedSystem, /<subagent_context>/);
+  assert.ok(
+    guardedSystem.includes(planPath),
+    'subagent sees active session plan file path',
+  );
+  assert.match(guardedSystem, /git push \*/);
+  assert.match(guardedSystem, /\.env\*/);
+  assert.match(guardedSystem, /PreToolUse guard active for matcher "execute"/);
+  assert.ok(
+    !guardedSystem.includes('guard-secret-hook-name.mjs'),
+    'guard hook summary must not expose raw hook command path',
+  );
+  assert.match(guardedSystem, /Read-only constraint:/);
 });

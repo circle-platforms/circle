@@ -1859,7 +1859,9 @@ function runMeta(run: WorkflowRunView): string {
     ? `running · ${workflowSummary(run)} · ${took(run.started)}`
     : [
         run.status,
-        `${run.agents.length} ${run.agents.length === 1 ? 'agent' : 'agents'}`,
+        ((count) => `${count} ${count === 1 ? 'agent' : 'agents'}`)(
+          run.agents.filter((agent) => !agent.command).length,
+        ),
         took(run.started, run.ended ?? run.started),
       ].join(' · ');
 }
@@ -1911,7 +1913,13 @@ function runRows(run: WorkflowRunView, only?: string): PickerItem[] {
   ].filter((title, index, all) => all.indexOf(title) === index);
   for (const title of titles) {
     if (only !== undefined && title !== only) continue;
-    const agents = run.agents.filter((agent) => agent.phase === title);
+    // A script's commands are its own bookkeeping: one is listed while it runs, or when it could not run
+    const agents = run.agents.filter(
+      (agent) =>
+        agent.phase === title &&
+        (!agent.command ||
+          ['running', 'queued', 'failed'].includes(agent.state)),
+    );
     const counts = (
       ['running', 'queued', 'done', 'cached', 'failed', 'stopped'] as const
     )

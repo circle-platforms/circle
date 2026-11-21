@@ -44,6 +44,16 @@ export async function runRpc(
         .finally(() => send({ type: 'agent_settled' }));
       return run;
     },
+    again: () => {
+      const run = runtime.runJobNoticesAgain();
+      running = run
+        .then(
+          () => {},
+          () => {},
+        )
+        .finally(() => send({ type: 'agent_settled' }));
+      return run;
+    },
   });
   const off = runtime.bus.subscribe((event) => {
     if (event.kind === 'job_ended') wake.jobEnded();
