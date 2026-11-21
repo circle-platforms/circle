@@ -7,6 +7,7 @@ import {
   type ScreenState,
 } from '../src/tui/render.js';
 import { jobRows } from '../src/tui/strip_rows.js';
+import { detailRows, taskSummaryRows } from '../src/tui/agent_rows.js';
 import { formatTokens } from '../src/tui/status_rows.js';
 import type { SubagentView } from '../src/tui/subagents.js';
 import { AgentRuntime } from '../src/runtime.js';
@@ -29,6 +30,7 @@ import {
   type ModelResponse,
 } from '../src/types.js';
 import type { Job } from '../src/jobs.js';
+import type { EventKind } from '../src/events.js';
 import { cleanup, scratch, until } from './helpers.js';
 
 const reply = (
@@ -182,6 +184,7 @@ async function subagents(t: Parameters<typeof scratch>[0], tasks: string[]) {
     app,
     ui,
     runtime,
+    model,
     turn,
     frame,
     running,
@@ -189,6 +192,8 @@ async function subagents(t: Parameters<typeof scratch>[0], tasks: string[]) {
     key,
     release,
     paints: () => paints,
+    /** The frame last drawn, without drawing another. */
+    rows: () => rendered,
   };
 }
 
@@ -381,6 +386,22 @@ test('the wheel over a strip with folded subagents moves the strip and leaves th
   s.frame();
   assert.equal(s.app.state.stripStart, undefined);
   assert.ok(s.app.state.stripAgents!.ids.includes(s.app.state.selectedAgent!));
+});
+
+test('two wheel reports over the strip in one burst move it two rows', async (t) => {
+  const s = await subagents(
+    t,
+    Array.from({ length: 8 }, (_, index) => `task ${index}`),
+  );
+  await until(() => s.running() === 8);
+  s.frame();
+  const strip = s.app.state.stripAgents!;
+  assert.equal(strip.scrollable, true);
+  const first = strip.ids;
+  const down = `\x1b[<65;11;${strip.row + 3}M`;
+  s.ui.dataListener(down + down);
+  assert.equal(s.app.state.scroll, 0);
+  assert.deepEqual(s.app.state.stripAgents!.ids.slice(0, -2), first.slice(2));
 });
 
 test("a subagent's card names it, and its record keeps esc and ← → while the card waits", async (t) => {
@@ -599,5 +620,310 @@ test('a row whose marker is a lamp keeps its tint after the lamp', () => {
   assert.ok(
     after.slice(p.reset.length).startsWith(p.write_bg.slice(0, -1)),
     JSON.stringify(after),
+  );
+});
+
+test('background subagent job shows live thinking summary and retains lastStep across rounds', async (t) => {
+  const root = scratch(t);
+  let seenThinking: string | undefined;
+  let seenRetained: string | undefined;
+  let releaseRound2!: () => void;
+  const round2Hold = new Promise<void>((resolve) => {
+    releaseRound2 = resolve;
+  });
+  let runtime!: AgentRuntime;
+  const route = async (request: ModelRequest): Promise<ModelResponse> => {
+    const first = String(
+      request.messages.find((m) => m.role === 'user')?.content,
+    );
+    const last = request.messages.at(-1)!;
+    if (first === 'go')
+      return last.role === 'tool'
+        ? reply('Started.')
+        : reply('', [
+            {
+              id: 'bg',
+              name: 'task',
+              args: {
+                description: 'background compile',
+                subagent_type: 'general-purpose',
+                background: true,
+              },
+            },
+          ]);
+    if (last.role === 'user') {
+      request.token('**Drafting ', true);
+      request.token('plan**', true);
+      seenThinking = runtime.jobs.list()[0]?.detail;
+      return reply('', [
+        {
+          id: 'w1',
+          name: 'write_file',
+          args: { file_path: 'notes/a.md', content: 'hello' },
+        },
+      ]);
+    }
+    seenRetained = runtime.jobs.list()[0]?.detail;
+    await round2Hold;
+    return reply('finished bg');
+  };
+  const model = new ScriptedModel(Array.from({ length: 10 }, () => route));
+  runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: trustFolder(defaultSettings(), root),
+    model,
+    approve: async () => 'approve',
+  });
+  cleanup(t, async () => {
+    releaseRound2();
+    await runtime.close();
+  });
+  await runtime.harness.run('go');
+  await until(() => seenRetained !== undefined);
+  assert.equal(seenThinking, 'Drafting plan');
+  assert.equal(seenRetained, 'Write(notes/a.md)');
+  const [row] = jobRows(runtime.jobs.list(), { width: 120 }).map(stripAnsi);
+  assert.match(row!, /Write\(notes\/a\.md\)/);
+  releaseRound2();
+  await until(() => runtime.jobs.list()[0]?.status === 'done');
+});
+
+test('open subagent detail page renders live thinking while main transcript Agent summary stays unchanged', async (t) => {
+  bigScreen(t);
+  const root = scratch(t);
+  const settings = trustFolder(defaultSettings(), root);
+  let entered!: () => void;
+  const streamingNow = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const model = new ScriptedModel([
+    reply('', [
+      {
+        id: 't-live',
+        name: 'task',
+        args: {
+          description: 'inspect manual',
+          subagent_type: 'general-purpose',
+        },
+      },
+    ]),
+    async (request) => {
+      request.token('First thought sentence.\nSecond thought sentence.', true);
+      request.token('Draft reply line');
+      entered();
+      await hold;
+      return reply('done');
+    },
+    reply('Parent done'),
+  ]);
+  const app = new SessionApp(root, root, settings);
+  const ui = app as any;
+  let rendered: string[] = [];
+  ui.screen.render = (rows: string[]) => {
+    rendered = rows;
+  };
+  await app.attach({
+    workspace: root,
+    home: root,
+    settings,
+    model,
+    headless: true,
+  });
+  cleanup(t, async () => {
+    release();
+    ui.off?.();
+    if (ui.flashTimer) clearTimeout(ui.flashTimer);
+    if (ui.renderTimer) clearTimeout(ui.renderTimer);
+    ui.input.close();
+    await app.runtime!.close();
+  });
+  const turn = app.runtime!.harness.run('go');
+  await streamingNow;
+  ui.repaint();
+  await until(() => Boolean(app.state.subagents?.length));
+  const child = app.state.subagents![0]!;
+  // Main transcript Agent(...) folded summary stays unchanged (meta line only, no live thinking row).
+  const folded = taskSummaryRows(child, { width: 100, expanded: false }).map(
+    stripAnsi,
+  );
+  assert.equal(folded.length, 1);
+  assert.doesNotMatch(folded[0]!, /Thinking|Second thought/);
+
+  // Opening the subagent detail page shows live thinking and streaming reply before llm_end.
+  ui.agents.open(child.id);
+  ui.repaint();
+  const detail = rendered.map(stripAnsi);
+  assert.ok(
+    detail.some((line) =>
+      line.includes('⎿ ∴ Thinking · Second thought sentence. · 48 chars'),
+    ),
+    detail.join('\n'),
+  );
+  assert.ok(
+    detail.some((line) => line.includes('● Draft reply line')),
+    detail.join('\n'),
+  );
+
+  // Expanding thinking (ctrl+t) renders the live thinking body on the detail page.
+  const expanded = detailRows(app.state.agentDetail!, {
+    width: 100,
+    expanded: true,
+  }).map(stripAnsi);
+  assert.ok(
+    expanded.some((line) => line.includes('First thought sentence.')),
+    expanded.join('\n'),
+  );
+  release();
+  await turn;
+});
+
+// One subagent that has asked the model and waits there: from here on only the test
+// sends its events, on the runtime's own bus, as the runtime forwards them.
+async function heldSubagent(t: Parameters<typeof scratch>[0]) {
+  const s = await subagents(t, ['task a']);
+  await until(() => s.model.requests.length === 2 && s.running() === 1);
+  s.frame();
+  const id = s.app.state.subagents![0]!.id;
+  const emit = (kind: EventKind, payload: Record<string, unknown> = {}) =>
+    s.runtime.bus.emit(kind, {
+      payload,
+      tags: { subagent: id, name: 'general-purpose' },
+    });
+  const stripRow = (): string =>
+    stripAnsi(s.rows()[s.app.state.stripAgents!.row]!);
+  return { ...s, id, emit, stripRow };
+}
+
+test("a subagent's tokens and progress draw nothing while nothing shown changes", async (t) => {
+  const s = await heldSubagent(t);
+  s.emit('llm_token', { text: '**Reading the notes**\n', thinking: true });
+  s.frame();
+  assert.match(s.stripRow(), /Reading the notes/);
+  const version = s.ui.activityVersion;
+  const paints = s.paints();
+  let stats = 0;
+  const stat = s.runtime.stats.bind(s.runtime);
+  s.runtime.stats = () => {
+    stats++;
+    return stat();
+  };
+  for (let i = 0; i < 100; i++) {
+    s.emit('llm_token', { text: `looking at part ${i} `, thinking: true });
+    s.emit('llm_token', { text: `answer ${i} ` });
+    s.emit('tool_progress', { id: 'call', text: `${i} of 100` });
+  }
+  assert.equal(s.ui.renderQueued, false, 'no frame was asked for');
+  assert.equal(s.paints(), paints);
+  assert.equal(stats, 0);
+  assert.equal(s.ui.activityVersion, version, 'the rows were not rebuilt');
+  // what they carried is kept, for the page when it opens
+  const kept = s.ui.agentActivity.get(s.id);
+  assert.equal(kept.activity, 'Reading the notes');
+  assert.match(kept.tracker.thinking, /looking at part 99 $/);
+  assert.match(kept.streaming, /answer 99 $/);
+  s.ui.agents.open(s.id);
+  const page = s.frame().map(stripAnsi);
+  assert.ok(
+    page.some((row) => row.includes('answer 99')),
+    page.join('\n'),
+  );
+});
+
+test('a new thinking heading or an open page still draws', async (t) => {
+  const s = await heldSubagent(t);
+  s.emit('llm_token', {
+    text: '**Reading the notes**\nfirst ',
+    thinking: true,
+  });
+  s.frame();
+  const before = s.paints();
+  s.emit('llm_token', { text: '\n**Writing the ', thinking: true });
+  assert.equal(s.ui.renderQueued, false, 'a heading not yet closed');
+  s.emit('llm_token', { text: 'answer**', thinking: true });
+  assert.equal(s.ui.renderQueued, true);
+  assert.equal(s.paints(), before, 'drawn with the next frame, not now');
+  await until(() => s.paints() > before);
+  assert.match(s.stripRow(), /Writing the answer/);
+  // with its page open, every token is on screen
+  s.ui.agents.open(s.id);
+  s.frame();
+  const version = s.ui.activityVersion;
+  s.emit('llm_token', { text: 'Draft reply line' });
+  assert.equal(s.ui.activityVersion, version + 1);
+  assert.equal(s.ui.renderQueued, true);
+  const shown = s.paints();
+  await until(() => s.paints() > shown);
+  assert.ok(
+    s.rows().some((row) => stripAnsi(row).includes('● Draft reply line')),
+    s.rows().map(stripAnsi).join('\n'),
+  );
+});
+
+test('its next step updates the strip on the next frame', async (t) => {
+  const s = await heldSubagent(t);
+  const before = s.paints();
+  s.emit('tool_start', {
+    id: 'read-b',
+    name: 'read_file',
+    args: { file_path: 'notes/b.md' },
+  });
+  assert.equal(s.ui.agentActivity.get(s.id).activity, 'Read(notes/b.md)');
+  assert.equal(s.paints(), before, 'not drawn at once');
+  assert.equal(s.ui.renderQueued, true);
+  await until(() => s.paints() > before);
+  assert.match(s.stripRow(), /Read\(notes\/b\.md\)/);
+});
+
+test('an unchanged step does not rebuild the list', async (t) => {
+  const s = await heldSubagent(t);
+  const version = s.ui.activityVersion;
+  const step = {
+    id: 'read-b',
+    name: 'read_file',
+    args: { file_path: 'notes/b.md' },
+  };
+  s.emit('tool_start', step);
+  s.frame();
+  s.emit('tool_start', step);
+  assert.equal(s.ui.activityVersion, version + 1);
+  let children = 0;
+  const list = s.runtime.store.children.bind(s.runtime.store);
+  s.runtime.store.children = (parent: string) => {
+    children++;
+    return list(parent);
+  };
+  s.frame();
+  assert.equal(children, 0);
+  assert.match(s.stripRow(), /Read\(notes\/b\.md\)/);
+});
+
+test('a background job update draws on the next frame', async (t) => {
+  const s = await heldSubagent(t);
+  let log: ((text: string) => void) | undefined;
+  s.runtime.jobs.startCall(
+    'fetch the pages',
+    { sessionId: s.runtime.session.id, startedBy: 'model' },
+    (signal, report) => {
+      log = report;
+      return new Promise((resolve) =>
+        signal.addEventListener('abort', () => resolve('stopped')),
+      );
+    },
+  );
+  await until(() => log !== undefined);
+  s.frame();
+  const before = s.paints();
+  log!('page 2 of 3');
+  assert.equal(s.paints(), before, 'not drawn at once');
+  assert.equal(s.ui.renderQueued, true);
+  await until(() => s.paints() > before);
+  assert.ok(
+    s.rows().some((row) => stripAnsi(row).includes('page 2 of 3')),
+    s.rows().map(stripAnsi).join('\n'),
   );
 });

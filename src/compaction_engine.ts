@@ -177,20 +177,52 @@ export class CompactionEngine {
     private options: ContextOptions,
   ) {}
 
+  // Finished operations change only with a write to their session, here or by another
+  // connection; a repaint asks for them on every frame. One running here or elsewhere
+  // changes without a write (its live progress, its receipts, whether its owner left),
+  // so a session with one is read every time. The most recently read 64 are kept.
+  private recorded = new Map<
+    string,
+    { stamp: string; records: CompactionSnapshot[] }
+  >();
   records(sessionId: string): CompactionSnapshot[] {
     const live = this.active.get(sessionId)?.operation.snapshot;
-    return this.store.compactions
-      .operations(sessionId, this.store.ancestorIds(sessionId))
-      .map(({ snapshot }) => {
-        if (snapshot.operationId === live?.operationId)
-          return structuredClone(live);
-        if (snapshot.status === 'running')
-          return this.store.compactions.snapshot(
-            snapshot,
-            !this.options.readOnly?.(),
-          );
-        return snapshot;
+    const stamp = this.store.sessionStamp(sessionId);
+    const known = this.recorded.get(sessionId);
+    if (!live && known?.stamp === stamp) {
+      this.recorded.delete(sessionId);
+      this.recorded.set(sessionId, known);
+      return structuredClone(known.records);
+    }
+    const operations = this.store.compactions.operations(
+      sessionId,
+      this.store.ancestorIds(sessionId),
+    );
+    const records = operations.map(({ snapshot }) => {
+      if (snapshot.operationId === live?.operationId)
+        return structuredClone(live);
+      if (snapshot.status === 'running')
+        return this.store.compactions.snapshot(
+          snapshot,
+          !this.options.readOnly?.(),
+        );
+      return snapshot;
+    });
+    if (
+      live ||
+      operations.some(({ snapshot }) => snapshot.status === 'running')
+    )
+      this.recorded.delete(sessionId);
+    else {
+      this.recorded.delete(sessionId);
+      this.recorded.set(sessionId, {
+        stamp,
+        records: structuredClone(records),
       });
+      if (this.recorded.size > 64)
+        this.recorded.delete(this.recorded.keys().next().value!);
+    }
+    return records;
   }
   snapshot(sessionId: string): CompactionSnapshot | undefined {
     const live = this.active.get(sessionId)?.operation.snapshot;

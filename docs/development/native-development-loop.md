@@ -67,3 +67,51 @@ npm --prefix apps/desktop run test:performance
 ```
 
 The native journey writes evidence to `apps/desktop/artifacts/native-developer-journey/` by default; `CIRCLE_NATIVE_JOURNEY_EVIDENCE` chooses another output directory. To exercise a packaged candidate, set `CIRCLE_DESKTOP_EXECUTABLE` to its actual executable and `CIRCLE_DESKTOP_APP_PATH` to its packaged application directory before running the same journey. The `Desktop workbench` workflow has path filters for pull requests and pushes to main. Its pull-request jobs run the development journey, `test:desktop` and `test:live` in the development application, and package it and run `test:update` on the package; its non-pull-request jobs also run the packaged journey, `test:desktop` and `test:live` in the packaged application for their configured native targets. Evidence must identify the tested candidate. A development build, a storage microbenchmark or a scripted GitHub adapter does not establish packaged-platform performance or live hosted PR/CI acceptance. Remaining limits are recorded in [Known issues](../known-issues.md#desktop-application).
+
+The publication benchmarks run from the repository root on a scratch home and a scripted model. `benchmark-publish.ts` runs in Node; `benchmark-publish-native.mjs` runs Electron and needs `npm --prefix apps/desktop run build` first. Both take `--sessions` (stored sessions, default 10), `--messages` (messages in each, 300), `--publishes` (idle publications to time, 20) and `--tool-calls` (tool calls of the measured turn, 10); the native one also takes `--profile <file>` for the renderer's CPU profile and `--app <folder>` for another build of `apps/desktop`.
+
+```sh
+node --import tsx apps/desktop/scripts/benchmark-publish.ts --sessions 40 --messages 1000
+node --import tsx apps/desktop/scripts/benchmark-publish.ts --subagents 8 --subagent-steps 20 --children 60
+```
+
+With `--subagents N` the Node benchmark then runs a turn that starts N subagents at once. Each makes `--subagent-steps` tool calls (default 10) before its report and streams `--subagent-tokens` tokens in each model call (default 20). `--children N` first stores N finished subagents of the open session, with `--child-messages` messages each (default 40). For that turn it reports the publications by event, the time each took in the runtime (mean and p95), how often `snapshot()` and `AgentRuntime.stats()` ran, and what the main process's buffer did with each token delta; a delta it could not apply is a resync, a state request the windows wait for.
+
+## Native performance suite
+
+`npm --prefix apps/desktop run test:performance` (`apps/desktop/test/native-performance.mjs`) times a developer's actions in the real development application while it carries load: a stored conversation of 10,000 messages, eight scripted agents streaming as background tasks, and a shell in the terminal mode that prints a line every 50 ms. A sample runs from a trusted input event to the second animation frame that shows its result: the message box's text and send button, the terminal mode open or closed, the conversation with its title, the file in the files mode, the editor saying the change is saved. A terminal line is timed from the moment the program that printed it wrote it. The suite then checks the effects behind them: the stored draft and its pasted text, the reading position, the file on disk, the terminal's own record of its output. It first sizes the window to 1400 by 900 CSS pixels, less in height when the display has no room for that, so that the modes open beside the conversation; in a window 1050 pixels wide or narrower a mode lies over the conversation and its message box, and a CI runner's 1024 by 768 screen would otherwise give it such a window. `report.json` records the size under `viewport`.
+
+| Metric           | What is timed                                                                      | Samples    | p95 budget |
+| ---------------- | ---------------------------------------------------------------------------------- | ---------- | ---------- |
+| `inputKeystroke` | a key in the message box                                                           | 40         | 100 ms     |
+| `inputPaste`     | a system-clipboard paste of 600 lines                                              | 20         | 100 ms     |
+| `inputClear`     | deleting the selected draft                                                        | 20         | 100 ms     |
+| `click`          | the terminal mode's button, closing and opening                                    | 40         | 100 ms     |
+| `eventToFrame`   | a terminal line, from the program that printed it to the xterm frame that shows it | 20 or more | 200 ms     |
+| `sessionSwitch`  | a conversation chosen in search                                                    | 24         | 300 ms     |
+| `fileSwitch`     | a file link in the conversation                                                    | 24         | 300 ms     |
+| `save`           | saving the file in the editor                                                      | 24         | 500 ms     |
+
+The suite starts only with a manifest of the build it is about to run, and checks the main, preload, worker and renderer files the window loaded against it. From the repository root, record the source before the build and the manifest after it:
+
+```sh
+perf=$(mktemp -d)
+node apps/desktop/scripts/native-build-manifest.mjs capture --root "$PWD" --output "$perf/source-receipt.json"
+npm --prefix apps/desktop run build
+node apps/desktop/scripts/native-build-manifest.mjs create --root "$PWD" --receipt "$perf/source-receipt.json" --app apps/desktop --output "$perf/build-manifest.json"
+CIRCLE_NATIVE_PERF_BUILD_MANIFEST="$perf/build-manifest.json" npm --prefix apps/desktop run test:performance
+```
+
+`capture` refuses a tree with uncommitted changes; pass `--allow-working-tree` to both `capture` and `create` to record each file's hash instead of a commit. A build input changed between the two makes `create` fail. A change to the tests alone needs no new manifest.
+
+The suite makes its own workspace, Circle home and data folder in a temporary folder and never opens the real ones. It brings a window to the front and types into it, so leave the keyboard and mouse alone while it runs (about a minute on an Apple M4). It uses the system clipboard: it saves every format before the first paste and puts them back at the end, comparing each byte. When they do not compare, it reports the clipboard as not restored, keeps the application open and waits; creating `retry-clipboard` in the attempt's folder tries again. A file copied in Finder does not come back exactly ([Known issues](../known-issues.md#desktop-application)): copy some text before a run.
+
+Each run writes a folder `attempt-<time>-<id>` under `CIRCLE_NATIVE_PERF_OUTPUT`, or under `evidence` in the suite's temporary folder; the summary it prints at the end names it. `report.json` has every sample, each metric's p95 against its budget, the checks that held, the hashes of the build that ran and any failure; `samples-before-cleanup.json` has the samples alone, and `initial-transcript.png`, `native-performance.png` or `failure.png` show the window. `CIRCLE_NATIVE_PERF_DIAGNOSTICS=1` adds main, renderer and worker timing in `stage-diagnostics.json`, and `CIRCLE_NATIVE_PERF_CPU_PROFILE=1` a renderer profile in `renderer.cpuprofile` and the reading position in `reading-trace.json`.
+
+A run fails when it does not finish, when an effect it waits for does not happen, when the window throws an error, when the stored conversation shows no message on opening, or when the clipboard is not restored. A metric whose p95 is over its budget fails the run too, unless `CIRCLE_NATIVE_PERF_BUDGETS=report` is set: then it is reported and the exit status is left to the other checks.
+
+### In CI
+
+On pushes to main, the `Desktop workbench` workflow's Apple silicon job (`darwin-arm64`) records the manifest around its development build and runs the suite in the development application after its other checks, with `CIRCLE_NATIVE_PERF_BUDGETS=report`. There the budgets are reported, not enforced. A GitHub runner is a shared virtual machine, and how long a key takes on it depends as much on what else the host runs as on the change, so a fixed threshold would fail commits at random ([rule 2 of Writing reliable tests](testing.md)). Everything else still fails the job: an effect that does not happen, an unfinished run, an error in the window.
+
+The numbers are in three places: the job's summary has a table of each metric's samples, p95, budget and result; each metric over its budget adds a warning annotation to the run; and the job's `circle-desktop-darwin-arm64-native` artifact holds the evidence under `apps/desktop/artifacts/native-performance/`, with the source receipt and build manifest beside it. A latency claim needs a local run with the budgets enforced.

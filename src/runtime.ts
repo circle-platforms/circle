@@ -25,7 +25,11 @@ import type { ChatModel, Message, PreparedRun, ToolCall } from './types.js';
 import { GatewayModel, EFFORT_LEVELS, defaultEffort } from './model.js';
 import { WebSearchService } from './websearch_service.js';
 import type { NativeSearchConnection } from './native_websearch.js';
-import { CheckpointStore, type Session } from './checkpoint_store.js';
+import {
+  CheckpointStore,
+  type ContextState,
+  type Session,
+} from './checkpoint_store.js';
 import { requestBudget, resolveBudget, contentHash } from './request_budget.js';
 import {
   occupiedSessionMessage,
@@ -183,7 +187,10 @@ import {
 } from './vision.js';
 import { saveMediaAttachment } from './media.js';
 import { UserShells } from './user_shell.js';
-import { toolCallLine } from './headless.js';
+import {
+  stepAgentActivity,
+  type AgentActivityState,
+} from './session_activity.js';
 import { canScreenshot, type ScreenshotOptions } from './screenshot.js';
 import { titleNeedsRefresh, userPrompts } from './session_title.js';
 import { migrateHookFiles } from './hook_migration.js';
@@ -503,6 +510,22 @@ interface CustomSubagent {
   path?: string;
   /** What its file says beyond the spec; absent for an extension's. */
   file?: SubagentFileInfo;
+}
+/** The footer's totals: the session's messages, its subagents' and every summary's. */
+export interface RuntimeStats {
+  messages: number;
+  toolCalls: number;
+  usage: import('./types.js').Usage;
+  costs: CostSummary;
+}
+/** What one session (the conversation or a subagent) adds to the totals, as read at `stamp`. */
+interface SessionStats {
+  stamp: string;
+  exists: boolean;
+  children?: string[];
+  receipts: { usage?: import('./types.js').Usage; cost?: unknown }[];
+  messages: Message[];
+  calls: { usage: import('./types.js').Usage; cost?: unknown }[];
 }
 /** A built-in subagent's own prompt. A missing file is an error that names it, never another agent's prompt (#547). */
 export function builtinSubagentPrompt(
@@ -1476,6 +1499,18 @@ export class AgentRuntime {
       const childBus = new EventBus(session.id);
       let backgroundJob: Job | undefined;
       let backgroundLog: ((text: string) => void) | undefined;
+      let jobActivity: AgentActivityState | undefined;
+      let lastJobDetail: string | undefined;
+      const redactDetail = (text: string): string =>
+        this.redact(text, {}, () => written(this.store.messages(session.id)));
+      const updateJobDetail = (detail: string): void => {
+        if (!backgroundJob) return;
+        const clean = redactDetail(detail);
+        if (clean !== lastJobDetail) {
+          lastJobDetail = clean;
+          this.jobs.activity(backgroundJob.id, clean);
+        }
+      };
       // The job a card waits under: its own, the one of the background subagent it works under, or its workflow's
       const jobOf = (): string | undefined =>
         launch?.jobId ?? backgroundJob?.id ?? spawner?.job();
@@ -1492,15 +1527,26 @@ export class AgentRuntime {
         const jobId = jobOf();
         // what the job said it was doing comes back once the answer is in
         const before = jobId ? this.jobs.get(jobId)?.detail : undefined;
-        if (jobId) this.jobs.activity(jobId, 'waiting for you');
+        if (jobId) {
+          if (backgroundJob?.id === jobId) lastJobDetail = 'waiting for you';
+          this.jobs.activity(jobId, 'waiting for you');
+        }
         try {
           return await action({ jobId, name, agent: session.id });
         } finally {
-          if (jobId)
-            this.jobs.activity(
-              jobId,
-              before && before !== 'waiting for you' ? before : 'working',
-            );
+          if (jobId) {
+            if (backgroundJob?.id === jobId) {
+              updateJobDetail(
+                jobActivity?.lastStep ??
+                  (before && before !== 'waiting for you' ? before : 'working'),
+              );
+            } else {
+              this.jobs.activity(
+                jobId,
+                before && before !== 'waiting for you' ? before : 'working',
+              );
+            }
+          }
         }
       };
       childBus.subscribe((event) => {
@@ -1526,16 +1572,17 @@ export class AgentRuntime {
           backgroundLog?.(
             `${event.payload.name}(${JSON.stringify(event.payload.args)})`,
           );
-          if (backgroundJob)
-            this.jobs.activity(
-              backgroundJob.id,
-              toolCallLine(String(event.payload.name), event.payload.args),
-            );
+          lastJobDetail = undefined;
         }
-        if (event.kind === 'llm_end')
+        if (event.kind === 'llm_end') {
           backgroundLog?.(
             String((event.payload.message as Message)?.content || ''),
           );
+          lastJobDetail = undefined;
+        }
+        jobActivity = stepAgentActivity(jobActivity, event);
+        if (event.kind !== 'run_end' && event.kind !== 'run_error')
+          updateJobDetail(jobActivity.activity);
         // A subagent that works under a background job, its own or one above it, is that job's work
         const jobId = jobOf();
         this.bus.emit(event.kind, {
@@ -1865,6 +1912,7 @@ export class AgentRuntime {
           { sessionId: root, startedBy: 'model' },
           async (signal, log, job) => {
             backgroundJob = job;
+            if (jobActivity) updateJobDetail(jobActivity.activity);
             this.childJobOwners.set(session.id, {
               sessionId: root,
               parent: job.id,
@@ -4291,12 +4339,57 @@ export class AgentRuntime {
     this.options.settings.default_thinking = clearing ? '' : level;
     if (!this.busy) this.refreshSystemPrompt();
   }
-  stats(): {
-    messages: number;
-    toolCalls: number;
-    usage: import('./types.js').Usage;
-    costs: CostSummary;
-  } {
+  // The totals while the store has not changed: a repaint asks for them on every frame.
+  // Keyed by both ids: a new or switched session sets them a few statements apart, and a
+  // deferred new session writes nothing.
+  private statsMemo?: { key: string; value: RuntimeStats };
+  // What the session and each subagent add, kept until that session is written here or
+  // another connection commits, so a write by one of seventy subagents reads that one again,
+  // not all of them. Only the sessions the last count reached are kept. The sums are made
+  // again from these in the same order, so they match a fresh read exactly.
+  private statsInputs = new Map<string, SessionStats>();
+  stats(): RuntimeStats {
+    // The stamps come before the data, so a write that lands in between moves them again.
+    const key = `${this.session.id}\0${this.harness.sessionId}\0${this.store.changeVersion()}`;
+    if (this.statsMemo?.key === key)
+      return structuredClone(this.statsMemo.value);
+    const database = this.store.databaseVersion();
+    const fresh = new Map<string, SessionStats>();
+    const receipts = (id: string) =>
+      this.store.compactions
+        .operations(id, this.store.ancestorIds(id))
+        .flatMap((operation) =>
+          this.store.compactions.attempts(operation.snapshot.operationId),
+        );
+    const summaryCalls = (state: ContextState) =>
+      state.compactionCalls ??
+      (state.summary?.usage
+        ? [{ usage: state.summary.usage, cost: state.summary.response?.cost }]
+        : []);
+    const inputs = (id: string): SessionStats => {
+      const stamp = this.store.sessionStamp(id, database);
+      const known = fresh.get(id) ?? this.statsInputs.get(id);
+      if (known?.stamp === stamp) {
+        fresh.set(id, known);
+        return known;
+      }
+      const read: SessionStats = {
+        stamp,
+        exists: Boolean(this.store.get(id)),
+        receipts: [],
+        messages: [],
+        calls: [],
+      };
+      if (read.exists) {
+        const state = this.store.contextState(id);
+        read.children = state.subagentSessionIds;
+        read.calls = summaryCalls(state);
+        read.receipts = receipts(id);
+        read.messages = this.store.messages(id);
+      }
+      fresh.set(id, read);
+      return read;
+    };
     const messages = this.harness.messages;
     const usage = emptyUsage();
     let estimatedIn = 0;
@@ -4323,34 +4416,28 @@ export class AgentRuntime {
       }
     const costs = messageCosts(messages);
     const compactions = new UsageCostTotals();
-    const state = this.store.contextState(this.session.id);
-    const addCompactionReceipts = (id: string) => {
-      for (const operation of this.store.compactions.operations(
-        id,
-        this.store.ancestorIds(id),
-      ))
-        for (const call of this.store.compactions.attempts(
-          operation.snapshot.operationId,
-        )) {
-          if (call.usage) addUsage(usage, call.usage);
-          compactions.add(call.cost);
-        }
+    const root = inputs(this.session.id);
+    const addCompactionReceipts = (calls: SessionStats['receipts']) => {
+      for (const call of calls) {
+        if (call.usage) addUsage(usage, call.usage);
+        compactions.add(call.cost);
+      }
     };
-    addCompactionReceipts(this.session.id);
+    addCompactionReceipts(root.receipts);
     // Every layer of subagents: each lists those it started
     const subagents: string[] = [];
     const descend = (ids: string[] = []): void => {
       for (const id of ids)
-        if (!subagents.includes(id) && this.store.get(id)) {
+        if (!subagents.includes(id) && inputs(id).exists) {
           subagents.push(id);
-          descend(this.store.contextState(id).subagentSessionIds);
+          descend(inputs(id).children);
         }
     };
-    descend(state.subagentSessionIds);
+    descend(root.children);
     for (const id of subagents) {
-      addCompactionReceipts(id);
-      const messages = this.store.messages(id);
-      for (const message of messages)
+      const child = inputs(id);
+      addCompactionReceipts(child.receipts);
+      for (const message of child.messages)
         if (message.usage) {
           addUsage(usage, message.usage);
           countEstimate(message);
@@ -4358,28 +4445,12 @@ export class AgentRuntime {
             for (const call of message.model_calls) compactions.add(call.cost);
           else compactions.add(message.cost, message.interrupted === true);
         }
-      const childState = this.store.contextState(id);
-      const calls =
-        childState.compactionCalls ??
-        (childState.summary?.usage
-          ? [
-              {
-                usage: childState.summary.usage,
-                cost: childState.summary.response?.cost,
-              },
-            ]
-          : []);
-      for (const call of calls) {
+      for (const call of child.calls) {
         addUsage(usage, call.usage);
         compactions.add(call.cost);
       }
     }
-    const calls =
-      state.compactionCalls ??
-      (state.summary?.usage
-        ? [{ usage: state.summary.usage, cost: state.summary.response?.cost }]
-        : []);
-    for (const call of calls) {
+    for (const call of root.calls) {
       addUsage(usage, call.usage);
       compactions.add(call.cost);
     }
@@ -4401,7 +4472,7 @@ export class AgentRuntime {
       usage.estimated_output_tokens = estimatedOut;
     }
     if (unreportedIn) usage.cache_unreported_input = unreportedIn;
-    return {
+    const result: RuntimeStats = {
       messages: messages.length,
       toolCalls: messages.reduce(
         (sum, message) => sum + (message.tool_calls?.length || 0),
@@ -4410,6 +4481,11 @@ export class AgentRuntime {
       usage,
       costs,
     };
+    // Only a run that finished: one that threw leaves nothing behind. What it no longer
+    // reached (a deleted subagent, the subagents of a session switched away from) goes.
+    this.statsInputs = fresh;
+    this.statsMemo = { key, value: structuredClone(result) };
+    return result;
   }
   async compact(hint = '', signal?: AbortSignal): Promise<string> {
     if (this.ownershipError) throw this.ownershipError;

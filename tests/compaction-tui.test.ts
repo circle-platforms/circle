@@ -202,6 +202,43 @@ test('TUI escape cancels automatic compaction with its turn while preserving the
   );
 });
 
+test("a finished compaction's notice reads its checkpoint once across repaints", async (t) => {
+  const home = scratch(t),
+    workspace = scratch(t),
+    settings = defaultSettings();
+  const model = new ScriptedModel([
+    { message: { id: 'summary', role: 'assistant', content: 'summary' } },
+  ]);
+  const app = new SessionApp(workspace, home, settings);
+  const ui = app as any;
+  ui.screen.render = () => {};
+  app.terminal = {
+    platform: process.platform,
+    write: () => {},
+    input: () => {},
+    kill: () => {},
+  };
+  await app.attach({ workspace, home, settings, model, headless: true });
+  cleanup(t, () => app.close());
+  const runtime = app.runtime!;
+  runtime.store.append(runtime.session.id, history());
+  await app.command('compact', '');
+  assert.equal(runtime.compaction!.status, 'succeeded');
+  let reads = 0;
+  const read = runtime.store.checkpoint.bind(runtime.store);
+  runtime.store.checkpoint = (id: string) => {
+    reads++;
+    return read(id);
+  };
+  for (let n = 0; n < 3; n++) ui.repaint();
+  assert.ok(reads <= 1, `${reads} checkpoint reads`);
+  const notices = app.state.notices
+    .map((text, index) => [text, app.state.noticeAnchors?.[index]] as const)
+    .filter(([text]) => text.startsWith('compacted'));
+  assert.equal(notices.length, 1, JSON.stringify(app.state.notices));
+  assert.equal(notices[0]![1], 'history-9');
+});
+
 test('compaction rows fit narrow and wide terminals in dark and light themes', async (t) => {
   const root = scratch(t);
   const { CheckpointStore } = await import('../src/checkpoint_store.js');

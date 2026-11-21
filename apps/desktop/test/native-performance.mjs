@@ -17,7 +17,13 @@ import {
  */
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
+import {
+  appendFile,
+  mkdtemp,
+  mkdir,
+  writeFile,
+  readFile,
+} from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -61,6 +67,19 @@ import {
   journeyNodeCommand,
 } from './helpers/native-journey-platform.mjs';
 import { patience } from './helpers/patience.mjs';
+import { setViewport } from './helpers/viewport.mjs';
+import {
+  openNativeTerminalInspector,
+  chooseNewLocalTerminal,
+} from './helpers/native-terminal-journey.mjs';
+import {
+  performanceBudgets as budgets,
+  performanceBudgetMode,
+  performanceBudgetWarnings,
+  performanceRunFailed,
+  performanceSummary,
+} from './helpers/native-performance-budgets.mjs';
+const budgetMode = performanceBudgetMode();
 const exec = promisify(execFile);
 const desktopRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const require = createRequire(import.meta.url);
@@ -214,6 +233,7 @@ const report = {
   samples,
   checks,
   errors,
+  budgetMode,
   metrics: {},
   complete: false,
 };
@@ -254,6 +274,23 @@ async function finish(metric) {
   assert.ok(Number.isFinite(value));
   samples[metric].push(value);
 }
+// The work drawer's terminal mode; each terminal in it is `#terminal-<id>`.
+const terminalMode = '[data-inspector-resource="terminal"]';
+/** Open the terminal mode and make a shell from its + menu; returns the new PTY's id. */
+async function openNewTerminal() {
+  const before = new Set(
+    (await service('terminal', 'list')).map((item) => item.id),
+  );
+  await chooseNewLocalTerminal(page, await openNativeTerminalInspector(page));
+  let created;
+  await waitFor(async () => {
+    created = (await service('terminal', 'list')).find(
+      (item) => !before.has(item.id),
+    );
+    return !!created;
+  }, 'a new terminal made from the terminal mode');
+  return created.id;
+}
 try {
   app = await electron.launch({
     executablePath: executable,
@@ -266,6 +303,16 @@ try {
   page.setDefaultTimeout(patience(15000));
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.bringToFront();
+  // The window opens at whatever the display allows: 1024 wide on a CI runner's
+  // 1024×768 screen, where the workbench is narrow (≤1050) and lays the drawer over
+  // the conversation, terminal over the message box. The suite measures the wide
+  // layout, the drawer beside the conversation, as the native journey does.
+  report.viewport = await setViewport(
+    app,
+    page,
+    { width: 1400, height: 900 },
+    { show: true },
+  );
   if (process.env.CIRCLE_NATIVE_PERF_CPU_PROFILE === '1') {
     cpuProfile = await startNativePerformanceCpuProfile(page, report);
     await page.evaluate(() => {
@@ -364,20 +411,10 @@ try {
       window.__circleNativeTerminalTiming = (record) =>
         window.__circleNativePerfTerminalTiming.push(record);
     });
+    terminalId = await openNewTerminal();
     await page
-      .getByRole('button', { name: 'terminal panel', exact: true })
-      .click();
-    await page
-      .locator('#inspector-terminal-terminal')
+      .locator(`${terminalMode} #terminal-${terminalId} .xterm-screen`)
       .waitFor({ state: 'visible' });
-    await page
-      .locator('#inspector-terminal-terminal button[aria-label="new terminal"]')
-      .click();
-    await page
-      .locator('#inspector-terminal-terminal .xterm-screen')
-      .first()
-      .waitFor({ state: 'visible' });
-    terminalId = (await service('terminal', 'list'))[0].id;
     const identity = await app.evaluate(({ app }) => ({
       isPackaged: app.isPackaged,
       resourcesPath: process.resourcesPath,
@@ -436,11 +473,9 @@ try {
       ),
       'probe producer record joins actual parser and frame callbacks',
     );
-    report.originalEntryProbe = await page.evaluate(async () => {
+    report.originalEntryProbe = await page.evaluate(async (selector) => {
       await document.fonts.ready;
-      const screen = document.querySelector(
-        '#inspector-terminal-terminal .xterm-screen',
-      );
+      const screen = document.querySelector(selector);
       const rows = window.__circleNativePerfTerminalTiming;
       return {
         inspectorVisible: screen.getBoundingClientRect().width > 0,
@@ -451,7 +486,7 @@ try {
           .fontFamily,
         phases: [...new Set(rows.map((row) => row.phase))],
       };
-    });
+    }, `${terminalMode} #terminal-${terminalId} .xterm-screen`);
     assert.ok(report.originalEntryProbe.inspectorVisible);
     assert.ok(report.originalEntryProbe.phases.includes('write-parsed'));
     await page.screenshot({ path: join(output, 'original-entry-probe.png') });
@@ -503,16 +538,10 @@ try {
       window.__circleNativePerfTerminalTiming.push(record);
     };
   });
+  terminalId = await openNewTerminal();
   await page
-    .getByRole('button', { name: 'terminal panel', exact: true })
-    .first()
-    .click();
-  await page
-    .locator('#inspector-terminal-terminal button[aria-label="new terminal"]')
-    .click();
-  await page.locator('#inspector-terminal-terminal .xterm').first().waitFor();
-  const terminals = await service('terminal', 'list');
-  terminalId = terminals[0].id;
+    .locator(`${terminalMode} #terminal-${terminalId} .xterm`)
+    .waitFor();
   const appIdentity = await app.evaluate(({ app }) => ({
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
@@ -681,23 +710,22 @@ try {
         originalAttachments,
       );
       if (index === 0) {
+        // The chip opens the attachment in a dialog over the window; the terminal
+        // mode stays open behind it.
         await page
           .locator('.attachment-strip')
           .getByRole('button', { name: marker, exact: true })
           .click();
-        const source = page
-          .locator('.inspector .context-source')
-          .filter({ has: page.locator('summary', { hasText: marker }) });
-        if (!(await source.evaluate((node) => node.open)))
-          await source.locator(':scope > summary').click();
+        const source = page.getByRole('dialog', { name: marker, exact: true });
         assert.equal(
-          await source.locator(':scope > pre').textContent(),
+          await source.locator('.data-block pre').textContent(),
           longPaste,
           'original UI exposes all600lines exactly',
         );
-        await page
-          .getByRole('button', { name: 'terminal panel', exact: true })
+        await source
+          .getByRole('button', { name: 'close dialog', exact: true })
           .click();
+        await source.waitFor({ state: 'detached' });
       }
     } else {
       assert.equal(
@@ -733,20 +761,28 @@ try {
     '20 trusted native clipboard pastes retain exact600line originals and20 keyboard clears restore composer context',
   );
   report.interfaceScope =
-    'original topbar panels, inspector and main file view; no dual layout';
+    'top bar mode buttons, the work drawer terminal and files modes; no dual layout';
   await input.fill('retained developer draft');
   await input.evaluate((node) => {
     node.focus();
     node.setSelectionRange(3, 10);
   });
   const panelAnchor = await page.evaluate(captureNativeTranscriptAnchor);
+  // The roundtrips start from the open terminal mode: even clicks close it, odd ones reopen it.
+  assert.equal(
+    await page
+      .getByRole('button', { name: 'terminal panel', exact: true })
+      .getAttribute('aria-pressed'),
+    'true',
+  );
+  await page.locator(terminalMode).waitFor({ state: 'visible' });
   for (let index = 0; index < 40; index++) {
     const open = index % 2 === 1;
     await arm('click', 'button[aria-label="terminal panel"]', {
       selector: 'button[aria-label="terminal panel"]',
       attribute: 'aria-pressed',
       equals: String(open),
-      panel: { selector: '#inspector-terminal-terminal', visible: open },
+      panel: { selector: terminalMode, visible: open },
     });
     await page
       .getByRole('button', { name: 'terminal panel', exact: true })
@@ -1228,16 +1264,7 @@ try {
     taskIds.includes(task.spec.id),
   );
   await page.screenshot({ path: join(output, 'native-performance.png') });
-  for (const [metric, budget] of Object.entries({
-    inputKeystroke: 100,
-    inputPaste: 100,
-    inputClear: 100,
-    click: 100,
-    eventToFrame: 200,
-    sessionSwitch: 300,
-    fileSwitch: 300,
-    save: 500,
-  })) {
+  for (const [metric, budget] of Object.entries(budgets)) {
     assert.ok(samples[metric].length >= 20, `${metric} insufficient samples`);
     report.metrics[metric] = {
       n: samples[metric].length,
@@ -1249,10 +1276,11 @@ try {
   report.measurement =
     '40 actual keys plus20 trusted system clipboard600line pastes and20 keyboard clears require actual composer and React Send state; original-panel click feedback and session backend/route/header/visible-body require two frames; producer-to-frame uses actual xterm write callback plus two visible RAF opportunities, never a compositor pixel timestamp. AX latency is reported independently.';
   report.complete = true;
-  report.passed =
-    Object.values(report.metrics).every((metric) => metric.passed) &&
-    !errors.length &&
-    report.initialTranscriptPassed;
+  report.budgetsPassed = Object.values(report.metrics).every(
+    (metric) => metric.passed,
+  );
+  report.functionalPassed = !errors.length && report.initialTranscriptPassed;
+  report.passed = report.budgetsPassed && report.functionalPassed;
 } catch (error) {
   report.failure = String(error.stack ?? error);
   try {
@@ -1426,6 +1454,7 @@ try {
             retryPath: join(output, 'retry-clipboard'),
           };
           report.passed = false;
+          report.functionalPassed = false;
           process.exitCode = 1;
           await writePerformanceEvidence(
             report,
@@ -1461,16 +1490,7 @@ try {
       );
     }
   }
-  for (const [metric, budget] of Object.entries({
-    inputKeystroke: 100,
-    inputPaste: 100,
-    inputClear: 100,
-    click: 100,
-    eventToFrame: 200,
-    sessionSwitch: 300,
-    fileSwitch: 300,
-    save: 500,
-  })) {
+  for (const [metric, budget] of Object.entries(budgets)) {
     if (!report.metrics[metric] && samples[metric].length)
       report.metrics[metric] = {
         n: samples[metric].length,
@@ -1492,6 +1512,8 @@ try {
         output,
         complete: report.complete,
         passed: report.passed ?? false,
+        functionalPassed: report.functionalPassed ?? false,
+        budgetMode,
         metrics: report.metrics,
         failure: report.failure,
         diagnosticWriteErrors: report.diagnosticWriteErrors,
@@ -1500,5 +1522,21 @@ try {
       2,
     ),
   );
-  if (report.complete && !report.passed) process.exitCode = 1;
+  if (budgetMode === 'report')
+    for (const line of performanceBudgetWarnings(report.metrics))
+      console.log(line);
+  if (process.env.GITHUB_STEP_SUMMARY)
+    try {
+      await appendFile(
+        process.env.GITHUB_STEP_SUMMARY,
+        performanceSummary(report, budgetMode, output),
+      );
+    } catch (error) {
+      console.log(
+        `::warning title=native performance::the step summary was not written: ${error}`,
+      );
+    }
+  // An unfinished run or a missing effect fails in either mode; a p95 over its budget
+  // fails only where budgets are enforced. Nothing here sets the exit code back to 0.
+  if (performanceRunFailed(report, budgetMode)) process.exitCode = 1;
 }

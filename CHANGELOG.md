@@ -18,6 +18,15 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 - **A long session with many subagents no longer lags the screen.** Every repaint read the usage statistics, and the statistics read the context state and the messages of every subagent session: five hours in, with 85 subagent sessions, that reading was 85% of the process's time. A repaint now reuses the last statistics for a quarter second, or ten times what reading them cost; a turn that ends and a message the conversation itself gains still show at once.
 - **A turn a finished job started is tried again when the model's service breaks off.** The retry of a failed turn only ran while a notice still waited to be read, but the failed turn had already taken the notice into the conversation, so nothing happened and the work stopped without a word until the next job ended. The turn is now owed: it is run again after fifteen seconds, a minute and four minutes, on the conversation as it stands, and only then does Circle wait for you.
 
+## 1.18.1 - 2026-11-16
+
+### Added
+- **Live thinking summaries.** A running subagent shows what it is thinking — the newest heading or the latest sentence of its reasoning — in the terminal's agent rows and detail view and on the desktop's Overview cards and in the Subagents drawer, instead of a bare `working` label. (#576)
+
+### Fixed
+- **Responsive with many subagents.** With many subagents in a long conversation, the terminal and the desktop no longer rescan every subagent session on each frame: context state, footer totals and compaction history are cached per session and publications are coalesced, so the interface stays responsive. (#578)
+- **The native performance suite runs again.** The desktop's native performance suite, broken since the terminal mode replaced the inspector's terminal tab, runs on Apple silicon in CI on pushes to main and reports its latency there; on shared runners the budgets are reported, not enforced. Tests and CI only. (#580)
+
 ## 1.18.0 - 2026-11-15
 
 ### Added

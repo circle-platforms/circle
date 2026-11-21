@@ -18,6 +18,7 @@ import {
 import { commandExecutionReceipt } from '../../../src/command_process.js';
 import { canonicalPath } from '../../../src/paths.js';
 import { readPlanFolderFile } from './plan-folder.js';
+import { redactRuntimeOutput } from './runtime-exit';
 import type { ResolveInputsRequest } from '../../../src/input_outbox.js';
 import { spawnPty } from './workspace/native-pty.js';
 import { createTerminalCommandLauncher } from './workspace/command-terminal.js';
@@ -66,7 +67,10 @@ import {
   sessionOccupied,
   SessionOccupiedError,
 } from '../../../src/session_lock.js';
-import { CheckpointStore } from '../../../src/checkpoint_store.js';
+import {
+  CheckpointStore,
+  type Session as CheckpointSession,
+} from '../../../src/checkpoint_store.js';
 import {
   isTaskWorkspace,
   newTaskName,
@@ -231,7 +235,10 @@ function pageTransport(
         : 'stdio';
 }
 import { PlanCompletionTracker } from '../../../src/plan_state.js';
-import { nextAgentActivity } from '../../../src/session_activity.js';
+import {
+  stepAgentActivity,
+  type AgentActivityState,
+} from '../../../src/session_activity.js';
 import { formatElapsed, type TurnUsage } from '../../../src/tui/status_rows.js';
 import {
   approvalPreview,
@@ -306,6 +313,33 @@ const FILE_TOOLS = [
   'delete',
   'browser_record',
 ];
+// How long a subagent's steps wait to be published together (publishSoon).
+const PUBLISH_DELAY_MS = 100;
+const schedulePublish = (run: () => void) => {
+  const timer = setTimeout(run, PUBLISH_DELAY_MS);
+  timer.unref();
+  return () => clearTimeout(timer);
+};
+// What the window must see at once, with its event: a subagent starting, ending, failing
+// or waiting for you (its card is up at the same moment), and a file it changed (the
+// window lists the folder again). The rest of its steps, and every job's progress, can
+// wait for the next publication.
+const publishesLater = (event: CircleEvent): boolean => {
+  if (event.kind === 'job_updated') return true;
+  if (!event.tags?.subagent) return false;
+  if (
+    ['run_start', 'run_end', 'run_error', 'error', 'tool_waiting'].includes(
+      event.kind,
+    )
+  )
+    return false;
+  if (event.kind === 'compaction') return event.payload.phase === 'chunks';
+  // Only tool_result names its tool; tool_end follows it.
+  return !(
+    event.kind === 'tool_result' &&
+    FILE_TOOLS.includes(String(event.payload.name ?? ''))
+  );
+};
 const TASK_STATUS_EVENTS = new Set([
   'task.queued',
   'task.preparing',
@@ -394,6 +428,9 @@ export interface ControllerOptions {
   model?: ChatModel;
   catalog?: (home: string) => ModelCatalog;
   emit: (update: RuntimeUpdate) => void;
+  /** Runs a coalesced publication later and returns what cancels it; 100 ms when not
+   * given. Tests pass their own to decide when it runs. */
+  schedulePublish?: (run: () => void) => () => void;
   /** A link an extension asked for: the window opens it in its browser panel; with no
    * window the main process opens it in the system browser. */
   openUrl?: (url: string) => void;
@@ -454,7 +491,8 @@ export class RuntimeController {
   readonly home: string;
   private metadata: SessionMetadata;
   private planCompletions = new Map<string, PlanCompletionTracker>();
-  private activities = new Map<string, string>();
+  private activities = new Map<string, AgentActivityState>();
+  private taskSessionIds = new Set<string>();
   private notices = new Map<
     string,
     {
@@ -548,6 +586,11 @@ export class RuntimeController {
     { status: TurnStatus; started: number; waited: number; since?: number }
   >();
   private error?: string;
+  // Cancels the publication publishSoon scheduled, while one waits.
+  private publishPending?: () => void;
+  // The stream the windows hold for each session: the one the last publication carried, or
+  // the one of a token delta sent since.
+  private deltaStreams = new Map<string, string>();
   private closing = false;
   private closePromise?: Promise<void>;
   private mutation = Promise.resolve();
@@ -1853,10 +1896,12 @@ export class RuntimeController {
         onRuntimeCreated: (task, runtime) => {
           this.taskRuntimes.set(task.spec.id, runtime);
           this.activeRuns.add(runtime.session.id);
+          this.taskSessionIds.add(runtime.session.id);
         },
         onRuntimeClosed: (task, runtime) => {
           this.taskRuntimes.delete(task.spec.id);
           this.activeRuns.delete(runtime.session.id);
+          this.taskSessionIds.delete(runtime.session.id);
           if (this.active === runtime) {
             this.viewedSessionId = runtime.session.id;
             const parent = task.spec.sessionId
@@ -1894,11 +1939,15 @@ export class RuntimeController {
       if (!this.closing) this.publish();
     });
   }
-  private taskAgentAttempts(ownerSessionId: string): {
+  /** `row`, when the caller has listed it, saves reading the session again. */
+  private taskAgentAttempts(
+    ownerSessionId: string,
+    row?: CheckpointSession,
+  ): {
     records: readonly TaskRecord[];
     archived: boolean;
   } {
-    const owner = this.store.get(ownerSessionId);
+    const owner = row ?? this.store.get(ownerSessionId);
     if (!owner) return { records: [], archived: true };
     const root = this.taskWorkspaces.get(owner.workspace) ?? owner.workspace;
     const live = this.taskServices.get(root);
@@ -1936,10 +1985,13 @@ export class RuntimeController {
       return { records: [], archived: true };
     }
   }
-  private nativeTaskAgents(inputs: HistoryInputs): AgentRecord[] {
+  private nativeTaskAgents(
+    inputs: HistoryInputs,
+    owners: readonly CheckpointSession[],
+  ): AgentRecord[] {
     const agents = new Map<string, AgentRecord>();
-    for (const owner of this.store.list(undefined, true)) {
-      const { records, archived } = this.taskAgentAttempts(owner.id);
+    for (const owner of owners) {
+      const { records, archived } = this.taskAgentAttempts(owner.id, owner);
       for (const task of records) {
         const sources = [
           {
@@ -1975,7 +2027,7 @@ export class RuntimeController {
               task.spec.prompt.split(/\r\n|\r|\n/u)[0] ||
               'agent',
             description: task.spec.prompt,
-            activity: this.activities.get(child.id),
+            activity: this.activities.get(child.id)?.activity,
             status:
               recovery ||
               ['waiting', 'blocked', 'needs_review'].includes(source.state)
@@ -1987,7 +2039,7 @@ export class RuntimeController {
                   : 'completed',
             model: child.model,
             tokens: 0,
-            messages: this.sessionHistory(child.id, child.head, inputs)
+            messages: this.sessionHistory(child.id, child.head, inputs, child)
               .messages,
             workspaceId: identity(child.workspace),
             resourceSessionId: child.id,
@@ -2642,6 +2694,7 @@ export class RuntimeController {
       else throw error;
     }
     this.fileRewinds.set(runtime, fileRewind);
+    if (task) this.taskSessionIds.add(runtime.session.id);
     runtime.bus.subscribe((event) => {
       if (task) {
         this.event(
@@ -2827,6 +2880,7 @@ export class RuntimeController {
     id: string,
     head: string | null,
     inputs: HistoryInputs,
+    row?: CheckpointSession,
   ): SessionHistory {
     this.historiesRead.add(id);
     const owner =
@@ -2834,7 +2888,7 @@ export class RuntimeController {
       [...this.taskRuntimes.values()].find((task) => task.session.id === id);
     const before = this.histories.get(id);
     const { priced, showHookAllow } = inputs;
-    const attempts = this.taskAgentAttempts(id).records;
+    const attempts = this.taskAgentAttempts(id, row).records;
     const live = owner || attempts.length;
     const unchanged = [
       inputs.storeVersion,
@@ -3382,8 +3436,12 @@ export class RuntimeController {
     const inspecting = !!this.viewedSessionId;
     const defaultFolder = this.defaultWorkspace(savedSettings);
     const taskRoot = this.tasksRootFor(savedSettings);
-    // The open conversation is listed before its first message.
-    const rows = this.store.list(undefined, false, true);
+    // One listing for the sessions, the subagents and the tasks' owners: it costs a
+    // query of every session's last message (#577). Its order is total, so the root
+    // rows keep the order a listing of them alone gives, the open conversation with
+    // no message yet among them.
+    const listed = this.store.list(undefined, true);
+    const rows = listed.filter((row) => row.parent_id === null);
     const paths = this.listedFolders(rows);
     this.historiesRead.clear();
     const historyInputs: HistoryInputs = {
@@ -3392,7 +3450,7 @@ export class RuntimeController {
       showHookAllow: savedSettings.show_hook_allow,
       storeVersion: this.store.changeVersion(),
     };
-    const nativeAgents = this.nativeTaskAgents(historyInputs);
+    const nativeAgents = this.nativeTaskAgents(historyInputs, listed);
     const sessions: Session[] = rows.map((row) => {
       const owner =
         this.runtimes.get(row.id) ??
@@ -3404,7 +3462,7 @@ export class RuntimeController {
       const queue = selected
         ? owner.harness.queuedMessages
         : { steering: [], followUp: [] };
-      const history = this.sessionHistory(row.id, row.head, historyInputs);
+      const history = this.sessionHistory(row.id, row.head, historyInputs, row);
       const executionRootValid = this.validWorkspaceRoot(row.workspace);
       return {
         id: row.id,
@@ -3555,8 +3613,7 @@ export class RuntimeController {
       sessions,
       files: [],
       agents: [
-        ...this.store
-          .list(undefined, true)
+        ...listed
           .filter((row) => row.parent_id)
           .map(
             (row) =>
@@ -3568,7 +3625,7 @@ export class RuntimeController {
                 // Core history has no durable per-child permission metadata.
                 readOnly: true,
                 name: row.title || 'agent',
-                activity: this.activities.get(row.id),
+                activity: this.activities.get(row.id)?.activity,
                 description: row.title,
                 status: [...this.pending.values()].some(
                   (pending) => pending.row.origin?.agent === row.id,
@@ -3579,8 +3636,12 @@ export class RuntimeController {
                     : 'completed',
                 model: row.model,
                 tokens: 0,
-                messages: this.sessionHistory(row.id, row.head, historyInputs)
-                  .messages,
+                messages: this.sessionHistory(
+                  row.id,
+                  row.head,
+                  historyInputs,
+                  row,
+                ).messages,
               }) as AgentRecord,
           ),
         ...nativeAgents,
@@ -3916,6 +3977,13 @@ export class RuntimeController {
     return normalizeBaseUrl(endpoint.href, 'openai');
   }
   publish(event?: RuntimeUpdate['event']) {
+    this.publishPending?.();
+    this.publishPending = undefined;
+    // This publication carries every stream still open, so a later token of another
+    // stream of the same session must end it with a publication first.
+    this.deltaStreams = new Map(
+      [...this.streams].map(([id, stream]) => [id, stream.id]),
+    );
     if (this.closing) return;
     this.persistLocation();
     const update: RuntimeUpdate = {
@@ -3931,6 +3999,24 @@ export class RuntimeController {
     this.options.emit(update);
     this.refreshTerminalTabWaits();
     return update;
+  }
+  /** One publication for many events: eight subagents step many times a second, and each
+   * publication reads every session (#577). */
+  private publishSoon(): void {
+    if (this.closing || this.publishPending) return;
+    this.publishPending = (this.options.schedulePublish ?? schedulePublish)(
+      () => {
+        this.publishPending = undefined;
+        try {
+          this.publish();
+        } catch (error) {
+          // The bus swallowed a failed publication; a timer would end the process.
+          process.stderr.write(
+            `publication failed: ${redactRuntimeOutput(String(error))}\n`,
+          );
+        }
+      },
+    );
   }
   private event(
     runtime: AgentRuntime,
@@ -3950,10 +4036,12 @@ export class RuntimeController {
       event.tags?.subagent ?? event.tags?.session_id ?? runtime.session.id,
     );
     this.sessionEvents.set(id, (this.sessionEvents.get(id) ?? 0) + 1);
-    if (event.tags?.subagent)
+    const trackActivity =
+      Boolean(event.tags?.subagent) || this.taskSessionIds.has(id);
+    if (trackActivity)
       this.activities.set(
         id,
-        nextAgentActivity(this.activities.get(id), event),
+        stepAgentActivity(this.activities.get(id), event),
       );
     if (!event.tags?.subagent && event.kind === 'todo_list') {
       let tracker = this.planCompletions.get(id);
@@ -4132,6 +4220,17 @@ export class RuntimeController {
     if (event.kind === 'llm_token' && !this.cancelling.has(id)) {
       const stream = this.streams.get(id);
       if (stream) {
+        // A new stream after steps that wait to be published: the windows hold the last
+        // stream until a publication ends it, and would take this one as a gap. That
+        // publication comes before this token counts, which then goes as a delta.
+        const sent = this.deltaStreams.get(id);
+        if (
+          publishSnapshot &&
+          this.options.emitTokenDelta &&
+          sent !== undefined &&
+          sent !== stream.id
+        )
+          this.publish();
         if (event.payload.thinking)
           stream.thinking += String(event.payload.text ?? '');
         else stream.text += String(event.payload.text ?? '');
@@ -4208,6 +4307,7 @@ export class RuntimeController {
     ) {
       const stream = this.streams.get(id);
       if (stream) {
+        this.deltaStreams.set(id, stream.id);
         const chunk = String(event.payload.text ?? '');
         this.options.emitTokenDelta({
           epoch: this.tokenEpoch,
@@ -4218,6 +4318,9 @@ export class RuntimeController {
           parentId: this.store.get(id)?.head ?? null,
           text: event.payload.thinking ? undefined : chunk,
           thinking: event.payload.thinking ? chunk : undefined,
+          ...(trackActivity
+            ? { activity: this.activities.get(id)?.activity }
+            : {}),
           at: event.ts,
           turn: this.turn(id),
         });
@@ -4225,6 +4328,10 @@ export class RuntimeController {
       }
     }
     if (!publishSnapshot) return;
+    if (publishesLater(event)) {
+      this.publishSoon();
+      return;
+    }
     this.publish({
       kind: event.kind,
       sessionId: id,
@@ -5707,6 +5814,7 @@ export class RuntimeController {
           this.sessionEvents.delete(target);
           this.histories.delete(target);
           this.activities.delete(target);
+          this.taskSessionIds.delete(target);
           this.changes.delete(target);
           for (const key of this.diffs.keys())
             if (key.startsWith(`${target}:`)) this.diffs.delete(key);
@@ -6956,6 +7064,8 @@ export class RuntimeController {
   private async closeAll(): Promise<void> {
     this.persistLocation();
     this.closing = true;
+    this.publishPending?.();
+    this.publishPending = undefined;
     await this.externalFiles?.close();
     this.externalGrantOwners.clear();
     for (const pending of this.pending.values())
