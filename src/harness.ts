@@ -330,6 +330,14 @@ function escapeReminder(text: string): string {
   return text.replace(/<(\/?system-reminder)/gi, '&lt;$1');
 }
 
+/**
+ * With how many requests left a subagent is reminded of its `maxTurns`: a fifth of them, twenty at
+ * most. A limit under ten gets no reminder: there is nothing to do differently in one or two requests.
+ */
+export function turnsLeftReminder(maxTurns: number): number {
+  return maxTurns < 10 ? 0 : Math.min(20, Math.floor(maxTurns / 5));
+}
+
 export class Harness {
   private hooksAnnounced = false;
   /** Whether this conversation's hooks have started: its SessionStart ran, or would have. */
@@ -426,6 +434,8 @@ export class Harness {
   /** Model requests made so far, counted against `maxTurns`. */
   private turnsTaken = 0;
   private turnLimitHit = false;
+  /** The subagent has been told once how many of its requests are left. */
+  private turnLimitSaid = false;
   /** The last run ended because `maxTurns` was spent, not with an answer of the model's own. */
   get stoppedAtTurnLimit(): boolean {
     return this.turnLimitHit;
@@ -1268,6 +1278,23 @@ export class Harness {
           });
           this.flushTitle();
           return { answer, usage };
+        }
+        // Told once, with a fifth of its requests left (twenty at most): what a subagent has learned
+        // and not written is lost when they are spent, and one that only read hands back nothing
+        if (this.options.maxTurns !== undefined && !this.turnLimitSaid) {
+          const left = this.options.maxTurns - this.turnsTaken;
+          if (left <= turnsLeftReminder(this.options.maxTurns)) {
+            this.turnLimitSaid = true;
+            this.save({
+              id: randomUUID(),
+              role: 'user',
+              internal: 'turn_limit',
+              content:
+                '<system-reminder data-source="turn-limit">\n' +
+                `This session can make ${left} more model ${left === 1 ? 'request' : 'requests'} of its ${this.options.maxTurns}. When they are spent it ends with what it has written to files and said by then, and anything learned and not written down is lost. Write the result the task asks for now; use the requests that remain to check and correct it.\n` +
+                '</system-reminder>',
+            });
+          }
         }
         // The step starts here: a steerNow while the messages before are read stops it
         const stepControl = new AbortController();

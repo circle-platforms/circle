@@ -33,7 +33,7 @@ the file and the line. Change nothing.
 | `model` | no | an id on the same endpoint; without it the agent uses the model of the conversation, or of the subagent that started it |
 | `effort` | no | its thinking depth, one of `minimal`, `low`, `medium`, `high`, `xhigh` or `max`, sent with each of its requests; without it the agent follows the conversation's depth. `CIRCLE_REASONING_EFFORT` set for the run wins over it. `/agents <name>` shows the depth |
 | `permissionMode` | no | how its calls are decided: `default` (or `manual`), `acceptEdits`, `plan`, `dontAsk`, `bypassPermissions` or `auto`. See [Permission modes](#permission-modes) |
-| `maxTurns` | no | how many model requests it may make, a whole number from 1. When they are spent it stops with what it has written, and `task` returns that under `Partial result:` |
+| `maxTurns` | no | how many model requests it may make, a whole number from 1. When they are spent it stops with what it has written, and `task` returns that under `Partial result:`. With a fifth of them left (twenty at most; a limit under ten gets none) it is told once how many remain |
 | `skills` | no | skills loaded into its conversation in full before its task, as if it had loaded them with `skill`, up to 32 names. One that is not installed is left out, and `/agents <name>` names it |
 | `mcpServers` | no | MCP servers it gets the tools of, by the names they are configured under, beside what `tools` lists. See [MCP servers](#mcp-servers) |
 | `hooks` | no | [hooks](hooks.md) that run only for this subagent, while it runs. See [Its own hooks](#its-own-hooks) |

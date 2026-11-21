@@ -287,6 +287,42 @@ test('maxTurns stops a subagent with what it has, marked partial, after that man
   );
 });
 
+test('a subagent is told once how many requests it has left, with a fifth of its maxTurns to go', async (t) => {
+  const paths = folders(t);
+  agent(join(paths.home, 'agents'), 'reader', 'maxTurns: 10\n');
+  agent(join(paths.home, 'agents'), 'brief', 'maxTurns: 5\n');
+  const step = (n: number) =>
+    reply(`step ${n}`, [{ id: `ls${n}`, name: 'ls', args: { path: '.' } }]);
+  const model = modelByAsker({
+    go: [
+      reply('', [task('r', 'read on', 'reader')]),
+      reply('', [task('b', 'be brief', 'brief')]),
+      reply('done'),
+    ],
+    'read on': Array.from({ length: 12 }, (_, n) => step(n + 1)),
+    'be brief': Array.from({ length: 6 }, (_, n) => step(n + 1)),
+  });
+  const runtime = runtimeFor(t, paths, model);
+  runtime.policy.setYolo(runtime.session.id, true);
+  await runtime.harness.run('go');
+  const reminders = (name: string) =>
+    runtime.store
+      .messages(sessionOf(runtime, name))
+      .filter((message) => message.internal === 'turn_limit')
+      .map((message) => String(message.content));
+  assert.deepEqual(reminders('reader'), [
+    '<system-reminder data-source="turn-limit">\nThis session can make 2 more model requests of its 10. When they are spent it ends with what it has written to files and said by then, and anything learned and not written down is lost. Write the result the task asks for now; use the requests that remain to check and correct it.\n</system-reminder>',
+  ]);
+  // It is in the ninth request, the first of the two that are left, and not before
+  const asked = model.requests.filter((request) => askedBy(request, 'read on'));
+  assert.equal(asked.length, 10);
+  const told = (request: (typeof asked)[number]) =>
+    JSON.stringify(request.messages).includes('data-source=\\"turn-limit\\"');
+  assert.deepEqual(asked.map(told), [false, false, false, false, false, false, false, false, true, true]);
+  // A limit of a few requests gets none
+  assert.deepEqual(reminders('brief'), []);
+});
+
 test('sessionPrompt: false gives a subagent its own prompt with where it runs and the variables, and not what the conversation is told', async (t) => {
   const paths = folders(t);
   agent(

@@ -148,6 +148,7 @@ const INTERNAL_REMINDERS = new Set([
   'hook_context',
   'mode-boundary',
   'skill',
+  'turn_limit',
 ]);
 
 function isInternalReminder(message: Message): boolean {
