@@ -384,6 +384,89 @@ test('closing RPC input waits for a model job and delivers its actual result in 
   assert.deepEqual(output.at(-1), { type: 'jobs_stopped', count: 0 });
 });
 
+test('an RPC conversation runs again the turn a finished job started when the model service broke off after it took the notice', async (t) => {
+  const root = scratch(t);
+  writeFileSync(
+    join(root, 'job.cjs'),
+    "setTimeout(() => console.log('job result'), 250);",
+  );
+  const model = new ScriptedModel([
+    {
+      message: {
+        id: 'start',
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            id: 'background',
+            name: 'execute',
+            args: {
+              command: `"${process.execPath}" "${join(root, 'job.cjs')}"`,
+              background: true,
+            },
+          },
+        ],
+      },
+    },
+    { message: answer('started') },
+    async () => {
+      throw new Error('the model service broke off');
+    },
+    { message: answer('noticed at last') },
+  ]);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model,
+    headless: true,
+  });
+  runtime.policy.setYolo(runtime.session.id, true);
+  cleanup(t, () => runtime.close());
+  const input = new PassThrough();
+  const output: Record<string, unknown>[] = [];
+  const runner = runRpc(runtime, {
+    input,
+    write: (text) => output.push(JSON.parse(text)),
+  });
+  cleanup(t, async () => {
+    input.destroy();
+    await runtime.cancel();
+    await runner;
+  });
+  // Counted by tries, not by the clock, which is moved below
+  const settled = async (count: number) => {
+    for (let tries = 0; tries < 500; tries++) {
+      if (
+        output.filter((record) => record.type === 'agent_settled').length >=
+        count
+      )
+        return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error(`no ${count} settled turns: ${JSON.stringify(output)}`);
+  };
+  input.write(
+    JSON.stringify({ id: 'prompt', type: 'prompt', message: 'start' }) + '\n',
+  );
+  await settled(2);
+  assert.equal(model.requests.length, 3);
+  assert.equal(runtime.jobs.hasNotices(runtime.session.id, true), false);
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 16_000 });
+  await settled(3);
+  t.mock.timers.reset();
+  input.end();
+  assert.equal(await runner, 0);
+  assert.equal(model.requests.length, 4);
+  assert.ok(
+    model.requests[3]!.messages.some(
+      (message) =>
+        message.internal === 'job_notice' &&
+        message.content.includes('job result'),
+    ),
+  );
+});
+
 async function requestModels(
   runtime: AgentRuntime,
 ): Promise<Record<string, unknown>> {

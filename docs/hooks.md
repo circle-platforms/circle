@@ -119,7 +119,7 @@ The same handler in more than one settings file runs once for an occurrence. A p
 | `PreToolUse` | Before a call runs, after read-only mode and the hard refusals | Allow, deny or ask; rewrite the call; add words for the model |
 | `PermissionRequest` | When Circle would show an approval card | Answer the card: allow or deny |
 | `PostToolUse` | After a call returns | Add words beside the result; put another text in its place |
-| `PostToolUseFailure` | After the tool itself failed | Add words beside the error |
+| `PostToolUseFailure` | After the tool itself failed, a command (`execute`, a pack's script) that exits non-zero or runs out of time included | Add words beside the error |
 | `UserPromptSubmit` | When you send a message, before the model reads it: the message a turn starts with, a queued one, and one that steers a turn | Keep it from the model; add words after it; name the session |
 | `Stop` | When the model ends a turn without a tool call | Send it back to work |
 | `SubagentStart` | When `task` starts a subagent, before its first request | Add words at the start of its conversation |
@@ -163,7 +163,7 @@ The fields of each event:
 | `PreToolUse` | `tool_name`, `tool_input`, `tool_use_id`, `paths` |
 | `PermissionRequest` | `tool_name`, `tool_input`, `paths` |
 | `PostToolUse` | Those of `PreToolUse`, `tool_response` (the text the model would read) and `duration_ms` |
-| `PostToolUseFailure` | Those of `PreToolUse`, `error`, `is_interrupt` and `duration_ms` |
+| `PostToolUseFailure` | Those of `PreToolUse`, `error` (for a command, what it printed and its exit code), `is_interrupt` and `duration_ms` |
 | `UserPromptSubmit` | `prompt`, the message as you wrote it |
 | `Stop` | `stop_hook_active` (true once a Stop hook has sent this turn back to work, whatever the model did since), `last_assistant_message`, `background_tasks` (the jobs still running: `type` is `shell`, `subagent`, or `workflow` with the workflow's `name`) and `session_crons` (always empty) |
 | `SubagentStart` | `agent_id`, `agent_type`, and Circle's `description`, the task the model wrote |

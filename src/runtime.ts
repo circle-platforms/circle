@@ -21,7 +21,13 @@ import {
 import { homedir } from 'node:os';
 import { SKILL_DATA_FOLDER, SKILLS_ROOT } from './local_skills.js';
 import { packTool, readPackTools } from './pack_tools.js';
-import type { ChatModel, Message, PreparedRun, ToolCall } from './types.js';
+import type {
+  ChatModel,
+  CommandResult,
+  Message,
+  PreparedRun,
+  ToolCall,
+} from './types.js';
 import { GatewayModel, EFFORT_LEVELS, defaultEffort } from './model.js';
 import { WebSearchService } from './websearch_service.js';
 import type { NativeSearchConnection } from './native_websearch.js';
@@ -38,7 +44,7 @@ import {
 import {
   defaultPolicy,
   DEFAULT_CREDENTIAL_FILES,
-  ruleTool,
+  judgingRuleTools,
   type ApprovalMode,
   type SessionMode,
 } from './approvals.js';
@@ -1853,6 +1859,7 @@ export class AgentRuntime {
           signal.throwIfAborted();
           // SubagentStart hooks (#557): what they say back starts its conversation
           await this.subagentStartHooks(child, agent, description, signal);
+          // An agent of a workflow takes only its definition's skills, not its caller's
           await this.preloadSkills(
             uniqueSkillNames([
               ...(file?.skills ?? []),
@@ -1985,7 +1992,7 @@ export class AgentRuntime {
       );
     }
     const ruleTools = [
-      ...new Set(childTools.map((tool) => ruleTool(tool.name))),
+      ...new Set(childTools.flatMap((tool) => judgingRuleTools(tool.name))),
     ];
     const seenDeny = new Set<string>();
     const denyLines: string[] = [];
@@ -2366,7 +2373,7 @@ export class AgentRuntime {
     request: AgentRequest,
     signal: AbortSignal,
     run: { run: string; sessionId: string },
-  ): Promise<{ code: number | null; output: string }> {
+  ): Promise<CommandResult> {
     if (this.harness.sessionId !== run.sessionId)
       throw new AgentCallError(
         'the conversation that started this workflow is not the open one, so its commands cannot run',

@@ -548,6 +548,42 @@ test('an idle job notice resumes the model without inventing a user prompt and s
   assert.equal(await runtime.runJobNotices(), undefined);
   assert.equal(model.requests.length, 1);
 });
+test('a turn that took its notice and then failed is run again only when it is owed: with no notice waiting, runJobNotices(true) asks the model about the conversation as it is', async (t) => {
+  const root = scratch(t);
+  const model = new ScriptedModel([
+    response('greeting', 'hello'),
+    async () => {
+      throw new Error('the model service broke off');
+    },
+    response('answer', 'read the job at last'),
+  ]);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model,
+    headless: true,
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('start');
+  const job = await runtime.jobs.startShell(
+    script(root, 'console.log("ready");'),
+    { sessionId: runtime.session.id },
+  );
+  await runtime.jobs.wait([job.id], 5, new AbortController().signal);
+  await assert.rejects(runtime.runJobNotices(), /broke off/);
+  assert.equal(runtime.jobs.hasNotices(runtime.session.id, true), false);
+  assert.equal(await runtime.runJobNotices(), undefined);
+  assert.equal(model.requests.length, 2);
+  assert.equal(await runtime.runJobNotices(true), 'read the job at last');
+  assert.equal(model.requests.length, 3);
+  assert.ok(
+    model.requests[2]!.messages.some(
+      (message) =>
+        message.internal === 'job_notice' && /ready/.test(message.content),
+    ),
+  );
+});
 test('native background subagents return immediately, retain live read-only checks, and start subagents of their own only in the foreground', async (t) => {
   const root = scratch(t);
   const reached = deferred<void>();

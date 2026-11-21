@@ -95,6 +95,7 @@ export class JobWake {
           this.owed = false;
           return;
         }
+        // A turn that failed is not one of the turns in a row
         this.wakes--;
         this.owed = true;
         this.retryAt = Date.now() + wait;

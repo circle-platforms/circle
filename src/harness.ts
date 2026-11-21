@@ -21,6 +21,7 @@ import { ApprovalPolicy, wildcard, type ApprovalMode } from './approvals.js';
 import { CheckpointStore, type Session } from './checkpoint_store.js';
 import { attachPrompt } from './mentions.js';
 import { prepareToolCall, RecoverableToolError } from './tool_call_compat.js';
+import { CommandFailure } from './jobs.js';
 import { redact } from './redact.js';
 import type { CallIdentity } from './sandbox.js';
 import { isRecord } from './settings.js';
@@ -2015,6 +2016,10 @@ export class Harness {
     const callModel = this.model;
     let call = original;
     let secrets: Record<string, string> = {};
+    // A command or a page may show a secret back: the model and a workflow script read its name instead, for the
+    // values the call used and the ones saved now, unless the person or the model wrote it
+    const shown = (text: string): string =>
+      this.redact(text, secrets, () => written(this.messages));
     let content = '';
     // Set when a before_tool hook rewrote the call: the tool result starts with it, whatever happens next
     let changedLine = '';
@@ -2339,9 +2344,7 @@ export class Harness {
               onCommandResult: (result) =>
                 onCommandResult({
                   code: result.code,
-                  output: this.redact(result.output, secrets, () =>
-                    written(this.messages),
-                  ).trimEnd(),
+                  output: shown(result.output).trimEnd(),
                 }),
             }
           : {}),
@@ -2437,7 +2440,10 @@ export class Harness {
       status = 'error';
       recoverable = error instanceof RecoverableToolError;
       attachments = [];
-      content = redact(error instanceof Error ? error.message : String(error));
+      content =
+        error instanceof CommandFailure
+          ? error.message
+          : redact(error instanceof Error ? error.message : String(error));
       // The tool itself failed, not a check before it, and nobody stopped it: PostToolUseFailure hooks hear of it
       if (
         ranAt !== undefined &&
@@ -2475,9 +2481,7 @@ export class Harness {
       content = `${content}\n\n${HOOK_OUTPUT_LINE} (${[...new Set(names)].join(', ') || 'hook'}):\n${preHook.context}`;
     }
     if (changedLine) content = `${changedLine}\n\n${content}`;
-    // A command or a page may show a secret back: the model reads its name instead, for the
-    // values the call used and the ones saved now, unless the person or the model wrote it
-    content = this.redact(content, secrets, () => written(this.messages));
+    content = shown(content);
     let commandExecutions: Message['commandExecutions'];
     try {
       const binding = this.options.commandExecution;

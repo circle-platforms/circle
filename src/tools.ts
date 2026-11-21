@@ -142,6 +142,15 @@ const integer = (description: string, minimum = 1) => ({
   minimum,
   description,
 });
+const answerCommand = (
+  context: ToolContext,
+  output: string,
+  exitCode: number | null | undefined,
+  timedOut = false,
+): string => {
+  context.onCommandResult?.({ code: exitCode ?? null, output });
+  return commandAnswer(output, exitCode, timedOut);
+};
 export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
   const readBySession = new Map<string, Set<string>>();
   const sessionRead = (context: ToolContext): Set<string> => {
@@ -551,11 +560,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
           args.timeout === undefined ? undefined : Number(args.timeout),
         );
         if (result.job) return result.output;
-        context.onCommandResult?.({
-          code: result.exit_code ?? null,
-          output: result.output,
-        });
-        return commandAnswer(result.output, result.exit_code);
+        return answerCommand(context, result.output, result.exit_code);
       }
       if (args.background === true)
         throw new Error('background commands are not available here');
@@ -565,11 +570,12 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         Math.max(1, Number(args.timeout) || 120) * 1000,
         context.identity,
       );
-      context.onCommandResult?.({
-        code: result.exit_code ?? null,
-        output: result.output,
-      });
-      return commandAnswer(result.output, result.exit_code, result.timed_out);
+      return answerCommand(
+        context,
+        result.output,
+        result.exit_code,
+        result.timed_out,
+      );
     },
   );
   if (hooks.localSkills) {

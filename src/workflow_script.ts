@@ -447,7 +447,7 @@ function prepare(source: string, filename: string): PreparedScript {
 
 /** What a running script tells the runtime, as it happens. */
 export interface ScriptHost {
-  agent(id: number, spec: string): void;
+  call(id: number, spec: string): void;
   phase(title: string): void;
   log(message: string): void;
   /** The script returned: its value as JSON, or undefined for none. */
@@ -518,7 +518,7 @@ const BOOTSTRAP = String.raw`(function (host, argsJson, fanOut, fileName) {
     try { spec = stringify({ prompt, options: options === undefined ? {} : options }); }
     catch (error) { return Promise.reject(new TypeError('agent() options must be plain data: ' + error.message)); }
     return new Promise((resolve, reject) => {
-      call('agent', spec,
+      call('call', spec,
         (json) => resolve(json === undefined ? null : parse(json)),
         (message) => reject(new Error(message)));
     });
@@ -532,7 +532,7 @@ const BOOTSTRAP = String.raw`(function (host, argsJson, fanOut, fileName) {
     try { spec = stringify({ command, options: options === undefined ? {} : options }); }
     catch (error) { return Promise.reject(new TypeError('execute() options must be plain data: ' + error.message)); }
     return new Promise((resolve, reject) => {
-      call('agent', spec,
+      call('call', spec,
         (json) => resolve(json === undefined ? null : parse(json)),
         (message) => reject(new Error(message)));
     });
@@ -624,11 +624,11 @@ const post = (message) => {
 };
 const bridge = (kind, first, second, third) => {
   try {
-    if (kind === 'agent') {
+    if (kind === 'call') {
       if (typeof first !== 'string' || typeof second !== 'function' || typeof third !== 'function') return undefined;
       const id = next++;
       waiting.set(id, { resolve: second, reject: third });
-      post({ type: 'agent', id, spec: first });
+      post({ type: 'call', id, spec: first });
     } else if (kind === 'phase') post({ type: 'phase', title: String(first) });
     else if (kind === 'log') post({ type: 'log', message: String(first) });
     else if (kind === 'spent') return spent;
@@ -736,7 +736,7 @@ export class ScriptWorker {
       fanOut: MAX_FAN_OUT,
     });
   }
-  /** Answers an `agent()` call: its value as JSON, or the error it rejects with. */
+  /** Answers an `agent()` or `execute()` call: its value as JSON, or the error it rejects with. */
   settle(
     id: number,
     outcome: { json: string } | { error: string },
@@ -781,8 +781,8 @@ export class ScriptWorker {
   }
   private received(message: Record<string, unknown>): void {
     if (this.ended) return;
-    if (message.type === 'agent')
-      this.host.agent(Number(message.id), String(message.spec));
+    if (message.type === 'call')
+      this.host.call(Number(message.id), String(message.spec));
     else if (message.type === 'phase') this.host.phase(String(message.title));
     else if (message.type === 'log') this.host.log(String(message.message));
     else if (message.type === 'done')

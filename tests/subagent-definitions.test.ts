@@ -12,7 +12,12 @@ import { AgentRuntime, subagentApproval } from '../src/runtime.js';
 import { defaultSettings, type CircleSettings } from '../src/settings.js';
 import { discoverSubagents } from '../src/subagent_files.js';
 import type { ScriptedModel } from '../src/testing.js';
-import { emptyUsage, type Message, type ModelResponse } from '../src/types.js';
+import {
+  emptyUsage,
+  type Message,
+  type ModelResponse,
+  type Tool,
+} from '../src/types.js';
 import { askedBy, cleanup, modelByAsker, scratch } from './helpers.js';
 import { mcpStub } from './mcp-stub.js';
 
@@ -68,6 +73,7 @@ function runtimeFor(
   options: {
     settings?: CircleSettings;
     approve?: () => Promise<'approve'>;
+    extraTools?: Tool[];
   } = {},
 ) {
   const runtime = new AgentRuntime({
@@ -77,6 +83,7 @@ function runtimeFor(
     settings: options.settings ?? defaultSettings(),
     model,
     ...(options.approve ? { approve: options.approve } : {}),
+    ...(options.extraTools ? { extraTools: options.extraTools } : {}),
   });
   cleanup(t, () => runtime.close());
   return runtime;
@@ -1042,4 +1049,62 @@ test('subagents receive active plan file path, deny rules, and guard hook bounda
     'guard hook summary must not expose raw hook command path',
   );
   assert.match(guardedSystem, /Read-only constraint:/);
+});
+
+test('a subagent is told the deny rules that judge its own tools: the browser, a whole MCP server, and the execute rules for the lines it types into a terminal tab', async (t) => {
+  const paths = folders(t);
+  const stub = await mcpStub(t, {
+    tools: [{ name: 'echo', inputSchema: { type: 'object', properties: {} } }],
+  });
+  const settings = defaultSettings();
+  settings.mcpServers = { stub: { type: 'http', url: stub.url } };
+  mkdirSync(join(paths.workspace, '.circle'), { recursive: true });
+  writeFileSync(
+    join(paths.workspace, '.circle', 'approvals.json'),
+    JSON.stringify({
+      rules: [
+        { tool: 'execute', pattern: 'git push *', effect: 'deny' },
+        { tool: 'terminal', pattern: 'device-only *', effect: 'deny' },
+        { tool: 'browser', pattern: 'blocked.example.test', effect: 'deny' },
+        { tool: 'mcp__stub', effect: 'deny' },
+      ],
+    }),
+  );
+  const fake = (name: string): Tool => ({
+    name,
+    description: `The ${name} tool.`,
+    parameters: { type: 'object', properties: {} },
+    effect: 'execute',
+    run: async () => 'ok',
+  });
+  const agents = join(paths.home, 'agents');
+  agent(agents, 'typist', 'tools: terminal_send\n');
+  agent(agents, 'surfer', 'tools: browser_navigate, mcp__stub__echo\n');
+  const model = modelByAsker({
+    go: [
+      reply('', [
+        task('a', 'type it', 'typist'),
+        task('b', 'surf it', 'surfer'),
+      ]),
+      reply('done'),
+    ],
+    'type it': [reply('typed')],
+    'surf it': [reply('surfed')],
+  });
+  const runtime = runtimeFor(t, paths, model, {
+    settings,
+    extraTools: [fake('terminal_send'), fake('browser_navigate')],
+  });
+  await runtime.initialize();
+  await runtime.harness.run('go');
+  const system = (key: string) =>
+    model.requests.find((request) => askedBy(request, key))!.system;
+  const typist = system('type it');
+  assert.match(typist, /execute matching "git push \*"/);
+  assert.match(typist, /terminal matching "device-only \*"/);
+  assert.doesNotMatch(typist, /blocked\.example\.test|mcp__stub/);
+  const surfer = system('surf it');
+  assert.match(surfer, /browser matching "blocked\.example\.test"/);
+  assert.match(surfer, /mcp__stub matching "\*"/);
+  assert.doesNotMatch(surfer, /git push|device-only/);
 });

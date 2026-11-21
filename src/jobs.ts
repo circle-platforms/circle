@@ -239,13 +239,15 @@ export function noticeLine(job: Job): string {
   const chars = Array.from(title);
   return `◆ ${job.id} ${outcomeWords(job)} · ${chars.length > 60 ? chars.slice(0, 59).join('') + '…' : title} · ${elapsed(job)}`;
 }
+/** A command that ran and failed. Its message is what it printed and its exit code, shown as any command's output. */
+export class CommandFailure extends Error {}
 export function commandAnswer(
   output: string,
   exitCode: number | null | undefined,
   timedOut = false,
 ): string {
   const text = `${output}\nExit code: ${exitCode ?? 'none'}`;
-  if (timedOut || exitCode !== 0) throw new Error(text);
+  if (timedOut || exitCode !== 0) throw new CommandFailure(text);
   return text;
 }
 /** The most of a workflow's result its notice carries; the rest stays in its file. */

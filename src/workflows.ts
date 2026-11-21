@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { Ajv } from 'ajv';
 import { EFFORT_LEVELS } from './effort.js';
 import { parseToolInput } from './tool_call_compat.js';
+import type { CommandResult } from './types.js';
 import {
   ScriptWorker,
   WORKFLOW_NAME,
@@ -88,7 +89,7 @@ export type AgentRunner = (
 export type CommandRunner = (
   request: AgentRequest,
   signal: AbortSignal,
-) => Promise<{ code: number | null; output: string }>;
+) => Promise<CommandResult>;
 export const COMMAND_SECONDS = 120;
 const MAX_COMMAND_SECONDS = 600;
 const MAX_RUN_COMMANDS = 10_000;
@@ -470,7 +471,7 @@ export class WorkflowRun {
       const script = new ScriptWorker(
         this.options.prepared,
         {
-          agent: (id, spec) =>
+          call: (id, spec) =>
             this.called(
               spec,
               (json) =>
@@ -856,6 +857,7 @@ export class WorkflowRun {
     let outcome:
       { value: unknown } | { nothing: string } | { error: string } | undefined;
     try {
+      // A command takes no agent's place, so it runs while every place is taken
       if (call.request.command === undefined) {
         await this.slots.take(call.abort.signal);
         placed = true;
@@ -944,6 +946,7 @@ export class WorkflowRun {
           call.abort.signal,
         );
       } catch (error) {
+        // A command that did not run rejects the script's call: it never gives null
         if (this.closed || call.stopped || error instanceof AgentCallError)
           throw error;
         throw new AgentCallError(

@@ -18,6 +18,7 @@ import {
   type ModelResponse,
 } from '../src/types.js';
 import { readJournal, workflowSummary } from '../src/workflows.js';
+import { saveSecret } from '../src/secrets.js';
 import { approvalRequest } from '../src/tui/approval_preview.js';
 import {
   askedBy,
@@ -1383,6 +1384,14 @@ return { first, second, worked }
 test("a command is decided as the conversation's own call is: a hook that denies it gives the script the refusal and nothing runs, and options out of range are refused", async (t) => {
   const paths = folders(t);
   commandFiles(paths.workspace);
+  const after = join(paths.root, 'after.mjs');
+  writeFileSync(
+    after,
+    `import { appendFileSync } from 'node:fs';
+appendFileSync(${JSON.stringify(join(paths.root, 'after.txt'))}, 'ran\\n');
+process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: 'Exit code: 55' } }));
+`,
+  );
   const deny = join(paths.root, 'deny.mjs');
   writeFileSync(
     deny,
@@ -1402,12 +1411,7 @@ if (String(input.tool_input?.command ?? '').includes('forbidden'))
             hooks: [
               {
                 type: 'command',
-                command:
-                  process.execPath +
-                  ' -e ' +
-                  JSON.stringify(
-                    "console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: 'Exit code: 55' } }))",
-                  ),
+                command: `${JSON.stringify(process.execPath)} ${JSON.stringify(after)}`,
               },
             ],
           },
@@ -1462,6 +1466,11 @@ return { denied, allowed, long, empty, label }
     'fine\n',
   );
   assert.equal(
+    readFileSync(join(paths.root, 'after.txt'), 'utf8'),
+    'ran\n',
+    'the PostToolUse hook ran for the command that ran',
+  );
+  assert.equal(
     result.long,
     'execute() option timeout must be a whole number of seconds from 1 to 600',
   );
@@ -1474,6 +1483,217 @@ return { denied, allowed, long, empty, label }
     runtime.workflowRunViews()[0]!.agents.map((agent) => agent.state),
     ['failed', 'done'],
   );
+});
+
+test("a script's command output shows a saved secret's value as its name, and reads the same when the command fails", async (t) => {
+  const paths = folders(t);
+  commandFiles(paths.workspace);
+  saveSecret(paths.home, 'LAB_SECRET', 'q9z8x7w6v5');
+  const script =
+    META('secret') +
+    `const ok = await execute('node emit.mjs token=abc1234567/%LAB_SECRET%')
+const failed = await execute('node emit.mjs token=abc1234567/%LAB_SECRET% 2')
+return { ok, failed }
+`;
+  let notice = '';
+  const model = modelByAsker({
+    go: [
+      workflowCall('w1', { script }),
+      reply('started'),
+      (request) => {
+        notice = request.messages.at(-1)!.content;
+        return reply('read');
+      },
+    ],
+  });
+  const runtime = runtimeFor(t, paths, model);
+  await runtime.initialize();
+  await runtime.harness.run('go');
+  const { run, job } = started(runtime, 'w1');
+  assert.equal((await finished(runtime, job)).status, 'done');
+  await runtime.runJobNotices();
+  const folder = join(runtime.workflowRunsFolder, run);
+  const shown = 'token=abc1234567/%LAB_SECRET%';
+  assert.deepEqual(
+    readJournal(join(folder, 'journal.jsonl'))
+      .filter((event) => event.t === 'end')
+      .map((event) => [event.i, event.status, event.result]),
+    [
+      [0, 'done', { code: 0, output: shown }],
+      [1, 'done', { code: 2, output: shown }],
+    ],
+  );
+  for (const text of [
+    readFileSync(join(folder, 'journal.jsonl'), 'utf8'),
+    readFileSync(join(folder, 'result.txt'), 'utf8'),
+    notice,
+  ])
+    assert.ok(!text.includes('q9z8x7w6v5'), text);
+});
+
+test("what a PostToolUse hook adds to a command's output or puts in its place does not reach the script, which gets the command's result", async (t) => {
+  const paths = folders(t);
+  commandFiles(paths.workspace);
+  const replace = join(paths.root, 'replace.mjs');
+  writeFileSync(
+    replace,
+    `import { appendFileSync } from 'node:fs';
+appendFileSync(${JSON.stringify(join(paths.root, 'replaced.txt'))}, 'ran\\n');
+process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: 'a note', updatedToolOutput: 'REPLACED' } }));
+`,
+  );
+  writeFileSync(
+    join(paths.home, 'settings.json'),
+    JSON.stringify({
+      hooks: {
+        PostToolUse: [
+          {
+            matcher: 'execute',
+            hooks: [
+              {
+                type: 'command',
+                command: `${JSON.stringify(process.execPath)} ${JSON.stringify(replace)}`,
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  );
+  const script =
+    META('replaced') + "return await execute('node emit.mjs kept')\n";
+  let notice = '';
+  const model = modelByAsker({
+    go: [
+      workflowCall('w1', { script }),
+      reply('started'),
+      (request) => {
+        notice = request.messages.at(-1)!.content;
+        return reply('read');
+      },
+    ],
+  });
+  const runtime = runtimeFor(t, paths, model);
+  await runtime.initialize();
+  await runtime.harness.run('go');
+  const { job } = started(runtime, 'w1');
+  assert.equal((await finished(runtime, job)).status, 'done');
+  await runtime.runJobNotices();
+  assert.deepEqual(noticeResult(notice), { code: 0, output: 'kept' });
+  assert.equal(readFileSync(join(paths.root, 'replaced.txt'), 'utf8'), 'ran\n');
+});
+
+test("a script's command stopped when its seconds are over is a result with a non-zero code, its output ending with why", async (t) => {
+  const paths = folders(t);
+  writeFileSync(
+    join(paths.workspace, 'wait.mjs'),
+    "process.stdout.write('waiting');\nsetTimeout(() => {}, 20_000);\n",
+  );
+  const script =
+    META('slow') + "return await execute('node wait.mjs', { timeout: 1 })\n";
+  let notice = '';
+  const model = modelByAsker({
+    go: [
+      workflowCall('w1', { script }),
+      reply('started'),
+      (request) => {
+        notice = request.messages.at(-1)!.content;
+        return reply('read');
+      },
+    ],
+  });
+  const runtime = runtimeFor(t, paths, model);
+  await runtime.initialize();
+  await runtime.harness.run('go');
+  const { job } = started(runtime, 'w1');
+  assert.equal((await finished(runtime, job)).status, 'done');
+  await runtime.runJobNotices();
+  const result = noticeResult(notice) as { code: number; output: string };
+  assert.notEqual(result.code, 0);
+  if (process.platform !== 'win32') assert.equal(result.code, 130);
+  assert.match(result.output, /^waiting[\s\S]*Command ended: timeout$/);
+});
+
+test("a script's command is approved as the conversation's own call is: a deny rule refuses it, a rule that allows it runs it without asking, and in manual mode the others ask you", async (t) => {
+  const paths = folders(t);
+  commandFiles(paths.workspace);
+  mkdirSync(join(paths.workspace, '.circle'), { recursive: true });
+  writeFileSync(
+    join(paths.workspace, '.circle', 'approvals.json'),
+    JSON.stringify({
+      rules: [
+        {
+          tool: 'execute',
+          pattern: 'node note.mjs denied.txt *',
+          effect: 'deny',
+        },
+      ],
+    }),
+  );
+  writeFileSync(
+    join(paths.home, 'approvals.json'),
+    JSON.stringify({
+      rules: [
+        {
+          tool: 'execute',
+          pattern: 'node note.mjs ruled.txt *',
+          effect: 'allow',
+        },
+      ],
+    }),
+  );
+  const script =
+    META('approvals') +
+    `const ran = (call) => call.then((result) => result.code, (error) => error.message)
+return {
+  denied: await ran(execute('node note.mjs denied.txt x')),
+  ruled: await ran(execute('node note.mjs ruled.txt x')),
+  approved: await ran(execute('node note.mjs approved.txt x')),
+  rejected: await ran(execute('node note.mjs rejected.txt x')),
+}
+`;
+  const asked: string[] = [];
+  let notice = '';
+  const model = modelByAsker({
+    go: [
+      workflowCall('w1', { script }),
+      reply('started'),
+      (request) => {
+        notice = request.messages.at(-1)!.content;
+        return reply('read');
+      },
+    ],
+  });
+  const runtime = runtimeFor(t, paths, model, {
+    yolo: false,
+    approve: async (call) => {
+      if (call.name !== 'execute') return 'approve';
+      const command = String(call.args.command);
+      asked.push(command);
+      return command.includes('rejected.txt') ? 'reject' : 'approve';
+    },
+  });
+  await runtime.initialize();
+  await runtime.harness.run('go');
+  const { job } = started(runtime, 'w1');
+  assert.equal((await finished(runtime, job)).status, 'done');
+  await runtime.runJobNotices();
+  const result = noticeResult(notice) as Record<string, unknown>;
+  assert.match(String(result.denied), /is denied/);
+  assert.equal(result.ruled, 0);
+  assert.equal(result.approved, 0);
+  assert.equal(result.rejected, 'The user rejected this tool call.');
+  assert.deepEqual(asked, [
+    'node note.mjs approved.txt x',
+    'node note.mjs rejected.txt x',
+  ]);
+  for (const [name, made] of [
+    ['denied.txt', false],
+    ['ruled.txt', true],
+    ['approved.txt', true],
+    ['rejected.txt', false],
+  ] as const)
+    assert.equal(existsSync(join(paths.workspace, name)), made, name);
 });
 
 test("a relaunch hands back a command's saved result without running it again, and runs a changed command", async (t) => {
