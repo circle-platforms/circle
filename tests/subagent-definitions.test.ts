@@ -318,7 +318,18 @@ test('a subagent is told once how many requests it has left, with a fifth of its
   assert.equal(asked.length, 10);
   const told = (request: (typeof asked)[number]) =>
     JSON.stringify(request.messages).includes('data-source=\\"turn-limit\\"');
-  assert.deepEqual(asked.map(told), [false, false, false, false, false, false, false, false, true, true]);
+  assert.deepEqual(asked.map(told), [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+    true,
+  ]);
   // A limit of a few requests gets none
   assert.deepEqual(reminders('brief'), []);
 });
