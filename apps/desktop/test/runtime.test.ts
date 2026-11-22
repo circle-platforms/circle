@@ -4464,6 +4464,175 @@ test('a background job that ends while nothing runs starts a turn that reads its
   assert.ok(session().messages.at(-1)?.usage, 'the turn shows its own usage');
 });
 
+/** Approves the next `count` requests of the conversation, one after the other. */
+async function approveNext(
+  f: Awaited<ReturnType<typeof setup>>,
+  sessionId: string,
+  count: number,
+) {
+  for (let approved = 0; approved < count; approved++) {
+    await wait(
+      () =>
+        f.controller
+          .snapshot()
+          .interactions.some((item) => item.status === 'pending'),
+      'a command waits for approval',
+    );
+    const pending = f.controller
+      .snapshot()
+      .interactions.find((item) => item.status === 'pending')!;
+    await f.call(
+      'answer',
+      { id: pending.id, revision: pending.revision, answer: 'approve' },
+      sessionId,
+    );
+  }
+}
+
+test("after a stop, a finished job's notice that waits for the person's message is said in the conversation once for each job, and the next message gives the model the notices", async (t) => {
+  let first = '';
+  let second = '';
+  const f = await setup(t, [
+    async () => ({
+      message: assistant('', [
+        {
+          id: 'first',
+          name: 'execute',
+          args: { command: first, background: true },
+        },
+        {
+          id: 'second',
+          name: 'execute',
+          args: { command: second, background: true },
+        },
+      ]),
+      usage: emptyUsage(),
+    }),
+    { message: assistant('waiting for both'), usage: emptyUsage() },
+    { message: assistant('read both'), usage: emptyUsage() },
+  ]);
+  const gates = [join(f.workspace, 'gate-1'), join(f.workspace, 'gate-2')];
+  first = gatedCommand(gates[0]!, 'first output');
+  second = gatedCommand(gates[1]!, 'second output');
+  const id = f.controller.snapshot().activeSessionId;
+  const session = () =>
+    f.controller.snapshot().sessions.find((item) => item.id === id)!;
+  const waits = () =>
+    session().messages.filter(
+      (message) =>
+        message.role === 'notice' &&
+        message.text.includes('waits for your message'),
+    );
+  await f.call('prompt', { text: 'run both in the background' }, id);
+  await approveNext(f, id, 2);
+  await wait(
+    () => f.model.requests.length === 2 && session().state === 'idle',
+    'the turn that started the jobs ends',
+  );
+  // The person stops (esc) with nothing running: the jobs that end after it start no turn
+  await f.call('abort', {}, id);
+  await writeFile(gates[0]!, '');
+  await wait(() => waits().length === 1, 'the first notice is said to wait');
+  await writeFile(gates[1]!, '');
+  await wait(() => waits().length === 2, 'the second notice is said to wait');
+  assert.equal(f.model.requests.length, 2, 'no turn starts for either');
+  // The first is not said again when the second is: one line for each job, after the last row stored
+  const lines = waits().map((message) => message.text);
+  assert.match(lines[0]!, /^j1 done · .+ · \S+ · waits for your message$/);
+  assert.match(lines[1]!, /^j2 done · .+ · \S+ · waits for your message$/);
+  assert.equal(
+    session().messages.at(-1)?.text,
+    lines[1],
+    'after the last row stored',
+  );
+  assert.equal(
+    session().messages.at(-3)?.text,
+    'waiting for both',
+    'under the answer of the turn that started the jobs',
+  );
+
+  await f.call('prompt', { text: 'go on' }, id);
+  await wait(
+    () => f.model.requests.length === 3 && session().state === 'idle',
+    'the turn of the message ends',
+  );
+  const read = noticesIn(f.model.requests[2]!)
+    .map((message) => String(message.content))
+    .join('\n');
+  assert.match(read, /first output/);
+  assert.match(read, /second output/);
+  const rows = session().messages;
+  assert.deepEqual(
+    waits().map((message) => message.text),
+    lines,
+    'the lines stay where they were, and nothing is said again',
+  );
+  assert.ok(
+    rows.findIndex((message) => message.text === lines[1]) <
+      rows.findIndex((message) => message.text === 'go on'),
+    'the lines are above the message that gave the model the notices',
+  );
+});
+
+test("after the limit of turns in a row that jobs started, a finished job's notice that waits is said in the conversation with the number", async (t) => {
+  const before = process.env.CIRCLE_JOB_WAKES;
+  process.env.CIRCLE_JOB_WAKES = '1';
+  t.after(() => {
+    if (before === undefined) delete process.env.CIRCLE_JOB_WAKES;
+    else process.env.CIRCLE_JOB_WAKES = before;
+  });
+  let first = '';
+  let second = '';
+  const f = await setup(t, [
+    async () => startedJob(first, 'first'),
+    { message: assistant('waiting for the first'), usage: emptyUsage() },
+    // The turn the first job's end starts: it starts the second job
+    async () => startedJob(second, 'second'),
+    { message: assistant('waiting for the second'), usage: emptyUsage() },
+    { message: assistant('read the second'), usage: emptyUsage() },
+  ]);
+  const gates = [join(f.workspace, 'gate-1'), join(f.workspace, 'gate-2')];
+  first = gatedCommand(gates[0]!, 'first output');
+  second = gatedCommand(gates[1]!, 'second output');
+  const id = f.controller.snapshot().activeSessionId;
+  const session = () =>
+    f.controller.snapshot().sessions.find((item) => item.id === id)!;
+  const waits = () =>
+    session().messages.filter(
+      (message) =>
+        message.role === 'notice' &&
+        message.text.includes('waits for your message'),
+    );
+  await startGatedJob(f, id);
+  await writeFile(gates[0]!, '');
+  // The first job's end starts a turn, the one turn in a row there is: nothing waits yet
+  await approveNext(f, id, 1);
+  await wait(
+    () => f.model.requests.length === 4 && session().state === 'idle',
+    'the turn the first job starts ends',
+  );
+  assert.deepEqual(waits(), []);
+  await writeFile(gates[1]!, '');
+  await wait(() => waits().length === 1, 'the second notice is said to wait');
+  assert.match(
+    waits()[0]!.text,
+    /^j2 done · .+ · \S+ · waits for your message after 1 turn started by jobs$/,
+  );
+  assert.equal(f.model.requests.length, 4, 'no turn starts for the second');
+
+  await f.call('prompt', { text: 'go on' }, id);
+  await wait(
+    () => f.model.requests.length === 5 && session().state === 'idle',
+    'the turn of the message ends',
+  );
+  assert.match(
+    noticesIn(f.model.requests[4]!)
+      .map((message) => String(message.content))
+      .at(-1)!,
+    /second output/,
+  );
+});
+
 test("an ended job's output is read once and carries no terminal control codes", async (t) => {
   let command = '';
   const f = await setup(t, [

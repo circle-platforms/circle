@@ -102,6 +102,35 @@ test('only typed completion diagnostics translate; model and provider text stay 
   );
 });
 
+test("a finished job's notice that waits for the next message keeps the job's line and is translated after it", (context) => {
+  context.after(() => setLanguage('en'));
+  const line = 'j21 done · stage 21 · 7m 38s';
+  const limit =
+    line + ' · waits for your message after 20 turns in a row started by jobs';
+  const one =
+    'j2 failed · exit 1 · npm test · 4s · waits for your message after 1 turn started by jobs';
+  const stopped = line + ' · waits for your message';
+  setLanguage('en');
+  for (const text of [limit, one, stopped])
+    assert.equal(completionNoticeText({ text }), text);
+  setLanguage('zh-CN');
+  assert.equal(
+    completionNoticeText({ text: limit }),
+    line + ' · 已连续由任务触发 20 轮，等待下一条消息',
+  );
+  assert.equal(
+    completionNoticeText({ text: one }),
+    'j2 failed · exit 1 · npm test · 4s · 由任务触发 1 轮后，等待下一条消息',
+  );
+  assert.equal(
+    completionNoticeText({ text: stopped }),
+    line + ' · 等待下一条消息',
+  );
+  // A text that only ends in the same words, with no job's line before it, is left as it is
+  const title = 'echo waits for your message';
+  assert.equal(completionNoticeText({ text: title }), title);
+});
+
 test('a stopped reply keeps one interrupt mark, under the stats', () => {
   const row = (
     role: Message['role'],

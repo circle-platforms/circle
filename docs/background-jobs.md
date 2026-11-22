@@ -41,13 +41,13 @@ Circle does not start such a turn:
 - for a job of another conversation: its notice waits until that conversation is open again;
 - more than twenty times in a row: then it waits for you. Work that runs many jobs by design, one for each item of a long list, sets `CIRCLE_JOB_WAKES` to a higher number before Circle starts.
 
-When a notice waits like this and nothing else holds the conversation, the terminal says so as the job ends, with a dim line: `j21 done · download returns · 7m 38s · waits for your message after 20 turns in a row started by jobs`. After `esc` or `ctrl+c` the line ends at `waits for your message`. The line is not part of the conversation's history: the model reads the notice itself with your next message, and its row, `◆ j21 done · …`, appears then. Turns that jobs start count from your last message, however long the jobs run, so a long run of jobs, each started in the turn the one before started, reaches the limit.
+When a notice waits like this and nothing else holds the conversation, the terminal says so as the job ends, with a dim line: `j21 done · download returns · 7m 38s · waits for your message after 20 turns in a row started by jobs`. After `esc` or `ctrl+c` the line ends at `waits for your message`. The desktop application shows the same line as a notice in the conversation, under its last message, with what follows the job's line in the interface language, and [RPC mode](rpc.md#events) writes a `job_notice_waiting` record. The line is not part of the conversation's history: the model reads the notice itself with your next message, and the terminal draws its row, `◆ j21 done · …`, then. Turns that jobs start count from your last message, however long the jobs run, so a long run of jobs, each started in the turn the one before started, reaches the limit.
 
 A turn that failed, because the model did not answer, its service broke off or a compaction was running, is tried again after fifteen seconds, a minute and four minutes. The failed turn has usually read the notice already, so the retry asks the model about the conversation as it stands. After the third it waits for you.
 
 The [desktop application](desktop.md) starts such a turn too, with these differences:
 
-- The conversation has no row for the notice. The job's row in the overview's [background jobs card](desktop.md#the-overview) says how it ended.
+- The conversation has no row for the notice, except the line above when it waits for your message. The job's row in the overview's [background jobs card](desktop.md#the-overview) says how it ended.
 - The stop button counts as `esc`, and going back with the session tree counts as `/tree`.
 - Each open conversation wakes by itself, selected or not, so a job of a conversation you are not looking at starts a turn in that conversation.
 - Typing holds nothing back: what you send during the turn waits in the queue, as it does during any turn.
@@ -75,7 +75,7 @@ Without the full-screen interface:
 
 - **Print mode** (`circle -p`) waits after its answer while jobs the model started run, and lets the model answer again when they end, up to twenty times and for up to `CIRCLE_JOB_WAIT` seconds (1800 by default; `0` does not wait). Processes a command left running, usually servers, are stopped at once. What still runs at the end is stopped.
 - **Line mode** prints `Background job j3 ended.` to standard error when a job ends; the model reads its notice with your next line.
-- **RPC mode** reports jobs as events and starts a turn when one ends while nothing runs; see [RPC mode](rpc.md).
+- **RPC mode** reports jobs as events, starts a turn when one ends while nothing runs, and writes a `job_notice_waiting` record when its notice waits for the next prompt; see [RPC mode](rpc.md).
 
 ## What is not tracked
 

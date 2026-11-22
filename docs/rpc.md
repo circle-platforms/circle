@@ -52,9 +52,10 @@ The work a prompt starts is written as the [JSON events](cli.md#json-events) of 
 | `steer` | The model read a steering message (`message`). |
 | `turn_end` with `"aborted": true` | The turn was stopped by `abort` or `ctrl+c`. |
 | `agent_settled` | The work a prompt or a job notice started has ended, and nothing more will run on its own. |
+| `job_notice_waiting` | A finished [background job](background-jobs.md)'s notice waits for the next prompt, because no turn will start for it. One record for each job, once the job has ended and nothing runs: `jobId`; `line`, the job's line as the terminal shows it, such as `j21 done · stage 21 · 7m 38s`; and `why`, either `limit`, with `most`, the number of turns in a row that jobs may start (`CIRCLE_JOB_WAKES`, twenty by default), or `stopped`, after `abort` or `new_session` or when the turn a job started failed on every retry. The next prompt gives the model the notice. |
 | `jobs_stopped` | The last line: `count`, the jobs that were still running at the end and were stopped. |
 
-When a [background job](background-jobs.md) the model started ends while nothing runs, Circle starts a turn for it, up to twenty in a row. Its `turn_start` has no `message`, and it also ends with `agent_settled`. After `abort` or `new_session` such turns wait for the next prompt.
+When a [background job](background-jobs.md) the model started ends while nothing runs, Circle starts a turn for it, up to twenty in a row. Its `turn_start` has no `message`, and it also ends with `agent_settled`. After the limit, and after `abort` or `new_session`, such turns wait for the next prompt, and each job that ends then gets a `job_notice_waiting` record.
 
 ## Options and approvals
 

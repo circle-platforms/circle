@@ -4,6 +4,8 @@ import {
   JobWake,
   answerJobsBeforeLeaving,
   mostWakesInARow,
+  unsaidNotices,
+  waitingSentence,
 } from '../src/job_wake.js';
 
 function setup(t: TestContext) {
@@ -458,4 +460,54 @@ test('a front end that does not ask to be told is not looked at again while a no
   const first = looks;
   t.mock.timers.tick(60_000);
   assert.equal(looks, first, 'no timer of its own after the first look');
+});
+
+// What a front end says when it is told: each notice that waits, once, in the sentence the terminal prints.
+test('a notice that waits is news once, and again only when a turn has read it and another waits', () => {
+  const waiting: { id: string; line: string }[] = [
+    { id: 'j1', line: 'j1 done · stage 1 · 3s' },
+  ];
+  const asked: string[] = [];
+  const runtime = {
+    session: { id: 'conversation' },
+    jobs: {
+      waitingNotices: (sessionId: string) => {
+        asked.push(sessionId);
+        return structuredClone(waiting);
+      },
+    },
+  };
+  const said = new Set<string>();
+  const news = () => unsaidNotices(runtime as never, said).map((n) => n.id);
+  assert.deepEqual(news(), ['j1']);
+  assert.deepEqual(news(), [], 'said once');
+  waiting.push({ id: 'j2', line: 'j2 done · stage 2 · 4s' });
+  assert.deepEqual(news(), ['j2'], 'a notice more is news, the first is not');
+  assert.deepEqual(
+    asked,
+    Array(3).fill('conversation'),
+    'this conversation only',
+  );
+  // A turn read them: they are forgotten, so one that waits again is news again
+  waiting.length = 0;
+  assert.deepEqual(news(), []);
+  assert.equal(said.size, 0);
+  waiting.push({ id: 'j1', line: 'j1 done · stage 1 · 3s' });
+  assert.deepEqual(news(), ['j1']);
+});
+
+test('the sentence of a notice that waits says why: after the limit with its number, a single turn in the singular, or after a stop with none', () => {
+  const line = 'j21 done · stage 21 · 7m 38s';
+  assert.equal(
+    waitingSentence(line, { why: 'limit', most: 20 }),
+    'j21 done · stage 21 · 7m 38s · waits for your message after 20 turns in a row started by jobs',
+  );
+  assert.equal(
+    waitingSentence(line, { why: 'limit', most: 1 }),
+    'j21 done · stage 21 · 7m 38s · waits for your message after 1 turn started by jobs',
+  );
+  assert.equal(
+    waitingSentence(line, { why: 'stopped' }),
+    'j21 done · stage 21 · 7m 38s · waits for your message',
+  );
 });

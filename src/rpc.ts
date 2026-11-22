@@ -9,7 +9,7 @@ import { resolve } from 'node:path';
 import type { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { rpcMessage, rpcJob } from './rpc_codec.js';
-import { JobWake, answerJobsBeforeLeaving } from './job_wake.js';
+import { JobWake, answerJobsBeforeLeaving, unsaidNotices } from './job_wake.js';
 export interface RpcIO {
   input: Readable;
   write(text: string): void;
@@ -30,6 +30,8 @@ export async function runRpc(
   let running: Promise<void> | undefined;
   let code = 0;
   let ended = false;
+  // The jobs whose notices wait for the next prompt and that were said so, until a turn reads their notices
+  const said = new Set<string>();
   const wake = new JobWake({
     hasNotice: () => runtime.jobs.hasNotices(runtime.session.id, true),
     occupied: () => runtime.busy,
@@ -43,6 +45,16 @@ export async function runRpc(
         )
         .finally(() => send({ type: 'agent_settled' }));
       return run;
+    },
+    // A notice no turn starts for waits for the next prompt: one record for each, as the terminal prints one line
+    holding: (hold) => {
+      for (const notice of unsaidNotices(runtime, said))
+        send({
+          type: 'job_notice_waiting',
+          jobId: notice.id,
+          line: notice.line,
+          ...hold,
+        });
     },
   });
   const off = runtime.bus.subscribe((event) => {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test, type TestContext } from 'node:test';
 import { PassThrough } from 'node:stream';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { runRpc } from '../src/rpc.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { ScriptedModel } from '../src/testing.js';
+import { Watch } from '../src/watch.js';
 import { defaultSettings, saveCredentials } from '../src/settings.js';
 import {
   scratch,
@@ -465,6 +466,200 @@ test('an RPC conversation runs again the turn a finished job started when the mo
         message.content.includes('job result'),
     ),
   );
+});
+
+// A finished job's notice that no turn starts for waits for the next prompt: after the limit of turns in a row that
+// jobs started (CIRCLE_JOB_WAKES) and after an abort. RPC says so once for each job, as the terminal does in a line.
+async function waitingSession(t: TestContext, replies: number) {
+  const root = scratch(t);
+  const model = new ScriptedModel(
+    Array.from({ length: replies }, (_, i) => ({
+      message: answer(`turn ${i + 1}`),
+    })),
+  );
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model,
+    headless: true,
+  });
+  cleanup(t, () => runtime.close());
+  const input = new PassThrough();
+  const output: Record<string, unknown>[] = [];
+  const runner = runRpc(runtime, {
+    input,
+    write: (text) => output.push(JSON.parse(text)),
+  });
+  cleanup(t, async () => {
+    input.destroy();
+    await runtime.cancel();
+    await runner;
+  });
+  const send = (value: unknown): void => {
+    input.write(JSON.stringify(value) + '\n');
+  };
+  // A ceiling, not a clock: a job that ended is looked at a second later
+  const patience = { timeout: 15_000 };
+  const settled = (count: number) =>
+    until(
+      () =>
+        output.filter((record) => record.type === 'agent_settled').length >=
+        count,
+      { ...patience, label: `${count} settled turns` },
+    );
+  const waiting = () =>
+    output.filter((record) => record.type === 'job_notice_waiting');
+  const waitingCount = (count: number) =>
+    until(() => waiting().length >= count, {
+      ...patience,
+      label: () => `${count} waiting notices: ${JSON.stringify(output)}`,
+    });
+  return {
+    runtime,
+    model,
+    input,
+    runner,
+    output,
+    send,
+    settled,
+    waiting,
+    waitingCount,
+  };
+}
+/** A job of the model's that ends when the returned function is called: a watch, as the terminal's tests use. */
+function startJob(runtime: AgentRuntime, title: string): () => void {
+  let ended = false;
+  runtime.jobs.startWatch(
+    new Watch(title, () => (ended ? 'ok' : null), { interval_s: 0.01 }),
+    { sessionId: runtime.session.id, startedBy: 'model' },
+  );
+  return () => {
+    ended = true;
+  };
+}
+const noticesIn = (request: { messages: Message[] }) =>
+  request.messages.filter((message) => message.internal === 'job_notice');
+
+test('RPC writes one record for each finished job whose notice waits after the limit of turns in a row, and the next prompt gives the model the notices', async (t) => {
+  const before = process.env.CIRCLE_JOB_WAKES;
+  process.env.CIRCLE_JOB_WAKES = '1';
+  t.after(() => {
+    if (before === undefined) delete process.env.CIRCLE_JOB_WAKES;
+    else process.env.CIRCLE_JOB_WAKES = before;
+  });
+  const {
+    runtime,
+    model,
+    input,
+    runner,
+    send,
+    settled,
+    waiting,
+    waitingCount,
+  } = await waitingSession(t, 3);
+  send({ type: 'prompt', message: 'start pipeline' });
+  await settled(1);
+  // The end of the first job starts a turn: one turn in a row, which is the limit
+  startJob(runtime, 'stage 1')();
+  await settled(2);
+  assert.equal(model.requests.length, 2);
+  assert.deepEqual(waiting(), [], 'a turn started, nothing waits');
+
+  // The second job's notice waits: its record says which job, its line, and why
+  startJob(runtime, 'stage 2')();
+  await waitingCount(1);
+  const { line, ...second } = waiting()[0] as {
+    line: string;
+    [key: string]: unknown;
+  };
+  assert.deepEqual(second, {
+    type: 'job_notice_waiting',
+    jobId: 'j2',
+    why: 'limit',
+    most: 1,
+  });
+  assert.match(line, /^j2 done · stage 2 · \S+$/);
+  assert.equal(model.requests.length, 2, 'no turn starts for it');
+  assert.equal(runtime.jobs.hasNotices(runtime.session.id, true), true);
+
+  // A job that ends while the first still waits is one record more; the first is not said again
+  startJob(runtime, 'stage 3')();
+  await waitingCount(2);
+  assert.deepEqual(
+    waiting().map((record) => record.jobId),
+    ['j2', 'j3'],
+  );
+  assert.equal(model.requests.length, 2);
+
+  // The prompt: the model reads both notices with it, and nothing waits any more
+  send({ type: 'prompt', message: 'go on' });
+  await settled(3);
+  // The first job's notice was read by the turn it started; the others come now, in one message
+  const notices = noticesIn(model.requests.at(-1)!);
+  assert.equal(notices.length, 2);
+  assert.match(notices[0]!.content, /stage 1/);
+  assert.match(notices[1]!.content, /stage 2[\s\S]*stage 3/);
+  assert.equal(runtime.jobs.hasNotices(runtime.session.id, true), false);
+  assert.equal(waiting().length, 2, 'the prompt said nothing more');
+  input.end();
+  assert.equal(await runner, 0);
+});
+
+test('after abort, RPC writes a record for a finished job whose notice waits, without a number, and none for a job the person stopped', async (t) => {
+  const {
+    runtime,
+    model,
+    input,
+    runner,
+    output,
+    send,
+    settled,
+    waiting,
+    waitingCount,
+  } = await waitingSession(t, 2);
+  send({ type: 'prompt', message: 'start pipeline' });
+  await settled(1);
+  send({ id: 'stop', type: 'abort' });
+  await until(() => output.some((record) => record.id === 'stop'), {
+    label: 'the abort answered',
+  });
+  // A job the person stops is no news: it never starts a turn, so nothing waits for it
+  startJob(runtime, 'dev server');
+  send({ type: 'stop_job', jobId: 'j1' });
+  await until(
+    () =>
+      output.some(
+        (record) =>
+          record.type === 'job' &&
+          (record.job as { id: string; status: string }).id === 'j1' &&
+          (record.job as { status: string }).status === 'stopped',
+      ),
+    { label: 'the job stopped' },
+  );
+  const end = startJob(runtime, 'build');
+  end();
+  await waitingCount(1);
+  const { line, ...record } = waiting()[0] as {
+    line: string;
+    [key: string]: unknown;
+  };
+  assert.deepEqual(record, {
+    type: 'job_notice_waiting',
+    jobId: 'j2',
+    why: 'stopped',
+  });
+  assert.match(line, /^j2 done · build · \S+$/);
+  assert.equal(waiting().length, 1, 'nothing for the job that was stopped');
+  assert.equal(model.requests.length, 1, 'no turn starts for it');
+
+  send({ type: 'prompt', message: 'go on' });
+  await settled(2);
+  const notices = noticesIn(model.requests.at(-1)!);
+  assert.equal(notices.length, 1);
+  assert.match(notices[0]!.content, /build/);
+  input.end();
+  assert.equal(await runner, 0);
 });
 
 async function requestModels(

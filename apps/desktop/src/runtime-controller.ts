@@ -261,7 +261,11 @@ import {
   outputTail,
   type Job as BackgroundJob,
 } from '../../../src/jobs.js';
-import { JobWake } from '../../../src/job_wake.js';
+import {
+  JobWake,
+  unsaidNotices,
+  waitingSentence,
+} from '../../../src/job_wake.js';
 import type { CircleEvent } from '../../../src/events.js';
 import type {
   WorkbenchSnapshot,
@@ -2728,6 +2732,8 @@ export class RuntimeController {
         this.event(runtime, event);
       }
     });
+    // The jobs this conversation has said wait for the person's message, until a turn reads their notices
+    const said = new Set<string>();
     // A task's runtime ends with its turn; only a conversation waits for its jobs.
     if (!task)
       this.jobWakes.set(
@@ -2753,6 +2759,23 @@ export class RuntimeController {
             const run = runtime.runJobNotices(owed);
             this.track(run, runtime);
             return run;
+          },
+          // A notice no turn starts for waits for the person's next message: a line in the conversation, as in the
+          // terminal, placed after the last stored row and not stored in the history
+          holding: (hold) => {
+            const id = runtime.session.id;
+            const news = unsaidNotices(runtime, said);
+            if (news.length === 0) return;
+            const rows = this.notices.get(id) ?? [];
+            for (const notice of news)
+              rows.push({
+                id: `job-waits-${randomUUID()}`,
+                after: runtime.store.get(id)?.head ?? null,
+                text: waitingSentence(notice.line, hold),
+                at: new Date().toISOString(),
+              });
+            this.notices.set(id, rows);
+            this.publish();
           },
         }),
       );

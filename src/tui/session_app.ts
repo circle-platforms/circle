@@ -154,7 +154,7 @@ import { loadSecrets } from '../secrets.js';
 import { KnowledgeService } from '../knowledge/service.js';
 import { knowledgeLamp, knowledgeSyncNotice } from './knowledge_view.js';
 import { PROTOCOLS } from '../protocols.js';
-import { JobWake } from '../job_wake.js';
+import { JobWake, unsaidNotices, waitingSentence } from '../job_wake.js';
 export { VERSION } from '../version.js';
 interface DialogPending {
   complete: (answer: unknown) => void;
@@ -573,18 +573,8 @@ export class SessionApp {
         holding: (hold) => {
           const runtime = this.runtime;
           if (!runtime) return;
-          const waiting = runtime.jobs.waitingNotices(runtime.session.id);
-          for (const id of said)
-            if (!waiting.some((notice) => notice.id === id)) said.delete(id);
-          const why =
-            hold.why === 'limit'
-              ? ` after ${hold.most} ${hold.most === 1 ? 'turn' : 'turns in a row'} started by jobs`
-              : '';
-          for (const notice of waiting)
-            if (!said.has(notice.id)) {
-              said.add(notice.id);
-              this.notice(`${notice.line} · waits for your message${why}`);
-            }
+          for (const notice of unsaidNotices(runtime, said))
+            this.notice(waitingSentence(notice.line, hold));
         },
       },
       { timed: false },

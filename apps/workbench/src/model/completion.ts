@@ -1,6 +1,6 @@
 import type { ModelCompletionFailureCode } from '../../../../src/model_completion';
 import type { Message } from './types';
-import { locale, t } from '../i18n/index.ts';
+import { locale, t, tn } from '../i18n/index.ts';
 import { compactionOutcomeText } from './compaction';
 
 /**
@@ -69,6 +69,14 @@ export function completionFailureText(
   }
 }
 
+/**
+ * A finished job's notice that waits for the person's next message, as the runtime writes it, the same line the
+ * terminal prints: `j21 done · stage 21 · 7m 38s · waits for your message after 20 turns in a row started by jobs`.
+ * What comes before `waits` is the job's line, which stays as it was written; what follows is translated.
+ */
+const WAITING_NOTICE =
+  /^(.+ · )waits for your message(?: after (\d+) turns? (?:in a row )?started by jobs)?$/;
+
 export function completionNoticeText(
   message: Pick<
     Message,
@@ -91,6 +99,18 @@ export function completionNoticeText(
     const said = message.text.split('\n').slice(1).join('\n');
     return `✖ ${failure}${said ? '\n' + said : ''}`;
   }
+  const waiting = WAITING_NOTICE.exec(message.text);
+  if (waiting)
+    return (
+      waiting[1] +
+      (waiting[2] === undefined
+        ? t('waits for your message')
+        : tn(
+            Number(waiting[2]),
+            'waits for your message after {n} turn started by jobs',
+            'waits for your message after {n} turns in a row started by jobs',
+          ))
+    );
   // The runtime's own words for a failed turn and a failed session title.
   if (message.text === '✖ the turn failed') return t('✖ the turn failed');
   if (message.text === '✖ Interrupted') return t('✖ Interrupted');

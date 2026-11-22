@@ -101,7 +101,6 @@ These are gaps to know about before you trust Circle with a repository or a mach
 - **If Circle is killed with `SIGKILL`, or crashes, its jobs keep running.** Find them with `ps` and stop them yourself.
 - **Jobs do not outlive Circle.** A reopened session has none running; the note Circle leaves names the ones that were stopped (not after `SIGTERM`, `SIGHUP` or a closed terminal window).
 - **A background subagent keeps the agent it started with.** After `/reload`, `/models` or a change of extensions it still uses the old tools and model until it ends; `/plan` reaches it.
-- **The desktop application and RPC mode do not say when a finished job's notice waits for your message.** After the limit of turns in a row that finished jobs start (`CIRCLE_JOB_WAKES`) or after a stop, no turn follows the job's end until a message is sent. The desktop's job row and RPC's `job` event say how the job ended and nothing more; only the terminal says that its notice waits. See [When a job ends](background-jobs.md#when-a-job-ends).
 - **The output a dev server prints may not show on its row**: many programs keep their output in a buffer when it does not go to a terminal (`python3 -u` and `PYTHONUNBUFFERED=1` help for Python).
 
 ## Workflows

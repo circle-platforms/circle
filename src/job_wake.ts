@@ -145,6 +145,32 @@ export class JobWake {
 }
 
 /**
+ * What a front end says when `JobWake` calls its `holding`: the notices of the conversation that wait for the person's
+ * next message and that it has not said yet, each with its job's id and its line (`j21 done · stage 21 · 7m 38s`).
+ * `said` is the front end's memory of the conversation, kept until a turn reads the notices: a notice is news once.
+ */
+export function unsaidNotices(
+  runtime: Pick<AgentRuntime, 'jobs' | 'session'>,
+  said: Set<string>,
+): { id: string; line: string }[] {
+  const waiting = runtime.jobs.waitingNotices(runtime.session.id);
+  for (const id of said)
+    if (!waiting.some((notice) => notice.id === id)) said.delete(id);
+  const news = waiting.filter((notice) => !said.has(notice.id));
+  for (const notice of news) said.add(notice.id);
+  return news;
+}
+
+/** The line a conversation shows for a notice that waits, in English: `j21 done · … · 7m 38s · waits for your message after 20 turns in a row started by jobs`. */
+export function waitingSentence(line: string, hold: JobHold): string {
+  const why =
+    hold.why === 'limit'
+      ? ` after ${hold.most} ${hold.most === 1 ? 'turn' : 'turns in a row'} started by jobs`
+      : '';
+  return `${line} · waits for your message${why}`;
+}
+
+/**
  * After the last prompt, with no one left to write: stops what commands left running,
  * then lets the model answer as its jobs end, for as long as CIRCLE_JOB_WAIT allows.
  */
