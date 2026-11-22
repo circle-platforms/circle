@@ -148,6 +148,35 @@ test('after twenty turns in a row that finished jobs started, the twenty-first j
   assert.equal(runtime.jobs.hasNotices(runtime.session.id, true), false);
 });
 
+test('with a limit of one, the line counts one turn', async (t) => {
+  const before = process.env.CIRCLE_JOB_WAKES;
+  process.env.CIRCLE_JOB_WAKES = '1';
+  t.after(() => {
+    if (before === undefined) delete process.env.CIRCLE_JOB_WAKES;
+    else process.env.CIRCLE_JOB_WAKES = before;
+  });
+  const { app, ui, runtime, model } = await session(t, 3);
+  await app.submit('start pipeline');
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  let end = startJob(runtime, 'stage 1');
+  end();
+  await lookAfterTheSecond(t, ui, runtime);
+  await eventually(
+    () => model.requests.length === 2 && !runtime.busy,
+    'the turn of job 1',
+  );
+  end = startJob(runtime, 'stage 2');
+  end();
+  await lookAfterTheSecond(t, ui, runtime);
+  assert.equal(model.requests.length, 2, 'no turn starts for the second');
+  const held = app.state.notices.filter((note) => note.startsWith('j2 '));
+  assert.equal(held.length, 1);
+  assert.match(
+    held[0]!,
+    /^j2 done · stage 2 · \S+ · waits for your message after 1 turn started by jobs$/,
+  );
+});
+
 test('a job that ends after a stop waits for the next message, and the conversation says so without a number', async (t) => {
   const { app, ui, runtime, model, key } = await session(t, 3);
   await app.submit('start pipeline');

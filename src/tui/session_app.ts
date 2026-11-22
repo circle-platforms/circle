@@ -578,7 +578,7 @@ export class SessionApp {
             if (!waiting.some((notice) => notice.id === id)) said.delete(id);
           const why =
             hold.why === 'limit'
-              ? ` after ${hold.most} turns in a row started by jobs`
+              ? ` after ${hold.most} ${hold.most === 1 ? 'turn' : 'turns in a row'} started by jobs`
               : '';
           for (const notice of waiting)
             if (!said.has(notice.id)) {
