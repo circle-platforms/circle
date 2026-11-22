@@ -80,6 +80,7 @@ import {
 import { VERSION } from './version.js';
 import { formatJcs } from './knowledge/canonical.js';
 import { replaceLongest } from './secrets.js';
+import { visibleLine } from './visible_text.js';
 import { tokenLen } from './middleware/tool_result_prune.js';
 import type { Job, JobOwner } from './jobs.js';
 import type { ElicitationAnswer } from './hooks.js';
@@ -1042,14 +1043,8 @@ function callServerTool(
   };
   return client.callTool(params, { ...options, toolDefinition: listed });
 }
-/** A server's words on one line of the screen: no control or bidirectional-text characters, cut at `max`. */
-function oneLine(text: string, max = 160): string {
-  const line = text
-    .replace(/[\u0000-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
-}
+/** A server's words on one line of the screen, cut at `max` characters: see `visibleLine`. */
+const oneLine = (text: string, max = 160): string => visibleLine(text, max);
 /** A progress notice as the call's row reads it: `3/10 · indexing` (#554). */
 export function progressText(notice: {
   progress: number;
