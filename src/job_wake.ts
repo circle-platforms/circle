@@ -1,5 +1,12 @@
 import type { AgentRuntime } from './runtime.js';
 
+/** Why a notice waits for the person's next message instead of starting a turn. */
+export type JobHold =
+  /** Finished jobs have started `most` turns in a row. */
+  | { why: 'limit'; most: number }
+  /** The person stopped a turn or went back in the conversation, or a turn that kept failing was given up. */
+  | { why: 'stopped' };
+
 /** What a conversation tells its job wake. */
 export interface JobWakeHost {
   /** A finished job's notice may start a turn. */
@@ -10,6 +17,12 @@ export interface JobWakeHost {
   closed(): boolean;
   /** Starts the turn that reads the notices; `owed` runs it with none left, for a turn that failed after reading them. */
   start(owed: boolean): Promise<unknown>;
+  /**
+   * A notice waits and no turn will start for it until the person writes, so the conversation has to say so: it is
+   * called once for the jobs that ended, when nothing runs and nobody is typing. A front end that does not say
+   * so leaves it out, and is not looked at again for it.
+   */
+  holding?(hold: JobHold): void;
 }
 
 // Notices that arrive within this of each other go in one turn. A turn or a card that
@@ -38,6 +51,8 @@ export class JobWake {
   private failures = 0;
   private retryAt = 0;
   private owed = false;
+  /** Whether the host was told that the notices wait, since a job last ended. */
+  private told = false;
   private readonly most = mostWakesInARow();
   constructor(
     private readonly host: JobWakeHost,
@@ -51,6 +66,7 @@ export class JobWake {
   }
   jobEnded(): void {
     this.settleAt = Date.now() + SETTLE_MS;
+    this.told = false;
     this.look();
   }
   /** The person stopped a turn or went back in the conversation: wait for their next message. */
@@ -64,19 +80,19 @@ export class JobWake {
     this.failures = 0;
     this.retryAt = 0;
     this.owed = false;
+    this.told = false;
   }
   /** For a wake the front end ran itself, such as the last ones before leaving. */
   countWake(): void {
     this.wakes++;
   }
   check(): void {
-    if (
-      this.host.closed() ||
-      this.held ||
-      this.wakes >= this.most ||
-      (!this.host.hasNotice() && !this.owed)
-    )
+    if (this.host.closed()) return;
+    if (this.held || this.wakes >= this.most) {
+      if (this.host.hasNotice()) this.hold();
       return;
+    }
+    if (!this.host.hasNotice() && !this.owed) return;
     const now = Date.now();
     if (now < this.settleAt || now < this.retryAt || this.host.occupied()) {
       this.look();
@@ -101,6 +117,18 @@ export class JobWake {
         this.retryAt = Date.now() + wait;
         this.look();
       },
+    );
+  }
+  /** A notice that may start a turn waits for the person: said once the turn or card that held the conversation is over. */
+  private hold(): void {
+    if (!this.host.holding || this.told) return;
+    if (Date.now() < this.settleAt || this.host.occupied()) {
+      this.look();
+      return;
+    }
+    this.told = true;
+    this.host.holding(
+      this.held ? { why: 'stopped' } : { why: 'limit', most: this.most },
     );
   }
   private look(): void {

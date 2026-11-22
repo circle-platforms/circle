@@ -239,6 +239,10 @@ export function noticeLine(job: Job): string {
   const chars = Array.from(title);
   return `◆ ${job.id} ${outcomeWords(job)} · ${chars.length > 60 ? chars.slice(0, 59).join('') + '…' : title} · ${elapsed(job)}`;
 }
+/** Whether the end of a job may start a turn: not one that was stopped, one of the person's own commands, or a subagent's. */
+function mayWake(job: Job): boolean {
+  return job.status !== 'stopped' && job.startedBy !== 'user' && !job.parent;
+}
 /** A command that ran and failed. Its message is what it printed and its exit code, shown as any command's output. */
 export class CommandFailure extends Error {}
 export function commandAnswer(
@@ -1358,10 +1362,18 @@ export class JobRegistry {
   }
   hasNotices(sessionId: string, wakeOnly = false): boolean {
     return (this.notices.get(sessionId) ?? []).some(
-      (job) =>
-        !wakeOnly ||
-        (job.status !== 'stopped' && job.startedBy !== 'user' && !job.parent),
+      (job) => !wakeOnly || mayWake(job),
     );
+  }
+  /**
+   * The notices of one conversation that wait to be read and may start a turn, each as the conversation shows a
+   * finished job without the diamond (`j3 done · npm test · 12s`), redacted as the notice is.
+   */
+  waitingNotices(sessionId: string): { id: string; line: string }[] {
+    return (this.notices.get(sessionId) ?? []).filter(mayWake).map((job) => ({
+      id: job.id,
+      line: this.redact(noticeLine(job).replace(/^◆ /, ''), sessionId),
+    }));
   }
   takeNotices(sessionId: string, ids?: string[]): Message[] {
     const pending = this.notices.get(sessionId) ?? [];

@@ -331,3 +331,127 @@ test('a turn owed that keeps failing waits for the person after the last retry, 
     'the message of the person is the next turn; nothing is owed',
   );
 });
+
+// The front end is told when a notice waits and no turn will start for it, so that the person is not left
+// looking at a conversation that has gone quiet.
+function setupHolding(t: TestContext) {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const state = {
+    notice: true,
+    occupied: false,
+    starts: 0,
+    holds: [] as unknown[],
+  };
+  const wake = new JobWake({
+    hasNotice: () => state.notice,
+    occupied: () => state.occupied,
+    closed: () => false,
+    start: () => {
+      state.starts++;
+      return Promise.resolve();
+    },
+    holding: (hold) => {
+      state.holds.push(hold);
+    },
+  });
+  return { state, wake, tick: (ms = 1000) => t.mock.timers.tick(ms) };
+}
+
+test('the limit of turns in a row holds a notice back: the front end is told once for the jobs that ended, and again for a job that ends after', (t) => {
+  const { state, wake, tick } = setupHolding(t);
+  for (let i = 0; i < 10; i++) {
+    wake.jobEnded();
+    tick();
+  }
+  assert.equal(state.starts, 10);
+  assert.deepEqual(state.holds, [], 'ten turns started, nothing is held yet');
+  wake.jobEnded();
+  tick();
+  assert.equal(state.starts, 10, 'the eleventh waits for the person');
+  assert.deepEqual(state.holds, [{ why: 'limit', most: 10 }]);
+  tick(5000);
+  assert.equal(state.holds.length, 1, 'once, not at every look');
+  wake.jobEnded();
+  tick();
+  assert.equal(state.holds.length, 2, 'a job that ends after is a notice more');
+  wake.personSent();
+  wake.jobEnded();
+  tick();
+  assert.equal(
+    state.starts,
+    11,
+    'a message of the person lets the next turn start',
+  );
+  assert.equal(state.holds.length, 2);
+});
+
+test('the limit is told with the number CIRCLE_JOB_WAKES set', (t) => {
+  const before = process.env.CIRCLE_JOB_WAKES;
+  process.env.CIRCLE_JOB_WAKES = '2';
+  t.after(() => {
+    if (before === undefined) delete process.env.CIRCLE_JOB_WAKES;
+    else process.env.CIRCLE_JOB_WAKES = before;
+  });
+  const { state, wake, tick } = setupHolding(t);
+  for (let i = 0; i < 3; i++) {
+    wake.jobEnded();
+    tick();
+  }
+  assert.equal(state.starts, 2);
+  assert.deepEqual(state.holds, [{ why: 'limit', most: 2 }]);
+});
+
+test('a stop holds a notice back the same way, and the front end is told', (t) => {
+  const { state, wake, tick } = setupHolding(t);
+  wake.snooze();
+  wake.jobEnded();
+  tick();
+  assert.equal(state.starts, 0);
+  assert.deepEqual(state.holds, [{ why: 'stopped' }]);
+  wake.personSent();
+  wake.jobEnded();
+  tick();
+  assert.equal(state.starts, 1);
+  assert.equal(state.holds.length, 1);
+});
+
+test('nothing is said while a turn or a card holds the conversation, and it is said when that is over', (t) => {
+  const { state, wake, tick } = setupHolding(t);
+  wake.snooze();
+  state.occupied = true;
+  wake.jobEnded();
+  tick(5000);
+  assert.deepEqual(state.holds, [], 'the turn may still read the notice');
+  state.occupied = false;
+  tick();
+  assert.deepEqual(state.holds, [{ why: 'stopped' }]);
+});
+
+test('nothing is said when no notice waits that could start a turn, such as one of a job the person stopped', (t) => {
+  const { state, wake, tick } = setupHolding(t);
+  wake.snooze();
+  state.notice = false;
+  wake.jobEnded();
+  tick(5000);
+  assert.deepEqual(state.holds, []);
+});
+
+test('a front end that does not ask to be told is not looked at again while a notice is held', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  let looks = 0;
+  const wake = new JobWake({
+    hasNotice: () => {
+      looks++;
+      return true;
+    },
+    occupied: () => false,
+    closed: () => false,
+    start: () => Promise.resolve(),
+  });
+  wake.snooze();
+  wake.jobEnded();
+  t.mock.timers.tick(1000);
+  const first = looks;
+  t.mock.timers.tick(60_000);
+  assert.equal(looks, first, 'no timer of its own after the first look');
+});

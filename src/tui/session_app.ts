@@ -553,6 +553,8 @@ export class SessionApp {
       parked: new ParkedDraft(),
       backgroundCard: false,
     } as SessionView;
+    // The jobs this view has said wait for your message, until a turn reads their notices
+    const said = new Set<string>();
     // The clock that repaints the screen looks for it, in this view.
     view.jobWake = new JobWake(
       {
@@ -567,6 +569,23 @@ export class SessionApp {
         closed: () => !this.runtime || this.ended,
         start: (owed) =>
           this.runtime!.runJobNotices(owed).finally(() => this.repaint()),
+        // A notice no turn starts for is not shown until the model reads it with your next message
+        holding: (hold) => {
+          const runtime = this.runtime;
+          if (!runtime) return;
+          const waiting = runtime.jobs.waitingNotices(runtime.session.id);
+          for (const id of said)
+            if (!waiting.some((notice) => notice.id === id)) said.delete(id);
+          const why =
+            hold.why === 'limit'
+              ? ` after ${hold.most} turns in a row started by jobs`
+              : '';
+          for (const notice of waiting)
+            if (!said.has(notice.id)) {
+              said.add(notice.id);
+              this.notice(`${notice.line} · waits for your message${why}`);
+            }
+        },
       },
       { timed: false },
     );
