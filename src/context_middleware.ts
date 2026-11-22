@@ -26,6 +26,7 @@ import type { Job } from './jobs.js';
 import {
   messageTokenEstimate,
   requestBudget,
+  resolveBudget,
   BudgetExceeded,
 } from './request_budget.js';
 import { CompactionEngine, type CompactionFrame } from './compaction_engine.js';
@@ -291,7 +292,10 @@ export class ContextManager {
     const pruned = nextPruneState(
       this.projectWith(messages, offloaded),
       offloaded,
-      this.options.prune,
+      {
+        contextWindow: resolveBudget(model, this.options.contextWindow).window,
+        ...this.options.prune,
+      },
     );
     const next = nextMediaState(this.projectWith(messages, pruned), pruned);
     if (next !== state) {

@@ -31,6 +31,22 @@ export interface PruneOptions {
   protectTokens?: number;
   minimumTokens?: number;
   enabled?: boolean;
+  /** The context window of the model this request goes to, in tokens. */
+  contextWindow?: number;
+}
+/** The least recent tool output that pruning leaves untouched, in tokens. */
+export const PRUNE_PROTECT_FLOOR = 40000;
+/**
+ * How much recent tool output pruning leaves untouched: a quarter of the model's context window, and never less than
+ * the floor. A fixed 40,000 tokens made an agent on a one-million-token model read the same files again and again,
+ * because what it had read a few calls ago was already shortened while nine tenths of its window stood empty.
+ */
+export function pruneProtectTokens(contextWindow?: number): number {
+  const window =
+    typeof contextWindow === 'number' && Number.isFinite(contextWindow)
+      ? contextWindow
+      : 0;
+  return Math.max(PRUNE_PROTECT_FLOOR, Math.floor(window / 4));
 }
 export function nextPruneState(
   messages: Message[],
@@ -38,9 +54,13 @@ export function nextPruneState(
   options: PruneOptions = {},
 ): ContextState {
   if (!(options.enabled ?? envFlag('CIRCLE_PRUNE_TOOL_OUTPUTS'))) return state;
-  const fromEnv = Number(process.env.CIRCLE_PRUNE_PROTECT_TOKENS || 40000);
+  const configured = process.env.CIRCLE_PRUNE_PROTECT_TOKENS;
+  const fromEnv = configured ? Number(configured) : NaN;
   const protect =
-    options.protectTokens ?? (Number.isFinite(fromEnv) ? fromEnv : 40000);
+    options.protectTokens ??
+    (Number.isFinite(fromEnv)
+      ? fromEnv
+      : pruneProtectTokens(options.contextWindow));
   const old = new Set(state.prunedIds);
   const callNames = new Map(
     messages

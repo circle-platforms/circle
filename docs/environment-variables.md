@@ -100,7 +100,7 @@ A model that does not read images can have pictures described by a side vision m
 | `CIRCLE_LOOP_SOFT_BUDGET`     | Tool calls in one turn before a soft note that says to carry on.                                                                          | `25`    |
 | `CIRCLE_LOOP_WINDOW`          | Minimum model replies between reminders, and how many recent calls are compared.                                                          | `8`     |
 | `CIRCLE_PRUNE_TOOL_OUTPUTS`   | `0`, `false`, `no` or `off` turns off pruning of old tool output.                                                                         | on      |
-| `CIRCLE_PRUNE_PROTECT_TOKENS` | How much recent output stays untouched by pruning.                                                                                        | `40000` |
+| `CIRCLE_PRUNE_PROTECT_TOKENS` | How much recent output stays untouched by pruning, in tokens.                                                                                        | a quarter of the model's context window, at least `40000` |
 
 While background jobs the model started are running, two calls that only wait for them (a bare `sleep`, reading a job's output again, `list_jobs`) are enough for a reminder that names the jobs; the thresholds above do not change that.
 

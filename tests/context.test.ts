@@ -8,6 +8,7 @@ import { ContextManager } from '../src/context_middleware.js';
 import {
   nextPruneState,
   pruneMessages,
+  pruneProtectTokens,
 } from '../src/middleware/tool_result_prune.js';
 import { planReminder, planTail } from '../src/middleware/plan_tail.js';
 import { analyze, loopReminder } from '../src/middleware/loop_guard.js';
@@ -532,3 +533,50 @@ for (const reason of [
     assert.equal(digest(store.messages(session.id)), before);
   });
 }
+
+test('the tool output pruning leaves untouched grows with the context window, and the environment setting still decides when it is given', () => {
+  const saved = process.env.CIRCLE_PRUNE_PROTECT_TOKENS;
+  delete process.env.CIRCLE_PRUNE_PROTECT_TOKENS;
+  try {
+    assert.equal(pruneProtectTokens(), 40000);
+    assert.equal(pruneProtectTokens(128000), 40000);
+    assert.equal(pruneProtectTokens(200000), 50000);
+    assert.equal(pruneProtectTokens(1000000), 250000);
+    const messages: Parameters<typeof nextPruneState>[0] = [];
+    for (let index = 0; index < 10; index++)
+      messages.push(
+        assistant('read-' + index, 'step', 'read_file', { index }),
+        tool('read-' + index, 'read_file', 'x'.repeat(40000)),
+      );
+    const pruned = (options: Parameters<typeof nextPruneState>[2]) =>
+      nextPruneState(messages, emptyContextState(), options).prunedIds;
+    // ten results of 10,000 tokens each: the default keeps the four most recent
+    assert.deepEqual(
+      pruned({}),
+      [0, 1, 2, 3, 4, 5].map((index) => 'result-read-' + index),
+    );
+    assert.deepEqual(
+      pruned({ contextWindow: 200000 }),
+      [0, 1, 2, 3, 4].map((index) => 'result-read-' + index),
+    );
+    assert.deepEqual(
+      pruned({ contextWindow: 1000000 }),
+      [],
+      'a model with a million tokens of context keeps what its agent read',
+    );
+    assert.equal(
+      pruned({ contextWindow: 1000000, protectTokens: 0 }).length,
+      10,
+      'an explicit option still decides',
+    );
+    process.env.CIRCLE_PRUNE_PROTECT_TOKENS = '10000';
+    assert.equal(
+      pruned({ contextWindow: 1000000 }).length,
+      9,
+      'CIRCLE_PRUNE_PROTECT_TOKENS still decides',
+    );
+  } finally {
+    if (saved === undefined) delete process.env.CIRCLE_PRUNE_PROTECT_TOKENS;
+    else process.env.CIRCLE_PRUNE_PROTECT_TOKENS = saved;
+  }
+});
