@@ -114,6 +114,9 @@ export class JobWake {
         if (wait === undefined) {
           this.held = true;
           this.owed = false;
+          // A notice that is still unread waits for the person now: a front end with a clock of its own is told so
+          // at the next look, as one that looks itself is when it does
+          if (this.host.holding) this.look();
           return;
         }
         // A turn that failed is not one of the turns in a row

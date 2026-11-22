@@ -442,6 +442,101 @@ test('nothing is said when no notice waits that could start a turn, such as one 
   assert.deepEqual(state.holds, []);
 });
 
+// The turn a job started failed on every retry, and a notice still waits: the person is told as after a stop, whether the
+// front end has a clock of its own or looks itself.
+function failingWake(t: TestContext, options?: { timed: boolean }) {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const state = { starts: 0, holds: [] as unknown[] };
+  const wake = new JobWake(
+    {
+      hasNotice: () => true,
+      occupied: () => false,
+      closed: () => false,
+      start: () => {
+        state.starts++;
+        return Promise.reject(Error('model unavailable'));
+      },
+      holding: (hold) => {
+        state.holds.push(hold);
+      },
+    },
+    options,
+  );
+  return { state, wake };
+}
+
+test('after the last retry a notice that still waits is told to a front end with a clock of its own, once', async (t) => {
+  const { state, wake } = failingWake(t);
+  wake.jobEnded();
+  t.mock.timers.tick(1000);
+  for (const wait of [16_000, 61_000, 241_000]) {
+    await settle();
+    t.mock.timers.tick(wait);
+  }
+  await settle();
+  assert.equal(state.starts, 4, 'the turn and its three retries');
+  assert.equal(wake.snoozed, true);
+  assert.deepEqual(state.holds, [], 'nothing before it looks again');
+  t.mock.timers.tick(1000);
+  assert.deepEqual(state.holds, [{ why: 'stopped' }]);
+  t.mock.timers.tick(600_000);
+  assert.equal(state.holds.length, 1, 'once, not at every look');
+  assert.equal(state.starts, 4);
+});
+
+test('after the last retry a front end that looks itself is told when it looks, and has no timer to look for it', async (t) => {
+  const { state, wake } = failingWake(t, { timed: false });
+  wake.jobEnded();
+  t.mock.timers.tick(1000);
+  wake.check();
+  for (const wait of [16_000, 61_000, 241_000]) {
+    await settle();
+    t.mock.timers.tick(wait);
+    wake.check();
+  }
+  await settle();
+  assert.equal(state.starts, 4);
+  t.mock.timers.tick(600_000);
+  assert.deepEqual(
+    state.holds,
+    [],
+    'no clock of its own: it says nothing by itself',
+  );
+  wake.check();
+  assert.deepEqual(state.holds, [{ why: 'stopped' }]);
+  wake.check();
+  assert.equal(state.holds.length, 1, 'once');
+});
+
+test('after the last retry a front end that does not ask to be told is not looked at again', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  let looks = 0;
+  let starts = 0;
+  const wake = new JobWake({
+    hasNotice: () => {
+      looks++;
+      return true;
+    },
+    occupied: () => false,
+    closed: () => false,
+    start: () => {
+      starts++;
+      return Promise.reject(Error('model unavailable'));
+    },
+  });
+  wake.jobEnded();
+  t.mock.timers.tick(1000);
+  for (const wait of [16_000, 61_000, 241_000]) {
+    await settle();
+    t.mock.timers.tick(wait);
+  }
+  await settle();
+  assert.equal(starts, 4);
+  const after = looks;
+  t.mock.timers.tick(600_000);
+  assert.equal(looks, after, 'no timer of its own after it gave up');
+});
+
 test('a front end that does not ask to be told is not looked at again while a notice is held', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   let looks = 0;
