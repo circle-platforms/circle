@@ -167,12 +167,14 @@ function normalize(
   }
   return result;
 }
-// `verbose` gives each error the schema that holds the failed keyword (`parentSchema`).
+// `verbose` gives each error the schema that holds the failed keyword (`parentSchema`). A format is an
+// annotation the tool checks itself: checked here, each one Ajv has no check for printed a notice.
 const ajv = new Ajv({
   strict: false,
   allErrors: true,
   coerceTypes: true,
   verbose: true,
+  validateFormats: false,
 });
 const validators = new WeakMap<Tool, ValidateFunction>();
 // The most of a pattern a message quotes, in characters: a pattern is written for machines.

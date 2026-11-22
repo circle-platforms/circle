@@ -17,7 +17,11 @@ import {
   type ModelRequest,
   type ModelResponse,
 } from '../src/types.js';
-import { readJournal, workflowSummary } from '../src/workflows.js';
+import {
+  readJournal,
+  schemaContradiction,
+  workflowSummary,
+} from '../src/workflows.js';
 import { saveSecret } from '../src/secrets.js';
 import { approvalRequest } from '../src/tui/approval_preview.js';
 import {
@@ -1808,4 +1812,19 @@ test('args a model wrote as JSON text reach the script as the list or object the
       ['string', null, 'j', 'just words {not json}'],
     ].sort(),
   );
+});
+
+test('a workflow schema that names a format is valid and prints no notice', (t) => {
+  const warned: unknown[] = [];
+  t.mock.method(console, 'warn', (...args: unknown[]) => {
+    warned.push(args);
+  });
+  assert.equal(
+    schemaContradiction({
+      type: 'object',
+      properties: { at: { type: 'string', format: 'date-time' } },
+    }),
+    undefined,
+  );
+  assert.deepEqual(warned, []);
 });

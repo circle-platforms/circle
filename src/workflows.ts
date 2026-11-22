@@ -121,7 +121,7 @@ export const realStallTimer: StallTimer = (ms, fire) => {
   return () => clearTimeout(timer);
 };
 
-const ajv = new Ajv({ strict: false, allErrors: true });
+const ajv = new Ajv({ strict: false, allErrors: true, validateFormats: false });
 /**
  * Why a schema cannot be met, when that can be shown from the schema alone: it is not an object
  * schema, it does not compile, or a part of it contradicts itself (a required key that

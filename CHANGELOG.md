@@ -24,6 +24,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 - **`knowledge_search` says what it searches**: the local personal knowledge, by logical folder paths that start with `/`, not files on disk; when that knowledge is empty its answer says so.
 
 ### Fixed
+- **A schema that names a `format` prints no notice.** A tool or workflow schema may name a format, such as `date-time`, that Circle has no check for. Circle printed a notice over the conversation for each one; it now leaves formats to the tool that declares them, as JSON Schema treats a format as an annotation.
 - **The loop guard warns less.** A file read again after an edit is not a repeated call, a long line read in parts is not an unordered read, and after a warning only the calls since are counted; the reminder about the number of calls in a turn comes once.
 
 ## 1.18.1 - 2026-11-16

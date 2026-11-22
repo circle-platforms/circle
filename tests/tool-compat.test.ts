@@ -427,3 +427,40 @@ test('unambiguous parameter synonyms normalize before schema checks, and unexpec
     },
   );
 });
+
+test('a format in a tool schema is left to the tool and prints no notice', (t) => {
+  const warned: unknown[] = [];
+  t.mock.method(console, 'warn', (...args: unknown[]) => {
+    warned.push(args);
+  });
+  const tool: Tool = {
+    name: 'synthetic_since',
+    description: '',
+    effect: 'read',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          anyOf: [
+            {
+              type: 'object',
+              properties: { since: { type: 'string', format: 'date-time' } },
+            },
+            { type: 'null' },
+          ],
+        },
+      },
+    },
+    run: async () => 'ok',
+  };
+  const prepared = prepareToolCall(
+    {
+      id: 'since',
+      name: 'synthetic_since',
+      args: { query: { since: 'yesterday' } },
+    },
+    [tool],
+  );
+  assert.deepEqual(prepared.call.args, { query: { since: 'yesterday' } });
+  assert.deepEqual(warned, []);
+});
