@@ -160,6 +160,52 @@ export async function resolveServer(
   }
 }
 
+/** How much of a refused answer is read, and how many characters of it are shown. */
+const REFUSAL_BYTES = 2000;
+const REFUSAL_CHARACTERS = 400;
+
+/**
+ * What the server said when it refused a request: its body when that is plain text, at most `REFUSAL_BYTES` of it
+ * read, as one line of at most `REFUSAL_CHARACTERS` characters (the first lines that are not empty, with no control
+ * or bidirectional-text character and without the token this request sent). Undefined when there is no text to show.
+ */
+async function refusalText(
+  response: Response,
+  token: string,
+): Promise<string | undefined> {
+  const type = response.headers.get('content-type') ?? '';
+  if (response.body === null || !/^\s*text\/plain\s*(?:;|$)/i.test(type)) {
+    await response.body?.cancel().catch(() => {});
+    return undefined;
+  }
+  const reader = response.body.getReader();
+  // A character cut by the byte limit is left out, not shown as a broken one
+  const decoder = new StringDecoder('utf8');
+  let text = '';
+  let bytes = 0;
+  try {
+    while (bytes < REFUSAL_BYTES) {
+      const part = await reader.read();
+      if (part.done) break;
+      const head = part.value.subarray(0, REFUSAL_BYTES - bytes);
+      bytes += head.length;
+      text += decoder.write(head);
+    }
+  } catch {
+    return undefined;
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  const line = (token.length > 0 ? redactSecrets(text, { TOKEN: token }) : text)
+    .replace(/[\u0000-\u001F\u007F-\u009F\u202A-\u202E\u2066-\u2069]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (line.length <= REFUSAL_CHARACTERS) return line === '' ? undefined : line;
+  const head = line.slice(0, REFUSAL_CHARACTERS - 1);
+  // A pair of surrogates is one character: do not leave its first half
+  return (/[\uD800-\uDBFF]$/.test(head) ? head.slice(0, -1) : head) + '…';
+}
+
 /** Fetch with the bearer token, no redirects, and a bounded timeout. */
 async function fetchBytes(
   url: string,
@@ -180,16 +226,24 @@ async function fetchBytes(
         '令牌无效或已撤销',
         `重新登录这个服务器（${SIGN_IN}），或换上新的令牌后再试`,
       );
-    if (response.status === 404)
-      throw new LocalSkillsError(
-        '这个版本没有分给你、已下架或不存在',
-        '向管理员确认分配后再试',
-      );
-    if (!response.ok)
+    if (!response.ok) {
+      // The server's own words say why and what to do; a guess of ours would merge causes it tells apart
+      const said = await refusalText(response, token);
+      if (said !== undefined)
+        throw new LocalSkillsError(
+          `服务器说（HTTP ${response.status}）：“${said}”`,
+          '照服务器说的做，然后再试',
+        );
+      if (response.status === 404)
+        throw new LocalSkillsError(
+          '服务器没有这个版本或文件（HTTP 404）',
+          '包引用要照服务器的回答抄，不要猜版本号；仍然不行，向服务器的管理员确认后再试',
+        );
       throw new LocalSkillsError(
         `服务器回答了 HTTP ${response.status}`,
         '确认服务器的监听地址后再试',
       );
+    }
     const declared = Number(response.headers.get('content-length') ?? '');
     if (Number.isFinite(declared) && declared > limit)
       throw new LocalSkillsError(

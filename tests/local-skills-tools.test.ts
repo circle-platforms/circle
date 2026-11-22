@@ -163,3 +163,45 @@ test('skill_install takes the token of the Hub entry signed in from the extensio
   assert.ok(sent.length >= 3);
   assert.ok(sent.every((value) => value === 'Bearer signed-in-token'));
 });
+
+test('skill_install gives the model what the server said when it refuses a download, and what to do about it', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-local-skills-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const said =
+    '无权限：当前账户未获授权使用工作流「demo-tools」。请联系管理员为该账户或所在团队分配此工作流。';
+  const hub = createServer((request, response) => {
+    // No discovery document, as the Hub answers: its local tools are beside its MCP endpoint
+    if (request.url === '/.well-known/knowledge-sync') {
+      response.writeHead(404).end();
+      return;
+    }
+    response.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+    response.end(said);
+  });
+  await new Promise<void>((resolve) => hub.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise<void>((resolve) => hub.close(() => resolve())));
+  const address = hub.address();
+  const settings = settingsWith({
+    name: 'Hub',
+    url: `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}/mcp`,
+    headers: { authorization: 'Bearer literal-token' },
+  });
+  const install = buildTools(new Sandbox(root), {
+    localSkills: {
+      home: root,
+      settings: () => settings,
+      secrets: () => ({}),
+      variables: () => ({}),
+      root: join(root, 'skills'),
+    },
+  }).find((item) => item.name === 'skill_install')!;
+  await assert.rejects(
+    install.run({ server: 'Hub', pack: 'demo-tools@1.0.0' }, {
+      signal: new AbortController().signal,
+    } as never),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message ===
+        `服务器说（HTTP 403）：“${said}”；照服务器说的做，然后再试`,
+  );
+});
