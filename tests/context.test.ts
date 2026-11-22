@@ -7,6 +7,7 @@ import { CheckpointStore, emptyContextState } from '../src/checkpoint_store.js';
 import { ContextManager } from '../src/context_middleware.js';
 import {
   nextPruneState,
+  pruneBatchTokens,
   pruneMessages,
   pruneProtectTokens,
 } from '../src/middleware/tool_result_prune.js';
@@ -534,20 +535,34 @@ for (const reason of [
   });
 }
 
-test('the tool output pruning leaves untouched grows with the context window, and the environment setting still decides when it is given', () => {
+// Ten results of 10,000 tokens each, or as many as asked, as an agent that read ten files leaves them
+const reads = (count: number): Parameters<typeof nextPruneState>[0] => {
+  const messages: Parameters<typeof nextPruneState>[0] = [];
+  for (let index = 0; index < count; index++)
+    messages.push(
+      assistant('read-' + index, 'step', 'read_file', { index }),
+      tool('read-' + index, 'read_file', 'x'.repeat(40000)),
+    );
+  return messages;
+};
+const unlessSet = async (run: () => void | Promise<void>) => {
   const saved = process.env.CIRCLE_PRUNE_PROTECT_TOKENS;
   delete process.env.CIRCLE_PRUNE_PROTECT_TOKENS;
   try {
+    await run();
+  } finally {
+    if (saved === undefined) delete process.env.CIRCLE_PRUNE_PROTECT_TOKENS;
+    else process.env.CIRCLE_PRUNE_PROTECT_TOKENS = saved;
+  }
+};
+
+test('the tool output pruning leaves untouched grows with the most input the model takes, and the environment setting still decides when it is given', () =>
+  unlessSet(() => {
     assert.equal(pruneProtectTokens(), 40000);
     assert.equal(pruneProtectTokens(128000), 40000);
     assert.equal(pruneProtectTokens(200000), 50000);
     assert.equal(pruneProtectTokens(1000000), 250000);
-    const messages: Parameters<typeof nextPruneState>[0] = [];
-    for (let index = 0; index < 10; index++)
-      messages.push(
-        assistant('read-' + index, 'step', 'read_file', { index }),
-        tool('read-' + index, 'read_file', 'x'.repeat(40000)),
-      );
+    const messages = reads(10);
     const pruned = (options: Parameters<typeof nextPruneState>[2]) =>
       nextPruneState(messages, emptyContextState(), options).prunedIds;
     // ten results of 10,000 tokens each: the default keeps the four most recent
@@ -556,27 +571,107 @@ test('the tool output pruning leaves untouched grows with the context window, an
       [0, 1, 2, 3, 4, 5].map((index) => 'result-read-' + index),
     );
     assert.deepEqual(
-      pruned({ contextWindow: 200000 }),
+      pruned({ inputLimit: 200000 }),
       [0, 1, 2, 3, 4].map((index) => 'result-read-' + index),
     );
     assert.deepEqual(
-      pruned({ contextWindow: 1000000 }),
+      pruned({ inputLimit: 1000000 }),
       [],
-      'a model with a million tokens of context keeps what its agent read',
+      'a model that takes a million tokens keeps what its agent read',
     );
     assert.equal(
-      pruned({ contextWindow: 1000000, protectTokens: 0 }).length,
+      pruned({ inputLimit: 1000000, protectTokens: 0 }).length,
       10,
       'an explicit option still decides',
     );
     process.env.CIRCLE_PRUNE_PROTECT_TOKENS = '10000';
     assert.equal(
-      pruned({ contextWindow: 1000000 }).length,
+      pruned({ inputLimit: 1000000 }).length,
       9,
       'CIRCLE_PRUNE_PROTECT_TOKENS still decides',
     );
-  } finally {
-    if (saved === undefined) delete process.env.CIRCLE_PRUNE_PROTECT_TOKENS;
-    else process.env.CIRCLE_PRUNE_PROTECT_TOKENS = saved;
-  }
-});
+  }));
+
+test('the least pruned in one batch is half of what is left untouched, 20,000 tokens at least, and an explicit option still wins', () =>
+  unlessSet(() => {
+    assert.equal(pruneBatchTokens(40000), 20000);
+    assert.equal(pruneBatchTokens(250000), 125000);
+    assert.equal(pruneBatchTokens(10000), 20000, 'never less than the floor');
+    const pruned = (
+      count: number,
+      options: Parameters<typeof nextPruneState>[2] = {},
+    ) =>
+      nextPruneState(reads(count), emptyContextState(), options).prunedIds
+        .length;
+    // At the floor, as before: 40,000 tokens stay, and a batch is 20,000, two of the results
+    assert.equal(pruned(5), 0, 'one result is less than a batch');
+    assert.equal(pruned(6), 2);
+    // A model that takes a million tokens leaves 250,000 and waits for 125,000 more
+    assert.equal(
+      pruned(37, { inputLimit: 1000000 }),
+      0,
+      '120,000 are no batch',
+    );
+    assert.equal(pruned(38, { inputLimit: 1000000 }), 13);
+    // The same when what is left untouched is given
+    assert.equal(pruned(14, { protectTokens: 100000 }), 0);
+    assert.equal(pruned(15, { protectTokens: 100000 }), 5);
+    process.env.CIRCLE_PRUNE_PROTECT_TOKENS = '100000';
+    assert.equal(pruned(14), 0);
+    assert.equal(pruned(15), 5);
+    // An explicit least wins over both
+    assert.equal(
+      pruned(14, { protectTokens: 100000, minimumTokens: 30000 }),
+      4,
+    );
+    assert.equal(
+      pruned(15, { protectTokens: 100000, minimumTokens: 60000 }),
+      0,
+    );
+  }));
+
+test('the context middleware sizes what pruning leaves untouched from the most input the model takes', (t) =>
+  unlessSet(async () => {
+    const root = scratch(t);
+    const store = new CheckpointStore(root);
+    cleanup(t, () => store.close());
+    const manager = new ContextManager(store, join(root, 'data'), {
+      autoCompact: false,
+    });
+    const signal = new AbortController().signal;
+    // Six results of 10,000 tokens each, in a conversation of their own, for a model with these limits
+    const prunedFor = async (limits: {
+      contextWindow?: number;
+      inputLimit?: number;
+    }) => {
+      const session = store.create(root, 'test');
+      store.append(session.id, [
+        { id: 'user', role: 'user', content: 'go' },
+        ...reads(6),
+      ]);
+      await manager.prepare(
+        session.id,
+        Object.assign(new ScriptedModel(), limits),
+        '',
+        [],
+        signal,
+      );
+      return store.contextState(session.id).prunedIds;
+    };
+    const oldest = ['result-read-0', 'result-read-1'];
+    assert.deepEqual(
+      await prunedFor({}),
+      oldest,
+      'the default window leaves 40,000 tokens untouched',
+    );
+    assert.deepEqual(
+      await prunedFor({ contextWindow: 1000000 }),
+      [],
+      'a window of a million tokens leaves 250,000: nothing is pruned',
+    );
+    assert.deepEqual(
+      await prunedFor({ contextWindow: 1000000, inputLimit: 100000 }),
+      oldest,
+      'a model that takes 100,000 tokens of input is sized by that, not by its window',
+    );
+  }));

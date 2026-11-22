@@ -28,25 +28,42 @@ export function completeJson(text: string): boolean {
   }
 }
 export interface PruneOptions {
+  /** How much recent tool output stays untouched, in tokens. */
   protectTokens?: number;
+  /** The least that is shortened in one batch, in tokens. */
   minimumTokens?: number;
   enabled?: boolean;
-  /** The context window of the model this request goes to, in tokens. */
-  contextWindow?: number;
+  /**
+   * The most input a request to the model can carry, in tokens: its context window, or its input limit when that is
+   * smaller. What stays untouched is sized from it.
+   */
+  inputLimit?: number;
 }
 /** The least recent tool output that pruning leaves untouched, in tokens. */
 export const PRUNE_PROTECT_FLOOR = 40000;
+/** The least that pruning shortens in one batch when it leaves the floor untouched, in tokens. */
+export const PRUNE_BATCH_FLOOR = PRUNE_PROTECT_FLOOR / 2;
 /**
- * How much recent tool output pruning leaves untouched: a quarter of the model's context window, and never less than
- * the floor. A fixed 40,000 tokens made an agent on a one-million-token model read the same files again and again,
- * because what it had read a few calls ago was already shortened while nine tenths of its window stood empty.
+ * How much recent tool output pruning leaves untouched: a quarter of the most input the model takes (its context
+ * window, or its input limit when that is smaller), and never less than the floor. A fixed 40,000 tokens made an
+ * agent on a one-million-token model read the same files again and again, because what it had read a few calls ago
+ * was already shortened while nine tenths of its window stood empty. A quarter of a window the model's input limit
+ * keeps it from filling would never be reached before the conversation is summarized.
  */
-export function pruneProtectTokens(contextWindow?: number): number {
-  const window =
-    typeof contextWindow === 'number' && Number.isFinite(contextWindow)
-      ? contextWindow
+export function pruneProtectTokens(inputLimit?: number): number {
+  const input =
+    typeof inputLimit === 'number' && Number.isFinite(inputLimit)
+      ? inputLimit
       : 0;
-  return Math.max(PRUNE_PROTECT_FLOOR, Math.floor(window / 4));
+  return Math.max(PRUNE_PROTECT_FLOOR, Math.floor(input / 4));
+}
+/**
+ * The least that pruning shortens in one batch: half of what it leaves untouched, and never less than the floor's
+ * half. A batch rewrites a message as far back as what stays untouched reaches, so the request's cached prefix is
+ * lost from there on; where that is a quarter of a large window, a gain of 20,000 tokens would not pay for it.
+ */
+export function pruneBatchTokens(protect: number): number {
+  return Math.max(PRUNE_BATCH_FLOOR, Math.floor(protect / 2));
 }
 export function nextPruneState(
   messages: Message[],
@@ -60,7 +77,7 @@ export function nextPruneState(
     options.protectTokens ??
     (Number.isFinite(fromEnv)
       ? fromEnv
-      : pruneProtectTokens(options.contextWindow));
+      : pruneProtectTokens(options.inputLimit));
   const old = new Set(state.prunedIds);
   const callNames = new Map(
     messages
@@ -97,7 +114,7 @@ export function nextPruneState(
   }
   if (
     candidates.reduce((sum, item) => sum + item.tokens, 0) <
-    (options.minimumTokens ?? 20000)
+    (options.minimumTokens ?? pruneBatchTokens(protect))
   )
     return state;
   const newIds = candidates.reverse().map((item) => item.id);

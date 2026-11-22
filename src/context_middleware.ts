@@ -293,7 +293,8 @@ export class ContextManager {
       this.projectWith(messages, offloaded),
       offloaded,
       {
-        contextWindow: resolveBudget(model, this.options.contextWindow).window,
+        // What a request can carry, which is less than the window of a model with a smaller input limit
+        inputLimit: resolveBudget(model, this.options.contextWindow).inputLimit,
         ...this.options.prune,
       },
     );
