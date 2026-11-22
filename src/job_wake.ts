@@ -1,11 +1,11 @@
 import type { AgentRuntime } from './runtime.js';
+import type { JobHold } from './job_notice_words.js';
 
-/** Why a notice waits for the person's next message instead of starting a turn. */
-export type JobHold =
-  /** Finished jobs have started `most` turns in a row. */
-  | { why: 'limit'; most: number }
-  /** The person stopped a turn or went back in the conversation, or a turn that kept failing was given up. */
-  | { why: 'stopped' };
+export {
+  turnsStartedByJobs,
+  waitingSentence,
+  type JobHold,
+} from './job_notice_words.js';
 
 /** What a conversation tells its job wake. */
 export interface JobWakeHost {
@@ -162,18 +162,6 @@ export function unsaidNotices(
   const news = waiting.filter((notice) => !said.has(notice.id));
   for (const notice of news) said.add(notice.id);
   return news;
-}
-
-/** The limit of turns in a row that jobs may start, in words: `20 turns in a row started by jobs`, `1 turn started by jobs`. */
-export function turnsStartedByJobs(most: number): string {
-  return `${most} ${most === 1 ? 'turn' : 'turns in a row'} started by jobs`;
-}
-
-/** The line a conversation shows for a notice that waits, in English: `j21 done · … · 7m 38s · waits for your message after 20 turns in a row started by jobs`. */
-export function waitingSentence(line: string, hold: JobHold): string {
-  const why =
-    hold.why === 'limit' ? ` after ${turnsStartedByJobs(hold.most)}` : '';
-  return `${line} · waits for your message${why}`;
 }
 
 /**
