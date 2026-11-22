@@ -577,6 +577,16 @@ export class ModelGuard {
           (budget.deadlineMs > 0 && now() - started >= budget.deadlineMs)
         )
           throw attempts ? new RetriesExhausted(error, attempts) : error;
+        // The endpoint said when to come back, and that is after this request's last try: asking again before then
+        // only delays its answer. A monthly quota that reset sixteen days later kept each agent silent for ten minutes.
+        const comeBackMs =
+          kind === 'rate_limit' ? retryAfterMs(error) : undefined;
+        if (
+          comeBackMs !== undefined &&
+          budget.deadlineMs > 0 &&
+          now() - started + comeBackMs > budget.deadlineMs
+        )
+          throw attempts ? new RetriesExhausted(error, attempts) : error;
         const waitMs = backoffMs(
           kind,
           attempts,
