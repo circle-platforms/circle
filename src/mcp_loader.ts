@@ -27,13 +27,14 @@ import {
   type Transport,
 } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
-import { AjvJsonSchemaValidator } from '@modelcontextprotocol/client/validators/ajv';
+import type { AjvJsonSchemaValidator } from '@modelcontextprotocol/client/validators/ajv';
 import {
   CallToolResultSchema,
   JSONObjectSchema,
   ListResourcesResultSchema,
   ListToolsResultSchema,
 } from '@modelcontextprotocol/core';
+import { QuietJsonSchemaValidator } from './schema_formats.js';
 import { WebSocketClientTransport } from './mcp_websocket.js';
 import {
   negotiationSetting,
@@ -2188,8 +2189,13 @@ export class McpManager {
         platform: process.platform,
       } as Implementation,
       // A server may ask the person for input in the middle of a call, with a form or by a page to open (#556). Circle
-      // says it takes both; where no one can be asked a question is cancelled, unless a hook answers it.
-      { capabilities: CAPABILITIES },
+      // says it takes both; where no one can be asked a question is cancelled, unless a hook answers it. The library's
+      // own validator is as quiet as the one below that checks a tool's result: it says nothing of a format it has no
+      // check for.
+      {
+        capabilities: CAPABILITIES,
+        jsonSchemaValidator: new QuietJsonSchemaValidator(),
+      },
     );
     client.setRequestHandler('elicitation/create', (request, context) =>
       this.elicit(
@@ -2508,7 +2514,7 @@ export class McpManager {
     const registered: Tool[] = [];
     const said = new Map<string, ToolMarks>();
     const specs = new Map<string, ServerTool>();
-    const validator = new AjvJsonSchemaValidator();
+    const validator = new QuietJsonSchemaValidator();
     const digest = createHash('sha256');
     let ttlMs: number | undefined;
     let cursor: string | undefined;

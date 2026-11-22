@@ -1,6 +1,7 @@
 import { Ajv2020 } from 'ajv/dist/2020.js';
 import type { AnySchema, ValidateFunction } from 'ajv';
 import { knowledgeAsset } from '../knowledge_assets.js';
+import { ajvLogger } from '../schema_formats.js';
 import type { PackManifest, SyncObject } from './types.js';
 import { wellFormedText } from './unicode.js';
 
@@ -51,11 +52,13 @@ export function decodeBase64(value: string): Buffer {
   requireRule(bytes.toString('base64') === value, 'base64 padding');
   return bytes;
 }
+// The documents name formats this validator has no check for (`uri`); it leaves them unchecked and says nothing.
 const ajv = new Ajv2020({
   strict: false,
   allErrors: false,
   coerceTypes: false,
   useDefaults: false,
+  logger: ajvLogger,
 });
 ajv.addFormat(
   'uuid',
