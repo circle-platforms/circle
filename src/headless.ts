@@ -4,7 +4,7 @@ import type { CircleEvent } from './events.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { rpcJob } from './rpc_codec.js';
 import type { Message } from './types.js';
-import { answerJobsBeforeLeaving } from './job_wake.js';
+import { answerJobsBeforeLeaving, turnsStartedByJobs } from './job_wake.js';
 export function jsonEvent(
   event: CircleEvent,
 ): Record<string, unknown> | undefined {
@@ -319,6 +319,15 @@ export class HeadlessProgress {
   finish(): void {
     if (this.verbose || this.notRun) this.write(this.summary());
   }
+  /**
+   * The notices print mode left unread, because jobs had started as many turns in a row as they may: nobody is left
+   * to be told by a conversation, so the jobs and the limit are said here, always, on one line.
+   */
+  unreadNotices(jobs: string[], most: number): void {
+    this.write(
+      `Notices not read after ${turnsStartedByJobs(most)} (CIRCLE_JOB_WAKES sets the limit): ${jobs.join(', ')}.`,
+    );
+  }
 }
 export interface HeadlessOptions {
   json?: boolean;
@@ -361,7 +370,7 @@ export async function runPrint(
     for (const prompt of prompts)
       answer = (await runtime.harness.run(prompt)).answer;
     if (options.waitJobs !== false) {
-      await answerJobsBeforeLeaving(runtime, {
+      const left = await answerJobsBeforeLeaving(runtime, {
         delay: (ms) => delay(ms, undefined, { signal: waiting.signal }),
         carryOn: () => {
           waiting.signal.throwIfAborted();
@@ -372,6 +381,14 @@ export async function runPrint(
           if (later !== undefined) answer = later;
         },
       });
+      // Standard output stays the last answer; the notices that were not read are told on standard error
+      if (left?.why === 'limit')
+        progress.unreadNotices(
+          runtime.jobs
+            .waitingNotices(runtime.session.id)
+            .map((notice) => notice.id),
+          left.most,
+        );
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

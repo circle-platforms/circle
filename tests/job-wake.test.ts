@@ -4,6 +4,7 @@ import {
   JobWake,
   answerJobsBeforeLeaving,
   mostWakesInARow,
+  turnsStartedByJobs,
   unsaidNotices,
   waitingSentence,
 } from '../src/job_wake.js';
@@ -225,7 +226,7 @@ test('before leaving, the model answers as its jobs end, up to the limit, and wh
     },
   };
   let wakes = 0;
-  await answerJobsBeforeLeaving(runtime as never, {
+  const atTheLimit = await answerJobsBeforeLeaving(runtime as never, {
     delay: async () => {},
     wake: async () => {
       wakes++;
@@ -235,11 +236,16 @@ test('before leaving, the model answers as its jobs end, up to the limit, and wh
   });
   assert.deepEqual(stopped, ['left']);
   assert.equal(wakes, 17, 'twenty in a row, counting the ones before');
+  assert.deepEqual(
+    atTheLimit,
+    { why: 'limit', most: 20 },
+    'it says it left at the limit, with notices unread',
+  );
 
   notices = 1;
   wakes = 0;
   let looks = 0;
-  await answerJobsBeforeLeaving(runtime as never, {
+  const done = await answerJobsBeforeLeaving(runtime as never, {
     delay: async () => {
       looks++;
     },
@@ -251,6 +257,49 @@ test('before leaving, the model answers as its jobs end, up to the limit, and wh
     carryOn: () => looks < 5,
   });
   assert.equal(wakes, 1);
+  assert.equal(done, undefined, 'every notice was read: nothing to say');
+});
+
+test('before leaving, the limit named is the one CIRCLE_JOB_WAKES sets, and it is reached only with a notice unread', async (t) => {
+  const before = process.env.CIRCLE_JOB_WAKES;
+  process.env.CIRCLE_JOB_WAKES = '2';
+  t.after(() => {
+    if (before === undefined) delete process.env.CIRCLE_JOB_WAKES;
+    else process.env.CIRCLE_JOB_WAKES = before;
+  });
+  let notices = 5;
+  const runtime = {
+    session: { id: 's' },
+    jobs: {
+      list: () => [],
+      stop: async () => {},
+      hasNotices: () => notices > 0,
+    },
+  };
+  const options = {
+    delay: async () => {},
+    wake: async () => {
+      notices = 0;
+    },
+  };
+  assert.deepEqual(
+    await answerJobsBeforeLeaving(runtime as never, {
+      ...options,
+      wake: async () => {
+        notices--;
+      },
+    }),
+    { why: 'limit', most: 2 },
+  );
+  // The limit used up by the turns before, and every notice read: nothing is left unsaid
+  notices = 0;
+  assert.equal(
+    await answerJobsBeforeLeaving(runtime as never, {
+      ...options,
+      wakesSoFar: 2,
+    }),
+    undefined,
+  );
 });
 
 test('before leaving, carrying on no longer ends the wait without a turn', async () => {
@@ -260,7 +309,7 @@ test('before leaving, carrying on no longer ends the wait without a turn', async
   };
   let stop = false;
   let wakes = 0;
-  await answerJobsBeforeLeaving(runtime as never, {
+  const left = await answerJobsBeforeLeaving(runtime as never, {
     delay: async () => {
       stop = true;
     },
@@ -270,6 +319,7 @@ test('before leaving, carrying on no longer ends the wait without a turn', async
     carryOn: () => !stop,
   });
   assert.equal(wakes, 0);
+  assert.equal(left, undefined, 'it did not leave at the limit');
 });
 
 test('a turn that took its notice and then failed is run again, though no notice waits any more', async (t) => {
@@ -589,6 +639,11 @@ test('a notice that waits is news once, and again only when a turn has read it a
   assert.equal(said.size, 0);
   waiting.push({ id: 'j1', line: 'j1 done · stage 1 · 3s' });
   assert.deepEqual(news(), ['j1']);
+});
+
+test('the limit in words counts a single turn in the singular', () => {
+  assert.equal(turnsStartedByJobs(20), '20 turns in a row started by jobs');
+  assert.equal(turnsStartedByJobs(1), '1 turn started by jobs');
 });
 
 test('the sentence of a notice that waits says why: after the limit with its number, a single turn in the singular, or after a stop with none', () => {

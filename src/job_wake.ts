@@ -164,18 +164,23 @@ export function unsaidNotices(
   return news;
 }
 
+/** The limit of turns in a row that jobs may start, in words: `20 turns in a row started by jobs`, `1 turn started by jobs`. */
+export function turnsStartedByJobs(most: number): string {
+  return `${most} ${most === 1 ? 'turn' : 'turns in a row'} started by jobs`;
+}
+
 /** The line a conversation shows for a notice that waits, in English: `j21 done · … · 7m 38s · waits for your message after 20 turns in a row started by jobs`. */
 export function waitingSentence(line: string, hold: JobHold): string {
   const why =
-    hold.why === 'limit'
-      ? ` after ${hold.most} ${hold.most === 1 ? 'turn' : 'turns in a row'} started by jobs`
-      : '';
+    hold.why === 'limit' ? ` after ${turnsStartedByJobs(hold.most)}` : '';
   return `${line} · waits for your message${why}`;
 }
 
 /**
  * After the last prompt, with no one left to write: stops what commands left running,
  * then lets the model answer as its jobs end, for as long as CIRCLE_JOB_WAIT allows.
+ * When it stops because jobs have started as many turns in a row as they may, with a notice still unread, it returns
+ * that limit, so that the caller can say so: nobody is left to be told by a conversation. Otherwise nothing.
  */
 export async function answerJobsBeforeLeaving(
   runtime: Pick<AgentRuntime, 'jobs' | 'session'>,
@@ -187,7 +192,7 @@ export async function answerJobsBeforeLeaving(
     carryOn?: () => boolean;
     wakesSoFar?: number;
   },
-): Promise<void> {
+): Promise<JobHold | undefined> {
   const carryOn = options.carryOn ?? (() => true);
   const configured = Number(process.env.CIRCLE_JOB_WAIT ?? 1800);
   const deadline =
@@ -200,7 +205,8 @@ export async function answerJobsBeforeLeaving(
   let wakes = options.wakesSoFar ?? 0;
   while (Date.now() < deadline && carryOn()) {
     if (runtime.jobs.hasNotices(runtime.session.id, true)) {
-      if (wakes >= mostWakesInARow()) return;
+      const most = mostWakesInARow();
+      if (wakes >= most) return { why: 'limit', most };
       await options.delay(SETTLE_MS);
       if (!carryOn()) return;
       wakes++;

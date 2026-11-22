@@ -73,9 +73,9 @@ Closing the terminal window, `SIGTERM` and `SIGHUP` stop every job too, but leav
 
 Without the full-screen interface:
 
-- **Print mode** (`circle -p`) waits after its answer while jobs the model started run, and lets the model answer again when they end, up to twenty times and for up to `CIRCLE_JOB_WAIT` seconds (1800 by default; `0` does not wait). Processes a command left running, usually servers, are stopped at once. What still runs at the end is stopped.
+- **Print mode** (`circle -p`) waits after its answer while jobs the model started run, and lets the model answer again when they end, up to twenty times and for up to `CIRCLE_JOB_WAIT` seconds (1800 by default; `0` does not wait). Processes a command left running, usually servers, are stopped at once. What still runs at the end is stopped. Notices that the twenty left unread are named on standard error.
 - **Line mode** prints `Background job j3 ended.` to standard error when a job ends; the model reads its notice with your next line.
-- **RPC mode** reports jobs as events, starts a turn when one ends while nothing runs, and writes a `job_notice_waiting` record when its notice waits for the next prompt; see [RPC mode](rpc.md).
+- **RPC mode** reports jobs as events, starts a turn when one ends while nothing runs, and writes a `job_notice_waiting` record when its notice waits for the next prompt, or is left unread when its input ends; see [RPC mode](rpc.md).
 
 ## What is not tracked
 

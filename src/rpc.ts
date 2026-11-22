@@ -9,7 +9,12 @@ import { resolve } from 'node:path';
 import type { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { rpcMessage, rpcJob } from './rpc_codec.js';
-import { JobWake, answerJobsBeforeLeaving, unsaidNotices } from './job_wake.js';
+import {
+  JobWake,
+  answerJobsBeforeLeaving,
+  unsaidNotices,
+  type JobHold,
+} from './job_wake.js';
 export interface RpcIO {
   input: Readable;
   write(text: string): void;
@@ -32,6 +37,16 @@ export async function runRpc(
   let ended = false;
   // The jobs whose notices wait for the next prompt and that were said so, until a turn reads their notices
   const said = new Set<string>();
+  // One record for each notice that waits and was not said yet, as the terminal prints one line
+  const say = (hold: JobHold): void => {
+    for (const notice of unsaidNotices(runtime, said))
+      send({
+        type: 'job_notice_waiting',
+        jobId: notice.id,
+        line: notice.line,
+        ...hold,
+      });
+  };
   const wake = new JobWake({
     hasNotice: () => runtime.jobs.hasNotices(runtime.session.id, true),
     occupied: () => runtime.busy,
@@ -46,16 +61,8 @@ export async function runRpc(
         .finally(() => send({ type: 'agent_settled' }));
       return run;
     },
-    // A notice no turn starts for waits for the next prompt: one record for each, as the terminal prints one line
-    holding: (hold) => {
-      for (const notice of unsaidNotices(runtime, said))
-        send({
-          type: 'job_notice_waiting',
-          jobId: notice.id,
-          line: notice.line,
-          ...hold,
-        });
-    },
+    // A notice no turn starts for waits for the next prompt
+    holding: say,
   });
   const off = runtime.bus.subscribe((event) => {
     if (event.kind === 'job_ended') wake.jobEnded();
@@ -261,7 +268,7 @@ export async function runRpc(
     // model-owned job notices, then stop remaining work before returning.
     ended = true;
     await running;
-    await answerJobsBeforeLeaving(runtime, {
+    const left = await answerJobsBeforeLeaving(runtime, {
       delay,
       carryOn: () => !wake.snoozed && code === 0,
       wakesSoFar: wake.wakesInARow,
@@ -272,6 +279,8 @@ export async function runRpc(
         send({ type: 'agent_settled' });
       },
     });
+    // No prompt will come to read what the limit left: the notices are said now, as they are while the input is open
+    if (left) say(left);
     const stopped = await runtime.jobs.close();
     for (const sessionId of new Set(
       runtime.jobs.list().map((job) => job.sessionId),

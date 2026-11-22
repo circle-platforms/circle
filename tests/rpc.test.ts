@@ -662,6 +662,82 @@ test('after abort, RPC writes a record for a finished job whose notice waits, wi
   assert.equal(await runner, 0);
 });
 
+test('when its input ends at the limit of turns in a row, RPC writes a record for the notice a job left unread, before jobs_stopped', async (t) => {
+  const before = process.env.CIRCLE_JOB_WAKES;
+  process.env.CIRCLE_JOB_WAKES = '1';
+  t.after(() => {
+    if (before === undefined) delete process.env.CIRCLE_JOB_WAKES;
+    else process.env.CIRCLE_JOB_WAKES = before;
+  });
+  const { runtime, model, input, runner, output, send, settled, waiting } =
+    await waitingSession(t, 2);
+  send({ type: 'prompt', message: 'start pipeline' });
+  await settled(1);
+  // The end of the first job starts the one turn in a row there is
+  startJob(runtime, 'stage 1')();
+  await settled(2);
+  // The second job runs while the input ends: nobody is left to send a prompt that would read its notice
+  const end = startJob(runtime, 'stage 2');
+  input.end();
+  end();
+  assert.equal(await runner, 0);
+  assert.equal(model.requests.length, 2, 'no third turn starts for it');
+  const { line, ...record } = waiting()[0] as {
+    line: string;
+    [key: string]: unknown;
+  };
+  assert.deepEqual(record, {
+    type: 'job_notice_waiting',
+    jobId: 'j2',
+    why: 'limit',
+    most: 1,
+  });
+  assert.match(line, /^j2 done · stage 2 · \S+$/);
+  assert.equal(waiting().length, 1);
+  const types = output.map((item) => item.type);
+  assert.ok(
+    types.lastIndexOf('job_notice_waiting') < types.lastIndexOf('jobs_stopped'),
+  );
+  assert.deepEqual(output.at(-1), { type: 'jobs_stopped', count: 0 });
+});
+
+test('when its input ends with a notice already said to wait, RPC does not say it again', async (t) => {
+  const before = process.env.CIRCLE_JOB_WAKES;
+  process.env.CIRCLE_JOB_WAKES = '1';
+  t.after(() => {
+    if (before === undefined) delete process.env.CIRCLE_JOB_WAKES;
+    else process.env.CIRCLE_JOB_WAKES = before;
+  });
+  const { runtime, input, runner, send, settled, waiting, waitingCount } =
+    await waitingSession(t, 2);
+  send({ type: 'prompt', message: 'start pipeline' });
+  await settled(1);
+  startJob(runtime, 'stage 1')();
+  await settled(2);
+  // The second notice waits and the input is still open: the record is written then
+  startJob(runtime, 'stage 2')();
+  await waitingCount(1);
+  input.end();
+  assert.equal(await runner, 0);
+  assert.deepEqual(
+    waiting().map((record) => record.jobId),
+    ['j2'],
+    'once, not again as the input ends',
+  );
+});
+
+test('when its input ends after the notices were read, RPC says nothing about waiting', async (t) => {
+  const { runtime, input, runner, send, settled, waiting } =
+    await waitingSession(t, 2);
+  send({ type: 'prompt', message: 'start pipeline' });
+  await settled(1);
+  startJob(runtime, 'stage 1')();
+  await settled(2);
+  input.end();
+  assert.equal(await runner, 0);
+  assert.deepEqual(waiting(), []);
+});
+
 async function requestModels(
   runtime: AgentRuntime,
 ): Promise<Record<string, unknown>> {
