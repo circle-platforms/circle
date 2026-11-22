@@ -1,5 +1,5 @@
-// A finished job's notice that waits for the person: after the limit of turns in a row that jobs started (ten, as
-// `CIRCLE_JOB_WAKES` sets), and after a stop. The notice is the model's to read with the person's next message; what
+// A finished job's notice that waits for the person: after the limit of turns in a row that jobs started (twenty, or
+// what `CIRCLE_JOB_WAKES` sets), and after a stop. The notice is the model's to read with the person's next message; what
 // the person must not be left with is a conversation that has gone quiet with nothing to say why. The real screen's
 // session, runtime, job registry and store, with a scripted model; jobs are watches that end when the test says so.
 import assert from 'node:assert/strict';
@@ -87,14 +87,14 @@ async function lookAfterTheSecond(
   ui.jobWake.check();
 }
 
-test('after ten turns in a row that finished jobs started, the eleventh job to end waits for the next message, the conversation says so once, and the message gives the model the notice', async (t) => {
-  const { app, ui, runtime, model, screen } = await session(t, 12);
+test('after twenty turns in a row that finished jobs started, the twenty-first job to end waits for the next message, the conversation says so once, and the message gives the model the notice', async (t) => {
+  const { app, ui, runtime, model, screen } = await session(t, 22);
   await app.submit('start pipeline');
   assert.equal(model.requests.length, 1);
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   let end = startJob(runtime, 'stage 1');
-  // Each job's end starts a turn, in which the model starts the next job: ten turns in a row
-  for (let stage = 1; stage <= 10; stage++) {
+  // Each job's end starts a turn, in which the model starts the next job: twenty turns in a row
+  for (let stage = 1; stage <= 20; stage++) {
     end();
     await lookAfterTheSecond(t, ui, runtime);
     await eventually(
@@ -103,33 +103,37 @@ test('after ten turns in a row that finished jobs started, the eleventh job to e
     );
     end = startJob(runtime, `stage ${stage + 1}`);
   }
-  assert.equal(model.requests.length, 11);
+  assert.equal(model.requests.length, 21);
   assert.deepEqual(
     app.state.notices.filter((note) => /waits for your message/.test(note)),
     [],
-    'ten turns started, nothing is held',
+    'twenty turns started, nothing is held',
   );
 
   end();
   await lookAfterTheSecond(t, ui, runtime);
   assert.equal(runtime.busy, false);
-  assert.equal(model.requests.length, 11, 'no turn starts for the eleventh');
+  assert.equal(
+    model.requests.length,
+    21,
+    'no turn starts for the twenty-first',
+  );
   assert.equal(runtime.jobs.hasNotices(runtime.session.id, true), true);
   const held = () =>
-    app.state.notices.filter((note) => note.startsWith('j11 '));
+    app.state.notices.filter((note) => note.startsWith('j21 '));
   assert.equal(held().length, 1);
   assert.match(
     held()[0]!,
-    /^j11 done · stage 11 · \S+ · waits for your message after 10 turns in a row started by jobs$/,
+    /^j21 done · stage 21 · \S+ · waits for your message after 20 turns in a row started by jobs$/,
   );
-  assert.match(screen(), /j11 done · stage 11 · .*waits for your message/);
+  assert.match(screen(), /j21 done · stage 21 · .*waits for your message/);
   // The clock looks again and again; the line is said once
   for (let looks = 0; looks < 5; looks++) {
     t.mock.timers.tick(160);
     ui.jobWake.check();
   }
   assert.equal(held().length, 1);
-  assert.equal(model.requests.length, 11);
+  assert.equal(model.requests.length, 21);
 
   // The person writes: the notice is read with the message, and turns may start by themselves again
   await app.submit('go on');
@@ -137,7 +141,7 @@ test('after ten turns in a row that finished jobs started, the eleventh job to e
   assert.ok(
     last.messages.some(
       (message) =>
-        message.internal === 'job_notice' && /stage 11/.test(message.content),
+        message.internal === 'job_notice' && /stage 21/.test(message.content),
     ),
     'the model reads the notice with the message',
   );

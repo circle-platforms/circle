@@ -41,7 +41,7 @@ This also applies to `websearch`'s native provider request and DuckDuckGo fallba
 
 | Variable                     | Effect                                                                                                                                                                                                  | Default |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `CIRCLE_JOB_WAKES`           | How many turns in a row finished [background jobs](background-jobs.md) may start by themselves before Circle waits for a message of yours. Raise it for work that runs many jobs by design. | `10`    |
+| `CIRCLE_JOB_WAKES`           | How many turns in a row finished [background jobs](background-jobs.md) may start by themselves before Circle waits for a message of yours. Raise it for work that runs many jobs by design. | `20`    |
 | `CIRCLE_JOB_WAIT`            | How many seconds print mode (and RPC mode, when its input ends) waits after its answer for [background jobs](background-jobs.md) the model started. What still runs then is stopped. `0` does not wait. | `1800`  |
 | `CIRCLE_JOB_OUTPUT_LIMIT_MB` | A background job that writes more output than this is stopped. Also applies to a command in the foreground.                                                                                             | `1024`  |
 

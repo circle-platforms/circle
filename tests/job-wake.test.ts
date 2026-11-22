@@ -104,17 +104,17 @@ test('a job that ends after the person stopped a turn does not undo the stop', (
   assert.equal(state.starts, 0);
 });
 
-test('at most ten turns in a row start by themselves, until the person writes', (t) => {
+test('at most twenty turns in a row start by themselves, until the person writes', (t) => {
   const { state, wake, tick } = setup(t);
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 22; i++) {
     wake.jobEnded();
     tick();
   }
-  assert.equal(state.starts, 10);
+  assert.equal(state.starts, 20);
   wake.personSent();
   wake.jobEnded();
   tick();
-  assert.equal(state.starts, 11);
+  assert.equal(state.starts, 21);
 });
 
 test('a turn that fails to start is tried again three times, further apart each time, and then waits for the person', async (t) => {
@@ -172,11 +172,11 @@ test('a turn that starts after a failed one clears the count of failures', async
   assert.equal(state.starts, 4, 'the first wait again, not the second');
 });
 
-test('CIRCLE_JOB_WAKES sets how many turns in a row start by themselves; anything that is no whole number from one up leaves ten', () => {
-  assert.equal(mostWakesInARow({}), 10);
+test('CIRCLE_JOB_WAKES sets how many turns in a row start by themselves; anything that is no whole number from one up leaves twenty', () => {
+  assert.equal(mostWakesInARow({}), 20);
   assert.equal(mostWakesInARow({ CIRCLE_JOB_WAKES: '500' }), 500);
   for (const value of ['0', '-3', '2.5', 'many', ''])
-    assert.equal(mostWakesInARow({ CIRCLE_JOB_WAKES: value }), 10, value);
+    assert.equal(mostWakesInARow({ CIRCLE_JOB_WAKES: value }), 20, value);
 });
 
 test('a front end with a clock of its own looks when it likes, and nothing starts before the second is up', (t) => {
@@ -205,7 +205,7 @@ test('a front end with a clock of its own looks when it likes, and nothing start
 
 test('before leaving, the model answers as its jobs end, up to the limit, and what commands left running is stopped', async () => {
   const stopped: string[] = [];
-  let notices = 12;
+  let notices = 22;
   let running = true;
   const runtime = {
     session: { id: 's' },
@@ -232,7 +232,7 @@ test('before leaving, the model answers as its jobs end, up to the limit, and wh
     wakesSoFar: 3,
   });
   assert.deepEqual(stopped, ['left']);
-  assert.equal(wakes, 7, 'ten in a row, counting the ones before');
+  assert.equal(wakes, 17, 'twenty in a row, counting the ones before');
 
   notices = 1;
   wakes = 0;
@@ -359,16 +359,20 @@ function setupHolding(t: TestContext) {
 
 test('the limit of turns in a row holds a notice back: the front end is told once for the jobs that ended, and again for a job that ends after', (t) => {
   const { state, wake, tick } = setupHolding(t);
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 20; i++) {
     wake.jobEnded();
     tick();
   }
-  assert.equal(state.starts, 10);
-  assert.deepEqual(state.holds, [], 'ten turns started, nothing is held yet');
+  assert.equal(state.starts, 20);
+  assert.deepEqual(
+    state.holds,
+    [],
+    'twenty turns started, nothing is held yet',
+  );
   wake.jobEnded();
   tick();
-  assert.equal(state.starts, 10, 'the eleventh waits for the person');
-  assert.deepEqual(state.holds, [{ why: 'limit', most: 10 }]);
+  assert.equal(state.starts, 20, 'the twenty-first waits for the person');
+  assert.deepEqual(state.holds, [{ why: 'limit', most: 20 }]);
   tick(5000);
   assert.equal(state.holds.length, 1, 'once, not at every look');
   wake.jobEnded();
@@ -379,7 +383,7 @@ test('the limit of turns in a row holds a notice back: the front end is told onc
   tick();
   assert.equal(
     state.starts,
-    11,
+    21,
     'a message of the person lets the next turn start',
   );
   assert.equal(state.holds.length, 2);

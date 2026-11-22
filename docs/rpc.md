@@ -54,7 +54,7 @@ The work a prompt starts is written as the [JSON events](cli.md#json-events) of 
 | `agent_settled` | The work a prompt or a job notice started has ended, and nothing more will run on its own. |
 | `jobs_stopped` | The last line: `count`, the jobs that were still running at the end and were stopped. |
 
-When a [background job](background-jobs.md) the model started ends while nothing runs, Circle starts a turn for it, up to ten in a row. Its `turn_start` has no `message`, and it also ends with `agent_settled`. After `abort` or `new_session` such turns wait for the next prompt.
+When a [background job](background-jobs.md) the model started ends while nothing runs, Circle starts a turn for it, up to twenty in a row. Its `turn_start` has no `message`, and it also ends with `agent_settled`. After `abort` or `new_session` such turns wait for the next prompt.
 
 ## Options and approvals
 
@@ -64,4 +64,4 @@ Nobody can answer an approval card, so calls are decided as in [print mode](cli.
 
 ## When the input closes
 
-Closing standard input lets the current turn finish and save its answer, including when the input stream closes without an end-of-file event. Processes a command left running are stopped. Then Circle waits for the jobs the model started, as print mode does: when one ends the model gets its notice and a turn, up to `CIRCLE_JOB_WAIT` seconds (1800 by default) and ten turns, and not at all after an `abort`. It stops what still runs, writes `jobs_stopped`, and exits with code `0`, or `130` after `ctrl+c`.
+Closing standard input lets the current turn finish and save its answer, including when the input stream closes without an end-of-file event. Processes a command left running are stopped. Then Circle waits for the jobs the model started, as print mode does: when one ends the model gets its notice and a turn, up to `CIRCLE_JOB_WAIT` seconds (1800 by default) and twenty turns, and not at all after an `abort`. It stops what still runs, writes `jobs_stopped`, and exits with code `0`, or `130` after `ctrl+c`.

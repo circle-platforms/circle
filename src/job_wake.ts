@@ -28,11 +28,16 @@ export interface JobWakeHost {
 // Notices that arrive within this of each other go in one turn. A turn or a card that
 // holds the conversation is looked at again this often, for as long as a notice waits.
 const SETTLE_MS = 1000;
+// A workflow in stages, each a job whose end starts the turn that starts the next, was seen to need eleven such
+// turns. Twenty leaves it room and still ends a chain of jobs that feeds itself.
+const MOST_WAKES_IN_A_ROW = 20;
 export function mostWakesInARow(
   env: Record<string, string | undefined> = process.env,
 ): number {
   const configured = Number(env.CIRCLE_JOB_WAKES);
-  return Number.isInteger(configured) && configured >= 1 ? configured : 10;
+  return Number.isInteger(configured) && configured >= 1
+    ? configured
+    : MOST_WAKES_IN_A_ROW;
 }
 const RETRY_AFTER_MS = [15_000, 60_000, 240_000];
 

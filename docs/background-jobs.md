@@ -39,9 +39,9 @@ Circle does not start such a turn:
 - while a card waits for you, you are typing, a list such as `/jobs` is open, or `/tree` has taken the conversation back;
 - for a job you stopped, or one that was your own `!command`. A `!command` you moved to the background shares its output with the model when it ends, as one in the foreground does;
 - for a job of another conversation: its notice waits until that conversation is open again;
-- more than ten times in a row: then it waits for you. Work that runs many jobs by design, one for each item of a long list, sets `CIRCLE_JOB_WAKES` to a higher number before Circle starts.
+- more than twenty times in a row: then it waits for you. Work that runs many jobs by design, one for each item of a long list, sets `CIRCLE_JOB_WAKES` to a higher number before Circle starts.
 
-When a notice waits like this and nothing else holds the conversation, the terminal says so as the job ends, with a dim line: `j11 done · download returns · 7m 38s · waits for your message after 10 turns in a row started by jobs`. After `esc` or `ctrl+c` the line ends at `waits for your message`. The line is not part of the conversation's history: the model reads the notice itself with your next message, and its row, `◆ j11 done · …`, appears then. Turns that jobs start count from your last message, however long the jobs run, so a long run of jobs, each started in the turn the one before started, reaches the limit.
+When a notice waits like this and nothing else holds the conversation, the terminal says so as the job ends, with a dim line: `j21 done · download returns · 7m 38s · waits for your message after 20 turns in a row started by jobs`. After `esc` or `ctrl+c` the line ends at `waits for your message`. The line is not part of the conversation's history: the model reads the notice itself with your next message, and its row, `◆ j21 done · …`, appears then. Turns that jobs start count from your last message, however long the jobs run, so a long run of jobs, each started in the turn the one before started, reaches the limit.
 
 A turn that failed, because the model did not answer, its service broke off or a compaction was running, is tried again after fifteen seconds, a minute and four minutes. The failed turn has usually read the notice already, so the retry asks the model about the conversation as it stands. After the third it waits for you.
 
@@ -73,7 +73,7 @@ Closing the terminal window, `SIGTERM` and `SIGHUP` stop every job too, but leav
 
 Without the full-screen interface:
 
-- **Print mode** (`circle -p`) waits after its answer while jobs the model started run, and lets the model answer again when they end, up to ten times and for up to `CIRCLE_JOB_WAIT` seconds (1800 by default; `0` does not wait). Processes a command left running, usually servers, are stopped at once. What still runs at the end is stopped.
+- **Print mode** (`circle -p`) waits after its answer while jobs the model started run, and lets the model answer again when they end, up to twenty times and for up to `CIRCLE_JOB_WAIT` seconds (1800 by default; `0` does not wait). Processes a command left running, usually servers, are stopped at once. What still runs at the end is stopped.
 - **Line mode** prints `Background job j3 ended.` to standard error when a job ends; the model reads its notice with your next line.
 - **RPC mode** reports jobs as events and starts a turn when one ends while nothing runs; see [RPC mode](rpc.md).
 
