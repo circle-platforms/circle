@@ -430,22 +430,26 @@ test('a headersHelper runs at connect in the folder it belongs to, and its heade
   );
   // A helper the project brings does not get the variables whose names look secret
   assert.equal(headers['x-secret'], 'undefined');
-  // Not trusted: the helper does not run, and the server is reached with its own headers
-  stub.requests.length = 0;
+  // Not trusted: the helper does not run, and the server is reached with its own headers.
+  // It is a server of its own: the connection the load replaces may still send (its
+  // stream, the end of its session), and those requests carry the helper's headers.
+  const untrusted = await mcpStub(t, { tools: echo });
   await manager.load(
     [
       {
         name: 'local',
         scope: 'local',
         folder: workspace,
-        config: { type: 'http', url: stub.url, headersHelper: command },
+        config: { type: 'http', url: untrusted.url, headersHelper: command },
       },
     ],
     new Set(),
     undefined,
     { trusted: false },
   );
-  assert.equal(stub.requests[0]!.headers.authorization, undefined);
+  assert.ok(untrusted.requests.length > 0);
+  for (const request of untrusted.requests)
+    assert.equal(request.headers.authorization, undefined);
   assert.match(manager.describe(), /headersHelper not run/);
 });
 
