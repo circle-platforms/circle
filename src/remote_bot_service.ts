@@ -99,8 +99,8 @@ export async function serveRemoteBot(directory: string) {
             chunks.push(chunk);
           }
           const frame = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
-            owner: string;
-            op:
+            owner?: string;
+            op?:
               | ChatOperation
               | { action: 'configure' }
               | { action: 'disable' }
@@ -124,10 +124,22 @@ export async function serveRemoteBot(directory: string) {
                   files?: ChatFile[];
                 };
             route?: ChatRoute;
-            config?: RemoteModel;
+            config?: RemoteModel | null;
             version?: string;
           };
-          if (!frame.owner || !frame.op || typeof frame.owner !== 'string')
+          const ownerOptional =
+            frame?.op?.action === 'configure' ||
+            frame?.op?.action === 'disable';
+          if (
+            !frame ||
+            typeof frame !== 'object' ||
+            Array.isArray(frame) ||
+            !frame.op ||
+            typeof frame.op !== 'object' ||
+            (ownerOptional
+              ? frame.owner !== undefined && typeof frame.owner !== 'string'
+              : !frame.owner || typeof frame.owner !== 'string')
+          )
             throw new BotError(
               400,
               'invalid_request',
@@ -151,18 +163,40 @@ export async function serveRemoteBot(directory: string) {
               );
           }
           if (frame.op.action === 'configure') {
-            if (!frame.config)
+            if (frame.config === undefined)
               throw new BotError(
                 400,
                 'invalid_request',
                 'missing bot configuration',
               );
-            host.configure(frame.config);
-            return answer(response, 200, { configured: true });
+            if (frame.config === null) host.disable();
+            else host.configure(frame.config);
+            return answer(response, 200, { configured: frame.config !== null });
           }
           if (frame.op.action === 'disable') {
             host.disable();
             return answer(response, 200, { disabled: true });
+          }
+          if (frame.op.action === 'test') {
+            if (!frame.config)
+              throw new BotError(
+                503,
+                'bot_not_enabled',
+                'bot model is not enabled',
+              );
+            await remoteCompletion(
+              directory,
+              frame.config,
+              [{ id: 'test', role: 'user', content: 'reply OK' }],
+              AbortSignal.timeout(15000),
+              () => {},
+              true,
+            );
+            return answer(response, 200, { tested: true, version: VERSION });
+          }
+          if ('config' in frame && frame.config !== undefined) {
+            if (frame.config === null) host.disable();
+            else host.configure(frame.config);
           }
           if (frame.op.action === 'claim')
             return answer(response, 200, {
@@ -189,7 +223,7 @@ export async function serveRemoteBot(directory: string) {
               response,
               200,
               host.inbound(
-                frame.owner,
+                frame.owner!,
                 frame.op.request,
                 frame.op.text,
                 frame.config,
@@ -198,27 +232,15 @@ export async function serveRemoteBot(directory: string) {
               ),
             );
           }
-          if (frame.op.action === 'test') {
-            if (!frame.config)
-              throw new BotError(
-                503,
-                'bot_not_enabled',
-                'bot model is not enabled',
-              );
-            await remoteCompletion(
-              directory,
-              frame.config,
-              [{ id: 'test', role: 'user', content: 'reply OK' }],
-              AbortSignal.timeout(15000),
-              () => {},
-              true,
-            );
-            return answer(response, 200, { tested: true, version: VERSION });
-          }
           return answer(
             response,
             200,
-            host.run(frame.owner, frame.op, frame.config, frame.route),
+            host.run(
+              frame.owner!,
+              frame.op,
+              frame.config ?? undefined,
+              frame.route,
+            ),
           );
         } catch (error) {
           if (error instanceof BotError)
