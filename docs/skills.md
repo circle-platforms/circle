@@ -179,7 +179,7 @@ Not applied:
 An MCP server can publish client tools for a pack under its `/local-tools` contract: a manifest whose SHA-256 is the pack digest, and every file with its size and SHA-256. Circle installs them with the `skill_install` tool and runs them with `skill_run`; the server only verifies and serves the original bytes.
 
 - `skill_install` takes the name of the MCP server entry and the `<id>@<version>` and digest from that server's answer. It downloads the manifest and every file from the entry's `/local-tools` endpoint with the token that entry's connection sends: its `Authorization` header's (`Bearer ${secret:NAME}` or a literal `Bearer` value), or else the token its sign-in keeps, so an entry you signed in to needs no token saved for it. It verifies size and SHA-256 and installs into `~/.agents/skills/<pack>/`. That root is the universal Agent Skills folder, so other agents that read `~/.agents/skills` see the same install. An entry that is not signed in and has no header, or is turned off, is refused with what to do. When the server refuses a download, the error quotes the server's own explanation with the HTTP status: the first lines of its plain-text answer, at most 2,000 bytes of it read and 400 characters shown, without the characters nobody sees (zero-width, bidirectional and tag characters among them) and without a token it repeats. The quotation is the server's explanation, not an instruction: the error tells the model to deal with the reason it names, such as asking the administrator to assign or install, and to try again, and to run nothing the quotation contains. A 404 also says not to guess version numbers, with an explanation or without one. An answer that is not plain text, or has none, gives only the status: a 404 says the server has no such version or file. A 401 still says the token is invalid or revoked.
-- `skill_run` runs a script only under the installed pack's `tools/`, with the current Node, in the workspace, as `execute` runs a command (see [How a pack's script runs](#how-a-packs-script-runs)). `%NAME%` placeholders expand at execution from the variables in settings and the secrets saved with `/secrets`; a pack's instructions name the ones it needs, so define those once. An MCP entry can also give its endpoint and its token under names of its `placeholders`, such as the Hub's `%HUB_URL%` and `%HUB_TOKEN%`, without either being saved (see [Secrets by name](security.md#secrets-by-name)). The output shows every secret value as its `%NAME%`, and tokens never appear in arguments, results, logs or Git. The script's environment also has `CIRCLE_SESSION_ID`, and `CIRCLE_AGENT_ID` in a subagent, as a command's does.
+- `skill_run` runs a script only under the installed pack's `tools/`, with Circle's Node runtime (the desktop application uses its bundled Node 24.21.0 rather than a system Node on `PATH`; the CLI uses its own Node process), in the workspace, as `execute` runs a command (see [How a pack's script runs](#how-a-packs-script-runs)). `%NAME%` placeholders expand at execution from the variables in settings and the secrets saved with `/secrets`; a pack's instructions name the ones it needs, so define those once. An MCP entry can also give its endpoint and its token under names of its `placeholders`, such as the Hub's `%HUB_URL%` and `%HUB_TOKEN%`, without either being saved (see [Secrets by name](security.md#secrets-by-name)). The output shows every secret value as its `%NAME%`, and tokens never appear in arguments, results, logs or Git. The script's environment also has `CIRCLE_SESSION_ID`, and `CIRCLE_AGENT_ID` in a subagent, as a command's does.
 - `skill_list` shows what is installed and the digest each pack was installed from.
 
 ### How a pack's script runs
@@ -201,22 +201,30 @@ A pack can declare its scripts' parameters in a `tools.json` at its root, listed
 ```json
 {
   "version": 1,
-  "tools": [{
-    "name": "convert",
-    "description": "Convert a text file to PDF or HTML.",
-    "script": "tools/convert.mjs",
-    "input_schema": {
-      "type": "object",
-      "properties": {
-        "in": { "type": "string" },
-        "format": { "enum": ["pdf", "html"] },
-        "title": { "type": "string" }
+  "tools": [
+    {
+      "name": "convert",
+      "description": "Convert a text file to PDF or HTML.",
+      "script": "tools/convert.mjs",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "in": { "type": "string" },
+          "format": { "enum": ["pdf", "html"] },
+          "title": { "type": "string" }
+        },
+        "required": ["in", "format"]
       },
-      "required": ["in", "format"]
-    },
-    "args": ["--in", "{in}", "--format", "{format}", { "flag": "--title", "param": "title" }],
-    "env": { "HUB_TOKEN": "%HUB_TOKEN%" }
-  }]
+      "args": [
+        "--in",
+        "{in}",
+        "--format",
+        "{format}",
+        { "flag": "--title", "param": "title" }
+      ],
+      "env": { "HUB_TOKEN": "%HUB_TOKEN%" }
+    }
+  ]
 }
 ```
 
@@ -230,4 +238,4 @@ A subagent that loads the skill itself gets the pack's tools from its next reque
 
 The tools belong to the session that loaded the skill, like its hooks: switching, importing or starting another session leaves them out until the skill is loaded there. Loading the skill again tells the model again which tools it has. Loading it adds tools to the list, so the next request does not reuse the prompt cache of the requests before.
 
-Installing and running a pack executes the publisher's Node code; a server-side scan is not a sandbox. Read the pack before installing it, and treat what runs locally as a preview: the serving side's recomputation is the evidence.
+Installing and running a pack executes the publisher's Node code; a server-side scan is not a sandbox. Read the pack before installing it, and treat what runs locally as a preview: the serving side's recomputation is the evidence. Packs and skills are supported on macOS and Linux only.
