@@ -11,10 +11,9 @@ import { parse as parseYaml } from 'yaml';
 import { EFFORT_LEVELS } from './effort.js';
 import { parseHooks, type HookDefinition } from './hook_config.js';
 import { isRecord } from './settings.js';
-import { parseFrontmatter, splitFrontmatter } from './skills.js';
+import { parseFrontmatter, splitFrontmatter, splitOutside } from './skills.js';
 import type { SubagentSpec } from './extensions.js';
 
-/** The values `permissionMode` takes; `manual` is read as `default`. */
 export const PERMISSION_MODES = [
   'default',
   'acceptEdits',
@@ -35,54 +34,34 @@ export const AGENT_COLORS = [
   'pink',
   'cyan',
 ] as const;
-/** At most this many distinct skills are loaded into a subagent before its task. */
 export const MAX_PRELOADED_SKILLS = 32;
-/** Keys a pack's definition may have that are not read for a pack. */
 const NOT_FOR_PACKS = ['hooks', 'mcpServers', 'permissionMode'] as const;
 
-/** One subagent defined by a markdown file. */
 export interface SubagentFileInfo {
   spec: SubagentSpec;
-  /**
-   * The tool names the file lists; undefined means the default set. An entry ending in `*` takes every tool whose
-   * name starts with what comes before it.
-   */
   tools?: string[];
-  /** Tools it never gets, in the same form as `tools`. */
   disallowedTools?: string[];
   permissionMode?: SubagentPermissionMode;
-  /** How many model requests it may make before it stops with what it has. */
   maxTurns?: number;
-  /** Skills loaded into its conversation before its task. */
   skills?: string[];
-  /** Configured MCP servers, by name, whose tools it gets. */
   mcpServers?: string[];
-  /** Hooks that run only for this subagent while it runs. Its Stop hooks are SubagentStop hooks. */
   hooks?: HookDefinition[];
-  /** It runs as a background job when the conversation starts it. */
   background?: boolean;
   sessionPrompt?: boolean;
-  /** Read and shown, and not applied yet. */
   memory?: (typeof MEMORY_SCOPES)[number];
   isolation?: 'worktree';
   color?: (typeof AGENT_COLORS)[number];
-  /** Keys a pack's definition has that are not read for a pack. */
   ignored?: string[];
-  /** Values read and not applied, each with why: a project's definition cannot loosen approvals. */
   notApplied?: string[];
   path: string;
   source_label: string;
 }
 
-/** What was found, and why a file was passed over. */
 export interface SubagentSources {
   agents: SubagentFileInfo[];
   problems: string[];
 }
 
-// Lowest priority first: a later folder replaces an earlier one of the same name, so a
-// project's agent beats your own, as it does for skills. Extensions come last of all and
-// are merged by the runtime.
 export function subagentSources(
   workspace: string,
   home: string,
@@ -104,14 +83,13 @@ export function subagentSources(
     try {
       if (statSync(path).isDirectory()) unique.set(realpathSync(path), label);
     } catch {
-      /* No agents folder here. */
+      /* Missing agents directory. */
     }
   return [...unique];
 }
 
 const NAME = /^[A-Za-z0-9_-]{1,64}$/;
 
-/** The files in one folder, by name, ignoring everything else. */
 function markdownFiles(directory: string): string[] {
   let found: string[];
   try {
@@ -124,24 +102,10 @@ function markdownFiles(directory: string): string[] {
     .sort((a, b) => a.localeCompare(b));
 }
 
-/** `a, b(x, y) c` as its entries: commas, semicolons and spaces part them, except inside parentheses. */
 function splitEntries(text: string): string[] {
-  const entries: string[] = [];
-  let depth = 0;
-  let word = '';
-  for (const char of text) {
-    if (char === '(') depth++;
-    else if (char === ')') depth = Math.max(0, depth - 1);
-    if (depth === 0 && /[,;\s]/.test(char)) {
-      if (word.trim()) entries.push(word.trim());
-      word = '';
-    } else word += char;
-  }
-  if (word.trim()) entries.push(word.trim());
-  return entries;
+  return splitOutside(text, (char) => /[,;\s]/.test(char));
 }
 
-/** A list as written: a YAML list, or one line of names. Undefined when it is neither. */
 function listOf(value: unknown): string[] | undefined {
   if (typeof value === 'string') return splitEntries(value);
   if (Array.isArray(value) && value.every((item) => typeof item === 'string'))
@@ -149,12 +113,10 @@ function listOf(value: unknown): string[] | undefined {
   return undefined;
 }
 
-/** A tool entry without what its parentheses say: `task(worker)` is `task`, `execute(git push *)` is `execute`. */
 function toolName(entry: string): string {
   return entry.replace(/\(.*\)$/s, '').trim();
 }
 
-/** The keys this version reads beyond name, description, model and effort. They are read from YAML only. */
 const KEYS = [
   'tools',
   'disallowedTools',
@@ -170,14 +132,12 @@ const KEYS = [
   'color',
 ] as const;
 type Key = (typeof KEYS)[number];
-/** Modes that would let a subagent ask less than the conversation: a project's definition cannot set them. */
 const LOOSENING = new Set<SubagentPermissionMode>([
   'acceptEdits',
   'bypassPermissions',
   'auto',
 ]);
 
-/** A value that is text: a string, or a number or a word YAML read as one. Undefined when there is none. */
 function textOf(value: unknown, key: string): string | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value === 'string') return value;
@@ -186,10 +146,6 @@ function textOf(value: unknown, key: string): string | undefined {
   throw new Error(`${key} must be text`);
 }
 
-/**
- * A definition's frontmatter: every key as YAML gives it, by its name in lower case. When it is not YAML, its one-line
- * keys and the reason. A key written twice in different cases is a reason too.
- */
 function readFrontmatter(
   text: string,
 ):
@@ -224,10 +180,6 @@ function readFrontmatter(
   return { fields };
 }
 
-/**
- * The fields of one definition beyond its name, description, prompt, model and effort, checked. A value a key does
- * not take is a reason, and the file is not offered.
- */
 function readFields(
   fields: Map<string, unknown>,
   name: string,
@@ -240,7 +192,6 @@ function readFields(
   const found: Omit<SubagentFileInfo, 'spec' | 'path' | 'source_label'> = {};
   const given = (raw: unknown): boolean =>
     raw !== undefined && raw !== null && raw !== '';
-  /** One word of a fixed set; undefined when the key is not there. */
   const word = <T extends string>(
     key: Key,
     allowed: readonly T[],
@@ -367,10 +318,6 @@ function readFields(
   return found;
 }
 
-/**
- * The definitions in one folder, and why a file there was passed over: the folders below, and the `agents` folder an
- * installed pack ships (#552). A pack's definition does not get hooks, MCP servers or a permission mode of its own.
- */
 export function readSubagentFolder(
   root: string,
   label: string,
@@ -452,7 +399,6 @@ export function readSubagentFolder(
       problems.push(`${path}: no prompt after the --- lines`);
       continue;
     }
-    // A depth of its own; a word that is not one does not load
     const effort = basics.effort?.trim();
     if (effort && !(EFFORT_LEVELS as readonly string[]).includes(effort)) {
       problems.push(
@@ -489,10 +435,6 @@ export function readSubagentFolder(
   return { agents, problems };
 }
 
-/**
- * Read the folders of agent definitions. A file that cannot be used is reported in
- * `problems` rather than dropped quietly, so `/agents` can say what is wrong with it.
- */
 export function discoverSubagents(
   workspace: string,
   home: string,
@@ -505,7 +447,6 @@ export function discoverSubagents(
     agents.push(...found.agents);
     problems.push(...found.problems);
   }
-  // Later folders replace earlier ones, in the order the folders are read.
   const byName = new Map<string, SubagentFileInfo>();
   for (const agent of agents) byName.set(agent.spec.name, agent);
   return { agents: [...byName.values()], problems };

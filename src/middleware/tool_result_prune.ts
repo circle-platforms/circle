@@ -2,6 +2,7 @@ import type { Message } from '../types.js';
 import type { ContextState } from '../checkpoint_store.js';
 import { envFlag } from '../model_guard.js';
 import { isRecord } from '../settings.js';
+
 export function tokenLen(text: string): number {
   let cjk = 0;
   let other = 0;
@@ -18,6 +19,7 @@ export function tokenLen(text: string): number {
   }
   return cjk + Math.ceil(other / 4);
 }
+
 export function completeJson(text: string): boolean {
   if (!/^\s*[{[]/.test(text)) return false;
   try {
@@ -27,29 +29,17 @@ export function completeJson(text: string): boolean {
     return false;
   }
 }
+
 export interface PruneOptions {
-  /** How much recent tool output stays untouched, in tokens. */
   protectTokens?: number;
-  /** The least that is shortened in one batch, in tokens. */
   minimumTokens?: number;
   enabled?: boolean;
-  /**
-   * The most input a request to the model can carry, in tokens: its context window, or its input limit when that is
-   * smaller. What stays untouched is sized from it.
-   */
   inputLimit?: number;
 }
-/** The least recent tool output that pruning leaves untouched, in tokens. */
+
 export const PRUNE_PROTECT_FLOOR = 40000;
-/** The least that pruning shortens in one batch when it leaves the floor untouched, in tokens. */
 export const PRUNE_BATCH_FLOOR = PRUNE_PROTECT_FLOOR / 2;
-/**
- * How much recent tool output pruning leaves untouched: a quarter of the most input the model takes (its context
- * window, or its input limit when that is smaller), and never less than the floor. A fixed 40,000 tokens made an
- * agent on a one-million-token model read the same files again and again, because what it had read a few calls ago
- * was already shortened while nine tenths of its window stood empty. A quarter of a window the model's input limit
- * keeps it from filling would never be reached before the conversation is summarized.
- */
+
 export function pruneProtectTokens(inputLimit?: number): number {
   const input =
     typeof inputLimit === 'number' && Number.isFinite(inputLimit)
@@ -57,14 +47,12 @@ export function pruneProtectTokens(inputLimit?: number): number {
       : 0;
   return Math.max(PRUNE_PROTECT_FLOOR, Math.floor(input / 4));
 }
-/**
- * The least that pruning shortens in one batch: half of what it leaves untouched, and never less than the floor's
- * half. A batch rewrites a message as far back as what stays untouched reaches, so the request's cached prefix is
- * lost from there on; where that is a quarter of a large window, a gain of 20,000 tokens would not pay for it.
- */
+
+// A batch invalidates prompt cache back to the oldest pruned message, so require at least half the protect window.
 export function pruneBatchTokens(protect: number): number {
   return Math.max(PRUNE_BATCH_FLOOR, Math.floor(protect / 2));
 }
+
 export function nextPruneState(
   messages: Message[],
   state: ContextState,
@@ -100,7 +88,6 @@ export function nextPruneState(
       message.role !== 'tool' ||
       old.has(message.id) ||
       Boolean(message.attachments?.length) ||
-      // its images were left out: its text says so and where they were
       state.droppedMedia?.includes(message.id) ||
       ['question', 'skill'].includes(name) ||
       message === latestTodos ||
@@ -118,7 +105,8 @@ export function nextPruneState(
   )
     return state;
   const newIds = candidates.reverse().map((item) => item.id);
-  const first = messages.findIndex((message) => newIds.includes(message.id));
+  const newSet = new Set(newIds);
+  const first = messages.findIndex((message) => newSet.has(message.id));
   const strip = messages
     .slice(first + 1)
     .filter((message) => message.role === 'assistant')
@@ -129,6 +117,7 @@ export function nextPruneState(
     stripThinkingIds: [...new Set([...state.stripThinkingIds, ...strip])],
   };
 }
+
 export function pruneMessages(
   messages: Message[],
   state: ContextState,

@@ -6,28 +6,20 @@ import {
 } from './jobs.js';
 import {
   prepareRun,
+  prepareScriptCommand,
   runTool,
-  scriptCommand,
   type RunToolOptions,
 } from './local_skills.js';
 
-/** How a pack's script runs: the same choices as a command the model runs with execute. */
 export interface ScriptRunOptions {
   jobs?: JobRegistry;
   owner: JobOwner;
   signal: AbortSignal;
-  /** The workspace, where the script runs. */
   cwd: string;
-  /** Seconds, at most 600. Without it a run still going after 120 s goes on as a background job. */
   timeout?: number;
   background?: boolean;
 }
 
-/**
- * Runs a pack's script in the workspace as execute runs a command. Still running at 120 s, it goes on as a background
- * job and the model gets its id and output file; given a `timeout`, it is ended then; with `background`, it starts as
- * a job. Where background jobs are not available it runs here, to its end or the timeout.
- */
 export async function runScript(
   run: RunToolOptions,
   options: ScriptRunOptions,
@@ -40,28 +32,33 @@ export async function runScript(
     throw new Error('timeout is in seconds, at most 600');
   if (jobs) {
     const prepared = await prepareRun(run);
-    const command = await scriptCommand(prepared);
-    if (background) {
-      signal.throwIfAborted();
-      const job = await jobs.startShell(
-        command,
+    const script = await prepareScriptCommand(prepared);
+    try {
+      if (background) {
+        signal.throwIfAborted();
+        const job = await jobs.startShell(
+          script.command,
+          owner,
+          timeout,
+          signal,
+          prepared.env,
+        );
+        return `In background: ${jobLine(job)}. A notice will arrive when it ends; do not poll or sleep.`;
+      }
+      const result = await jobs.execute(
+        script.command,
         owner,
-        timeout,
         signal,
+        timeout || undefined,
+        undefined,
         prepared.env,
       );
-      return `In background: ${jobLine(job)}. A notice will arrive when it ends; do not poll or sleep.`;
+      if (result.job) return result.output;
+      return commandAnswer(result.output, result.exit_code);
+    } catch (error) {
+      await script.cleanup();
+      throw error;
     }
-    const result = await jobs.execute(
-      command,
-      owner,
-      signal,
-      timeout || undefined,
-      undefined,
-      prepared.env,
-    );
-    if (result.job) return result.output;
-    return commandAnswer(result.output, result.exit_code);
   }
   if (background) throw new Error('background runs are not available here');
   const result = await runTool({

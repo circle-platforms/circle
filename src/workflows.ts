@@ -556,7 +556,20 @@ export class WorkflowRun {
       /* The run goes on; only its record is missing. */
     }
   }
-  /** An `agent()` call, while the script runs: queued here, started once the script waits. */
+  private checkStringOptions(
+    caller: string,
+    options: Record<string, unknown>,
+    keys: readonly string[],
+    refuse: (message: string) => void,
+  ): boolean {
+    for (const key of keys) {
+      if (options[key] !== undefined && typeof options[key] !== 'string') {
+        refuse(`${caller}() option ${key} must be a string`);
+        return false;
+      }
+    }
+    return true;
+  }
   private called(
     spec: string,
     resolve: (json?: string) => void,
@@ -587,16 +600,15 @@ export class WorkflowRun {
         resolve,
         reject,
       });
-    for (const key of [
-      'label',
-      'phase',
-      'model',
-      'effort',
-      'agentType',
-      'isolation',
-    ])
-      if (options[key] !== undefined && typeof options[key] !== 'string')
-        return refuse(`agent() option ${key} must be a string`);
+    if (
+      !this.checkStringOptions(
+        'agent',
+        options,
+        ['label', 'phase', 'model', 'effort', 'agentType', 'isolation'],
+        refuse,
+      )
+    )
+      return;
     if (
       options.stallMs !== undefined &&
       !(
@@ -673,9 +685,10 @@ export class WorkflowRun {
       return refuse(
         'execute() takes the command as its first argument, a string',
       );
-    for (const key of ['label', 'phase'])
-      if (options[key] !== undefined && typeof options[key] !== 'string')
-        return refuse(`execute() option ${key} must be a string`);
+    if (
+      !this.checkStringOptions('execute', options, ['label', 'phase'], refuse)
+    )
+      return;
     const timeout = options.timeout;
     if (
       timeout !== undefined &&

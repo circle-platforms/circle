@@ -11,15 +11,8 @@ import { runScript } from './script_runs.js';
 import { expandVariables } from './secrets.js';
 import type { Tool, ToolContext } from './types.js';
 
-/**
- * Typed tools a pack declares for its scripts (#544). The pack lists `tools.json` in its manifest, so the file is
- * covered by the pack's digest like every other file. Each entry names a script under `tools/`, the JSON Schema of
- * its input, how the input becomes the script's arguments, and the environment Circle fills from variables and
- * secrets, which the model never sees.
- */
 export const PACK_TOOLS_FILE = 'tools.json';
 
-/** An argument the template takes from the input: `{ "flag": "--title", "param": "title" }`. */
 export interface PackToolFlag {
   flag: string;
   param: string;
@@ -28,21 +21,16 @@ export interface PackToolFlag {
 export interface PackToolDeclaration {
   name: string;
   description: string;
-  /** A path under `tools/`, as `skill_run` takes it. */
   script: string;
   input_schema: Record<string, unknown>;
-  /** The script's arguments: literal strings, `"{param}"` for a required parameter, or a flag for an optional one. */
   args: Array<string | PackToolFlag>;
-  /** `json`: the whole input, as JSON, on standard input. */
   stdin?: 'json';
-  /** Environment the script also gets. `%NAME%` takes a variable's or a secret's value when the script starts. */
   env: Record<string, string>;
 }
 
 const MAX_TOOLS = 32;
 const NAME = '^[A-Za-z_][A-Za-z0-9_]{0,63}$';
 const PARAM = /^\{([A-Za-z_][A-Za-z0-9_]{0,63})\}$/;
-/** What Circle itself gives every script, which a declaration cannot replace. */
 const RESERVED_ENV = new Set([
   'PATH',
   'HOME',
@@ -53,7 +41,6 @@ const RESERVED_ENV = new Set([
   'CIRCLE_SKILL_DIR',
   'CIRCLE_SKILL_DATA',
 ]);
-/** The run options every declared tool takes as execute does, which a declaration cannot name as its own input. */
 const RUN_OPTIONS = {
   timeout: {
     type: 'integer',
@@ -177,10 +164,6 @@ let declarationCheck: ValidateFunction | undefined;
 const validateDeclaration = (value: unknown): boolean =>
   (declarationCheck ??= new Ajv({ strict: false }).compile(DECLARATION))(value);
 
-/**
- * The tools a declaration file names, or why it cannot be used. `files` are the paths the pack's manifest lists:
- * a script must be one of them.
- */
 export function parsePackTools(
   text: string,
   files: readonly string[],
@@ -233,7 +216,6 @@ export function parsePackTools(
         throw new Error(
           `${where}: args name ${param}, which is not a property`,
         );
-      // A bare "{param}" always has a value to put there; an optional one goes with its flag or not at all
       if (typeof item === 'string' && !required.has(param))
         throw new Error(
           `${where}: optional ${param} needs the form { "flag": …, "param": "${param}" }`,
@@ -250,7 +232,6 @@ export function parsePackTools(
         type: 'object',
         properties,
         ...(required.size ? { required: [...required] } : {}),
-        // Only what the declaration names reaches the script
         additionalProperties: false,
       },
       args: tool.args ?? [],
@@ -260,16 +241,13 @@ export function parsePackTools(
   });
 }
 
-/** The tools an installed pack declares, read after the pack verifies against its manifest. */
 export async function readPackTools(
   root: string,
   pack: string,
 ): Promise<PackToolDeclaration[]> {
   const directory = join(root, pack);
-  // A skill folder without a manifest is not a pack, and declares nothing
   if (!existsSync(join(directory, 'pack.json'))) return [];
   await verifyInstalled(directory);
-  // Every file the manifest lists was just checked against its digest
   const listed = (
     JSON.parse(await readFile(join(directory, 'pack.json'), 'utf8')) as {
       files: { path: string }[];
@@ -287,11 +265,7 @@ function argumentValues(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String) : [String(value)];
 }
 
-/**
- * The script's arguments from the template and the call's input. A literal takes plain variables' values, never a
- * secret's: arguments are visible to other processes. A flag with no value given is left out; `true` is the flag
- * alone, `false` nothing, and each item of a list repeats the flag.
- */
+// Plain variables only in argv: arguments are visible in process listings.
 export function packToolArgv(
   template: PackToolDeclaration['args'],
   input: Record<string, unknown>,
@@ -316,17 +290,15 @@ export function packToolArgv(
   return argv;
 }
 
-/** The model's tool for one declared script of an installed pack. */
 export function packTool(options: {
   root: string;
   pack: string;
   declaration: PackToolDeclaration;
   variables: () => Record<string, string>;
   secrets: () => Record<string, string>;
-  /** The workspace, where the script runs. */
   workspace: string;
-  /** Where packs keep what outlives an update (`CIRCLE_SKILL_DATA`). */
   dataRoot?: string;
+  nodeExecutable?: string;
   jobs?: JobRegistry;
   jobOwner?: (context: ToolContext) => JobOwner;
 }): Tool {
@@ -343,8 +315,7 @@ export function packTool(options: {
       },
     },
     effect: 'execute',
-    // What the model writes is checked against the schema and runs as written, %NAME% included: values from
-    // variables and secrets go only where the pack declared them
+    // Keep %NAME% literals unexpanded in the harness so secrets expand only in declared env slots.
     variables: false,
     run: async (args, context) => {
       const { timeout, background, ...input } = args;
@@ -376,6 +347,9 @@ export function packTool(options: {
           env,
           expand: false,
           ...(options.dataRoot ? { dataRoot: options.dataRoot } : {}),
+          ...(options.nodeExecutable
+            ? { nodeExecutable: options.nodeExecutable }
+            : {}),
         },
         {
           jobs: options.jobs,

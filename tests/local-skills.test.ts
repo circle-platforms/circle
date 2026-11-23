@@ -8,6 +8,9 @@ import {
   type ServerResponse,
 } from 'node:http';
 import {
+  chmod,
+  copyFile,
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -23,6 +26,7 @@ import {
   installPack,
   listInstalled,
   parsePackRef,
+  resolveNodeExecutable,
   resolveServer,
   runTool,
   serverBaseUrl,
@@ -1025,5 +1029,133 @@ setTimeout(() => process.stdout.write(Buffer.from([0xb8, 0xad])), 100);
   } finally {
     await server.close();
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('runTool executes .ts tools with relative imports using explicit nodeExecutable and reports missing or Electron runtimes', async (t) => {
+  const root = await realpath(await tempRoot());
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const skillsRoot = join(root, 'skills');
+  const workspace = join(root, 'workspace');
+  const stagedDir = join(root, 'Program Files Circle', 'tools', 'node', 'bin');
+  const stagedNode = join(
+    stagedDir,
+    process.platform === 'win32' ? 'node.exe' : 'node',
+  );
+  await Promise.all([
+    mkdir(skillsRoot, { recursive: true }),
+    mkdir(workspace, { recursive: true }),
+    mkdir(stagedDir, { recursive: true }),
+  ]);
+  await copyFile(process.execPath, stagedNode);
+  if (process.platform !== 'win32') await chmod(stagedNode, 0o755);
+
+  const files = {
+    'SKILL.md': '# recompose\n',
+    'functions/usage.ts':
+      "export function usageText(): string {\n  return 'Usage: check-record.ts --file <path>';\n}\n",
+    'tools/check-record.ts': `import { writeFileSync } from 'node:fs';
+import { usageText } from '../functions/usage.ts';
+const args = process.argv.slice(2);
+if (args.length === 0) {
+  console.error(usageText());
+  process.exit(2);
+}
+const chunks: Buffer[] = [];
+for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+const stdin = Buffer.concat(chunks).toString('utf8');
+writeFileSync('receipt.json', JSON.stringify({ execPath: process.execPath, args, stdin }));
+console.log('stdin=' + stdin.trim());
+`,
+  };
+  const value = pack('recompose', '1.2.7', files);
+  const server = await stubServer(
+    new Map([[value.ref, { manifest: value.manifest, files: value.files }]]),
+  );
+  t.after(() => server.close());
+  await installPack({
+    url: server.url,
+    token: TOKEN,
+    ref: value.ref,
+    root: skillsRoot,
+  });
+
+  const usage = await runTool({
+    root: skillsRoot,
+    pack: 'recompose',
+    script: 'tools/check-record.ts',
+    nodeExecutable: stagedNode,
+    cwd: workspace,
+  });
+  assert.equal(usage.exit_code, 2);
+  assert.match(usage.stderr, /Usage: check-record\.ts --file <path>/);
+
+  const ok = await runTool({
+    root: skillsRoot,
+    pack: 'recompose',
+    script: 'tools/check-record.ts',
+    nodeExecutable: stagedNode,
+    args: ['--file', 'record.json'],
+    stdin: '%API_TOKEN%\n',
+    secrets: { API_TOKEN: TOKEN },
+    cwd: workspace,
+  });
+  assert.equal(ok.exit_code, 0);
+  assert.equal(ok.stdout.trim(), 'stdin=%API_TOKEN%');
+  assert.ok(!ok.stdout.includes(TOKEN));
+  const receipt = JSON.parse(
+    await readFile(join(workspace, 'receipt.json'), 'utf8'),
+  ) as { execPath: string; args: string[]; stdin: string };
+  assert.equal(await realpath(receipt.execPath), await realpath(stagedNode));
+  assert.notEqual(
+    await realpath(receipt.execPath),
+    await realpath(process.execPath),
+  );
+  assert.deepEqual(receipt.args, ['--file', 'record.json']);
+  assert.equal(receipt.stdin, `${TOKEN}\n`);
+
+  const missingNode = join(root, 'missing-node');
+  await assert.rejects(
+    runTool({
+      root: skillsRoot,
+      pack: 'recompose',
+      script: 'tools/check-record.ts',
+      nodeExecutable: missingNode,
+      cwd: workspace,
+    }),
+    (error: unknown) =>
+      error instanceof LocalSkillsError && error.message.includes(missingNode),
+  );
+  await assert.rejects(
+    resolveNodeExecutable('   '),
+    (error: unknown) =>
+      error instanceof LocalSkillsError && error.message.includes('为空'),
+  );
+
+  const prevElectron = Object.getOwnPropertyDescriptor(
+    process.versions,
+    'electron',
+  );
+  const prevRunAsNode = process.env.ELECTRON_RUN_AS_NODE;
+  try {
+    Object.defineProperty(process.versions, 'electron', {
+      value: '44.9.1',
+      configurable: true,
+    });
+    delete process.env.ELECTRON_RUN_AS_NODE;
+    await assert.rejects(
+      resolveNodeExecutable(),
+      (error: unknown) =>
+        error instanceof LocalSkillsError &&
+        error.message.includes(process.execPath),
+    );
+    assert.equal(await resolveNodeExecutable(stagedNode), stagedNode);
+  } finally {
+    if (prevElectron)
+      Object.defineProperty(process.versions, 'electron', prevElectron);
+    else
+      delete (process.versions as Record<string, string | undefined>).electron;
+    if (prevRunAsNode === undefined) delete process.env.ELECTRON_RUN_AS_NODE;
+    else process.env.ELECTRON_RUN_AS_NODE = prevRunAsNode;
   }
 });

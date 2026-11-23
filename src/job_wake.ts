@@ -7,29 +7,16 @@ export {
   type JobHold,
 } from './job_notice_words.js';
 
-/** What a conversation tells its job wake. */
 export interface JobWakeHost {
-  /** A finished job's notice may start a turn. */
   hasNotice(): boolean;
-  /** A turn or a card holds the conversation now; in the terminal also what the person types or chooses from. */
   occupied(): boolean;
-  /** The conversation can no longer run a turn. */
   closed(): boolean;
-  /** Starts the turn that reads the notices; `owed` runs it with none left, for a turn that failed after reading them. */
   start(owed: boolean): Promise<unknown>;
-  /**
-   * A notice waits and no turn will start for it until the person writes, so the conversation has to say so: it is
-   * called once for the jobs that ended, when nothing runs and nobody is typing. A front end that does not say
-   * so leaves it out, and is not looked at again for it.
-   */
   holding?(hold: JobHold): void;
 }
 
-// Notices that arrive within this of each other go in one turn. A turn or a card that
-// holds the conversation is looked at again this often, for as long as a notice waits.
 const SETTLE_MS = 1000;
-// A workflow in stages, each a job whose end starts the turn that starts the next, was seen to need eleven such
-// turns. Twenty leaves it room and still ends a chain of jobs that feeds itself.
+// Bounded at 20 so multi-stage job chains complete without allowing runaway wake loops.
 const MOST_WAKES_IN_A_ROW = 20;
 export function mostWakesInARow(
   env: Record<string, string | undefined> = process.env,
@@ -41,13 +28,6 @@ export function mostWakesInARow(
 }
 const RETRY_AFTER_MS = [15_000, 60_000, 240_000];
 
-/**
- * Starts a turn when a background job of one conversation ends and nothing runs, because
- * the model was told to end its turn and wait for the notice. Every front end holds one
- * per conversation; see docs/background-jobs.md for the rules.
- *
- * It looks again by itself, unless the front end has a clock of its own and calls `check`.
- */
 export class JobWake {
   private timer?: ReturnType<typeof setTimeout>;
   private settleAt = 0;
@@ -56,7 +36,6 @@ export class JobWake {
   private failures = 0;
   private retryAt = 0;
   private owed = false;
-  /** Whether the host was told that the notices wait, since a job last ended. */
   private told = false;
   private readonly most = mostWakesInARow();
   constructor(
@@ -74,11 +53,9 @@ export class JobWake {
     this.told = false;
     this.look();
   }
-  /** The person stopped a turn or went back in the conversation: wait for their next message. */
   snooze(): void {
     this.held = true;
   }
-  /** A message of the person's starts a turn: finished jobs may start turns again. */
   personSent(): void {
     this.held = false;
     this.wakes = 0;
@@ -87,7 +64,6 @@ export class JobWake {
     this.owed = false;
     this.told = false;
   }
-  /** For a wake the front end ran itself, such as the last ones before leaving. */
   countWake(): void {
     this.wakes++;
   }
@@ -114,12 +90,10 @@ export class JobWake {
         if (wait === undefined) {
           this.held = true;
           this.owed = false;
-          // A notice that is still unread waits for the person now: a front end with a clock of its own is told so
-          // at the next look, as one that looks itself is when it does
           if (this.host.holding) this.look();
           return;
         }
-        // A turn that failed is not one of the turns in a row
+        // Failed wake turns do not count toward the consecutive wake cap.
         this.wakes--;
         this.owed = true;
         this.retryAt = Date.now() + wait;
@@ -127,7 +101,6 @@ export class JobWake {
       },
     );
   }
-  /** A notice that may start a turn waits for the person: said once the turn or card that held the conversation is over. */
   private hold(): void {
     if (!this.host.holding || this.told) return;
     if (Date.now() < this.settleAt || this.host.occupied()) {
@@ -147,11 +120,6 @@ export class JobWake {
   }
 }
 
-/**
- * What a front end says when `JobWake` calls its `holding`: the notices of the conversation that wait for the person's
- * next message and that it has not said yet, each with its job's id and its line (`j21 done · stage 21 · 7m 38s`).
- * `said` is the front end's memory of the conversation, kept until a turn reads the notices: a notice is news once.
- */
 export function unsaidNotices(
   runtime: Pick<AgentRuntime, 'jobs' | 'session'>,
   said: Set<string>,
@@ -164,19 +132,11 @@ export function unsaidNotices(
   return news;
 }
 
-/**
- * After the last prompt, with no one left to write: stops what commands left running,
- * then lets the model answer as its jobs end, for as long as CIRCLE_JOB_WAIT allows.
- * When it stops because jobs have started as many turns in a row as they may, with a notice still unread, it returns
- * that limit, so that the caller can say so: nobody is left to be told by a conversation. Otherwise nothing.
- */
 export async function answerJobsBeforeLeaving(
   runtime: Pick<AgentRuntime, 'jobs' | 'session'>,
   options: {
     delay: (ms: number) => Promise<unknown>;
-    /** Runs the turn that reads the notices. */
     wake: () => Promise<void>;
-    /** False, or a throw, ends the wait. */
     carryOn?: () => boolean;
     wakesSoFar?: number;
   },

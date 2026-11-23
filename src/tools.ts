@@ -48,24 +48,18 @@ export interface ToolHooks {
   knowledge?: KnowledgeService;
   knowledgeShare?: Parameters<typeof knowledgeTools>[1];
   fileMutations?: FileMutations;
-  /**
-   * The conversation's file journal, for a Circle with no native workspace backend: it
-   * records what a direct write changed, so `/rewind` can bring the older text back.
-   */
   captures?: <T>(
     paths: string[],
     signal: AbortSignal,
     write: () => T | Promise<T>,
   ) => Promise<T>;
   jobs?: JobRegistry;
-  /** One message to a running subagent, or the reason it did not go. */
   sendToJob?: (
     context: ToolContext,
     jobId: string,
     message: string,
   ) => string | Promise<string>;
   jobOwner?: (context: ToolContext) => import('./jobs.js').JobOwner;
-  /** Only the runtime may turn original arguments into public command display. */
   displayCommand?: (rawCommand: string, context: ToolContext) => string;
   todos?: (todos: Todo[]) => void;
   question?: (
@@ -77,10 +71,6 @@ export interface ToolHooks {
     args: Record<string, unknown>,
     context: ToolContext,
   ) => Promise<string>;
-  /**
-   * `workflow`: reads and checks the script a call names, before anyone is asked, and gives back what starts
-   * it, with the script's meta for the card.
-   */
   workflow?: (
     args: Record<string, unknown>,
     context: ToolContext,
@@ -92,30 +82,20 @@ export interface ToolHooks {
     context?: ToolContext,
   ) => Promise<string>;
   compact?: (hint: string, context: ToolContext) => Promise<string>;
-  /**
-   * The installer/runner of the local tools an MCP server publishes: the settings as they are now (the Hub can be
-   * connected after the tools were made), the secrets and variables it may put in, and the home whose MCP sign-ins it
-   * may use. `root` is the skills root; tests give their own.
-   */
   localSkills?: {
     home: string;
     settings: () => CircleSettings;
     secrets: () => Record<string, string>;
     variables: () => Record<string, string>;
     root?: string;
-    /** The typed tool offered for this script of a pack, when its skill is loaded and the pack declares it. */
+    nodeExecutable?: string;
     typed?: (
       pack: string,
       script: string,
       sessionId?: string,
     ) => string | undefined;
   };
-  /** Offer `screenshot`; tests give it their own runner. */
   screenshot?: Omit<ScreenshotOptions, 'app' | 'target'>;
-  /**
-   * Describes image files with the run's side vision model; adds the `vision` tool and
-   * the picture descriptions of the tools above when set.
-   */
   vision?: (
     paths: string[],
     question: string,
@@ -269,7 +249,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       sandbox.checkCredentialPath(path);
       const native = await authorizeRead(path, context);
       if (statSync(path).isDirectory()) {
-        // A folder is listed as ls lists it, within the same bounds
         await authorizeSearch(sandbox, mutations, path, context);
         return readdirSync(path, { withFileTypes: true })
           .map((entry) => entry.name + (entry.isDirectory() ? '/' : ''))
@@ -426,11 +405,9 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       ['apply_patch', mutations.preparePatch],
     ] as const) {
       const tool = tools.find((tool) => tool.name === name)!;
-      // The plan file has nothing to snapshot: the tool writes it when it runs
       tool.prepare = async (args, context) =>
         writesPlan(name, args) ? tool.run : prepare(args, context);
     }
-  // Listing and searching show what reading would: they keep to read_file's bounds
   add(
     'ls',
     'read',
@@ -685,7 +662,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         ['pack', 'script'],
       ),
       async (args, context) => {
-        // A script whose parameters the pack declares runs through its own tool, which checks them first
         const typed = localSkills.typed?.(
           string(args, 'pack'),
           string(args, 'script'),
@@ -710,6 +686,9 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
               ...(typeof args.stdin === 'string' ? { stdin: args.stdin } : {}),
               variables: localSkills.variables(),
               secrets: localSkills.secrets(),
+              ...(localSkills.nodeExecutable
+                ? { nodeExecutable: localSkills.nodeExecutable }
+                : {}),
               ...(localSkills.home
                 ? { dataRoot: join(localSkills.home, SKILL_DATA_FOLDER) }
                 : {}),
@@ -724,7 +703,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
                   executionSessionId: context.sessionId,
                   toolCallId: context.callId,
                   ...(context.identity ? { identity: context.identity } : {}),
-                  // As the model wrote them: %NAME% stays unfilled on screen
                   displayCommand: [
                     string(args, 'pack'),
                     string(args, 'script'),
@@ -889,7 +867,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
     add(
       'task',
       'read',
-      // As in deepagents' task schema, both fields are required.
       schema(
         {
           description: text(
@@ -936,7 +913,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       }),
       async (args, context) => (await prepare(args, context))(args, context),
     );
-    // What the call runs is read and checked before the card: what was approved is what starts
     tool.prepare = prepare;
     tool.subagents = false;
   }
@@ -1027,8 +1003,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
           folder,
           new Date().toISOString().replace(/[:.]/g, '-') + '.png',
         );
-        // Nothing is taken for a model that could not look at it, unless the side vision
-        // model will describe what was taken
         if (context.imageInput === false && !hooks.vision)
           throw new Error(
             'the model in use does not read images; no side vision model is configured (CIRCLE_VISION_BASE_URL, CIRCLE_VISION_KEY, CIRCLE_VISION_MODEL)',
@@ -1068,8 +1042,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         );
       },
     );
-    // The card says who sees the picture: for a model that cannot read images the side
-    // vision model does, and the model gets its words
     if (hooks.vision)
       screenshot.approvalFacts = (_args, _sessionId, _shown, imageInput) =>
         imageInput === false ? { seen_by: 'side vision model' } : undefined;
@@ -1096,7 +1068,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         if (!type) throw new Error('not a picture file');
         if (type === 'application/pdf')
           throw new Error('the vision model reads pictures, not PDFs');
-        // What read_file may not read does not go to the side vision model either
         await authorizeRead(path, context);
         if (!statSync(path).isFile()) throw new Error(`no such file: ${path}`);
         const described = await hooks.vision!(

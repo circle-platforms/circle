@@ -69,7 +69,12 @@ import { emptyUsage } from '../types.js';
 import { EFFORT_LEVELS } from '../model.js';
 import { exportKind, toHtml } from '../session_export.js';
 import { discoverCustomCommands, expandCommandTemplate } from '../commands.js';
-import { discoverSkills, loadSkillBody } from '../skills.js';
+import {
+  discoverSkills,
+  findSkill,
+  loadSkillBody,
+  type SkillInfo,
+} from '../skills.js';
 import { CONTEXT_FILE_CAP } from '../memory_sources.js';
 import {
   addMemory,
@@ -1298,7 +1303,7 @@ function agents(host: CommandHost, args: string): void {
         one.effort ? `  effort: ${one.effort}` : '  effort: the conversation’s',
         one.tools
           ? `  tools: ${one.tools.join(', ')}`
-          : '  tools: every tool a subagent may have',
+          : '  tools: every tool a subagent may have, except question',
         one.disallowedTools
           ? `  disallowed tools: ${one.disallowedTools.join(', ')}`
           : '',
@@ -2142,6 +2147,20 @@ async function skill(host: CommandHost, args: string): Promise<void> {
   );
   const token = args.trim();
   if (!token) {
+    const fields = (item: SkillInfo): string[] =>
+      (
+        [
+          ['allowed-tools', item.allowed_tools],
+          ['disallowed-tools', item.disallowed_tools],
+        ] as const
+      ).flatMap(([field, entries]) =>
+        entries
+          ? [aligned(' '.repeat(23), `${field}: ${entries.join(', ')}`)]
+          : [],
+      );
+    const problems = skills
+      .filter((item) => item.allowed_tools || item.disallowed_tools)
+      .flatMap((item) => runtime.skillTools(item).problems);
     host.notice(
       skills.length
         ? [
@@ -2151,11 +2170,17 @@ async function skill(host: CommandHost, args: string): Promise<void> {
               const source = skill.source_label
                 ? ` (${skill.source_label})`
                 : '';
-              return aligned(
-                `  ${pad(skill.name, 20)} `,
-                `${skill.description}${source}`,
-              );
+              return [
+                aligned(
+                  `  ${pad(skill.name, 20)} `,
+                  `${skill.description}${source}`,
+                ),
+                ...fields(skill),
+              ].join('\n');
             }),
+            ...(problems.length
+              ? ['', 'Not applied:', ...problems.map((line) => `  ${line}`)]
+              : []),
             '',
             'Load with /skill <name>',
           ].join('\n')
@@ -2173,7 +2198,7 @@ async function skill(host: CommandHost, args: string): Promise<void> {
     return;
   }
   const tools = await runtime.activateSkillHooks(name);
-  // Into the conversation without a turn: the model reads it with your next message.
+  const applied = runtime.applySkillTools(findSkill(name, skills)!, 'person');
   runtime.store.append(runtime.session.id, [
     {
       id: randomUUID(),
@@ -2187,7 +2212,10 @@ async function skill(host: CommandHost, args: string): Promise<void> {
     },
   ]);
   host.notice(
-    `Loaded skill \`${name}\`` + (skillArgs ? ` args='${skillArgs}'` : ''),
+    [
+      `Loaded skill \`${name}\`` + (skillArgs ? ` args='${skillArgs}'` : ''),
+      ...applied.lines.map((line) => `  ${line}`),
+    ].join('\n'),
   );
 }
 

@@ -85,6 +85,7 @@ import type {
   ResolveInputsRequest,
   ResolveInputsResult,
 } from './input_outbox.js';
+import type { SkillScopes } from './skill_tools.js';
 type InputPresentation = Omit<InputPayload, 'text'>;
 const inputPresentation = ({
   text: _text,
@@ -244,10 +245,9 @@ export interface HarnessOptions {
   ) => Promise<Buffer | undefined>;
   /** False for a subagent: tool hooks still run, session start and stop do not. */
   sessionHooks?: boolean;
-  /** How this session started, for SessionStart hooks; a session with history is resumed. */
   sessionSource?: 'startup' | 'resume' | 'clear';
-  /** The background work still running, for Stop hooks. */
   backgroundTasks?: () => Record<string, unknown>[];
+  skills?: Pick<SkillScopes, 'message' | 'withheld' | 'allows'>;
 }
 /** A message that waits for the model, as the input box showed it. */
 export interface QueuedMessage {
@@ -402,6 +402,12 @@ export class Harness {
   }
   get busy(): boolean {
     return Boolean(this.active);
+  }
+  private offered(): Tool[] {
+    const withheld = this.options.skills?.withheld(this.sessionId);
+    return withheld
+      ? this.tools.filter((tool) => !withheld.has(tool.name))
+      : this.tools;
   }
   get pendingMessageCount(): number {
     return this.steering.length + this.followUps.length;
@@ -1148,7 +1154,7 @@ export class Harness {
       parts.push(message.content);
       if (message.thinking) parts.push(message.thinking);
     }
-    for (const tool of this.tools)
+    for (const tool of this.offered())
       parts.push(tool.name, tool.description, JSON.stringify(tool.parameters));
     return Math.max(1, tokenLen(parts.join('\n')));
   }
@@ -1229,6 +1235,7 @@ export class Harness {
       }
       if (queued) this.consumeInput(queued, content);
       else this.save({ id: randomUUID(), role: 'user', ...content, ...shown });
+      this.options.skills?.message(this.sessionId);
       if (verdict) this.hookContext(verdict, 'UserPromptSubmit');
     }
     const session = this.options.store.get(this.sessionId)!;
@@ -1320,6 +1327,7 @@ export class Harness {
             continue;
           }
           this.consumeInput(input, content);
+          this.options.skills?.message(this.sessionId);
           this.bus.emit('steer', { payload: { message } });
           if (verdict) this.hookContext(verdict, 'UserPromptSubmit');
         }
@@ -1349,7 +1357,7 @@ export class Harness {
                 ? await this.options.prepareMessages(signal)
                 : this.options.store.projectedMessages(this.sessionId),
             ),
-            tools: this.tools,
+            tools: this.offered(),
             ...(this.options.effort ? { effort: this.options.effort } : {}),
             signal: stepSignal,
             notice: (event) =>
@@ -1989,7 +1997,7 @@ export class Harness {
   // that says its calls may, as an MCP tool its server marks read-only.
   private parallel(call: ToolCall): boolean {
     try {
-      const tool = prepareToolCall(call, this.tools).tool;
+      const tool = prepareToolCall(call, this.offered()).tool;
       return tool.name === 'task' || tool.parallel === true;
     } catch {
       return false;
@@ -2063,7 +2071,7 @@ export class Harness {
                 ),
               }
             : next,
-          this.tools,
+          this.offered(),
         );
         let call = prepared.call;
         const tool = prepared.tool;
@@ -2224,6 +2232,10 @@ export class Harness {
         readOnlyWorkflow;
       const hookAsk = before?.decision === 'ask';
       const hookAllow = before?.decision === 'allow' && !alwaysAsk;
+      const skillAllowed =
+        !alwaysAsk &&
+        this.options.skills?.allows(this.sessionId, tool.name, resolved) ===
+          true;
       const preparedRun = tool.prepare
         ? await tool.prepare(resolved, {
             signal,
@@ -2246,6 +2258,7 @@ export class Harness {
         // An ask rule, a critical delete: asked in every mode, whatever allows the call otherwise
         found.always ||
         (!settingsAllowed &&
+          !skillAllowed &&
           !this.options.planFileMutation?.(call) &&
           effect !== 'read' &&
           tool.approval !== false &&

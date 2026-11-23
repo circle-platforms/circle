@@ -1,32 +1,25 @@
 import vm from 'node:vm';
 import { Worker } from 'node:worker_threads';
 
-/** What a workflow script's `meta` says of it. */
 export interface WorkflowMeta {
   name: string;
   description: string;
   whenToUse?: string;
-  /** The progress groups, in order: each `phase()` title the script uses. */
   phases: { title: string; detail?: string; model?: string }[];
 }
-/** A script that cannot run: its words name the line when there is one. */
 export class WorkflowScriptError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'WorkflowScriptError';
   }
 }
-/** A checked script: its meta, and the code an isolated context evaluates. */
 export interface PreparedScript {
   meta: WorkflowMeta;
   source: string;
   filename: string;
-  /** The body as an async function called at once, its lines where the source has them. */
   code: string;
 }
-/** A workflow's name: letters, digits, `_` and `-`, up to 64, starting with a letter or digit. */
 export const WORKFLOW_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-/** How many items one `parallel()` or `pipeline()` call takes. */
 export const MAX_FAN_OUT = 4096;
 
 const lineOf = (text: string, at: number): number =>
@@ -36,7 +29,6 @@ const isIdentifierStart = (char: string | undefined): boolean =>
 const isIdentifierPart = (char: string | undefined): boolean =>
   char !== undefined && /[\p{ID_Continue}$\u200c\u200d\\]/u.test(char);
 
-/** Skips spaces, line ends and comments from `at`; the offset of what follows. */
 function skipTrivia(text: string, at: number): number {
   for (;;) {
     while (at < text.length && /\s/.test(text[at]!)) at++;
@@ -58,7 +50,6 @@ function readIdentifier(text: string, at: number): string {
   while (end < text.length && isIdentifierPart(text[end])) end++;
   return text.slice(at, end);
 }
-/** The text of a quoted string or a template without `${`, with its escapes read. */
 function unescape(raw: string): string {
   return raw.replace(
     /\\(?:x([0-9a-fA-F]{2})|u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|(\r\n|\n|\r|\u2028|\u2029)|([\s\S]))/g,
@@ -80,7 +71,6 @@ function unescape(raw: string): string {
     },
   );
 }
-/** The end of a quoted string or template that starts at `at`, after its closing quote. */
 function stringEnd(text: string, at: number): number {
   const quote = text[at]!;
   for (let index = at + 1; index < text.length; index++) {
@@ -94,11 +84,6 @@ function stringEnd(text: string, at: number): number {
   );
 }
 
-/**
- * One literal value of `meta`: an object, an array, a string, a number, a template without `${`,
- * true, false or null. Anything else (a name, a call, a spread, a computed key, a method) is not
- * a literal, and the script is refused with the line it is on.
- */
 function parseLiteral(
   text: string,
   start: number,
@@ -204,7 +189,6 @@ function parseLiteral(
   return refuse(char === undefined ? 'the end of the file' : `'${char}'`);
 }
 
-/** The meta a literal says, or why it says nothing that can be used. */
 function readMeta(value: unknown, text: string, at: number): WorkflowMeta {
   const where = `line ${lineOf(text, at)}`;
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -279,14 +263,8 @@ const REGEX_AFTER_WORDS = new Set([
   'await',
   'extends',
 ]);
-/**
- * The names and punctuation of a script, with strings, templates, regular expressions and
- * comments passed over (a template's `${…}` is read as code). It tells code from text well
- * enough to find an `import`; the script itself is parsed by the engine that runs it.
- */
 function tokens(text: string, from: number): Token[] {
   const found: Token[] = [];
-  // `{` of code, or `${` of a template whose text goes on after the matching `}`
   const braces: ('{' | '${')[] = [];
   let at = from;
   const regexAllowed = (): boolean => {
@@ -296,7 +274,6 @@ function tokens(text: string, from: number): Token[] {
     if (last.type === 'name') return REGEX_AFTER_WORDS.has(last.value);
     return ![')', ']', '}'].includes(last.value);
   };
-  // The rest of a template from `at`, which is just after its backquote or its `}`
   const templateText = (): void => {
     for (; at < text.length; at++) {
       const char = text[at]!;
@@ -364,12 +341,6 @@ function tokens(text: string, from: number): Token[] {
   return found;
 }
 
-/**
- * Checks a script and makes it ready to run. It must start with `export const meta = {…}`, a
- * plain literal with a name and a description, and must not import anything. The body is
- * plain JavaScript run as an async function, so it can `await` and `return` at its top level;
- * a syntax error is reported here, before anything runs.
- */
 export function prepareWorkflowScript(
   source: string,
   filename = 'workflow.js',
@@ -377,7 +348,6 @@ export function prepareWorkflowScript(
   try {
     return prepare(source, filename);
   } catch (error) {
-    // What the reader found is told by the file and its line, as an engine would tell it
     if (error instanceof WorkflowScriptError)
       throw new WorkflowScriptError(
         error.message.replace(/^line (\d+): /, `${filename}:$1: `),
@@ -445,23 +415,16 @@ function prepare(source: string, filename: string): PreparedScript {
   return { meta, source: text, filename, code };
 }
 
-/** What a running script tells the runtime, as it happens. */
 export interface ScriptHost {
   call(id: number, spec: string): void;
   phase(title: string): void;
   log(message: string): void;
-  /** The script returned: its value as JSON, or undefined for none. */
   done(json: string | undefined): void;
-  /** The script threw, ran too long without waiting for an agent, or its worker ended. */
   failed(message: string): void;
-  /** The script waits again: everything it asked since the last message it was sent has arrived. */
   idle(): void;
 }
-/** The most memory a script's heap may take. */
 export const SCRIPT_MEMORY_MB = 256;
 
-// Runs inside the script's context, from its own realm: the script reaches the runtime only
-// through `host`, which it never sees, and gets back only strings and values made here.
 const BOOTSTRAP = String.raw`(function (host, argsJson, fanOut, fileName) {
   'use strict';
   const G = globalThis;
@@ -607,8 +570,6 @@ const BOOTSTRAP = String.raw`(function (host, argsJson, fanOut, fileName) {
   };
 })`;
 
-// The worker a script runs in. It makes the context, runs the script, and passes messages: the script's
-// calls out, the runtime's answers in. After each message it says when the script waits again.
 const WORKER = String.raw`'use strict';
 const vm = require('node:vm');
 const { parentPort } = require('node:worker_threads');
@@ -669,16 +630,8 @@ parentPort.on('message', (message) => {
   setImmediate(() => parentPort.postMessage({ type: 'idle' }));
 });`;
 
-/**
- * One script running in a worker thread of its own, inside a node:vm context made without any of Node's
- * objects: no require, process, fs, timers or network, no code from strings, and no clock or randomness.
- * Values cross as JSON text in both directions, so nothing of the runtime is reachable from the script. The
- * worker has its own heap, of at most `memoryMb`; a stretch of script that runs on for `sliceMs` without
- * waiting for an agent ends the worker, as does running out of memory.
- */
 export class ScriptWorker {
   private worker?: Worker;
-  /** Messages sent that the worker has not finished with. */
   private outstanding = 0;
   private timer?: ReturnType<typeof setTimeout>;
   private ended = false;
@@ -691,7 +644,6 @@ export class ScriptWorker {
       memoryMb?: number;
     },
   ) {}
-  /** Starts the script; what it asks for arrives through the host. */
   start(): void {
     let worker: Worker;
     try {
@@ -736,7 +688,6 @@ export class ScriptWorker {
       fanOut: MAX_FAN_OUT,
     });
   }
-  /** Answers an `agent()` or `execute()` call: its value as JSON, or the error it rejects with. */
   settle(
     id: number,
     outcome: { json: string } | { error: string },
@@ -744,11 +695,9 @@ export class ScriptWorker {
   ): void {
     this.send({ type: 'settle', id, ...outcome, spent });
   }
-  /** Whether the script is running now, not waiting for an agent. */
   get running(): boolean {
     return !this.ended && this.outstanding > 0;
   }
-  /** Ends the worker: what the script would still do is dropped. */
   end(): void {
     this.ended = true;
     this.outstanding = 0;

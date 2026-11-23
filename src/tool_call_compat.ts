@@ -167,8 +167,8 @@ function normalize(
   }
   return result;
 }
-// `verbose` gives each error the schema that holds the failed keyword (`parentSchema`). A format is an
-// annotation the tool checks itself: checked here, each one Ajv has no check for printed a notice.
+// `verbose: true` gives each Ajv error its `parentSchema` for pattern/property details;
+// `validateFormats: false` silences unknown format notices on external schemas.
 const ajv = new Ajv({
   strict: false,
   allErrors: true,
@@ -177,22 +177,15 @@ const ajv = new Ajv({
   validateFormats: false,
 });
 const validators = new WeakMap<Tool, ValidateFunction>();
-// The most of a pattern a message quotes, in characters: a pattern is written for machines.
 const PATTERN_QUOTED = 120;
-// The most of a description or of one example a message quotes, in characters.
 const TEXT_QUOTED = 300;
-// The most examples a message quotes.
 const EXAMPLES_QUOTED = 3;
-// `text` in quotes. Past `limit` characters it is cut, and a note says so. Characters are
-// counted by code point, so a cut never splits one.
 function quote(text: string, limit: number, what: string): string {
   const chars = Array.from(text);
   return chars.length <= limit
     ? `"${text}"`
     : `"${chars.slice(0, limit).join('')}…" (${what} cut at ${limit} of ${chars.length} characters)`;
 }
-// A string that does not match its pattern: the description and examples of the schema that
-// holds the pattern, when it has them, and otherwise the pattern itself.
 function patternDetail(error: ErrorObject): string {
   const schema = isRecord(error.parentSchema) ? error.parentSchema : {};
   const description =

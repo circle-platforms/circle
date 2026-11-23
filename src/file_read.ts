@@ -3,7 +3,6 @@ import { createInterface } from 'node:readline';
 import { Readable } from 'node:stream';
 import { decodeOutput } from './output_encoding.js';
 
-// Command output as text, decoded a run of whole lines at a time (see decodeOutput).
 async function* outputText(input: Readable): AsyncGenerator<string> {
   let pending = Buffer.alloc(0);
   for await (const chunk of input as AsyncIterable<Buffer>) {
@@ -53,6 +52,20 @@ function formatWindowLine(
   return { text: `${lineNumber}: ${prefix}${slice}${suffix}`, length: total };
 }
 
+function windowBoundaryError(
+  offset: number,
+  limit: number,
+  total: number,
+  blank: boolean,
+): string | undefined {
+  if (blank) return 'System reminder: File exists but has empty contents';
+  if (limit === 0)
+    return 'System reminder: no lines were read because `limit` was 0. The file was not inspected and may have contents; retry with `limit` >= 1 to read it.';
+  if (offset >= total)
+    return `System reminder: no lines were read because offset ${offset} is at or past the end of the file (${total} lines). Valid zero-based offsets are 0..${total - 1}; retry from a valid offset.`;
+  return undefined;
+}
+
 function finishWindow(
   window: string[],
   truncated: TruncatedLine[],
@@ -78,7 +91,6 @@ function finishWindow(
   return `${window.join('\n')}\nSystem reminder: long line window (${details.join('; ')}${rest}).`;
 }
 
-/** Same line window for a versioned text snapshot, without re-reading changing disk bytes. */
 export function readTextContentWindow(
   content: string,
   offset: number,
@@ -88,12 +100,13 @@ export function readTextContentWindow(
 ): string {
   const lines = content.split(/\r\n|\n|\r/);
   if (!content || /[\r\n]$/.test(content)) lines.pop();
-  if (!lines.some((line) => line.trim()))
-    return 'System reminder: File exists but has empty contents';
-  if (limit === 0)
-    return 'System reminder: no lines were read because `limit` was 0. The file was not inspected and may have contents; retry with `limit` >= 1 to read it.';
-  if (offset >= lines.length)
-    return `System reminder: no lines were read because offset ${offset} is at or past the end of the file (${lines.length} lines). Valid zero-based offsets are 0..${lines.length - 1}; retry from a valid offset.`;
+  const boundary = windowBoundaryError(
+    offset,
+    limit,
+    lines.length,
+    !lines.some((line) => line.trim()),
+  );
+  if (boundary) return boundary;
   const truncated: TruncatedLine[] = [];
   let maxLineChars = 0;
   const window = lines.slice(offset, offset + limit).map((line, index) => {
@@ -110,8 +123,6 @@ export function readTextContentWindow(
   return finishWindow(window, truncated, charOffset, charLimit, maxLineChars);
 }
 
-/** Read a zero-based line window without loading a growing job log into memory.
- * `output` reads a command's output, which may be in the console's code page. */
 export async function readTextWindow(
   path: string,
   offset: number,
@@ -156,10 +167,7 @@ export async function readTextWindow(
     input.destroy();
   }
   signal.throwIfAborted();
-  if (blank) return 'System reminder: File exists but has empty contents';
-  if (limit === 0)
-    return 'System reminder: no lines were read because `limit` was 0. The file was not inspected and may have contents; retry with `limit` >= 1 to read it.';
-  if (offset >= total)
-    return `System reminder: no lines were read because offset ${offset} is at or past the end of the file (${total} lines). Valid zero-based offsets are 0..${total - 1}; retry from a valid offset.`;
+  const boundary = windowBoundaryError(offset, limit, total, blank);
+  if (boundary) return boundary;
   return finishWindow(window, truncated, charOffset, charLimit, maxLineChars);
 }

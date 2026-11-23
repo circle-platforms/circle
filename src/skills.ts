@@ -19,18 +19,17 @@ import {
 } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+
 export interface SkillInfo {
   name: string;
   description: string;
   path: string;
   source_label: string;
   personal_home?: string;
+  allowed_tools?: string[];
+  disallowed_tools?: string[];
 }
-/**
- * A markdown file's frontmatter: the lines between a first line of `---` and the next line that starts with `---`, and
- * the text after that line. `block` is undefined when the file has none. Every reader of a frontmatter finds it here,
- * so they all see the same lines.
- */
+
 export function splitFrontmatter(text: string): {
   block?: string;
   body: string;
@@ -42,23 +41,57 @@ export function splitFrontmatter(text: string): {
     ? { block: match[1] ?? '', body: text.slice(match[0].length) }
     : { body: text };
 }
-/** The frontmatter's keys read one line each, `key: value`, keys in lower case; nothing nested is read. */
+
+const unquoted = (text: string): string => text.replace(/^['"]|['"]$/g, '');
+
+function listItem(text: string): string {
+  const quoted = text.match(/^(['"])(.*?)\1(?:\s+#.*)?$/);
+  return quoted ? quoted[2]! : text.replace(/\s+#.*$/, '').trim();
+}
+
+export function splitOutside(
+  raw: string,
+  separator: (char: string) => boolean,
+): string[] {
+  const parts: string[] = [];
+  let part = '';
+  let depth = 0;
+  for (const char of raw) {
+    if (char === '(') depth++;
+    else if (char === ')' && depth > 0) depth--;
+    if (depth === 0 && separator(char)) {
+      if (part.trim()) parts.push(part.trim());
+      part = '';
+    } else part += char;
+  }
+  if (part.trim()) parts.push(part.trim());
+  return parts;
+}
+
+export function splitToolList(raw: string): string[] {
+  return [
+    ...new Set(splitOutside(raw, (char) => char === ',' || /\s/.test(char))),
+  ];
+}
+
 export function parseFrontmatter(text: string): {
   meta: Record<string, string>;
+  lists: Record<string, string[]>;
   body: string;
 } {
   const { block, body } = splitFrontmatter(text);
-  if (block === undefined) return { meta: {}, body: text };
+  if (block === undefined) return { meta: {}, lists: {}, body: text };
   const meta: Record<string, string> = {};
+  const lists: Record<string, string[]> = {};
   const lines = block.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
     if (!line.trim() || line.trimStart().startsWith('#')) continue;
-    // Only a key at the start of a line: an indented one belongs to the value above it, such as a hook's `name`
+    // Only top-level keys belong to frontmatter metadata; indented keys belong to nested blocks such as hooks.
     const entry = line.match(/^([^:\s][^:]*):\s*(.*)$/);
     if (!entry) continue;
     const key = entry[1]!.trim().toLowerCase();
-    let value = entry[2]!.trim();
+    const value = entry[2]!.trim();
     if (/^[>|][-+]?$/.test(value)) {
       const folded: string[] = [];
       while (
@@ -66,28 +99,57 @@ export function parseFrontmatter(text: string): {
         (/^\s/.test(lines[i + 1]!) || !lines[i + 1]!.trim())
       )
         folded.push(lines[++i]!);
-      value = value.startsWith('>')
+      meta[key] = value.startsWith('>')
         ? folded
-            .map((line) => line.trim())
+            .map((item) => item.trim())
             .filter(Boolean)
             .join(' ')
         : folded.join('\n').trim();
+      continue;
     }
-    meta[key] = value.replace(/^['"]|['"]$/g, '');
+    if (!value) {
+      const items: string[] = [];
+      let next = i;
+      while (next + 1 < lines.length) {
+        const following = lines[next + 1]!;
+        const item = following.match(/^\s*-(?:\s+(.*))?$/);
+        if (item) items.push(listItem((item[1] ?? '').trim()));
+        else if (following.trim() && !following.trimStart().startsWith('#'))
+          break;
+        next++;
+      }
+      if (items.length) {
+        lists[key] = items.filter(Boolean);
+        meta[key] = '';
+        i = next;
+        continue;
+      }
+    }
+    const flow = value.match(/^\[(.*)\]$/);
+    if (flow)
+      lists[key] = splitOutside(flow[1]!, (char) => char === ',').map(listItem);
+    meta[key] = unquoted(value);
   }
-  return { meta, body };
+  return { meta, lists, body };
 }
-// The skills that ship with Circle: src/builtin_skills in a checkout, dist/builtin_skills in
-// a build and a release, beside the bundled runtime in the desktop application (inside its
-// app.asar, which Electron's fs reads as a folder).
+
+function toolEntries(
+  meta: Record<string, string>,
+  lists: Record<string, string[]>,
+  key: string,
+): string[] | undefined {
+  const entries = [
+    ...new Set((lists[key] ?? [meta[key] ?? '']).flatMap(splitToolList)),
+  ];
+  return entries.length ? entries : undefined;
+}
+
 export function builtinSkillsRoot(): string {
   return fileURLToPath(new URL('./builtin_skills/', import.meta.url));
 }
-/** The source label of a skill that ships with Circle. `~/.circle/skills` is 'Circle'. */
+
 export const BUILTIN_SKILL_SOURCE = 'Built-in';
-// Lowest priority first: a skill replaces one of the same name from an earlier folder, so
-// one of yours or the project's replaces one that ships with Circle. `builtin` is where those
-// are (false for none).
+
 export function skillSources(
   workspace: string,
   home: string,
@@ -116,13 +178,11 @@ export function skillSources(
     try {
       if (statSync(path).isDirectory()) unique.set(realpathSync(path), label);
     } catch {
-      /* No skills folder here. */
+      /* Missing skill root. */
     }
   return [...unique];
 }
-// The skill folders are read again on every rebuild of the system prompt, so a folder
-// that cannot be read is passed over rather than stopping a model switch or /reload.
-// A linked skill folder counts (`npx skills add` links them).
+
 function folders(directory: string): string[] {
   let found: Dirent[];
   try {
@@ -141,13 +201,13 @@ function folders(directory: string): string[] {
       }
     });
 }
+
 export function discoverSkills(
   workspace: string,
   home: string,
   userHome = homedir(),
   builtin: string | false = builtinSkillsRoot(),
 ): SkillInfo[] {
-  // Explicit personal installations precede existing sources, preserving their established priority.
   const byName = new Map<string, SkillInfo>(
     installedPersonalPacks(home).map((pack) => [
       pack.name,
@@ -184,7 +244,7 @@ export function discoverSkills(
       } catch {
         continue;
       }
-      const { meta } = parseFrontmatter(text);
+      const { meta, lists } = parseFrontmatter(text);
       let name = (meta.name || basename(directory)).toLowerCase().trim();
       if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))
         name = basename(directory)
@@ -192,7 +252,9 @@ export function discoverSkills(
           .replace(/[^a-z0-9-]+/g, '-')
           .replace(/^-+|-+$/g, '')
           .slice(0, 64);
-      if (name)
+      if (name) {
+        const allowed = toolEntries(meta, lists, 'allowed-tools');
+        const disallowed = toolEntries(meta, lists, 'disallowed-tools');
         byName.set(name, {
           name,
           description: (
@@ -200,20 +262,29 @@ export function discoverSkills(
           ).slice(0, 1024),
           path,
           source_label: label,
+          ...(allowed ? { allowed_tools: allowed } : {}),
+          ...(disallowed ? { disallowed_tools: disallowed } : {}),
         });
+      }
     }
   }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
+
+export function findSkill(
+  name: string,
+  catalog: SkillInfo[],
+): SkillInfo | undefined {
+  return catalog.find((skill) => skill.name === name.trim().toLowerCase());
+}
+
 export function loadSkillBody(
   name: string,
   catalog: SkillInfo[],
   reference?: string,
   credentialFiles: readonly string[] = DEFAULT_CREDENTIAL_FILES,
 ): string {
-  const skill = catalog.find(
-    (skill) => skill.name === name.trim().toLowerCase(),
-  );
+  const skill = findSkill(name, catalog);
   if (!skill)
     throw new Error(
       `skill '${name}' not found. Available: ${catalog.map((skill) => skill.name).join(', ') || '(none)'}`,
@@ -243,7 +314,6 @@ export function loadSkillBody(
     )
       throw Error('skill reference is a credential file');
   }
-  // `${CIRCLE_SKILL_DIR}` in the text names this skill's folder, as a path the model can use as written
   const text = readFileSync(path, 'utf8')
     .trim()
     .replaceAll('${CIRCLE_SKILL_DIR}', dirname(skill.path));

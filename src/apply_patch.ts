@@ -32,7 +32,6 @@ export function patchPaths(patch: string): string[] {
   );
 }
 
-/** Paths needed to prepare a patch; this performs no reads or writes. */
 export function patchFilePaths(patch: string, sandbox: Sandbox): string[] {
   const paths = new Set<string>();
   for (const given of patchPaths(patch)) {
@@ -43,7 +42,6 @@ export function patchFilePaths(patch: string, sandbox: Sandbox): string[] {
   return [...paths];
 }
 
-/** Parse and validate against one caller-owned snapshot before any writes. */
 export function planPatch(
   patch: string,
   sandbox: Sandbox,
