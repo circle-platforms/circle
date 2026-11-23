@@ -60,6 +60,7 @@ export interface DeliveryItem {
   subject: string;
   receipt: string;
   role: string;
+  code?: string;
   text: string;
   sha256: string;
   size: number;

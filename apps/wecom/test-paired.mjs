@@ -1,8 +1,8 @@
 // Exercise the official WebSocket client against either a real Hub checkout or a self-contained mock Hub.
 import assert from 'node:assert/strict';
-import { createHash, randomUUID } from 'node:crypto';
+import { createCipheriv, createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer, request as unixRequest } from 'node:http';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
@@ -11,7 +11,7 @@ import { setTimeout as wait } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { WSClient } from '@wecom/aibot-node-sdk';
-import { ChannelSession } from './adapter.ts';
+import { ChannelSession, formatChannelNotice } from './adapter.ts';
 
 async function loadRemoteBotService() {
   const srcPath = new URL('../../src/remote_bot_service.ts', import.meta.url);
@@ -105,6 +105,28 @@ async function createMockHub(identity, channelConfig) {
       res.end(JSON.stringify(data));
     };
 
+    if (url.pathname.startsWith('/api/bot/v1/files/')) {
+      const auth = String(req.headers.authorization ?? '');
+      const member = membersByToken.get(auth.replace(/^Bearer /, ''));
+      if (!member) return reply(401, { code: 'UNAUTHORIZED' });
+      if (disabled.has(member.principal.id))
+        return reply(403, { code: 'BOT_DISABLED' });
+      const sha = url.pathname.split('/').at(-1);
+      if (req.method === 'PUT') {
+        if (sha256Hex(rawBody) !== sha) return reply(422, {});
+        storedFiles.set(`${member.principal.id}:${sha}`, rawBody);
+        const ownerDir = join(
+          runtimeDir,
+          'files',
+          sha256Hex(member.principal.id),
+        );
+        await mkdir(ownerDir, { recursive: true, mode: 0o700 });
+        await writeFile(join(ownerDir, sha), rawBody);
+        return reply(200, { sha256: sha, size: rawBody.length });
+      }
+      return reply(405, {});
+    }
+
     if (url.pathname === '/api/bot/v1') {
       const auth = String(req.headers.authorization ?? '');
       const member = membersByToken.get(auth.replace(/^Bearer /, ''));
@@ -123,7 +145,7 @@ async function createMockHub(identity, channelConfig) {
         route:
           op.action === 'send'
             ? {
-                source: 'desktop',
+                source: 'client',
                 issuer,
                 subject: subjectByOwner.get(member.principal.id) ?? null,
               }
@@ -265,6 +287,7 @@ async function createMockHub(identity, channelConfig) {
             subject: item.subject,
             receipt: item.receipt,
             role: item.role,
+            ...(item.code ? { code: item.code } : {}),
             text: item.text,
             sha256: combinedSha,
             size,
@@ -413,13 +436,101 @@ const model = createServer(async (req, res) => {
   res.end('data: [DONE]\n\n');
 });
 await new Promise((ok) => model.listen(0, '127.0.0.1', ok));
+const aesKeyRaw = Buffer.alloc(32, 0x33);
+const aesKey = aesKeyRaw.toString('base64').replace(/=+$/, '');
+const inboundFilePlain = Buffer.from('paired-inbound-attachment-content');
+const inboundPadLen = 32 - (inboundFilePlain.length % 32);
+const inboundPadded = Buffer.concat([
+  inboundFilePlain,
+  Buffer.alloc(inboundPadLen, inboundPadLen),
+]);
+const inboundCipher = createCipheriv(
+  'aes-256-cbc',
+  aesKeyRaw,
+  aesKeyRaw.subarray(0, 16),
+);
+inboundCipher.setAutoPadding(false);
+const encryptedInbound = Buffer.concat([
+  inboundCipher.update(inboundPadded),
+  inboundCipher.final(),
+]);
+const inboundFileSha = sha256Hex(inboundFilePlain);
+
 const ws = new WebSocketServer({ host: '127.0.0.1', port: 0 });
 await once(ws, 'listening');
 const sockets = [];
+const uploadSessions = new Map();
+const uploadedMedia = new Map();
 ws.on('connection', (socket) => {
   sockets.push(socket);
   socket.on('message', (bytes) => {
     const frame = JSON.parse(bytes);
+    if (frame.cmd === 'aibot_upload_media_init') {
+      const upload_id = 'upload-' + randomUUID();
+      uploadSessions.set(upload_id, {
+        type: frame.body.type,
+        filename: frame.body.filename,
+        total_size: frame.body.total_size,
+        total_chunks: frame.body.total_chunks,
+        md5: frame.body.md5,
+        chunks: new Map(),
+      });
+      socket.send(
+        JSON.stringify({
+          headers: frame.headers,
+          errcode: 0,
+          errmsg: 'ok',
+          body: { upload_id },
+        }),
+      );
+      return;
+    }
+    if (frame.cmd === 'aibot_upload_media_chunk') {
+      const session = uploadSessions.get(frame.body.upload_id);
+      if (session) {
+        session.chunks.set(
+          frame.body.chunk_index,
+          Buffer.from(frame.body.base64_data, 'base64'),
+        );
+      }
+      socket.send(
+        JSON.stringify({ headers: frame.headers, errcode: 0, errmsg: 'ok' }),
+      );
+      return;
+    }
+    if (frame.cmd === 'aibot_upload_media_finish') {
+      const session = uploadSessions.get(frame.body.upload_id);
+      const assembled = Buffer.concat(
+        Array.from({ length: session.total_chunks }, (_, i) =>
+          session.chunks.get(i),
+        ),
+      );
+      assert.equal(assembled.length, session.total_size);
+      assert.equal(
+        createHash('md5').update(assembled).digest('hex'),
+        session.md5,
+      );
+      const media_id = 'media-' + randomUUID();
+      uploadedMedia.set(media_id, {
+        type: session.type,
+        filename: session.filename,
+        bytes: assembled,
+      });
+      uploadSessions.delete(frame.body.upload_id);
+      socket.send(
+        JSON.stringify({
+          headers: frame.headers,
+          errcode: 0,
+          errmsg: 'ok',
+          body: {
+            media_id,
+            type: session.type,
+            created_at: new Date().toISOString(),
+          },
+        }),
+      );
+      return;
+    }
     if (frame.cmd === 'aibot_send_msg') sent.push(frame.body);
     socket.send(
       JSON.stringify({ headers: frame.headers, errcode: 0, errmsg: 'ok' }),
@@ -439,8 +550,18 @@ const adapter = new ChannelSession(
       maxAuthFailureAttempts: 0,
     }),
   async (url, options) => {
-    if (new URL(url).origin === hub.url) return fetch(url, options);
-    if (new URL(url).pathname.endsWith('/gettoken'))
+    const parsed = new URL(url);
+    if (parsed.origin === hub.url) return fetch(url, options);
+    if (parsed.hostname === 'wwcdn.weixin.qq.com') {
+      return new Response(encryptedInbound, {
+        status: 200,
+        headers: {
+          'content-length': String(encryptedInbound.length),
+          'content-disposition': 'attachment; filename="paired-inbound.txt"',
+        },
+      });
+    }
+    if (parsed.pathname.endsWith('/gettoken'))
       return Response.json({
         errcode: 0,
         access_token: 'synthetic',
@@ -466,7 +587,7 @@ const app = async (member, body) => {
   return { status: reply.status, data: await reply.json() };
 };
 async function until(check) {
-  const deadline = Date.now() + 15000;
+  const deadline = Date.now() + 20000;
   while (Date.now() < deadline) {
     await adapter.flush();
     if (await check()) return;
@@ -493,6 +614,19 @@ const frame = (sender, id, content, kind = 'single') =>
       chattype: kind,
       from: { userid: sender },
       text: { content },
+    },
+  });
+const fileFrame = (sender, id, url, aeskey) =>
+  JSON.stringify({
+    cmd: 'aibot_msg_callback',
+    headers: { req_id: id },
+    body: {
+      aibotid: channel.bot,
+      msgid: id,
+      msgtype: 'file',
+      chattype: 'single',
+      from: { userid: sender },
+      file: { url, aeskey },
     },
   });
 try {
@@ -569,10 +703,88 @@ try {
     200,
   );
   await until(() => sent.length === 4);
-  const content = sent.map((x) => x.markdown.content);
+  const content = sent.map((x) => x.markdown?.content).filter(Boolean);
   assert.equal(content.filter((x) => x === '客户端消息：\ndesktop').length, 1);
   assert.equal(content.filter((x) => x === 'reply desktop').length, 1);
   assert.equal(sent.filter((x) => x.chatid === 'b').length, 1);
+
+  sockets[0].send(frame('a', 'p-help', '帮助'));
+  await until(() => sent.length === 5);
+  assert.equal(sent[4].chatid, 'a');
+  assert.equal(sent[4].markdown.content, formatChannelNotice('help', ''));
+
+  sockets[0].send(
+    fileFrame(
+      'a',
+      'p-file-in',
+      'https://wwcdn.weixin.qq.com/paired-inbound.txt',
+      aesKey,
+    ),
+  );
+  sockets[0].send(frame('a', 'p-file-caption', 'analyze attachment'));
+  await until(() => sent.length === 6);
+  assert.ok(
+    inputs.some(
+      (text) =>
+        text.includes('analyze attachment') &&
+        text.includes('paired-inbound-attachment-content'),
+    ),
+  );
+  assert.match(sent[5].markdown.content, /paired-inbound-attachment-content/);
+  await assert.rejects(stat(join(home, 'staging', inboundFileSha)));
+
+  const outboundBytes = Buffer.from('paired-outbound-attachment-content');
+  const outboundSha = sha256Hex(outboundBytes);
+  const putOutbound = await fetch(
+    hub.url + '/api/bot/v1/files/' + outboundSha,
+    {
+      method: 'PUT',
+      headers: {
+        authorization: 'Bearer ' + hub.a.token,
+        'content-length': String(outboundBytes.length),
+      },
+      body: outboundBytes,
+    },
+  );
+  assert.equal(putOutbound.status, 200);
+  assert.equal(
+    (
+      await app(hub.a, {
+        action: 'send',
+        conversation: ca,
+        request: randomUUID(),
+        text: 'check outbound file',
+        files: [
+          {
+            name: 'paired-outbound.txt',
+            sha256: outboundSha,
+            size: outboundBytes.length,
+          },
+        ],
+      })
+    ).status,
+    200,
+  );
+  await until(() => sent.length === 9);
+  const outboundBatch = sent.slice(6, 9);
+  assert.ok(
+    outboundBatch.some(
+      (x) => x.markdown?.content === '客户端消息：\ncheck outbound file',
+    ),
+  );
+  const outboundFileMsg = outboundBatch.find((x) => x.msgtype === 'file');
+  assert.ok(outboundFileMsg);
+  assert.equal(outboundFileMsg.chatid, 'a');
+  const deliveredMedia = uploadedMedia.get(outboundFileMsg.file.media_id);
+  assert.ok(deliveredMedia);
+  assert.equal(deliveredMedia.filename, 'paired-outbound.txt');
+  assert.deepEqual(deliveredMedia.bytes, outboundBytes);
+  assert.ok(
+    outboundBatch.some((x) =>
+      x.markdown?.content?.includes('paired-outbound-attachment-content'),
+    ),
+  );
+
   if (realHubHelpers) {
     const { realHub, recordReaderFor } = realHubHelpers;
     const intents = await realHub.records.store.findMany({
@@ -580,7 +792,7 @@ try {
       key: 'chat.notification.owner',
       values: [hub.a.principal.id],
     });
-    assert.equal(intents.length, 3);
+    assert.equal(intents.length, 8);
     for (const intent of intents) {
       const receipt = await realHub.records.store.getByKey(
         'effect',
@@ -614,7 +826,7 @@ try {
     );
   } else {
     const intents = hub.getIntents(hub.a.principal.id);
-    assert.equal(intents.length, 3);
+    assert.equal(intents.length, 8);
     for (const intent of intents) {
       const receipt = hub.getReceipt(intent.body.receipt);
       assert.equal(receipt.body.intent, intent.digest);
@@ -627,12 +839,17 @@ try {
   await until(
     () =>
       adapter.db
-        .prepare("SELECT count(*) AS n FROM batch WHERE state='refused'")
-        .get().n === 1,
+        .prepare("SELECT count(*) AS n FROM batch WHERE state='failed'")
+        .get().n === 1 && sent.length === 10,
   );
   assert.equal(inputs.includes('revoked'), false);
+  assert.equal(sent[9].chatid, 'a');
+  assert.match(
+    sent[9].markdown.content,
+    /未绑定 Hub 账号或机器人访问权限已停用/,
+  );
   console.log(
-    `Paired synthetic check passed (${hub.mode}): official SDK private frames, two members, group exclusion, deduplication, shared history, scoped outbound receipts and disabled account.`,
+    `Paired synthetic check passed (${hub.mode}): official SDK private frames, two members, group exclusion, deduplication, shared history, notice localization, inbound/outbound file transfer, scoped outbound receipts and disabled account.`,
   );
 } finally {
   await adapter.close();
