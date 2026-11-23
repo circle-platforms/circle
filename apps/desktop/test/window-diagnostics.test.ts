@@ -407,3 +407,84 @@ test('C21: caches live OS PID across crash, records metrics breakdown and render
     rmSync(folder, { recursive: true, force: true });
   }
 });
+
+test('skips getOSProcessId and 0 MB samples while webContents is crashed and resumes after reload', () => {
+  const state = {
+    at: 4_000_000,
+    pid: 909,
+    crashed: false,
+    osPidCalls: 0,
+  };
+  const snapshotDir = mkdtempSync(join(tmpdir(), 'circle-win-diag-crashed-'));
+  try {
+    const snapshotFile = join(snapshotDir, 'logs', 'window-samples.json');
+    const diagnostics = createWindowDiagnostics({
+      log: () => {},
+      windowPids: () => (state.crashed ? [] : [state.pid]),
+      metrics: () =>
+        state.crashed
+          ? []
+          : [{ pid: state.pid, memory: { workingSetSize: 300 * 1024 } }],
+      snapshotFile,
+      now: () => state.at,
+      every: () => {},
+    });
+
+    const win = Object.assign(new EventEmitter(), {
+      webContents: Object.assign(new EventEmitter(), {
+        id: 88,
+        isDestroyed: () => false,
+        isCrashed: () => state.crashed,
+        getOSProcessId: () => {
+          state.osPidCalls++;
+          return state.pid;
+        },
+      }),
+    });
+
+    diagnostics.watch('main', win);
+    diagnostics.sample();
+    const callsBeforeCrash = state.osPidCalls;
+
+    state.crashed = true;
+    state.at += 30_000;
+    diagnostics.sample();
+    state.at += 30_000;
+    diagnostics.sample();
+
+    assert.equal(
+      state.osPidCalls,
+      callsBeforeCrash,
+      'getOSProcessId must not be called while crashed',
+    );
+    const duringCrash = JSON.parse(readFileSync(snapshotFile, 'utf8')) as {
+      windows: Record<string, { samples: Array<{ windowMb: number }> }>;
+    };
+    assert.deepEqual(
+      duringCrash.windows['88']?.samples.map((s) => s.windowMb),
+      [300],
+      'no 0 MB samples appended while crashed',
+    );
+
+    state.crashed = false;
+    state.pid = 910;
+    state.at += 30_000;
+    win.webContents.emit('did-finish-load');
+    diagnostics.sample();
+
+    assert.ok(state.osPidCalls > callsBeforeCrash);
+    const afterReload = JSON.parse(readFileSync(snapshotFile, 'utf8')) as {
+      windows: Record<
+        string,
+        { pid: number; samples: Array<{ windowMb: number }> }
+      >;
+    };
+    assert.equal(afterReload.windows['88']?.pid, 910);
+    assert.deepEqual(
+      afterReload.windows['88']?.samples.map((s) => s.windowMb),
+      [300, 300],
+    );
+  } finally {
+    rmSync(snapshotDir, { recursive: true, force: true });
+  }
+});

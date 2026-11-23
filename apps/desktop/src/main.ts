@@ -151,7 +151,12 @@ const windowDiagnostics = createWindowDiagnostics({
       circleVersion,
       text,
     ),
-  windowPids: () => appWindows().map((one) => one.webContents.getOSProcessId()),
+  windowPids: () =>
+    appWindows()
+      .filter(
+        (one) => !one.webContents.isDestroyed() && !one.webContents.isCrashed(),
+      )
+      .map((one) => one.webContents.getOSProcessId()),
   metrics: () => app.getAppMetrics(),
   snapshotFile: join(dataPath, 'logs', 'window-samples.json'),
   ...(windowSampleMs !== undefined ? { sampleMs: windowSampleMs } : {}),
@@ -287,8 +292,11 @@ function checkSender(event: {
   const own = appWindows().find((one) => one.webContents === event.sender);
   if (
     !own ||
-    event.senderFrame?.routingId !== own.webContents.mainFrame.routingId ||
-    event.senderFrame?.processId !== own.webContents.mainFrame.processId ||
+    own.webContents.isDestroyed() ||
+    own.webContents.isCrashed() ||
+    !event.senderFrame ||
+    event.senderFrame.routingId !== own.webContents.mainFrame.routingId ||
+    event.senderFrame.processId !== own.webContents.mainFrame.processId ||
     !trustedAppUrl(event.senderFrame.url)
   )
     throw Error('untrusted IPC sender');

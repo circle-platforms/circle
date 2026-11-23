@@ -42,6 +42,8 @@ export interface WindowEvents {
   isDestroyed?(): boolean;
   webContents: {
     id?: number;
+    isDestroyed?: () => boolean;
+    isCrashed?: () => boolean;
     getOSProcessId?: () => number;
     on(
       event: 'render-process-gone',
@@ -168,7 +170,13 @@ export function createWindowDiagnostics(options: {
 
   const captureLivePid = (entry: WindowState, target?: WindowEvents) => {
     const win = target ?? entry.targetRef.deref();
-    if (!win) return;
+    if (
+      !win ||
+      win.isDestroyed?.() ||
+      win.webContents.isDestroyed?.() ||
+      win.webContents.isCrashed?.()
+    )
+      return;
     const osPid = win.webContents.getOSProcessId?.();
     if (typeof osPid === 'number' && osPid > 0) entry.pid = osPid;
   };
@@ -225,6 +233,13 @@ export function createWindowDiagnostics(options: {
       }
     } else {
       for (const entry of windows.values()) {
+        const target = entry.targetRef.deref();
+        if (
+          target?.webContents.isDestroyed?.() ||
+          target?.webContents.isCrashed?.()
+        ) {
+          continue;
+        }
         captureLivePid(entry);
         const match =
           entry.pid !== undefined

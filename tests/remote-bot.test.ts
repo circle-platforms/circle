@@ -933,42 +933,138 @@ test('multi-turn RemoteBot history replays prior turn attachments across turns',
   }
 });
 
-test('serveRemoteBot rejects Unix socket paths exceeding platform sun_path byte limit', async () => {
-  const { mkdir } = await import('node:fs/promises');
-  const { serveRemoteBot } = await import('../src/remote_bot_service.js');
-  const base = await mkdtemp(join(tmpdir(), 'remote-bot-c18-'));
-  const maxBytes = process.platform === 'darwin' ? 103 : 107;
-  const pad = Math.max(
-    10,
-    maxBytes - Buffer.byteLength(join(base, 'host.sock'), 'utf8') + 5,
-  );
-  const longDir = join(base, 'x'.repeat(pad));
-  await mkdir(longDir, { recursive: true, mode: 0o700 });
-  const sockBytes = Buffer.byteLength(join(longDir, 'host.sock'), 'utf8');
-  try {
-    await assert.rejects(
-      serveRemoteBot(longDir),
-      (err: unknown) =>
-        err instanceof Error &&
-        err.message.includes(String(sockBytes)) &&
-        err.message.includes(String(maxBytes)) &&
-        !/EINVAL/.test(err.message),
+test(
+  'serveRemoteBot rejects Unix socket paths exceeding platform sun_path byte limit',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const { mkdir } = await import('node:fs/promises');
+    const { serveRemoteBot } = await import('../src/remote_bot_service.js');
+    const base = await mkdtemp(join(tmpdir(), 'remote-bot-c18-'));
+    const maxBytes = process.platform === 'darwin' ? 103 : 107;
+    const pad = Math.max(
+      10,
+      maxBytes - Buffer.byteLength(join(base, 'host.sock'), 'utf8') + 5,
     );
-  } finally {
-    await rm(base, { recursive: true, force: true });
-  }
-});
+    const longDir = join(base, 'x'.repeat(pad));
+    await mkdir(longDir, { recursive: true, mode: 0o700 });
+    const sockBytes = Buffer.byteLength(join(longDir, 'host.sock'), 'utf8');
+    try {
+      await assert.rejects(
+        serveRemoteBot(longDir),
+        (err: unknown) =>
+          err instanceof Error &&
+          err.message.includes(String(sockBytes)) &&
+          err.message.includes(String(maxBytes)) &&
+          !/EINVAL/.test(err.message),
+      );
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  },
+);
 
-test('serveRemoteBot accepts EffectOutcomeSchema receipt states and enforces SemVer 2.0.0 version compatibility', async () => {
-  const { request } = await import('node:http');
-  const { serveRemoteBot } = await import('../src/remote_bot_service.js');
-  const { VERSION } = await import('../src/version.js');
-  const dir = await mkdtemp(join(tmpdir(), 'remote-bot-svc-wire-'));
-  const stop = await serveRemoteBot(dir);
-  const call = (frame: unknown) =>
-    new Promise<{ status: number; body: Record<string, unknown> }>(
-      (ok, fail) => {
-        const payload = Buffer.from(JSON.stringify(frame));
+test(
+  'serveRemoteBot accepts EffectOutcomeSchema receipt states and enforces SemVer 2.0.0 version compatibility',
+  { skip: process.platform === 'win32' },
+  async () => {
+    const { request } = await import('node:http');
+    const { serveRemoteBot } = await import('../src/remote_bot_service.js');
+    const { VERSION } = await import('../src/version.js');
+    const dir = await mkdtemp(join(tmpdir(), 'remote-bot-svc-wire-'));
+    const stop = await serveRemoteBot(dir);
+    const call = (frame: unknown) =>
+      new Promise<{ status: number; body: Record<string, unknown> }>(
+        (ok, fail) => {
+          const payload = Buffer.from(JSON.stringify(frame));
+          const req = request(
+            {
+              socketPath: join(dir, 'host.sock'),
+              path: '/chat',
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                'content-length': payload.length,
+              },
+            },
+            (res) => {
+              const chunks: Buffer[] = [];
+              res.on('data', (c: Buffer) => chunks.push(c));
+              res.on('end', () =>
+                ok({
+                  status: res.statusCode ?? 500,
+                  body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
+                }),
+              );
+            },
+          );
+          req.on('error', fail);
+          req.end(payload);
+        },
+      );
+    try {
+      const [major, minor] = VERSION.split('.');
+      // SemVer 2.0.0: pre-release & build metadata on same major.minor succeed; invalid SemVer -> 400; major.minor mismatch -> 409.
+      assert.equal(
+        (
+          await call({
+            owner: 'member',
+            op: { action: 'discover' },
+            version: `${major}.${minor}.9-rc.1+build.42`,
+          })
+        ).status,
+        200,
+      );
+      const badSemver = await call({
+        owner: 'member',
+        op: { action: 'discover' },
+        version: '01.18.1',
+      });
+      assert.equal(badSemver.status, 400);
+      assert.equal(badSemver.body.code, 'invalid_version');
+      const mismatchSemver = await call({
+        owner: 'member',
+        op: { action: 'discover' },
+        version: `${major}.${Number(minor) + 1}.0`,
+      });
+      assert.equal(mismatchSemver.status, 409);
+      assert.equal(mismatchSemver.body.code, 'version_mismatch');
+
+      const { current } = (
+        await call({ owner: 'member', op: { action: 'discover' } })
+      ).body as { current: string };
+      // Verify EffectOutcomeSchema receipt states ('issued', 'target_rejected', 'not_dispatched') map cleanly.
+      const { RemoteBot } = await import('../src/remote_bot.js');
+      void RemoteBot;
+      const fakeId = randomUUID();
+      const resIssued = await call({
+        owner: 'channel',
+        op: { action: 'receipt', receipt: fakeId, state: 'issued' },
+      });
+      assert.equal(resIssued.status, 200);
+      const resRejected = await call({
+        owner: 'channel',
+        op: {
+          action: 'receipt',
+          receipt: randomUUID(),
+          state: 'target_rejected',
+        },
+      });
+      assert.equal(resRejected.status, 200);
+      const resNotDispatched = await call({
+        owner: 'channel',
+        op: {
+          action: 'receipt',
+          receipt: randomUUID(),
+          state: 'not_dispatched',
+        },
+      });
+      assert.equal(resNotDispatched.status, 200);
+      // Malformed JSON triggers host_internal_error with 500 and lowercase English message.
+      const raw500 = await new Promise<{
+        status: number;
+        body: Record<string, unknown>;
+      }>((ok, fail) => {
+        const badPayload = Buffer.from('{bad-json');
         const req = request(
           {
             socketPath: join(dir, 'host.sock'),
@@ -976,7 +1072,7 @@ test('serveRemoteBot accepts EffectOutcomeSchema receipt states and enforces Sem
             method: 'POST',
             headers: {
               'content-type': 'application/json',
-              'content-length': payload.length,
+              'content-length': badPayload.length,
             },
           },
           (res) => {
@@ -991,102 +1087,18 @@ test('serveRemoteBot accepts EffectOutcomeSchema receipt states and enforces Sem
           },
         );
         req.on('error', fail);
-        req.end(payload);
-      },
-    );
-  try {
-    const [major, minor] = VERSION.split('.');
-    // SemVer 2.0.0: pre-release & build metadata on same major.minor succeed; invalid SemVer -> 400; major.minor mismatch -> 409.
-    assert.equal(
-      (
-        await call({
-          owner: 'member',
-          op: { action: 'discover' },
-          version: `${major}.${minor}.9-rc.1+build.42`,
-        })
-      ).status,
-      200,
-    );
-    const badSemver = await call({
-      owner: 'member',
-      op: { action: 'discover' },
-      version: '01.18.1',
-    });
-    assert.equal(badSemver.status, 400);
-    assert.equal(badSemver.body.code, 'invalid_version');
-    const mismatchSemver = await call({
-      owner: 'member',
-      op: { action: 'discover' },
-      version: `${major}.${Number(minor) + 1}.0`,
-    });
-    assert.equal(mismatchSemver.status, 409);
-    assert.equal(mismatchSemver.body.code, 'version_mismatch');
-
-    const { current } = (
-      await call({ owner: 'member', op: { action: 'discover' } })
-    ).body as { current: string };
-    // Verify EffectOutcomeSchema receipt states ('issued', 'target_rejected', 'not_dispatched') map cleanly.
-    const { RemoteBot } = await import('../src/remote_bot.js');
-    void RemoteBot;
-    const fakeId = randomUUID();
-    const resIssued = await call({
-      owner: 'channel',
-      op: { action: 'receipt', receipt: fakeId, state: 'issued' },
-    });
-    assert.equal(resIssued.status, 200);
-    const resRejected = await call({
-      owner: 'channel',
-      op: {
-        action: 'receipt',
-        receipt: randomUUID(),
-        state: 'target_rejected',
-      },
-    });
-    assert.equal(resRejected.status, 200);
-    const resNotDispatched = await call({
-      owner: 'channel',
-      op: { action: 'receipt', receipt: randomUUID(), state: 'not_dispatched' },
-    });
-    assert.equal(resNotDispatched.status, 200);
-    // Malformed JSON triggers host_internal_error with 500 and lowercase English message.
-    const raw500 = await new Promise<{
-      status: number;
-      body: Record<string, unknown>;
-    }>((ok, fail) => {
-      const badPayload = Buffer.from('{bad-json');
-      const req = request(
-        {
-          socketPath: join(dir, 'host.sock'),
-          path: '/chat',
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            'content-length': badPayload.length,
-          },
-        },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on('data', (c: Buffer) => chunks.push(c));
-          res.on('end', () =>
-            ok({
-              status: res.statusCode ?? 500,
-              body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
-            }),
-          );
-        },
-      );
-      req.on('error', fail);
-      req.end(badPayload);
-    });
-    assert.equal(raw500.status, 500);
-    assert.equal(raw500.body.code, 'host_internal_error');
-    assert.ok(!/[\u4e00-\u9fff]/.test(String(raw500.body.message)));
-    assert.ok(current);
-  } finally {
-    await stop();
-    await rm(dir, { recursive: true, force: true });
-  }
-});
+        req.end(badPayload);
+      });
+      assert.equal(raw500.status, 500);
+      assert.equal(raw500.body.code, 'host_internal_error');
+      assert.ok(!/[\u4e00-\u9fff]/.test(String(raw500.body.message)));
+      assert.ok(current);
+    } finally {
+      await stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
 
 test('RemoteBot.claim returns strict Hub deliverySchema shape without internal slot or null file', async () => {
   const { createHash } = await import('node:crypto');

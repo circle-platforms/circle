@@ -42,11 +42,12 @@ const env = {
   CIRCLE_NO_MODELS_REFRESH: '1',
   CIRCLE_WORKBENCH_TEST_PROFILE: JSON.stringify({}),
   CIRCLE_WORKBENCH_BACKGROUND_TEST: '1',
-  CIRCLE_WORKBENCH_WINDOW_SAMPLE_MS: '100',
+  CIRCLE_WORKBENCH_WINDOW_SAMPLE_MS: '250',
 };
 delete env.ELECTRON_RUN_AS_NODE;
 delete env.CIRCLE_DESKTOP_RUNTIME_FIXTURE;
 let application;
+let printed = '';
 try {
   application = await electron.launch({
     chromiumSandbox: true,
@@ -57,7 +58,6 @@ try {
     env,
     timeout: 45000,
   });
-  let printed = '';
   application.process().stderr?.on('data', (chunk) => {
     printed += chunk;
   });
@@ -77,6 +77,14 @@ try {
         ),
       code,
     );
+  await page.waitForLoadState('load');
+  await page.waitForFunction(
+    () => document.readyState === 'complete' && !!window.circleDesktop,
+  );
+  await until(
+    () => inMain('!contents.isLoading() && !contents.isLoadingMainFrame()'),
+    'the main window load to complete',
+  );
   // Wait for rolling disk snapshot completion signal instead of a fixed 31s sleep.
   const mainSample = await until(async () => {
     const snap = await snapshotData();
@@ -146,6 +154,26 @@ try {
       ),
     'popout window to open',
   );
+  await until(
+    () =>
+      application.evaluate(async ({ BrowserWindow }) => {
+        const popout = BrowserWindow.getAllWindows().find((w) =>
+          w.webContents.getURL().includes('#/popout/'),
+        );
+        if (
+          !popout ||
+          popout.webContents.isLoading() ||
+          popout.webContents.isLoadingMainFrame()
+        )
+          return false;
+        return await popout.webContents
+          .executeJavaScript(
+            "document.readyState === 'complete' && !!window.circleDesktop",
+          )
+          .catch(() => false);
+      }),
+    'popout window load to complete',
+  );
   const popoutSample = await until(async () => {
     const snap = await snapshotData();
     const entries = snap?.windows ? Object.values(snap.windows) : [];
@@ -203,7 +231,11 @@ try {
   }, 'crashed popout window to reload');
   console.log('window crash: logged, isolated, popout reloaded');
 } catch (error) {
-  console.error('window-crash-native failed:', error);
+  console.error('window-crash-native failed:', error, {
+    exitCode: application?.process()?.exitCode,
+    signalCode: application?.process()?.signalCode,
+    stderr: printed,
+  });
   console.error(await logText());
   throw error;
 } finally {
