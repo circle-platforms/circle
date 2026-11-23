@@ -1,4 +1,4 @@
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 /**
@@ -148,6 +148,18 @@ function removeListener(
     emitter.removeListener(event, listener);
 }
 
+function rotatePreviousSnapshot(file: string): void {
+  try {
+    if (!existsSync(file)) return;
+    const previous = file.endsWith('.json')
+      ? `${file.slice(0, -5)}.previous.json`
+      : `${file}.previous`;
+    renameSync(file, previous);
+  } catch {
+    // Disk diagnostic persistence must never disrupt the main process.
+  }
+}
+
 export function createWindowDiagnostics(options: {
   log: (text: string) => void;
   /** The processes of the application's own windows, not of the pages in its browser panels. */
@@ -158,6 +170,7 @@ export function createWindowDiagnostics(options: {
   now?: () => number;
   every?: (run: () => void, ms: number) => void;
 }) {
+  if (options.snapshotFile) rotatePreviousSnapshot(options.snapshotFile);
   const now = options.now ?? Date.now;
   const every = options.every ?? ((run, ms) => setInterval(run, ms).unref?.());
   const sampleMs = options.sampleMs ?? WINDOW_SAMPLE_MS;
@@ -232,6 +245,8 @@ export function createWindowDiagnostics(options: {
         options.log(`window memory: ${sampleLine(taken)}`);
       }
     } else {
+      const active: WindowState[] = [];
+      const assignedPids = new Set<number>();
       for (const entry of windows.values()) {
         const target = entry.targetRef.deref();
         if (
@@ -241,12 +256,19 @@ export function createWindowDiagnostics(options: {
           continue;
         }
         captureLivePid(entry);
+        if (entry.pid !== undefined) assignedPids.add(entry.pid);
+        active.push(entry);
+      }
+      const unclaimedPids = pids.filter((pid) => !assignedPids.has(pid));
+      for (const entry of active) {
         const match =
           entry.pid !== undefined
             ? sizes.find((one) => one.pid === entry.pid)
-            : sizes
-                .filter((one) => pids.includes(one.pid))
-                .sort((a, b) => b.mb - a.mb)[0];
+            : assignedPids.size === 0
+              ? sizes
+                  .filter((one) => unclaimedPids.includes(one.pid))
+                  .sort((a, b) => b.mb - a.mb)[0]
+              : undefined;
         const taken: Sample = {
           at: timestamp,
           windowMb: match?.mb ?? 0,

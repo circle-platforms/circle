@@ -27,8 +27,17 @@ import type {
   RuntimeCommandName,
   RuntimeReply,
 } from '../src/runtime-protocol.ts';
-import { saveRemoteFile, uploadSelected } from '../src/remote-bot-files';
-import { remoteBotPort, remoteBotRequest } from '../src/remote-bot';
+import {
+  PartialBatchUploadError,
+  saveRemoteFile,
+  uploadSelected,
+  uploadSelectedBatch,
+} from '../src/remote-bot-files';
+import {
+  RemoteBotError,
+  remoteBotPort,
+  remoteBotRequest,
+} from '../src/remote-bot';
 import { fileSymlinkRefusal } from './helpers/symlink-support.mjs';
 import { patience } from './helpers/patience.mjs';
 
@@ -449,7 +458,7 @@ test('remoteBotRequest sends bot-client-version header and attaches structured e
 
   for (const scenario of [
     {
-      status: 426,
+      status: 409,
       body: { code: 'BOT_VERSION_MISMATCH', message: 'client too old' },
       expectedCode: 'BOT_VERSION_MISMATCH',
       expectedMessage: 'client too old',
@@ -461,7 +470,7 @@ test('remoteBotRequest sends bot-client-version header and attaches structured e
       expectedMessage: 'invalid bot client version',
     },
     {
-      status: 403,
+      status: 503,
       body: { code: 'BOT_DISABLED', message: 'bot disabled by admin' },
       expectedCode: 'BOT_DISABLED',
       expectedMessage: 'bot disabled by admin',
@@ -477,9 +486,36 @@ test('remoteBotRequest sends bot-client-version header and attaches structured e
     },
     {
       status: 401,
-      body: { message: 'token expired' },
-      expectedCode: undefined,
+      body: { code: 'BOT_UNAUTHENTICATED', message: 'token expired' },
+      expectedCode: 'BOT_UNAUTHENTICATED',
       expectedMessage: 'token expired',
+    },
+    {
+      status: 401,
+      body: {
+        code: 'BOT_CLIENT_FORBIDDEN',
+        message: 'token expired',
+      },
+      expectedCode: 'BOT_CLIENT_FORBIDDEN',
+      expectedMessage: 'token expired',
+    },
+    {
+      status: 408,
+      body: { code: 'BOT_REQUEST_TIMEOUT' },
+      expectedCode: 'BOT_REQUEST_TIMEOUT',
+      expectedMessage: 'remote bot request timed out',
+    },
+    {
+      status: 429,
+      body: { code: 'BOT_BUSY' },
+      expectedCode: 'BOT_BUSY',
+      expectedMessage: 'remote bot busy',
+    },
+    {
+      status: 500,
+      body: null,
+      expectedCode: undefined,
+      expectedMessage: 'remote bot unavailable',
     },
     {
       status: 503,
@@ -583,6 +619,10 @@ test('C6: remoteBotRequest, uploadSelected, and saveRemoteFile reject unsafe ser
       );
       await assert.rejects(
         () => uploadSelected(unsafePort, filePath, failFetch),
+        /https|loopback/i,
+      );
+      await assert.rejects(
+        () => uploadSelectedBatch(unsafePort, [filePath], failFetch),
         /https|loopback/i,
       );
       await assert.rejects(
@@ -878,5 +918,78 @@ test('C20: RuntimeController upload-batch pre-validates all files locally before
       { name: 'a.txt', size: 5 },
       { name: 'b.txt', size: 4 },
     ],
+  );
+
+  // S11: saveRemoteFile HTTP error responses preserve status/code via RemoteBotError.
+  const saveOut = join(root, 'save-fail.txt');
+  await assert.rejects(
+    () =>
+      saveRemoteFile(
+        remoteBotPort(home),
+        {
+          name: 'save-fail.txt',
+          sha256: createHash('sha256').update('x').digest('hex'),
+          size: 1,
+        },
+        saveOut,
+        (async () =>
+          new Response(
+            JSON.stringify({
+              code: 'BOT_CLIENT_FORBIDDEN',
+              message: 'direct member token required',
+            }),
+            { status: 403, headers: { 'content-type': 'application/json' } },
+          )) as typeof fetch,
+      ),
+    (error: unknown) =>
+      error instanceof RemoteBotError &&
+      error.status === 403 &&
+      error.code === 'BOT_CLIENT_FORBIDDEN' &&
+      error.remoteMessage === 'direct member token required',
+  );
+
+  // S12: uploadSelectedBatch mid-batch failure on file 3 of 5 reports uploaded count, total, and failing filename.
+  const fiveFiles = await Promise.all(
+    ['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt'].map(async (name) => {
+      const p = join(root, name);
+      await writeFile(p, name);
+      return p;
+    }),
+  );
+  let attempt = 0;
+  await assert.rejects(
+    () =>
+      uploadSelectedBatch(remoteBotPort(home), fiveFiles, (async (
+        input: string | URL | Request,
+      ) => {
+        attempt++;
+        if (attempt === 3) {
+          return new Response(
+            JSON.stringify({
+              code: 'BOT_QUOTA_EXCEEDED',
+              message: 'quota exceeded',
+            }),
+            { status: 413, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        const shaHex = String(input).split('/').pop() ?? '';
+        return new Response(JSON.stringify({ sha256: shaHex, size: 5 }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }) as typeof fetch),
+    (error: unknown) => {
+      assert.ok(error instanceof PartialBatchUploadError);
+      assert.equal(error.uploaded, 2);
+      assert.equal(error.total, 5);
+      assert.equal(error.fileName, 'c.txt');
+      assert.equal(error.status, 413);
+      assert.equal(error.code, 'BOT_QUOTA_EXCEEDED');
+      assert.equal(
+        error.message,
+        'Uploaded 2 of 5 files; failed on c.txt: quota exceeded',
+      );
+      return true;
+    },
   );
 });

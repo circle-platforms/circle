@@ -570,7 +570,7 @@ export function SkillsPage() {
               notify(
                 runtime.mode === 'live'
                   ? t('reloading skills')
-                  : 'reload requested; nothing was loaded',
+                  : t('reload requested; nothing was loaded'),
               );
             }}
           >
@@ -584,6 +584,14 @@ export function SkillsPage() {
         </div>
       }
     >
+      {snapshot.legacySkillPacks?.length ? (
+        <p className="panel-note" role="status">
+          {t(
+            'Found Hub packs from earlier installs in ~/.agents/skills ({packs}). Desktop now installs packs under the app data folder, so reinstall or move them into Desktop if needed.',
+            { packs: snapshot.legacySkillPacks.join(', ') },
+          )}
+        </p>
+      ) : null}
       {adding && (
         <form
           className="form-stack skill-draft"

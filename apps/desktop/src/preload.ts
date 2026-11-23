@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { ChatFile } from '../../../src/remote_bot_protocol.js';
 import type { DesktopAction, DesktopBridge } from './contracts';
 const actions = new Set<DesktopAction>([
   'new',
@@ -20,16 +21,46 @@ const raiseBrowserError = (error: unknown): never => {
     );
   throw Error(inner?.[1] ? inner[1] : message);
 };
+const unwrapBotTransfer = <T>(reply: unknown): T => {
+  if (
+    reply &&
+    typeof reply === 'object' &&
+    'ok' in reply &&
+    typeof (reply as { ok?: unknown }).ok === 'boolean'
+  ) {
+    const envelope = reply as {
+      ok: boolean;
+      data?: T;
+      error?: string;
+      errorStatus?: number;
+      errorCode?: string;
+      errorDetail?: string;
+    };
+    if (envelope.ok) return envelope.data as T;
+    throw Object.assign(Error(envelope.error ?? 'file transfer failed'), {
+      ...(envelope.errorStatus !== undefined
+        ? { status: envelope.errorStatus }
+        : {}),
+      ...(envelope.errorCode !== undefined ? { code: envelope.errorCode } : {}),
+      ...(envelope.errorDetail !== undefined
+        ? { detail: envelope.errorDetail }
+        : {}),
+    });
+  }
+  return reply as T;
+};
 const bridge: DesktopBridge = {
   apiVersion: 1,
   attachBotFiles: (binding) =>
     ipcRenderer
       .invoke('circle:attach-bot-files', binding)
-      .catch(raiseBrowserError),
+      .catch(raiseBrowserError)
+      .then((reply) => unwrapBotTransfer<ChatFile[] | null>(reply)),
   saveBotFile: (binding, file) =>
     ipcRenderer
       .invoke('circle:save-bot-file', binding, file)
-      .catch(raiseBrowserError),
+      .catch(raiseBrowserError)
+      .then((reply) => unwrapBotTransfer<boolean>(reply)),
   nativeAccessibility: () => ipcRenderer.invoke('circle:native-accessibility'),
   onNativeAccessibility: (listener) => {
     const handler = (_event: unknown, state: Parameters<typeof listener>[0]) =>

@@ -569,6 +569,8 @@ export interface WorkbenchSnapshot {
   approvalRules: ApprovalRule[];
   models: Model[];
   skills: Skill[];
+  /** Skill packs found only in ~/.agents/skills (CLI), outside desktop runtime-home. */
+  legacySkillPacks?: string[];
   commands: PromptCommand[];
   mcp: McpServer[];
   extensions: RuntimeExtension[];

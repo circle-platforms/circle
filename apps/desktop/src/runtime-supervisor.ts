@@ -965,6 +965,11 @@ export class RuntimeSupervisor {
     const now = Date.now();
     let longest: RuntimeCommandWait | undefined;
     for (const [id, entry] of this.pending) {
+      if (
+        entry.name === 'remote-bot' ||
+        entry.name === 'remote-bot-native-file'
+      )
+        continue;
       const waitedMs = now - entry.sentAt;
       if (waitedMs < (this.options.commandWaitMs ?? RUNTIME_COMMAND_WAIT_MS))
         continue;

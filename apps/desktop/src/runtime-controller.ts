@@ -54,7 +54,7 @@ import {
   unlinkSync,
 } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
-import { basename, join, relative, isAbsolute, sep } from 'node:path';
+import { basename, join, relative, isAbsolute, resolve, sep } from 'node:path';
 import { AgentRuntime, type InteractionContext } from '../../../src/runtime.js';
 import { TOOLS_NOT_LISTED_AGAIN } from '../../../src/mcp_loader.js';
 import { defaultRunOptions } from '../../../src/run_options.js';
@@ -418,6 +418,27 @@ interface Streaming {
   text: string;
   thinking: string;
 }
+function findLegacySkillPacks(
+  legacyRoot?: string,
+  currentRoot?: string,
+): string[] {
+  if (!legacyRoot) return [];
+  if (currentRoot && resolve(legacyRoot) === resolve(currentRoot)) return [];
+  try {
+    const packs: string[] = [];
+    for (const entry of readdirSync(legacyRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      if (!existsSync(join(legacyRoot, entry.name, 'pack.json'))) continue;
+      if (currentRoot && existsSync(join(currentRoot, entry.name, 'pack.json')))
+        continue;
+      packs.push(entry.name);
+    }
+    return packs.sort();
+  } catch {
+    return [];
+  }
+}
+
 export interface ControllerOptions {
   home: string;
   onFatalError?: (error: Error) => void;
@@ -436,6 +457,7 @@ export interface ControllerOptions {
   workspace?: string;
   userHome?: string;
   localSkillsRoot?: string;
+  legacySkillsRoot?: string;
   model?: ChatModel;
   catalog?: (home: string) => ModelCatalog;
   emit: (update: RuntimeUpdate) => void;
@@ -3732,6 +3754,18 @@ export class RuntimeController {
               ...(problems.length ? { toolProblems: problems } : {}),
             };
           }),
+      ...(!inspecting
+        ? (() => {
+            const currentSkillsRoot =
+              this.options.localSkillsRoot ??
+              join(this.options.userHome ?? homedir(), '.agents', 'skills');
+            const legacySkillPacks = findLegacySkillPacks(
+              this.options.legacySkillsRoot,
+              currentSkillsRoot,
+            );
+            return legacySkillPacks.length ? { legacySkillPacks } : {};
+          })()
+        : {}),
       commands:
         !inspecting && isFolderTrusted(settings, runtime.options.workspace)
           ? [
@@ -4845,8 +4879,19 @@ export class RuntimeController {
       } catch (error) {
         const meta =
           error instanceof Error
-            ? (error as Error & { status?: unknown; code?: unknown })
+            ? (error as Error & {
+                status?: unknown;
+                code?: unknown;
+                detail?: unknown;
+                remoteMessage?: unknown;
+              })
             : undefined;
+        const errorDetail =
+          typeof meta?.detail === 'string'
+            ? meta.detail
+            : typeof meta?.remoteMessage === 'string'
+              ? meta.remoteMessage
+              : undefined;
         return {
           id: command.id,
           ok: false,
@@ -4856,6 +4901,7 @@ export class RuntimeController {
             ? { errorStatus: meta.status }
             : {}),
           ...(typeof meta?.code === 'string' ? { errorCode: meta.code } : {}),
+          ...(errorDetail ? { errorDetail } : {}),
         };
       }
     };

@@ -8,10 +8,12 @@ import { MessageView } from '../components/MessageView';
 import { Button, FileChip } from '../components/common';
 import { t, useLocale } from '../i18n';
 import {
+  HUB_SERVER,
   botIdentityKey,
   classifyRemoteBotFailure,
   deliveryText,
   findHubConnection,
+  formatRemoteBotNotice,
   isHubConnected,
   mergeDeliveryStates,
   nextBotRetryDelay,
@@ -36,28 +38,67 @@ export function RemoteBotLink() {
   ) : null;
 }
 
+function DisconnectedPanel({
+  detail,
+  reconnecting,
+  onRetry,
+}: {
+  detail?: string;
+  reconnecting: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="empty-state" data-bot-error-kind="disconnected">
+      <h2>{t('remote bot disconnected')}</h2>
+      <p role="status">{t('Hub is not connected right now.')}</p>
+      <p className="muted small">
+        {t(
+          'Check your Hub connection in Settings -> Extensions, or retry reconnecting.',
+        )}
+      </p>
+      {detail && <p className="muted small">{detail}</p>}
+      <Button type="button" disabled={reconnecting} onClick={onRetry}>
+        {t('retry')}
+      </Button>
+    </div>
+  );
+}
+
 export function RemoteBotChat() {
   useLocale();
   const { snapshot, runtime } = useRuntime();
   const connection = findHubConnection(snapshot);
+  const [reconnecting, setReconnecting] = useState(false);
   return connection ? (
     <Chat
       key={connection.url}
       connected={connection.status === 'connected'}
+      connectionStatus={connection.status}
+      connectionError={connection.error}
       request={runtime.request}
     />
   ) : (
-    <div className="empty-state">
-      <p role="status">{t('remote bot disconnected')}</p>
-    </div>
+    <DisconnectedPanel
+      reconnecting={reconnecting}
+      onRetry={() => {
+        setReconnecting(true);
+        void Promise.resolve(runtime.request('reload'))
+          .catch(() => {})
+          .finally(() => setReconnecting(false));
+      }}
+    />
   );
 }
 
 function Chat({
   request,
   connected,
+  connectionStatus,
+  connectionError,
 }: {
   connected: boolean;
+  connectionStatus: string;
+  connectionError?: string;
   request: ReturnType<typeof useRuntime>['runtime']['request'];
 }) {
   useLocale();
@@ -73,6 +114,7 @@ function Chat({
   const [offline, setOffline] = useState(false);
   const [failure, setFailure] = useState<RemoteBotFailure>();
   const [sending, setSending] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const [epoch, setEpoch] = useState(0);
   const identity = useRef('');
   const cursor = useRef(0);
@@ -207,9 +249,24 @@ function Chat({
 
   if (!connected)
     return (
-      <div className="empty-state">
-        <p role="status">{t('remote bot disconnected')}</p>
-      </div>
+      <DisconnectedPanel
+        detail={connectionError}
+        reconnecting={reconnecting}
+        onRetry={() => {
+          setReconnecting(true);
+          void Promise.resolve(
+            connectionStatus === 'reload required'
+              ? request('reload')
+              : request('mcp.reload-server', { name: HUB_SERVER }),
+          )
+            .catch(() => request('reload'))
+            .catch(() => {})
+            .finally(() => {
+              setReconnecting(false);
+              setEpoch((n) => n + 1);
+            });
+        }}
+      />
     );
   if (offline) {
     const view = failure ?? classifyRemoteBotFailure(undefined);
@@ -239,7 +296,15 @@ function Chat({
       <div className="transcript">
         <div className="transcript-column">
           {events.map(
-            ({ id, at, role, text, files: assets, delivery: initial }) => (
+            ({
+              id,
+              at,
+              role,
+              text,
+              code,
+              files: assets,
+              delivery: initial,
+            }) => (
               <MessageView
                 key={id}
                 footer={
@@ -276,7 +341,16 @@ function Chat({
                     {deliveryText(delivery[id] ?? initial)}
                   </>
                 }
-                message={{ id, at, role, text, parentId: null }}
+                message={{
+                  id,
+                  at,
+                  role,
+                  text:
+                    role === 'notice'
+                      ? formatRemoteBotNotice(code, text)
+                      : text,
+                  parentId: null,
+                }}
                 showThinking={false}
               />
             ),

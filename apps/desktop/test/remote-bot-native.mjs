@@ -37,6 +37,7 @@ async function startStandaloneBackend() {
     [currentConv, { events: [], seenRequests: new Set(), active: null }],
   ]);
   let phase2Token = false;
+  let forceUnauthenticated = false;
 
   const readBytes = async (req) => {
     const chunks = [];
@@ -69,6 +70,12 @@ async function startStandaloneBackend() {
         });
       }
       const authHeader = req.headers.authorization ?? '';
+      if (forceUnauthenticated) {
+        return json(res, 401, {
+          code: 'BOT_UNAUTHENTICATED',
+          message: 'unauthorized',
+        });
+      }
       if (authHeader === `Bearer ${auth.token}` && !phase2Token) {
         return json(res, 403, {
           code: 'BOT_CLIENT_FORBIDDEN',
@@ -76,7 +83,10 @@ async function startStandaloneBackend() {
         });
       }
       if (authHeader !== `Bearer ${memberToken}`) {
-        return json(res, 401, { message: 'unauthorized' });
+        return json(res, 401, {
+          code: 'BOT_UNAUTHENTICATED',
+          message: 'unauthorized',
+        });
       }
       const op = JSON.parse((await readBytes(req)).toString('utf8'));
       if (op.action === 'discover') {
@@ -169,6 +179,12 @@ async function startStandaloneBackend() {
 
     if (reqUrl.pathname.startsWith('/api/bot/v1/files/')) {
       const authHeader = req.headers.authorization ?? '';
+      if (forceUnauthenticated) {
+        return json(res, 401, {
+          code: 'BOT_UNAUTHENTICATED',
+          message: 'unauthorized',
+        });
+      }
       if (authHeader === `Bearer ${auth.token}` && !phase2Token) {
         return json(res, 403, {
           code: 'BOT_CLIENT_FORBIDDEN',
@@ -176,7 +192,10 @@ async function startStandaloneBackend() {
         });
       }
       if (authHeader !== `Bearer ${memberToken}`) {
-        return json(res, 401, { message: 'unauthorized' });
+        return json(res, 401, {
+          code: 'BOT_UNAUTHENTICATED',
+          message: 'unauthorized',
+        });
       }
       const shaHex = reqUrl.pathname.slice('/api/bot/v1/files/'.length);
       if (req.method === 'PUT') {
@@ -215,6 +234,9 @@ async function startStandaloneBackend() {
     memberToken,
     logs: [],
     seenBotHeaders,
+    setForceUnauthenticated: (value) => {
+      forceUnauthenticated = value;
+    },
     async approveOAuth() {
       auth.deviceApproved = true;
     },
@@ -542,13 +564,13 @@ try {
   };
   delete env.ELECTRON_RUN_AS_NODE;
 
-  const launchElectron = async () => {
+  const launchElectron = async (language = 'en-US') => {
     const launched = await electron.launch({
       chromiumSandbox: true,
       executablePath,
       args: launchArgs,
       cwd: desktop,
-      env,
+      env: { ...env, CIRCLE_WORKBENCH_LANGUAGE: language },
       timeout: 45000,
     });
     const win = await launched.firstWindow();
@@ -604,10 +626,48 @@ try {
   await page
     .getByRole('heading', { name: 'direct member token required', exact: true })
     .waitFor();
+  assert.match(
+    (await page
+      .locator('[data-bot-error-kind="oauth-forbidden"]')
+      .textContent()) ?? '',
+    /settings\.json/,
+  );
   if (standalone) {
     assert.ok(backend.seenBotHeaders.length >= 1);
     assert.equal(backend.seenBotHeaders[0]['bot-client-version'], VERSION);
     assert.equal(backend.seenBotHeaders[0]['circle-version'], undefined);
+  }
+
+  // Verify zh-CN error localization on native Electron for 403 BOT_CLIENT_FORBIDDEN (and 401 BOT_UNAUTHENTICATED in standalone).
+  await Promise.race([app.close().catch(() => {}), delay(4000)]);
+  try {
+    app.process()?.kill('SIGKILL');
+  } catch {}
+  app = undefined;
+  page = undefined;
+  ({ launched: app, win: page } = await launchElectron('zh-CN'));
+  await page.keyboard.press('Escape');
+  await page
+    .getByRole('link', { name: '我的机器人', exact: true })
+    .first()
+    .click({ timeout: 30000 });
+  const zhForbidden = page.locator('[data-bot-error-kind="oauth-forbidden"]');
+  await zhForbidden.waitFor({ timeout: 20000 });
+  const zhForbiddenText = (await zhForbidden.textContent()) ?? '';
+  assert.match(zhForbiddenText, /需要使用直接成员令牌/);
+  assert.match(
+    zhForbiddenText,
+    /请先在 settings\.json 的 Hub 配置 headers\.Authorization/,
+  );
+  if (standalone) {
+    backend.setForceUnauthenticated(true);
+    await zhForbidden
+      .getByRole('button', { name: '重试', exact: true })
+      .click();
+    const zhAuth = page.locator('[data-bot-error-kind="auth"]');
+    await zhAuth.waitFor({ timeout: 20000 });
+    assert.match((await zhAuth.textContent()) ?? '', /机器人登录已过期/);
+    backend.setForceUnauthenticated(false);
   }
 
   // Phase 2: Direct member Bearer token configured on Hub MCP entry completes full round trip.

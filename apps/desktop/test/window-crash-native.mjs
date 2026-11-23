@@ -70,13 +70,13 @@ try {
     return state.connected ? state : undefined;
   }, 'the runtime');
   const inMain = (code) =>
-    application.evaluate(
-      ({ BrowserWindow }, source) =>
-        new Function('contents', `return ${source}`)(
-          BrowserWindow.getAllWindows()[0].webContents,
-        ),
-      code,
-    );
+    application.evaluate(({ BrowserWindow }, source) => {
+      const main =
+        BrowserWindow.getAllWindows().find(
+          (w) => !w.webContents.getURL().includes('#/popout/'),
+        ) ?? BrowserWindow.getAllWindows()[0];
+      return new Function('contents', `return ${source}`)(main.webContents);
+    }, code);
   await page.waitForLoadState('load');
   await page.waitForFunction(
     () => document.readyState === 'complete' && !!window.circleDesktop,
@@ -126,7 +126,6 @@ try {
     async () => (await logText()).includes('runtime stopped'),
     'the runtime to stop',
   );
-  await new Promise((done) => setTimeout(done, 250));
 
   await inMain('contents.reload()');
   await until(async () => {
@@ -182,6 +181,17 @@ try {
     );
   }, 'popout window snapshot on disk');
   assert.ok(popoutSample.samples.at(-1).windowMb > 20);
+  const mainBeforePopoutCrash = await until(async () => {
+    const snap = await snapshotData();
+    const entries = snap?.windows ? Object.values(snap.windows) : [];
+    const main = entries.find(
+      (w) =>
+        w.name === 'main' &&
+        w.pid > 0 &&
+        w.samples.some((s) => s.windowMb > 20),
+    );
+    return main;
+  }, 'reloaded main window snapshot before popout crash');
   await application.evaluate(({ BrowserWindow }) => {
     const popout = BrowserWindow.getAllWindows().find((w) =>
       w.webContents.getURL().includes('#/popout/'),
@@ -201,6 +211,30 @@ try {
       return Boolean(popout?.webContents.isCrashed());
     }),
     true,
+  );
+  // Main window remains alive and its diagnostics stay isolated from the crashed popout.
+  assert.equal(
+    await inMain('!contents.isDestroyed() && !contents.isCrashed()'),
+    true,
+    'main window must remain alive when popout crashes',
+  );
+  const mainSampleAfterCrash = await until(async () => {
+    const snap = await snapshotData();
+    const entries = snap?.windows ? Object.values(snap.windows) : [];
+    const main = entries.find((w) => w.name === 'main');
+    if (!main || main.pid !== mainBeforePopoutCrash.pid) return undefined;
+    const latest = main.samples.at(-1);
+    return latest &&
+      latest.at > mainBeforePopoutCrash.samples.at(-1).at &&
+      latest.windowMb > 20
+      ? main
+      : undefined;
+  }, 'main window diagnostics sample after popout crash');
+  assert.equal(mainSampleAfterCrash.pid, mainBeforePopoutCrash.pid);
+  assert.doesNotMatch(
+    await logText(),
+    /window main renderer gone.*window main renderer gone/,
+    'popout crash must not emit a duplicate main crash log',
   );
   await application.evaluate(({ BrowserWindow, Menu }) => {
     const popout = BrowserWindow.getAllWindows().find((w) =>
@@ -229,6 +263,7 @@ try {
       })
       .catch(() => false);
   }, 'crashed popout window to reload');
+  assert.doesNotMatch(printed, /Render frame was disposed/);
   console.log('window crash: logged, isolated, popout reloaded');
 } catch (error) {
   console.error('window-crash-native failed:', error, {

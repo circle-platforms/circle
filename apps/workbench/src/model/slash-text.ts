@@ -56,5 +56,5 @@ const SLASH_TEXT: Record<string, () => string> = {
   secrets: () => t('Named values Circle fills in unseen: /secrets [NAME]'),
 };
 export function slashText(name: string, english: string): string {
-  return SLASH_TEXT[name]?.() ?? english;
+  return Object.hasOwn(SLASH_TEXT, name) ? SLASH_TEXT[name]() : english;
 }

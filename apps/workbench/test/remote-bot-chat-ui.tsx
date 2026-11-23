@@ -34,8 +34,23 @@ const hub: McpServer = {
 snapshot.mcp = [hub];
 
 let discoverCalls = 0;
+let reloadCalls = 0;
+let currentEvents: Array<{
+  id: string;
+  at: string;
+  role: 'notice' | 'user' | 'assistant';
+  text: string;
+  code?: string;
+  cursor: number;
+}> = [];
 let nextFailure:
-  { error: string; errorStatus?: number; errorCode?: string } | undefined = {
+  | {
+      error: string;
+      errorStatus?: number;
+      errorCode?: string;
+      errorDetail?: string;
+    }
+  | undefined = {
   error: 'remote bot unavailable',
   errorStatus: 502,
 };
@@ -47,10 +62,25 @@ let attachOutcome:
   files: [],
 };
 
+const listeners = new Set<(update: RuntimeUpdate) => void>();
+let seq = 0;
 const update: RuntimeUpdate = { seq: 0, connected: true, snapshot };
+function emitSnapshot() {
+  seq += 1;
+  const next: RuntimeUpdate = {
+    seq,
+    connected: true,
+    snapshot: structuredClone(snapshot),
+  };
+  for (const listener of listeners) listener(next);
+}
+
 const host = {
-  runtimeState: async () => structuredClone(update),
-  onRuntime: () => () => {},
+  runtimeState: async () => structuredClone({ ...update, seq, snapshot }),
+  onRuntime: (listener: (u: RuntimeUpdate) => void) => {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  },
   onTerminalEvent: () => () => {},
   onBrowserEvent: () => () => {},
   onAction: () => () => {},
@@ -68,6 +98,10 @@ const host = {
   },
   saveBotFile: async () => true,
   runtimeCommand: async (command: RuntimeCommand): Promise<RuntimeReply> => {
+    if (command.name === 'mcp-reload-server' || command.name === 'reload') {
+      reloadCalls += 1;
+      return { id: command.id, ok: true };
+    }
     if (command.name === 'remote-bot') {
       const action = String(command.payload.action ?? '');
       if (action === 'discover') {
@@ -82,6 +116,9 @@ const host = {
               : {}),
             ...(nextFailure.errorCode !== undefined
               ? { errorCode: nextFailure.errorCode }
+              : {}),
+            ...(nextFailure.errorDetail !== undefined
+              ? { errorDetail: nextFailure.errorDetail }
               : {}),
           };
         }
@@ -108,13 +145,17 @@ const host = {
             ...(nextFailure.errorCode !== undefined
               ? { errorCode: nextFailure.errorCode }
               : {}),
+            ...(nextFailure.errorDetail !== undefined
+              ? { errorDetail: nextFailure.errorDetail }
+              : {}),
           };
         }
+        const after = Number(command.payload.after ?? 0);
         return {
           id: command.id,
           ok: true,
           data: {
-            events: [],
+            events: currentEvents.filter((event) => event.cursor > after),
             queued: [],
             deliveries: [],
             fileDeliveries: [],
@@ -133,13 +174,26 @@ const runtime = new LiveRuntime(host, update);
 Object.assign(window, {
   remoteBotUiFixture: {
     discoverCalls: () => discoverCalls,
+    reloadCalls: () => reloadCalls,
     resetDiscoverCalls: () => {
       discoverCalls = 0;
+    },
+    resetReloadCalls: () => {
+      reloadCalls = 0;
+    },
+    setHubStatus: (status: McpServer['status'], error?: string) => {
+      hub.status = status;
+      hub.error = error;
+      emitSnapshot();
+    },
+    setEvents: (events: typeof currentEvents) => {
+      currentEvents = events;
     },
     setFailure: (failure?: {
       error: string;
       errorStatus?: number;
       errorCode?: string;
+      errorDetail?: string;
     }) => {
       nextFailure = failure;
     },

@@ -17,6 +17,7 @@ snapshot.runtime = { connected: true, configured: true };
 snapshot.settings.theme = query.get('theme') === 'dark' ? 'dark' : 'light';
 snapshot.interactions = [];
 snapshot.requests = [];
+snapshot.legacySkillPacks = ['legacy-hub-pack'];
 snapshot.skills = [
   {
     id: 'project:demo-skill',

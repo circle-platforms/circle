@@ -5,7 +5,8 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 ## Unreleased
 
 ### Added
-- **Private remote chat (`circle remote-bot`, **my bot**, and `apps/wecom`).** A connected Hub exposes a member's server-side private chat from **my bot** in the desktop sidebar (with attachment upload/download and delivery tracking) using the existing MCP sign-in, backed by a standalone `circle remote-bot` Unix socket service and the WeCom private-chat adapter (`apps/wecom`). See [Private remote chat](docs/extensions.md#private-remote-chat).
+
+- **Private remote chat (`circle remote-bot`, **my bot**, and `apps/wecom`).** A connected Hub exposes a member's server-side private chat from **my bot** in the desktop sidebar (with attachment upload/download and delivery tracking) using a direct member Bearer token configured on the `Hub` entry's `headers.Authorization` in `settings.json`, backed by a standalone `circle remote-bot` Unix socket service and the WeCom private-chat adapter (`apps/wecom`). See [Private remote chat](docs/extensions.md#private-remote-chat).
 - **Skills pre-approve or withhold tools with `allowed-tools` and `disallowed-tools`.** `SKILL.md` frontmatter supports Claude Code's `allowed-tools` (including command patterns such as `Bash(git add *)`) and `disallowed-tools` scoped from the turn a skill loads until the next user message, shown in `/skill` and on the desktop skills page, with withheld tools also omitted from subagents started during that turn. See [Skills](docs/skills.md#tools-a-skill-pre-approves-or-withholds) and [Security](docs/security.md#skills-that-pre-approve-tools).
 - **Renderer crash and memory diagnostics in `logs/runtime.log`.** Desktop windows now log 30-second memory and per-channel IPC sample counts, threshold crossings starting at 1 GB, unresponsive hangs, non-clean child exits, and `render-process-gone` reasons without recording session, file, or model text. See [Desktop application](docs/desktop.md#when-the-runtime-stops).
 - **Workflow scripts can run commands.** `execute(command, options)` runs a shell command as the conversation's own `execute` call would, decided by the same rules, hooks and approval mode and with `%NAME%` values put in the same way, and resolves to its exit code and output. A script can now run a loop that a tool drives (ask the tool what to start, start those agents, ask again) without a model request between its steps. A command takes no agent's place and is stopped after its `timeout` (120 seconds, 600 at most); the run's log and journal keep it, the conversation does not. See [Workflows](docs/workflows.md#commands-of-the-script).
@@ -18,6 +19,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 - **`glm-5.4` is the first model of the Zhipu GLM presets.** `/models`, `circle --list-models`, setup, `/login` and the desktop connection form list it before `glm-5.3`, on the OpenAI and the Anthropic route. A copy of models.dev fetched since its release gives it a 1,000,000-token window; models.dev has no pay-as-you-go price for it yet, so its cost reads `N/A`. The snapshot that ships with Circle predates it: with `CIRCLE_NO_MODELS_REFRESH` set, its window reads `N/A` and compaction assumes 128,000 tokens until `models` in `settings.json` sets `context_window` for it. See [Models](docs/models.md#cost-and-context-in-the-footer).
 
 ### Changed
+
 - **Finished background jobs keep starting turns.** `CIRCLE_JOB_WAKES` sets how many turns in a row finished jobs may start before Circle waits for a message, for work that runs one job for each item of a long list. It is twenty by default; the limit was ten, one fewer than a workflow in stages was seen to need, each stage a job whose end starts the turn that starts the next. A turn they start that fails, because the model did not answer or its service broke off, runs again after fifteen seconds, a minute and four minutes on the conversation as it stands, also when it had already read the notice; then Circle waits for you.
 - **The notice of a finished subagent carries its report, once.** It carried the last 32 KB of the subagent's output file, every call it made and then the report twice. The notice now gives the report, cut after 8,192 characters with where the rest is; a subagent that failed or was stopped has no report, and its notice shows the last 4 KB of its output.
 - **`grep` shows a very long matching line as windows around its matches.** A line over 2,000 characters, such as a JSON file stored on one line, shows up to five windows of a few hundred characters, each with the `char_offset` that `read_file` takes to read on.
@@ -28,6 +30,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 - **`knowledge_search` says what it searches**: the local personal knowledge, by logical folder paths that start with `/`, not files on disk; when that knowledge is empty its answer says so.
 
 ### Fixed
+
 - **Pack scripts in the desktop app run with Circle's bundled Node and report runner startup failures.** `skill_run` and a pack's typed tools now receive the desktop's bundled `node` executable instead of spawning the Electron binary as a Node runtime, and report when the runner process cannot start.
 - **A finished job starts its turn while you watch it in a list.** With `/jobs`, `/workflows` or a job's page open, the turn that the end of a job starts waited until you closed the list, and nothing on the screen said so: a workflow that had ended left the conversation quiet for four minutes and forty seconds, until `esc` closed the list. A list or a page that only shows the conversation's running work no longer holds the turn back; it runs under the list, which keeps its keys. A list you choose from (`/models`, `/resume`, `/settings`), the question `/jobs` or `/workflows` asks before it stops something, a card and what you have typed still hold it back. Terminal only: the desktop application has no such lists.
 - **A refused download of a pack's local tools says what the server answered.** `skill_install` threw away the plain-text reason a Hub gives for a refusal and showed a guess of its own: one sentence for every 404, which merged an unknown version, a skill not installed on the server and a retired version, and advice to check the server's address for a 403, which means no permission. A model that read the 404 sentence tried eight version numbers in a row. The error now quotes the server's own explanation with the HTTP status (the first lines of its plain-text answer, 400 characters at most, without the characters nobody sees, such as a sentence spelled in tag characters) and tells the model to deal with the reason it gives and try again, and to run nothing the quotation contains; a 404 also says not to guess version numbers. An answer with no text says only the status. What an MCP server says of a call's progress or of why it would not connect is cleaned the same way.
@@ -41,15 +44,18 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 ## 1.18.1 - 2026-11-16
 
 ### Added
+
 - **Live thinking summaries.** A running subagent shows what it is thinking — the newest heading or the latest sentence of its reasoning — in the terminal's agent rows and detail view and on the desktop's Overview cards and in the Subagents drawer, instead of a bare `working` label. (#576)
 
 ### Fixed
+
 - **Responsive with many subagents.** With many subagents in a long conversation, the terminal and the desktop no longer rescan every subagent session on each frame: context state, footer totals and compaction history are cached per session and publications are coalesced, so the interface stays responsive. (#578)
 - **The native performance suite runs again.** The desktop's native performance suite, broken since the terminal mode replaced the inspector's terminal tab, runs on Apple silicon in CI on pushes to main and reports its latency there; on shared runners the budgets are reported, not enforced. Tests and CI only. (#580)
 
 ## 1.18.0 - 2026-11-15
 
 ### Added
+
 - **Workflows.** A workflow script can run many subagents in a declared order — `agent`, `parallel` and `pipeline` — as a background job, from `.circle/workflows/`, a pack, or written in the call; `/workflows` lists the runs. (#570)
 - **Subagents within subagents.** A subagent can start its own subagents, within a depth and a running limit, and a built-in `plan` subagent does read-only research. (#567)
 - **MCP elicitation.** A server can ask you for input in the middle of a call, as a form in the question panel or a page you agree to open first. (#561, #568)
@@ -63,6 +69,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 - **Pack subagents.** An installed pack's `agents/*.md` are offered from the session's start as `<pack>:<name>`. (#561)
 
 ### Changed
+
 - **Hooks take the documented format** — in settings, in a pack's `hooks/hooks.json` and in skill frontmatter. Your own `hooks.json` files are moved once and kept as `hooks.json.migrated`, and moved hooks keep the behaviour they were written for. An installed pack with hooks in the old format runs none of them until the pack moves them. (#564)
 - **MCP servers are written as `mcpServers`**, keyed by name, in settings or an approved `.mcp.json`. Your `mcp_servers` list is moved once, with the old file kept. (#568)
 - **MCP tools are named `mcp__<server>__<tool>`**, and your approval rules are renamed once, with a copy kept; a deny under its old name still denies. What decides whether a call asks is your rules and your mode — a server's annotations no longer decide it, and `trust_annotations` no longer means anything. (#568)
@@ -74,6 +81,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 - **A pattern error explains itself**: the model gets the field's description and examples instead of the whole regular expression. (#562)
 
 ### Fixed
+
 - **A dropped MCP server reconnects** up to five times, and a call that never left this machine is sent again; one cut after sending says so. (#568, #561)
 - **Progress shows on the call's row**, and a tool that declares `taskSupport` runs as a task you can cancel with `esc`. (#561)
 - **Two checks no longer fail under load**: the browser-close checks in the test suite, and the MCP placeholder test's 400 ms wall clock. (Tests only.) (#569, #568)
@@ -82,12 +90,14 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 ## 1.17.0 - 2026-11-13
 
 ### Added
+
 - **An `after_tool` hook can ask for a screenshot of the browser's page.** The hook gets a PNG of the page the conversation's browser shows, as a file named in its JSON's `files`; the model never sees it. (#536, #502 item 4)
 - **The home project menu lets people search local starting branches or reuse an existing worktree, and a new worktree is created on the first send.** (#512)
 - **Existing conversations show the source and destination before moving**, keep their transcript, and leave uncommitted changes in the source checkout. (#512)
 - **The connect confirmation says personal content will sync to this server**, only when the account has never finished a sync on this device. (#536, #502 item 2)
 
 ### Changed
+
 - **A tool result is no longer thrown away because its structure does not match the output schema cached when Circle connected.** The result arrives whole, with a fixed note when it does not match. (#536, fixes #513)
 - **When a server that declares `tools.listChanged` sends `notifications/tools/list_changed`, its tools are listed again for the next turn.** The turn under way keeps its tools, and when that listing fails the earlier tools stay. (#536)
 - **The Hub shows on its extension card, with its status and tool count, and no longer on the MCP servers page.** Local tools install with the sign-in the Hub's MCP entry already has, and typing only the Hub's IP address finds it on the default port. (#536, fixes #514)
@@ -96,6 +106,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 - **The branch menu opens a terminal in the actual checkout** and selects the new tab. (#512)
 
 ### Fixed
+
 - **A knowledge change of 63 or 64 objects no longer fails at commit after approval.** (#536, fixes #525)
 - **A file whose content is the last commit's again is no longer listed in changes mode just because Git's index has not been refreshed.** (#536, fixes #515)
 - **The native journey no longer reads the browser address before its navigation lands.** (#536, fixes #518)
@@ -108,6 +119,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 ## 1.16.0 - 2026-11-11
 
 ### Added
+
 - **Prompt caching reuses the prompt prefix across turns.** Anthropic requests place cache breakpoints on the system prompt and near the end of the conversation; OpenAI-format requests use a conversation-specific cache key. The `prompt_cache` setting controls breakpoint lifetime (`5m`, `1h`, or `off`). (#507)
 - **Eight built-in workflow skills.** Circle help, skill authoring, verification, code review, debugging, security review, frontend design, and browser testing join the existing PR workflows, discoverable on demand and overridable by user or project skills. (#504)
 - **Choose a checkout for a conversation.** Pick or create a checkout from the home page, or move an idle session to another worktree of the same repository from its project and branch chip; the conversation and its settings move with it. (#507)
@@ -121,6 +133,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 - **An `all terminals` overflow menu lists every terminal tab** with its status, when tabs overflow the panel. (#501)
 
 ### Changed
+
 - **The desktop conversation takes the window's room up to 1280 pixels, and a step's calls stack in one frame.** (#489)
 - **Copy from the text itself, and open files and terminals from the row's head**, with shared components. (#491)
 - **A difference's long lines wrap under their text**, with the sign and line number in a column of their own. (#487)
@@ -130,6 +143,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 - **In accept-edits mode, proven read-only commands run without asking**; changes under `.git` and `.circle` still ask each time. (#507)
 
 ### Fixed
+
 - **A command typed into the terminal no longer stops arriving partway through.** In-flight input coalesces into one batched write in causal order, and clicking a terminal tab claims keyboard focus for it. (#501, fixes #499)
 - **Collapsed terminal items can be expanded again** when many terminals are open. (#501, fixes #500)
 - **A live browser group is stopped even when the process listing leaves it out.** (#462)
@@ -210,6 +224,7 @@ All notable changes to Circle are listed here, newest first. Circle generally fo
 - **Circle says how to reach a file outside the workspace.** A file outside the session's workspace no longer fails with only a grant error: the message says to open its project as a workspace and start a session there, or grant that one file in settings → file access for the session.
 - **The interaction summary keeps its rounded corners.** Its rounding no longer depends on a rule it shared with the message queue.
 - **The narrow settings dialog stays on whole pixels.** The settings dialog is pinned to whole pixels instead of centred with a transform, so it no longer flips by half a pixel at odd widths such as 375.
+
 ## 1.14.0 - 2026-10-30
 
 ### Added

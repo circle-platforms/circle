@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -486,5 +487,108 @@ test('skips getOSProcessId and 0 MB samples while webContents is crashed and res
     );
   } finally {
     rmSync(snapshotDir, { recursive: true, force: true });
+  }
+});
+
+test('S9/C14: leaves new window with unknown PID at 0 MB instead of borrowing another tracked window PID', () => {
+  const entries: string[] = [];
+  let at = 3_000_000;
+  let popoutPid = 0;
+  const dir = mkdtempSync(join(tmpdir(), 'circle-window-unknown-pid-'));
+  const snapshotFile = join(dir, 'logs', 'window-samples.json');
+  try {
+    const diagnostics = createWindowDiagnostics({
+      log: (text) => entries.push(text),
+      windowPids: () => (popoutPid > 0 ? [101, popoutPid] : [101]),
+      metrics: () => [
+        { pid: 101, memory: { workingSetSize: 900 * 1024 } },
+        { pid: 202, memory: { workingSetSize: 150 * 1024 } },
+      ],
+      snapshotFile,
+      now: () => at,
+      every: () => {},
+    });
+
+    const mainWin = Object.assign(new EventEmitter(), {
+      webContents: Object.assign(new EventEmitter(), {
+        id: 1,
+        getOSProcessId: () => 101,
+      }),
+    });
+    const popoutWin = Object.assign(new EventEmitter(), {
+      webContents: Object.assign(new EventEmitter(), {
+        id: 2,
+        getOSProcessId: () => popoutPid,
+      }),
+    });
+
+    diagnostics.watch('main', mainWin);
+    diagnostics.watch('popout', popoutWin);
+    diagnostics.sample();
+
+    const first = JSON.parse(readFileSync(snapshotFile, 'utf8')) as {
+      windows: Record<
+        string,
+        { windowMb?: number; samples: Array<{ windowMb: number }> }
+      >;
+    };
+    assert.equal(first.windows['1']?.samples[0]?.windowMb, 900);
+    assert.equal(first.windows['2']?.samples[0]?.windowMb, 0);
+
+    popoutPid = 202;
+    at += 30_000;
+    popoutWin.webContents.emit('did-finish-load');
+    diagnostics.sample();
+
+    const second = JSON.parse(readFileSync(snapshotFile, 'utf8')) as {
+      windows: Record<
+        string,
+        { pid: number; samples: Array<{ windowMb: number }> }
+      >;
+    };
+    assert.equal(second.windows['2']?.pid, 202);
+    assert.deepEqual(
+      second.windows['2']?.samples.map((s) => s.windowMb),
+      [0, 150],
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('S9/C21: rotates an existing snapshotFile to window-samples.previous.json on startup', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'circle-window-rotate-'));
+  const snapshotFile = join(dir, 'logs', 'window-samples.json');
+  const previousFile = join(dir, 'logs', 'window-samples.previous.json');
+  try {
+    mkdirSync(join(dir, 'logs'), { recursive: true });
+    writeFileSync(
+      snapshotFile,
+      JSON.stringify({ updatedAt: 1, windows: { stale: { name: 'old' } } }),
+    );
+    const diagnostics = createWindowDiagnostics({
+      log: () => {},
+      windowPids: () => [10],
+      metrics: () => [{ pid: 10, memory: { workingSetSize: 128 * 1024 } }],
+      snapshotFile,
+      now: () => 2000,
+      every: () => {},
+    });
+    assert.equal(existsSync(snapshotFile), false);
+    assert.equal(existsSync(previousFile), true);
+    const rotated = JSON.parse(readFileSync(previousFile, 'utf8')) as {
+      updatedAt: number;
+      windows: Record<string, unknown>;
+    };
+    assert.equal(rotated.updatedAt, 1);
+    assert.ok('stale' in rotated.windows);
+
+    diagnostics.sample();
+    const current = JSON.parse(readFileSync(snapshotFile, 'utf8')) as {
+      updatedAt: number;
+    };
+    assert.equal(current.updatedAt, 2000);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -15,6 +15,14 @@ const BOT_CODE_FALLBACKS: Readonly<Record<string, string>> = {
   BOT_VERSION_INVALID: 'invalid bot client version',
   BOT_DISABLED: 'remote bot disabled',
   BOT_CLIENT_FORBIDDEN: 'oauth client token rejected',
+  BOT_UNAUTHENTICATED: 'bot sign-in expired',
+  BOT_NOT_FOUND: 'remote bot resource not found',
+  BOT_CONFLICT: 'remote bot state conflict',
+  BOT_QUOTA_EXCEEDED: 'bot attachment quota exceeded',
+  BOT_INVALID_REQUEST: 'invalid remote bot request',
+  BOT_BUSY: 'remote bot busy',
+  BOT_REQUEST_TIMEOUT: 'remote bot request timed out',
+  BOT_UPSTREAM_UNAVAILABLE: 'remote bot unavailable',
 };
 
 export class RemoteBotError extends Error {

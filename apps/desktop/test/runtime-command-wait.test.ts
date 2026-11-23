@@ -206,3 +206,46 @@ test(
     );
   },
 );
+
+test(
+  'S14/C3: pending remote-bot and remote-bot-native-file calls never emit a busy-wait banner',
+  { timeout: patience(8000) },
+  async () => {
+    await fixture(
+      async (supervisor, child) => {
+        const waits: (RuntimeCommandWait | null)[] = [];
+        supervisor.onCommandWait((event) => waits.push(event));
+
+        const botCall = supervisor.command({
+          id: 'bot-slow',
+          name: 'remote-bot',
+          payload: { action: 'discover' },
+        });
+        const fileCall = supervisor.command({
+          id: 'bot-file-slow',
+          name: 'remote-bot-native-file',
+          payload: { action: 'upload-batch', binding: 'b', paths: [] },
+        });
+
+        await delay(90);
+        assert.deepEqual(
+          waits,
+          [],
+          'remote-bot and remote-bot-native-file must never trigger busy-wait reporting',
+        );
+
+        child.emit('message', {
+          type: 'reply',
+          reply: { id: 'bot-slow', ok: true, data: {} },
+        });
+        child.emit('message', {
+          type: 'reply',
+          reply: { id: 'bot-file-slow', ok: true, data: [] },
+        });
+        await Promise.all([botCall, fileCall]);
+        assert.deepEqual(waits, []);
+      },
+      { commandWaitMs: 25 },
+    );
+  },
+);

@@ -76,6 +76,19 @@ try {
           assert.match(combined, /not applied/);
         }
 
+        // S8: legacySkillPacks banner surfaces in both languages without breaking detail notes.
+        const pageNotes = await page
+          .locator('section.page > [role="status"].panel-note')
+          .allTextContents();
+        const legacyText = pageNotes.join('\n');
+        assert.match(legacyText, /legacy-hub-pack/);
+        if (language === 'zh-CN') {
+          assert.match(legacyText, /早期安装的 Hub 扩展包/);
+          assert.match(legacyText, /应用数据文件夹/);
+        } else {
+          assert.match(legacyText, /earlier installs in ~\/\.agents\/skills/);
+        }
+
         await page.screenshot({
           path: join(output, `${name}.png`),
         });

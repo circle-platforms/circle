@@ -109,6 +109,43 @@ export async function uploadSelected(
   }
 }
 
+export class PartialBatchUploadError extends Error {
+  readonly uploaded: number;
+  readonly total: number;
+  readonly fileName: string;
+  readonly status?: number;
+  readonly code?: string;
+  readonly remoteMessage?: string;
+
+  constructor(
+    uploaded: number,
+    total: number,
+    fileName: string,
+    cause: unknown,
+  ) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `Uploaded ${uploaded} of ${total} files; failed on ${fileName}: ${reason}`,
+      { cause },
+    );
+    this.name = 'PartialBatchUploadError';
+    this.uploaded = uploaded;
+    this.total = total;
+    this.fileName = fileName;
+    if (cause && typeof cause === 'object') {
+      const meta = cause as {
+        status?: unknown;
+        code?: unknown;
+        remoteMessage?: unknown;
+      };
+      if (typeof meta.status === 'number') this.status = meta.status;
+      if (typeof meta.code === 'string') this.code = meta.code;
+      if (typeof meta.remoteMessage === 'string')
+        this.remoteMessage = meta.remoteMessage;
+    }
+  }
+}
+
 export async function uploadSelectedBatch(
   port: McpBearerConnection,
   paths: readonly string[],
@@ -124,7 +161,19 @@ export async function uploadSelectedBatch(
     }
     const receipts: ChatFile[] = [];
     for (const item of prepared) {
-      receipts.push(await putPreparedFile(port, item, fetcher));
+      try {
+        receipts.push(await putPreparedFile(port, item, fetcher));
+      } catch (error) {
+        if (receipts.length > 0) {
+          throw new PartialBatchUploadError(
+            receipts.length,
+            prepared.length,
+            item.name,
+            error,
+          );
+        }
+        throw error;
+      }
     }
     return receipts;
   } finally {
@@ -159,9 +208,11 @@ export async function saveRemoteFile(
       headers: { authorization: 'Bearer ' + token },
     }),
   );
+  if (!response.ok) {
+    throw await parseRemoteBotError(response, 'file unavailable');
+  }
   const contentLength = response.headers.get('content-length');
   if (
-    !response.ok ||
     !response.body ||
     contentLength === null ||
     Number(contentLength) !== descriptor.size

@@ -6,7 +6,6 @@ import {
   copyFile,
   mkdir,
   mkdtemp,
-  readFile,
   readdir,
   rm,
   writeFile,
@@ -211,50 +210,142 @@ async function runIsolatedChildCheck(): Promise<void> {
 
     const leakedEntries = await readdir(leakedRoot);
     assert.deepEqual(leakedEntries, ['pack-host-home']);
-
-    // Verify runtime-worker also wires localSkillsRoot explicitly alongside userHome.
-    const workerSource = await readFile(
-      fileURLToPath(new URL('../src/runtime-worker.ts', import.meta.url)),
-      'utf8',
-    );
-    assert.match(
-      workerSource,
-      /localSkillsRoot:\s*join\(home,\s*'\.agents',\s*'skills'\)/,
-      'runtime-worker.ts must pass localSkillsRoot under runtime-home',
-    );
   } finally {
     await controller?.close();
     await rm(root, { recursive: true, force: true });
   }
 }
 
+async function runWorkerWiringChildCheck(): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'circle-worker-skills-'));
+  try {
+    const dataFolder = join(root, 'Application Support', 'Circle');
+    const home = join(dataFolder, 'runtime-home');
+    const workspace = join(root, 'workspace');
+    const localSkillsRoot = join(home, '.agents', 'skills');
+    const legacyRoot = join(homedir(), '.agents', 'skills');
+    const fixturePath = join(root, 'fixture.json');
+
+    await Promise.all([
+      mkdir(home, { recursive: true }),
+      mkdir(workspace, { recursive: true }),
+      mkdir(join(workspace, '.git'), { recursive: true }),
+      mkdir(localSkillsRoot, { recursive: true }),
+      mkdir(legacyRoot, { recursive: true }),
+    ]);
+    await createPack(localSkillsRoot, 'pack-desktop', true);
+    await createPack(legacyRoot, 'pack-host-home', false);
+    saveSettings(trustFolder(defaultSettings(), workspace), home);
+    await writeFile(fixturePath, JSON.stringify({ replies: [] }), 'utf8');
+
+    process.env.CIRCLE_DESKTOP_RUNTIME_HOME = home;
+    process.env.CIRCLE_WORKBENCH_TEST_PROFILE = JSON.stringify({ workspace });
+    process.env.CIRCLE_DESKTOP_RUNTIME_FIXTURE = fixturePath;
+
+    const listeners = new Map<
+      string,
+      Array<(event: { data: unknown }) => void>
+    >();
+    let seenLegacyNotice = false;
+    let resolvedSnapshot:
+      | {
+          skills?: Array<{ name: string }>;
+          legacySkillPacks?: string[];
+        }
+      | undefined;
+
+    const done = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error('timed out waiting for runtime-worker snapshot'));
+      }, 15_000);
+      Object.defineProperty(process, 'parentPort', {
+        configurable: true,
+        value: {
+          postMessage(msg: {
+            type?: string;
+            update?: {
+              snapshot?: {
+                skills?: Array<{ name: string }>;
+                legacySkillPacks?: string[];
+              };
+            };
+          }) {
+            if (msg?.type === 'update' && msg.update?.snapshot) {
+              const snap = msg.update.snapshot;
+              if (snap.skills && snap.skills.length > 0) {
+                resolvedSnapshot = snap;
+                seenLegacyNotice = Boolean(
+                  snap.legacySkillPacks?.includes('pack-host-home'),
+                );
+                clearTimeout(timer);
+                resolve();
+              }
+            }
+          },
+          on(event: string, listener: (event: { data: unknown }) => void) {
+            const list = listeners.get(event) ?? [];
+            list.push(listener);
+            listeners.set(event, list);
+          },
+        },
+      });
+    });
+
+    await import('../src/runtime-worker.ts');
+    await done;
+
+    assert.ok(resolvedSnapshot, 'runtime-worker emitted initial snapshot');
+    assert.ok(
+      resolvedSnapshot.skills?.some((s) => s.name === 'pack-desktop'),
+      'runtime-worker loaded pack-desktop from runtime-home',
+    );
+    assert.equal(
+      resolvedSnapshot.skills?.some((s) => s.name === 'pack-host-home'),
+      false,
+      'runtime-worker ignored legacy host homedir skills',
+    );
+    assert.equal(
+      seenLegacyNotice,
+      true,
+      'runtime-worker reported legacy ~/.agents/skills packs in legacySkillPacks',
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 if (process.env.CIRCLE_TEST_SKILLS_CHILD === '1') {
   await runIsolatedChildCheck();
+} else if (process.env.CIRCLE_TEST_SKILLS_CHILD === 'worker') {
+  await runWorkerWiringChildCheck();
+  process.exit(0);
 } else {
   test('runtime-worker and RuntimeController share localSkillsRoot under desktop runtime-home', async () => {
-    const fakeHome = await mkdtemp(join(tmpdir(), 'circle-fake-home-'));
-    try {
-      const child = spawnSync(
-        process.execPath,
-        ['--import', 'tsx', fileURLToPath(import.meta.url)],
-        {
-          env: {
-            ...process.env,
-            HOME: fakeHome,
-            USERPROFILE: fakeHome,
-            CIRCLE_TEST_SKILLS_CHILD: '1',
+    for (const mode of ['1', 'worker'] as const) {
+      const fakeHome = await mkdtemp(join(tmpdir(), 'circle-fake-home-'));
+      try {
+        const child = spawnSync(
+          process.execPath,
+          ['--import', 'tsx', fileURLToPath(import.meta.url)],
+          {
+            env: {
+              ...process.env,
+              HOME: fakeHome,
+              USERPROFILE: fakeHome,
+              CIRCLE_TEST_SKILLS_CHILD: mode,
+            },
+            encoding: 'utf8',
+            timeout: 30_000,
           },
-          encoding: 'utf8',
-          timeout: 30_000,
-        },
-      );
-      assert.equal(
-        child.status,
-        0,
-        `child exited with ${child.status}\nstdout: ${child.stdout}\nstderr: ${child.stderr}`,
-      );
-    } finally {
-      await rm(fakeHome, { recursive: true, force: true });
+        );
+        assert.equal(
+          child.status,
+          0,
+          `child (${mode}) exited with ${child.status}\nstdout: ${child.stdout}\nstderr: ${child.stderr}`,
+        );
+      } finally {
+        await rm(fakeHome, { recursive: true, force: true });
+      }
     }
   });
 }

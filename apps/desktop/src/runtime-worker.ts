@@ -3,6 +3,7 @@ import {
   runtimeCommandDiagnosticMetadata,
 } from './runtime-performance-diagnostics.js';
 import { close as closeFile, open, readFileSync, stat } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { RuntimeController } from './runtime-controller';
 import { HistoryCompactor } from './runtime-history-wire';
@@ -89,6 +90,7 @@ async function run() {
     },
     userHome: home,
     localSkillsRoot: join(home, '.agents', 'skills'),
+    legacySkillsRoot: join(homedir(), '.agents', 'skills'),
     // A test profile keeps its ChatGPT host ID with its data, away from ~/.circle.
     // and its ChatGPT plan may point at a local stand-in for OpenAI.
     ...(process.env.CIRCLE_WORKBENCH_TEST_PROFILE

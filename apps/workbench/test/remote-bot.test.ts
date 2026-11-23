@@ -13,11 +13,13 @@ import {
   botIdentityKey,
   classifyRemoteBotFailure,
   deliveryText,
+  formatRemoteBotNotice,
   isHubConnected,
   mergeDeliveryStates,
   nextBotRetryDelay,
   shouldOpenInitialConnectionModal,
   stripInvokeErrorPrefix,
+  translateBotTransferError,
 } from '../src/model/remote-bot.ts';
 
 test('isHubConnected matches only a connected Hub entry', () => {
@@ -130,13 +132,14 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
     status: number | undefined,
     code: string | undefined,
     message: string,
-  ) => Object.assign(new Error(message), { status, code });
+    detail?: string,
+  ) => Object.assign(new Error(message), { status, code, detail });
 
   for (const lang of ['en', 'zh-CN'] as const) {
     setLanguage(lang);
-    const cases = [
+    const nonTransientCases = [
       {
-        err: makeErr(426, 'BOT_VERSION_MISMATCH', 'client too old'),
+        err: makeErr(409, 'BOT_VERSION_MISMATCH', 'client too old'),
         kind: 'version-mismatch',
         retryable: false,
       },
@@ -146,7 +149,7 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
         retryable: false,
       },
       {
-        err: makeErr(403, 'BOT_DISABLED', 'disabled by admin'),
+        err: makeErr(503, 'BOT_DISABLED', 'disabled by admin'),
         kind: 'disabled',
         retryable: false,
       },
@@ -156,21 +159,16 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
         retryable: false,
       },
       {
-        err: makeErr(401, undefined, 'token revoked'),
+        err: makeErr(401, 'BOT_UNAUTHENTICATED', 'token revoked'),
         kind: 'auth',
         retryable: false,
-      },
-      {
-        err: makeErr(502, undefined, 'remote bot unavailable'),
-        kind: 'transient',
-        retryable: true,
       },
     ] as const;
 
     const renderedTitles = new Set<string>();
     const renderedCauses = new Set<string>();
     const renderedActions = new Set<string>();
-    for (const c of cases) {
+    for (const c of nonTransientCases) {
       const classified = classifyRemoteBotFailure(c.err);
       assert.equal(classified.kind, c.kind);
       assert.equal(classified.retryable, c.retryable);
@@ -181,10 +179,185 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
       renderedCauses.add(classified.cause);
       renderedActions.add(classified.action);
     }
-    assert.equal(renderedTitles.size, cases.length);
-    assert.equal(renderedCauses.size, cases.length);
-    assert.equal(renderedActions.size, cases.length);
+    assert.equal(renderedTitles.size, nonTransientCases.length);
+    assert.equal(renderedCauses.size, nonTransientCases.length);
+    assert.equal(renderedActions.size, nonTransientCases.length);
+
+    // Status 401 always takes precedence over BOT_CLIENT_FORBIDDEN code.
+    const authWithForbiddenCode = classifyRemoteBotFailure(
+      makeErr(401, 'BOT_CLIENT_FORBIDDEN', 'expired session'),
+    );
+    assert.equal(authWithForbiddenCode.kind, 'auth');
+    assert.equal(authWithForbiddenCode.retryable, false);
+
+    // 403 BOT_CLIENT_FORBIDDEN action honestly instructs adding Bearer token in settings.json.
+    const forbidden = classifyRemoteBotFailure(
+      makeErr(403, 'BOT_CLIENT_FORBIDDEN', 'oauth client token rejected'),
+    );
+    assert.match(forbidden.action, /settings\.json/);
+    assert.match(forbidden.action, /Authorization|Bearer/);
+
+    // Transient codes/statuses including 408, 429 BOT_BUSY, 500, 502, 503, 504, undefined.
+    for (const transientErr of [
+      makeErr(408, 'BOT_REQUEST_TIMEOUT', 'timed out'),
+      makeErr(429, 'BOT_BUSY', 'queue full'),
+      makeErr(500, undefined, 'internal error'),
+      makeErr(502, undefined, 'remote bot unavailable'),
+      makeErr(503, undefined, 'temporarily unavailable'),
+      makeErr(504, undefined, 'gateway timeout'),
+      makeErr(undefined, undefined, 'network failure'),
+    ]) {
+      const classified = classifyRemoteBotFailure(transientErr);
+      assert.equal(classified.kind, 'transient');
+      assert.equal(classified.retryable, true);
+    }
+
+    // Request/resource non-retryable failures.
+    assert.equal(
+      classifyRemoteBotFailure(
+        makeErr(413, 'BOT_QUOTA_EXCEEDED', 'quota exceeded'),
+      ).retryable,
+      false,
+    );
+    assert.equal(
+      classifyRemoteBotFailure(
+        makeErr(404, 'BOT_NOT_FOUND', 'conversation not found'),
+      ).retryable,
+      false,
+    );
+    assert.equal(
+      classifyRemoteBotFailure(
+        makeErr(409, 'BOT_CONFLICT', 'duplicate request id conflict'),
+      ).retryable,
+      false,
+    );
+    const integrity = classifyRemoteBotFailure(
+      makeErr(422, 'BOT_INVALID_REQUEST', 'attachment_integrity_failed'),
+    );
+    assert.equal(integrity.kind, 'other');
+    assert.equal(integrity.retryable, false);
+
+    if (lang === 'zh-CN') {
+      assert.equal(authWithForbiddenCode.title, '机器人登录已过期');
+      assert.match(forbidden.action, /settings\.json.*headers\.Authorization/);
+      assert.equal(
+        classifyRemoteBotFailure(makeErr(429, 'BOT_BUSY', 'busy')).title,
+        '机器人请求繁忙',
+      );
+      assert.equal(
+        classifyRemoteBotFailure(makeErr(503, 'BOT_DISABLED', 'disabled'))
+          .title,
+        '我的机器人已停用',
+      );
+      assert.equal(integrity.title, '附件完整性校验失败');
+    }
   }
+});
+
+test('R1: formatRemoteBotNotice translates all 23 notice codes and English fallbacks', (t) => {
+  t.after(() => setLanguage('en'));
+  const codes = [
+    [
+      'help',
+      'send text or files to chat with your personal bot. send /new for a new conversation, or /stop to cancel the active reply.',
+    ],
+    ['conversation_started', 'started a new conversation'],
+    ['stop_requested', 'requested stop for active reply'],
+    ['stop_idle', 'no active reply to stop'],
+    [
+      'disabled_queued',
+      'bot model is disabled; queued message was not executed',
+    ],
+    ['bot_disabled_aborted', 'bot model was disabled; active reply stopped'],
+    ['credential_blocked', 'message cannot contain bot credentials'],
+    ['reply_stopped', 'reply stopped'],
+    [
+      'host_restarted_queued',
+      'host restarted while queued; message not executed',
+    ],
+    [
+      'host_restarted_interrupted',
+      'host restarted; previous request outcome unknown',
+    ],
+    ['bot_not_enabled', 'bot model is not enabled'],
+    ['model_invalid_question', 'model did not provide a valid question'],
+    ['model_credentials_blocked', 'model reply contained credentials'],
+    ['model_empty_reply', 'model returned an empty reply'],
+    ['model_auth_failed', 'model endpoint rejected credentials'],
+    ['model_id_unavailable', 'model id is unavailable'],
+    ['model_not_found', 'endpoint or model not found'],
+    ['model_unreachable', 'model endpoint unreachable or timed out'],
+    ['model_invalid_reply', 'model did not return a valid reply'],
+    ['attachment_integrity_failed', 'attachment integrity check failed'],
+    ['invalid_attachment_digest', 'invalid attachment digest'],
+    ['attachment_unavailable', 'attachment could not be read'],
+    ['reply_interrupted', 'model reply interrupted; outcome unknown'],
+  ] as const;
+
+  setLanguage('zh-CN');
+  for (const [code, fallback] of codes) {
+    const byCode = formatRemoteBotNotice(code, 'custom raw text');
+    const byFallback = formatRemoteBotNotice(undefined, fallback);
+    assert.equal(byCode, byFallback);
+    assert.notEqual(byCode, fallback);
+    assert.notEqual(byCode, 'custom raw text');
+  }
+  assert.equal(
+    formatRemoteBotNotice(undefined, 'unrecognized notice'),
+    'unrecognized notice',
+  );
+});
+
+test('S11/S12: translateBotTransferError localizes transfer errors, HTTP metadata, and partial batches', (t) => {
+  t.after(() => setLanguage('en'));
+  setLanguage('zh-CN');
+
+  assert.equal(
+    translateBotTransferError(new Error('remote bot unavailable'), 'fallback'),
+    '远程机器人暂不可用',
+  );
+  assert.equal(
+    translateBotTransferError(new Error('fetch failed'), 'fallback'),
+    '网络请求失败',
+  );
+  assert.equal(
+    translateBotTransferError(
+      Object.assign(new Error('The operation was aborted due to timeout'), {
+        name: 'TimeoutError',
+      }),
+      'fallback',
+    ),
+    '操作因超时已中止',
+  );
+  assert.equal(
+    translateBotTransferError(
+      Object.assign(new Error('forbidden'), {
+        status: 403,
+        code: 'BOT_CLIENT_FORBIDDEN',
+      }),
+      'fallback',
+    ),
+    'Hub 拒绝了 OAuth 登录令牌，请先在 settings.json 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌后再重试',
+  );
+  assert.equal(
+    translateBotTransferError(
+      Object.assign(new Error('too big'), { status: 413 }),
+      'fallback',
+    ),
+    '机器人请求无效',
+  );
+  assert.equal(
+    translateBotTransferError(
+      Object.assign(
+        new Error('Uploaded 2 of 5 files; failed on c.txt: fetch failed'),
+        {
+          name: 'PartialBatchUploadError',
+        },
+      ),
+      'fallback',
+    ),
+    '已上传 2/5 个文件；c.txt 上传失败：网络请求失败',
+  );
 });
 
 test('LiveRuntime.request forwards structured errorStatus and errorCode across IPC', async () => {

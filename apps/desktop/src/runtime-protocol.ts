@@ -91,6 +91,7 @@ export interface RuntimeReply {
   error?: string;
   errorStatus?: number;
   errorCode?: string;
+  errorDetail?: string;
   data?: unknown;
   /** The exact authoritative full publication made after this command's effect. */
   appliedState?: { epoch: string; seq: number };

@@ -68,6 +68,7 @@ import {
   parseImageDataUrl,
   validSaveName,
 } from './policy';
+import { verifyAppWindowSender } from './window-sender';
 import type {
   DesktopAction,
   DesktopInfo,
@@ -274,7 +275,9 @@ function appWindows(): BrowserWindow[] {
 }
 /** What the runtime, the browser and the terminals tell the window, told to every window. */
 function broadcast(channel: string, ...args: unknown[]) {
-  const targets = appWindows().filter((one) => !one.webContents.isDestroyed());
+  const targets = appWindows().filter(
+    (one) => !one.webContents.isDestroyed() && !one.webContents.isCrashed(),
+  );
   windowDiagnostics.sent(
     channel,
     args,
@@ -289,18 +292,7 @@ function checkSender(event: {
   sender: WebContents;
   senderFrame: WebFrameMain | null;
 }): BrowserWindow {
-  const own = appWindows().find((one) => one.webContents === event.sender);
-  if (
-    !own ||
-    own.webContents.isDestroyed() ||
-    own.webContents.isCrashed() ||
-    !event.senderFrame ||
-    event.senderFrame.routingId !== own.webContents.mainFrame.routingId ||
-    event.senderFrame.processId !== own.webContents.mainFrame.processId ||
-    !trustedAppUrl(event.senderFrame.url)
-  )
-    throw Error('untrusted IPC sender');
-  return own;
+  return verifyAppWindowSender(appWindows(), event);
 }
 function handle(channel: string, handler: (...args: unknown[]) => unknown) {
   ipcMain.handle(channel, (event, ...args) => {
@@ -1229,51 +1221,93 @@ app
         name: 'remote-bot-native-file',
         payload,
       });
-      if (!result.ok) throw Error(result.error ?? 'file transfer failed');
+      if (!result.ok) {
+        throw Object.assign(Error(result.error ?? 'file transfer failed'), {
+          ...(result.errorStatus !== undefined
+            ? { status: result.errorStatus }
+            : {}),
+          ...(result.errorCode !== undefined ? { code: result.errorCode } : {}),
+          ...(result.errorDetail !== undefined
+            ? { detail: result.errorDetail }
+            : {}),
+        });
+      }
       return result.data;
     }
-    handle('circle:attach-bot-files', async (binding) => {
-      if (typeof binding !== 'string')
-        throw Error('invalid remote bot connection');
-      let paths: string[];
-      if (fixtureProfile?.files !== undefined) {
-        paths = fixtureProfile.files;
-      } else {
-        const picked = await dialog.showOpenDialog(window!, {
-          title: text('choose files'),
-          properties: ['openFile', 'multiSelections'],
-        });
-        if (picked.canceled || picked.filePaths.length === 0) return null;
-        paths = picked.filePaths;
+    async function runBotTransferEnvelope(run: () => Promise<unknown>) {
+      try {
+        return { ok: true, data: await run() };
+      } catch (error) {
+        const meta =
+          error && typeof error === 'object'
+            ? (error as {
+                status?: unknown;
+                code?: unknown;
+                detail?: unknown;
+                remoteMessage?: unknown;
+              })
+            : undefined;
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          ...(typeof meta?.status === 'number'
+            ? { errorStatus: meta.status }
+            : {}),
+          ...(typeof meta?.code === 'string' ? { errorCode: meta.code } : {}),
+          ...(typeof meta?.detail === 'string'
+            ? { errorDetail: meta.detail }
+            : typeof meta?.remoteMessage === 'string'
+              ? { errorDetail: meta.remoteMessage }
+              : {}),
+        };
       }
-      if (paths.length > 8) throw Error('select up to eight files');
-      return await transferSelectedFile({
-        action: 'upload-batch',
-        binding,
-        paths,
-      });
-    });
-    handle('circle:save-bot-file', async (binding, file) => {
-      if (typeof binding !== 'string' || !file || typeof file !== 'object')
-        throw Error('invalid remote file');
-      const descriptor =
-        file as import('../../../src/remote_bot_protocol.js').ChatFile;
-      const name = validSaveName(descriptor.name);
-      const result = fixtureProfile?.exportPath
-        ? { canceled: false, filePath: fixtureProfile.exportPath }
-        : await dialog.showSaveDialog(window!, {
-            defaultPath: name,
-            properties: ['showOverwriteConfirmation'],
+    }
+    handle('circle:attach-bot-files', (binding) =>
+      runBotTransferEnvelope(async () => {
+        if (typeof binding !== 'string')
+          throw Error('invalid remote bot connection');
+        let paths: string[];
+        if (fixtureProfile?.files !== undefined) {
+          paths = fixtureProfile.files;
+        } else {
+          const picked = await dialog.showOpenDialog(window!, {
+            title: text('choose files'),
+            properties: ['openFile', 'multiSelections'],
           });
-      if (result.canceled || !result.filePath) return false;
-      await transferSelectedFile({
-        action: 'save',
-        binding,
-        file: descriptor,
-        path: result.filePath,
-      });
-      return true;
-    });
+          if (picked.canceled || picked.filePaths.length === 0) return null;
+          paths = picked.filePaths;
+        }
+        if (paths.length > 8) throw Error('select up to eight files');
+        return await transferSelectedFile({
+          action: 'upload-batch',
+          binding,
+          paths,
+        });
+      }),
+    );
+    handle('circle:save-bot-file', (binding, file) =>
+      runBotTransferEnvelope(async () => {
+        if (typeof binding !== 'string' || !file || typeof file !== 'object')
+          throw Error('invalid remote file');
+        const descriptor =
+          file as import('../../../src/remote_bot_protocol.js').ChatFile;
+        const name = validSaveName(descriptor.name);
+        const result = fixtureProfile?.exportPath
+          ? { canceled: false, filePath: fixtureProfile.exportPath }
+          : await dialog.showSaveDialog(window!, {
+              defaultPath: name,
+              properties: ['showOverwriteConfirmation'],
+            });
+        if (result.canceled || !result.filePath) return false;
+        await transferSelectedFile({
+          action: 'save',
+          binding,
+          file: descriptor,
+          path: result.filePath,
+        });
+        return true;
+      }),
+    );
     handle('circle:choose-files', async (purpose) => {
       if (!['attach', 'import', 'source'].includes(String(purpose)))
         throw Error('invalid file selection purpose');

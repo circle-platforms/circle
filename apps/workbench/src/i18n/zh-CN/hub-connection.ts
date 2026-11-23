@@ -55,6 +55,8 @@ export const hubConnection: Record<string, string> = {
     'Hub 拒绝了 OAuth 登录令牌对机器人接口的访问。',
   'Configure a direct member Bearer token in the Hub MCP settings, then retry.':
     '请在 Hub 的 MCP 设置中配置直接成员 Bearer 令牌后再重试。',
+  'Add a direct member Bearer Authorization header for Hub in settings.json, then retry.':
+    '请先在 settings.json 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌后再重试。',
   'bot sign-in expired': '机器人登录已过期',
   'Hub rejected the credential because it expired or was revoked.':
     'Hub 拒绝了当前凭据，可能已过期或被撤销。',
@@ -64,6 +66,38 @@ export const hubConnection: Record<string, string> = {
     '暂时无法连接到 Hub 机器人接口。',
   'Circle will retry automatically with backoff, or retry now.':
     'Circle 将按退避间隔自动重试，也可以立即手动重试。',
+  'Hub is not connected right now.': '当前未连接到 Hub。',
+  'Check your Hub connection in Settings -> Extensions, or retry reconnecting.':
+    '请在 设置 -> 扩展 中检查 Hub 连接状态，或点击重试重新连接。',
+  'remote bot busy': '机器人请求繁忙',
+  'The bot queue is full or rate-limited right now.':
+    '机器人队列已满或触发限流，请稍候。',
+  'Circle will retry shortly with backoff, or retry now.':
+    'Circle 将在短时间退避后自动重试，也可以立即手动重试。',
+  'bot attachment quota exceeded': '机器人附件配额已满',
+  'Your member bot attachment storage has reached its limit.':
+    '当前成员的机器人附件存储已达到上限。',
+  'Wait for older attachments to expire, or send without attachments.':
+    '请等待旧附件过期清理后再上传，或先发送不带附件的消息。',
+  'remote bot resource not found': '未找到机器人目标资源',
+  'Hub could not find the requested bot conversation or file.':
+    'Hub 未找到请求的机器人对话或文件。',
+  'Start a new bot conversation or retry.': '请新建机器人对话后重试。',
+  'remote bot state conflict': '机器人请求状态冲突',
+  'The request conflicts with an earlier bot conversation or request record.':
+    '该请求与已有机器人对话或请求记录状态冲突。',
+  'Reload the bot conversation and retry with a new request.':
+    '请刷新机器人对话后重新发送请求。',
+  'invalid remote bot request': '机器人请求无效',
+  'Hub rejected the bot request because its parameters or size are invalid.':
+    '请求参数或内容长度不符合要求，已被 Hub 拒绝。',
+  'Check the message or attachment limits and retry.':
+    '请检查消息内容或附件限制后再重试。',
+  'attachment integrity check failed': '附件完整性校验失败',
+  'Hub rejected the message because the attachment check failed.':
+    '附件校验未通过，Hub 拒绝了该消息。',
+  'Remove and attach the file again, then retry.':
+    '请移除并重新附加该文件后再试。',
   'remote bot request failed': '机器人请求失败',
   'Hub returned an unexpected error for my bot.':
     'Hub 返回了未预期的机器人错误。',
@@ -77,4 +111,50 @@ export const hubConnection: Record<string, string> = {
   'file upload was not verified': '文件上传未通过验证',
   'file unavailable': '文件不可用',
   'file digest mismatch': '文件校验不一致',
+  'file size mismatch': '文件大小不一致',
+  'remote bot unavailable': '远程机器人暂不可用',
+  'remote bot connection changed': '机器人连接配置已变更，请重试',
+  'invalid remote bot server': '无效的远程机器人服务器地址',
+  'file identity changed': '文件在读取过程中发生变化',
+  'invalid file receipt': '文件凭证无效',
+  'invalid remote file': '远程文件参数无效',
+  'file transfer failed': '文件传输失败',
+  'fetch failed': '网络请求失败',
+  'The operation was aborted due to timeout': '操作因超时已中止',
+  'invalid remote bot connection': '无效的机器人连接参数',
+  'invalid remote file operation': '无效的文件传输操作',
+  'unknown remote bot operation': '未知的机器人操作',
+  'runtime not enabled': '运行时未启用',
+  'oauth client token rejected':
+    'Hub 拒绝了 OAuth 登录令牌，请先在 settings.json 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌后再重试',
+  'remote bot request timed out': '机器人请求接收超时',
+  'Uploaded {uploaded} of {total} files; failed on {name}: {reason}':
+    '已上传 {uploaded}/{total} 个文件；{name} 上传失败：{reason}',
+  'send text or files to chat with your personal bot. send /new for a new conversation, or /stop to cancel the active reply.':
+    '可发送文字或文件与机器人对话。发送 /new 开始新对话，或发送 /stop 取消当前回复。',
+  'started a new conversation': '已开始新对话',
+  'requested stop for active reply': '已请求停止当前回复',
+  'no active reply to stop': '当前没有正在进行的回复可停止',
+  'bot model is disabled; queued message was not executed':
+    '机器人模型已停用，排队消息未执行',
+  'bot model was disabled; active reply stopped':
+    '机器人模型已停用，已中止当前回复',
+  'message cannot contain bot credentials': '消息中不能包含机器人凭据',
+  'reply stopped': '已停止回复',
+  'host restarted while queued; message not executed':
+    '宿主服务在排队期间重启，消息未执行',
+  'host restarted; previous request outcome unknown':
+    '宿主服务已重启，上一请求结果未知',
+  'bot model is not enabled': '机器人模型未启用',
+  'model did not provide a valid question': '模型未提供有效的提问内容',
+  'model reply contained credentials': '模型回复包含凭据，已拦截',
+  'model returned an empty reply': '模型返回了空回复',
+  'model endpoint rejected credentials': '模型端点拒绝了凭据',
+  'model id is unavailable': '模型 ID 不可用',
+  'endpoint or model not found': '未找到模型或端点',
+  'model endpoint unreachable or timed out': '无法连接模型端点或请求超时',
+  'model did not return a valid reply': '模型未返回有效回复',
+  'invalid attachment digest': '附件摘要无效',
+  'attachment could not be read': '无法读取附件',
+  'model reply interrupted; outcome unknown': '模型回复已中断，结果未知',
 };

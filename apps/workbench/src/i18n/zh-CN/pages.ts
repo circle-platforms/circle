@@ -159,6 +159,9 @@ export const pages: Record<string, string> = {
   'reconnecting {name}': '正在重新连接 {name}',
   'reloading MCP servers': '正在重新加载 MCP 服务器',
   'reloading skills': '正在重新加载技能',
+  'reload requested; nothing was loaded': '已请求重新加载；未加载任何内容',
+  'Found Hub packs from earlier installs in ~/.agents/skills ({packs}). Desktop now installs packs under the app data folder, so reinstall or move them into Desktop if needed.':
+    '在 ~/.agents/skills 中发现早期安装的 Hub 扩展包（{packs}）。桌面端现将扩展包安装于应用数据文件夹，如需使用请在桌面端重新安装或迁移。',
   reload: '重新加载',
   'add server': '添加服务器',
   configure: '配置',

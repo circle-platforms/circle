@@ -74,12 +74,37 @@ try {
         assert.equal(await getCalls(), calls, `polled at ${waitMs}ms`);
       }
 
-      // Recover with 200 OK -> backoff resets back to 1000ms on next error.
-      await page.evaluate(() =>
-        window.remoteBotUiFixture.setFailure(undefined),
-      );
+      // Recover with 200 OK and R1 notice codes localized cleanly in en and zh-CN.
+      await page.evaluate(() => {
+        window.remoteBotUiFixture.setFailure(undefined);
+        window.remoteBotUiFixture.setEvents([
+          {
+            id: 'ev-n1',
+            at: '2026-11-23T00:00:00Z',
+            role: 'notice',
+            code: 'conversation_started',
+            text: 'started a new conversation',
+            cursor: 1,
+          },
+          {
+            id: 'ev-n2',
+            at: '2026-11-23T00:00:01Z',
+            role: 'notice',
+            code: 'attachment_integrity_failed',
+            text: 'attachment integrity check failed',
+            cursor: 2,
+          },
+        ]);
+      });
       await page.clock.runFor(30_000);
       await page.locator('#remote-bot-input').waitFor();
+      if (language === 'zh-CN') {
+        await page.getByText('已开始新对话').waitFor();
+        await page.getByText('附件完整性校验失败').waitFor();
+      } else {
+        await page.getByText('started a new conversation').waitFor();
+        await page.getByText('attachment integrity check failed').waitFor();
+      }
 
       // C20: attaching a file, then cancelling picker keeps the file; IPC prefix is stripped.
       await page.evaluate(() =>
@@ -124,13 +149,85 @@ try {
         .textContent();
       assert.ok(attachError);
       assert.doesNotMatch(attachError, /Error invoking remote method/);
-      assert.match(
-        attachError,
-        /select up to eight files|最多只能选择 8 个文件/,
-      );
+      if (language === 'zh-CN') {
+        assert.match(attachError, /最多只能选择 8 个文件/);
+      } else {
+        assert.match(attachError, /select up to eight files/);
+      }
       assert.equal(await page.getByText('report.pdf').count(), 1);
 
-      // Next transient 502 error polls after 1000ms (backoff was reset on 200).
+      // S12: partial mid-batch upload error localizes uploaded count, total, filename and inner reason.
+      await page.evaluate(() =>
+        window.remoteBotUiFixture.setAttachError(
+          'Uploaded 2 of 5 files; failed on c.txt: fetch failed',
+        ),
+      );
+      await page
+        .getByRole('button', {
+          name: label('attach files', '附加文件…'),
+          exact: true,
+        })
+        .click();
+      const partialAttachError = await page
+        .locator('.composer-area [role="status"]')
+        .textContent();
+      assert.ok(partialAttachError);
+      if (language === 'zh-CN') {
+        assert.match(
+          partialAttachError,
+          /已上传 2\/5 个文件；c\.txt 上传失败：网络请求失败/,
+        );
+      } else {
+        assert.match(
+          partialAttachError,
+          /Uploaded 2 of 5 files; failed on c\.txt: fetch failed/,
+        );
+      }
+
+      // R3/S15: 408 BOT_REQUEST_TIMEOUT and 429 BOT_BUSY stay transient & auto-retry; 401 before BOT_CLIENT_FORBIDDEN; 403 BOT_CLIENT_FORBIDDEN has honest settings.json action; 503 BOT_DISABLED & 409 BOT_VERSION_MISMATCH pause polling.
+      for (const transientFailure of [
+        {
+          error: 'request timed out',
+          errorStatus: 408,
+          errorCode: 'BOT_REQUEST_TIMEOUT',
+        },
+        {
+          error: 'bot busy',
+          errorStatus: 429,
+          errorCode: 'BOT_BUSY',
+        },
+        {
+          error: 'internal error',
+          errorStatus: 500,
+        },
+      ]) {
+        await page.evaluate(() =>
+          window.remoteBotUiFixture.setFailure(undefined),
+        );
+        await page.clock.runFor(30_000);
+        await page.locator('#remote-bot-input').waitFor();
+        await page.evaluate((f) => {
+          window.remoteBotUiFixture.resetDiscoverCalls();
+          window.remoteBotUiFixture.setFailure(f);
+        }, transientFailure);
+        await page.clock.runFor(1000);
+        await page.locator('.empty-state [role="status"]').waitFor();
+        await flushMicrotasks(page);
+        const beforeBackoff = await getCalls();
+        await page.clock.runFor(1000);
+        await flushMicrotasks(page);
+        assert.ok(
+          (await getCalls()) > beforeBackoff,
+          `${transientFailure.errorCode ?? transientFailure.errorStatus} must auto-retry`,
+        );
+      }
+
+      // Next transient 502 error polls after 1000ms once backoff resets on 200.
+      await page.evaluate(() =>
+        window.remoteBotUiFixture.setFailure(undefined),
+      );
+      await page.clock.runFor(30_000);
+      await page.locator('#remote-bot-input').waitFor();
       await page.evaluate(() => {
         window.remoteBotUiFixture.resetDiscoverCalls();
         window.remoteBotUiFixture.setFailure({
@@ -148,7 +245,7 @@ try {
       await flushMicrotasks(page);
       assert.equal(await getCalls(), countAfterFirstResetErr + 1);
 
-      // C5 + C16: distinct non-retryable states pause auto-polling and provide Retry.
+      // C5 + R3 + S15: distinct non-retryable real Hub states pause auto-polling and provide Retry.
       const distinctStates = new Set();
       const transientState = (
         await page.locator('.empty-state').textContent()
@@ -158,7 +255,7 @@ try {
       for (const failure of [
         {
           error: 'client too old',
-          errorStatus: 426,
+          errorStatus: 409,
           errorCode: 'BOT_VERSION_MISMATCH',
         },
         {
@@ -168,17 +265,23 @@ try {
         },
         {
           error: 'bot disabled',
-          errorStatus: 403,
+          errorStatus: 503,
           errorCode: 'BOT_DISABLED',
         },
         {
-          error: 'session expired',
+          error: 'token expired',
           errorStatus: 401,
+          errorCode: 'BOT_UNAUTHENTICATED',
         },
         {
           error: 'oauth client token rejected',
           errorStatus: 403,
           errorCode: 'BOT_CLIENT_FORBIDDEN',
+        },
+        {
+          error: 'attachment_integrity_failed',
+          errorStatus: 400,
+          errorCode: 'BOT_INVALID_REQUEST',
         },
       ]) {
         await page.evaluate((f) => {
@@ -200,14 +303,77 @@ try {
         );
         const body = (await page.locator('.empty-state').textContent())?.trim();
         assert.ok(body && body.length > 0);
+        if (failure.errorCode === 'BOT_CLIENT_FORBIDDEN') {
+          assert.match(body, /settings\.json/);
+          if (language === 'zh-CN') {
+            assert.match(
+              body,
+              /请先在 settings\.json 的 Hub 配置 headers\.Authorization/,
+            );
+          }
+        }
+        if (
+          failure.errorCode === 'BOT_UNAUTHENTICATED' &&
+          language === 'zh-CN'
+        ) {
+          assert.match(body, /机器人登录已过期/);
+        }
+        if (failure.errorCode === 'BOT_DISABLED' && language === 'zh-CN') {
+          assert.match(body, /我的机器人已停用/);
+        }
         distinctStates.add(body);
       }
 
+      // 401 with BOT_CLIENT_FORBIDDEN must still classify as auth (expired login), not oauth-forbidden.
+      await page.evaluate(() => {
+        window.remoteBotUiFixture.resetDiscoverCalls();
+        window.remoteBotUiFixture.setFailure({
+          error: 'token expired',
+          errorStatus: 401,
+          errorCode: 'BOT_CLIENT_FORBIDDEN',
+        });
+      });
+      await page
+        .getByRole('button', { name: label('retry', '重试'), exact: true })
+        .click();
+      await flushMicrotasks(page);
+      await page.locator('[data-bot-error-kind="auth"]').waitFor();
+
       assert.equal(
         distinctStates.size,
-        6,
-        `expected 6 distinct failure panels, got ${distinctStates.size}: ${[...distinctStates].join(' | ')}`,
+        7,
+        `expected 7 distinct failure panels, got ${distinctStates.size}: ${[...distinctStates].join(' | ')}`,
       );
+
+      // R3: disconnected Hub state shows structured error panel + retry reloads Hub and recovers.
+      await page.evaluate(() => {
+        window.remoteBotUiFixture.resetReloadCalls();
+        window.remoteBotUiFixture.setFailure(undefined);
+        window.remoteBotUiFixture.setHubStatus('not connected', 'ECONNREFUSED');
+      });
+      const disconnectedPanel = page.locator(
+        '[data-bot-error-kind="disconnected"]',
+      );
+      await disconnectedPanel.waitFor();
+      await disconnectedPanel.locator('h2').waitFor();
+      await disconnectedPanel.locator('[role="status"]').waitFor();
+      const disconnectedText = (await disconnectedPanel.textContent()) ?? '';
+      assert.match(disconnectedText, /ECONNREFUSED/);
+      if (language === 'zh-CN') {
+        assert.match(disconnectedText, /当前未连接到 Hub/);
+      }
+      await disconnectedPanel
+        .getByRole('button', { name: label('retry', '重试'), exact: true })
+        .click();
+      await flushMicrotasks(page);
+      assert.equal(
+        await page.evaluate(() => window.remoteBotUiFixture.reloadCalls()),
+        1,
+      );
+      await page.evaluate(() =>
+        window.remoteBotUiFixture.setHubStatus('connected'),
+      );
+      await page.locator('#remote-bot-input').waitFor();
       await page.screenshot({ path: join(output, `${name}.png`) });
       assert.deepEqual(errors, []);
       receipts.push(name);
