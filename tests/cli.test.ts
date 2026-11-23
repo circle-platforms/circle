@@ -1380,3 +1380,32 @@ test('circle --help in English keeps its descriptions in one column near the opt
       else process.env[name] = value;
   }
 });
+
+test('circle remote-bot initializes network settings before dispatch and formats errors without stack traces', async (t) => {
+  const home = scratch(t);
+  const missingCert = join(home, 'missing-ca.pem');
+  writeFileSync(
+    join(home, 'settings.json'),
+    JSON.stringify({
+      ...defaultSettings(),
+      trust_cert_files: [missingCert],
+    }),
+  );
+  const invalidRun = await circle(home, ['remote-bot', 'relative-dir']);
+  assert.equal(invalidRun.code, 1);
+  assert.match(
+    invalidRun.stderr,
+    /trust_cert_files.*missing-ca\.pem|missing-ca\.pem/,
+    invalidRun.stderr,
+  );
+  assert.match(
+    invalidRun.stderr,
+    /✖ usage: circle remote-bot <private service directory>/,
+    invalidRun.stderr,
+  );
+  assert.doesNotMatch(
+    invalidRun.stderr,
+    /at runRemoteBot|UnhandledPromiseRejection/,
+    invalidRun.stderr,
+  );
+});

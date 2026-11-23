@@ -11,7 +11,22 @@ import {
   type ChatOperation,
   type RemoteModel,
 } from './remote_bot.js';
-import { VERSION } from './version.js';
+import { validVersion, VERSION } from './version.js';
+
+const RECEIPT_STATES = new Set([
+  'sent',
+  'unknown',
+  'refused',
+  'issued',
+  'target_rejected',
+  'not_dispatched',
+]);
+
+function majorMinor(version: string): string {
+  const base = version.split('+')[0]!.split('-')[0]!;
+  const [major, minor] = base.split('.');
+  return `${major}.${minor}`;
+}
 
 function answer(response: ServerResponse, status: number, body: unknown) {
   response
@@ -20,6 +35,10 @@ function answer(response: ServerResponse, status: number, body: unknown) {
       'cache-control': 'no-store',
     })
     .end(JSON.stringify(body));
+}
+
+function maxUnixSocketPathBytes(platform = process.platform): number {
+  return platform === 'darwin' ? 103 : 107;
 }
 
 export async function serveRemoteBot(directory: string) {
@@ -33,11 +52,18 @@ export async function serveRemoteBot(directory: string) {
     stat.mode & 0o077
   )
     throw new Error('private socket directory required');
+  const socket = join(directory, 'host.sock');
+  const maxSocketBytes = maxUnixSocketPathBytes();
+  const socketBytes = Buffer.byteLength(socket, 'utf8');
+  if (socketBytes > maxSocketBytes) {
+    throw new Error(
+      `unix socket path too long (${socketBytes} bytes, max ${maxSocketBytes}): ${socket}`,
+    );
+  }
   const release = await lockfile.lock(directory, {
     lockfilePath: join(directory, 'host.lock'),
     retries: 0,
   });
-  const socket = join(directory, 'host.sock');
   let bot: RemoteBot | undefined;
   try {
     const previous = await lstat(socket).catch(
@@ -64,19 +90,32 @@ export async function serveRemoteBot(directory: string) {
           let size = 0;
           for await (const chunk of request) {
             size += chunk.length;
-            if (size > 128 * 1024) throw new BotError(413, '消息过大');
+            if (size > 128 * 1024)
+              throw new BotError(
+                413,
+                'invalid_request',
+                'request payload too large',
+              );
             chunks.push(chunk);
           }
           const frame = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
             owner: string;
             op:
               | ChatOperation
+              | { action: 'configure' }
+              | { action: 'disable' }
               | { action: 'test' }
               | { action: 'claim'; issuer: string }
               | {
                   action: 'receipt';
                   receipt: string;
-                  state: 'sent' | 'unknown' | 'refused';
+                  state:
+                    | 'sent'
+                    | 'unknown'
+                    | 'refused'
+                    | 'issued'
+                    | 'target_rejected'
+                    | 'not_dispatched';
                 }
               | {
                   action: 'inbound';
@@ -89,20 +128,63 @@ export async function serveRemoteBot(directory: string) {
             version?: string;
           };
           if (!frame.owner || !frame.op || typeof frame.owner !== 'string')
-            throw new BotError(400, '缺少成员或操作');
-          if (frame.version && frame.version !== VERSION)
-            throw new BotError(409, '客户端与机器人 Circle 版本不同');
+            throw new BotError(
+              400,
+              'invalid_request',
+              'missing owner or operation',
+            );
+          if (frame.version !== undefined) {
+            if (
+              typeof frame.version !== 'string' ||
+              !validVersion(frame.version)
+            )
+              throw new BotError(
+                400,
+                'invalid_version',
+                'invalid client semantic version',
+              );
+            if (majorMinor(frame.version) !== majorMinor(VERSION))
+              throw new BotError(
+                409,
+                'version_mismatch',
+                'client and host version mismatch',
+              );
+          }
+          if (frame.op.action === 'configure') {
+            if (!frame.config)
+              throw new BotError(
+                400,
+                'invalid_request',
+                'missing bot configuration',
+              );
+            host.configure(frame.config);
+            return answer(response, 200, { configured: true });
+          }
+          if (frame.op.action === 'disable') {
+            host.disable();
+            return answer(response, 200, { disabled: true });
+          }
           if (frame.op.action === 'claim')
             return answer(response, 200, {
               delivery: host.claim(frame.op.issuer),
             });
           if (frame.op.action === 'receipt') {
+            if (!RECEIPT_STATES.has(frame.op.state))
+              throw new BotError(
+                400,
+                'invalid_request',
+                'invalid receipt state',
+              );
             host.delivered(frame.op.receipt, frame.op.state);
             return answer(response, 200, {});
           }
           if (frame.op.action === 'inbound') {
             if (!frame.config || !frame.route)
-              throw new BotError(503, '机器人尚未配置');
+              throw new BotError(
+                503,
+                'bot_not_enabled',
+                'bot is not configured',
+              );
             return answer(
               response,
               200,
@@ -117,11 +199,16 @@ export async function serveRemoteBot(directory: string) {
             );
           }
           if (frame.op.action === 'test') {
-            if (!frame.config) throw new BotError(503, '机器人模型尚未启用');
+            if (!frame.config)
+              throw new BotError(
+                503,
+                'bot_not_enabled',
+                'bot model is not enabled',
+              );
             await remoteCompletion(
               directory,
               frame.config,
-              [{ id: 'test', role: 'user', content: '回复 OK' }],
+              [{ id: 'test', role: 'user', content: 'reply OK' }],
               AbortSignal.timeout(15000),
               () => {},
               true,
@@ -135,15 +222,32 @@ export async function serveRemoteBot(directory: string) {
           );
         } catch (error) {
           if (error instanceof BotError)
-            return answer(response, error.status, { message: error.message });
-          return answer(response, 500, { message: '机器人未完成请求' });
+            return answer(response, error.status, {
+              code: error.code,
+              message: error.message,
+            });
+          return answer(response, 500, {
+            code: 'host_internal_error',
+            message: 'bot host failed to complete request',
+          });
         }
       },
     );
     await new Promise<void>((ok, fail) => {
-      server.once('error', fail);
+      const onError = (error: NodeJS.ErrnoException) => {
+        if (error.code === 'EINVAL' || error.code === 'ENAMETOOLONG') {
+          fail(
+            new Error(
+              `unix socket path too long (${socketBytes} bytes, max ${maxSocketBytes}): ${socket}`,
+            ),
+          );
+          return;
+        }
+        fail(error);
+      };
+      server.once('error', onError);
       server.listen(socket, () => {
-        server.off('error', fail);
+        server.off('error', onError);
         ok();
       });
     });

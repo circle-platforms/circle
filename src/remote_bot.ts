@@ -24,6 +24,7 @@ export interface RemoteModel {
 export class BotError extends Error {
   constructor(
     readonly status: number,
+    readonly code: string,
     message: string,
   ) {
     super(message);
@@ -60,7 +61,7 @@ function ownerHash(owner: string): string {
 }
 
 export function maskKey(text: string, key: string): string {
-  return key ? text.replaceAll(key, '[已遮盖]') : text;
+  return key ? text.replaceAll(key, '[redacted]') : text;
 }
 
 function describeQuestion(call: ToolCall): PromptQuestion {
@@ -77,7 +78,11 @@ function describeQuestion(call: ToolCall): PromptQuestion {
         v.question.trim(),
     )
   )
-    throw new BotError(502, '模型未提供有效问题');
+    throw new BotError(
+      502,
+      'model_output_blocked',
+      'model did not provide a valid question',
+    );
   const text = questions
     .map((q) => {
       const panel = panelQuestion(q);
@@ -111,7 +116,8 @@ export async function remoteCompletion(
   token: (text: string) => void,
   test = false,
 ) {
-  if (!config.key) throw new BotError(503, '机器人模型尚未启用');
+  if (!config.key)
+    throw new BotError(503, 'bot_not_enabled', 'bot model is not enabled');
   const settings = defaultSettings();
   settings.auth = {
     protocol: config.protocol,
@@ -145,26 +151,48 @@ export async function remoteCompletion(
     ) {
       const call = response.message.tool_calls[0]!;
       if (config.key && JSON.stringify(call).includes(config.key))
-        throw new BotError(502, '模型回复包含凭据');
+        throw new BotError(
+          502,
+          'model_output_blocked',
+          'model reply contained credentials',
+        );
       return describeQuestion(call);
     }
     if (!response.message.content.trim())
-      throw new BotError(502, '模型没有返回正文');
+      throw new BotError(
+        502,
+        'model_empty_reply',
+        'model returned an empty reply',
+      );
     return response.message.content;
   } catch (error) {
+    if (error instanceof BotError) throw error;
     const status = httpStatus(error);
     if (status === 401 || status === 403)
-      throw new BotError(422, '模型端点拒绝凭据');
+      throw new BotError(
+        422,
+        'model_auth_failed',
+        'model endpoint rejected credentials',
+      );
     if (
       providerErrorRecords(error).some(
         (row) => row.code === 'model_not_found' || row.code === 'invalid_model',
       )
     )
-      throw new BotError(422, '模型 ID 不可用');
-    if (status === 404) throw new BotError(422, '指定端点或模型不存在');
+      throw new BotError(422, 'model_not_found', 'model id is unavailable');
+    if (status === 404)
+      throw new BotError(422, 'model_not_found', 'endpoint or model not found');
     if (signal.aborted || isNetworkFailure(error))
-      throw new BotError(503, '模型端点未能建立连接或响应超时');
-    throw new BotError(502, '模型未返回有效回复');
+      throw new BotError(
+        503,
+        'model_unreachable',
+        'model endpoint unreachable or timed out',
+      );
+    throw new BotError(
+      502,
+      'model_unreachable',
+      'model did not return a valid reply',
+    );
   }
 }
 
@@ -173,11 +201,12 @@ async function attachFiles(
   owner: string,
   files: ChatFile[],
   message: Message,
-) {
-  let remaining = MAX_MEDIA_BYTES;
+  remaining = MAX_MEDIA_BYTES,
+  allowMissing = false,
+): Promise<number> {
   for (const file of files) {
     if (!/^[a-f0-9]{64}$/.test(file.sha256))
-      throw new BotError(400, '附件摘要无效');
+      throw new BotError(400, 'invalid_request', 'invalid attachment digest');
     message.content +=
       '\n' +
       JSON.stringify({ name: file.name, size: file.size, sha256: file.sha256 });
@@ -186,26 +215,41 @@ async function attachFiles(
       /\.(txt|md|json|csv|tsv|xml|km)$/i.test(file.name) &&
       file.size <= 128 * 1024;
     if ((!mime && !text) || file.size > remaining) {
-      message.content += '（本次只提供文件引用）';
+      message.content += ' (file reference only)';
       continue;
     }
-    const bytes = await readFile(
-      join(home, 'files', ownerHash(owner), file.sha256),
-    );
+    let bytes: Buffer;
+    try {
+      bytes = await readFile(
+        join(home, 'files', ownerHash(owner), file.sha256),
+      );
+    } catch (error) {
+      if (allowMissing && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        message.content += ' (file unavailable)';
+        continue;
+      }
+      throw error;
+    }
     if (
       bytes.length !== file.size ||
       createHash('sha256').update(bytes).digest('hex') !== file.sha256
     )
-      throw new BotError(422, '附件完整性校验失败');
+      throw new BotError(
+        422,
+        'invalid_request',
+        'attachment integrity check failed',
+      );
     remaining -= bytes.length;
     if (mime)
       (message.attachments ??= []).push(makeAttachment(bytes, mime, file.name));
     else message.content += '\n' + bytes.toString('utf8');
   }
+  return remaining;
 }
 
 export class RemoteBot {
   readonly db: DatabaseSync;
+  #activeConfig: RemoteModel | null = null;
   private stopping = false;
   private admissions = new Map<string, () => void>();
   private active = new Map<
@@ -248,12 +292,20 @@ export class RemoteBot {
     this.db.exec(`BEGIN IMMEDIATE;
       INSERT INTO event(conversation,id,request,role,text,at) SELECT conversation,lower(hex(randomblob(16))),request,'user',json_extract(body,'$.text'),at FROM queued ORDER BY seq;
       INSERT INTO attachments SELECT e.id,json_extract(q.body,'$.files') FROM queued q JOIN event e ON e.conversation=q.conversation AND e.request=q.request AND e.role='user' WHERE json_array_length(json_extract(q.body,'$.files'))>0;
-      INSERT INTO event(conversation,id,request,role,text,at) SELECT conversation,lower(hex(randomblob(16))),request,'notice','宿主重启时仍在排队，本条未执行',strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM queued ORDER BY seq;
+      INSERT INTO event(conversation,id,request,role,text,at) SELECT conversation,lower(hex(randomblob(16))),request,'notice','host restarted while queued; message not executed',strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM queued ORDER BY seq;
       DELETE FROM queued; COMMIT;`);
     // An interrupted call may have reached the endpoint. Preserve the input and never resend it.
     this.db.exec(`INSERT INTO event(conversation,id,request,role,text,at)
-      SELECT e.conversation, lower(hex(randomblob(16))), e.request,'notice','宿主重启，上一条请求结果未知',strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      SELECT e.conversation, lower(hex(randomblob(16))), e.request,'notice','host restarted; previous request outcome unknown',strftime('%Y-%m-%dT%H:%M:%fZ','now')
       FROM event e WHERE e.role='user' AND NOT EXISTS (SELECT 1 FROM event f WHERE f.conversation=e.conversation AND f.request=e.request AND f.role<>'user')`);
+  }
+
+  configure(config: RemoteModel | null): void {
+    this.#activeConfig = config && config.key ? { ...config } : null;
+  }
+
+  disable(): void {
+    this.#activeConfig = null;
   }
 
   private tx<T>(fn: () => T): T {
@@ -384,17 +436,32 @@ export class RemoteBot {
     };
   }
 
-  delivered(receipt: string, state: 'sent' | 'unknown' | 'refused') {
+  delivered(
+    receipt: string,
+    state:
+      | 'sent'
+      | 'unknown'
+      | 'refused'
+      | 'issued'
+      | 'target_rejected'
+      | 'not_dispatched',
+  ) {
+    const stored =
+      state === 'issued'
+        ? 'sent'
+        : state === 'target_rejected' || state === 'not_dispatched'
+          ? 'refused'
+          : state;
     this.db
       .prepare(
         "UPDATE delivery SET state=? WHERE receipt=? AND state='unknown'",
       )
-      .run(state, receipt);
+      .run(stored, receipt);
     this.db
       .prepare(
         "UPDATE file_delivery SET state=? WHERE receipt=? AND state='unknown'",
       )
-      .run(state, receipt);
+      .run(stored, receipt);
   }
 
   inbound(
@@ -405,6 +472,7 @@ export class RemoteBot {
     route: ChatRoute,
     files: ChatFile[] = [],
   ) {
+    this.configure(config);
     const old = this.db
       .prepare(
         "SELECT e.conversation FROM (SELECT conversation,request FROM event WHERE role='user' UNION ALL SELECT conversation,request FROM queued) e JOIN conversation c ON c.id=e.conversation WHERE c.owner=? AND e.request=?",
@@ -424,7 +492,7 @@ export class RemoteBot {
           current,
           request,
           'notice',
-          '发送文字或文件与私人机器人对话。发送 /new 新建对话，发送 /stop 停止当前回复。',
+          'send text or files to chat with your personal bot. send /new for a new conversation, or /stop to cancel the active reply.',
           route,
         );
         return { request };
@@ -435,7 +503,7 @@ export class RemoteBot {
           String(next.conversation),
           request,
           'notice',
-          '已新建对话',
+          'started a new conversation',
           route,
         );
         return { request };
@@ -449,7 +517,7 @@ export class RemoteBot {
           current,
           request,
           'notice',
-          job ? '已请求停止当前回复' : '当前没有正在生成的回复',
+          job ? 'requested stop for active reply' : 'no active reply to stop',
           route,
         );
         return { request };
@@ -522,6 +590,30 @@ export class RemoteBot {
     };
   }
 
+  private drainQueue(conversation: string) {
+    while (
+      !this.stopping &&
+      !this.active.has(conversation) &&
+      !this.db
+        .prepare(
+          'SELECT 1 FROM question WHERE conversation=? AND answered IS NULL',
+        )
+        .get(conversation)
+    ) {
+      const next = this.db
+        .prepare(
+          'SELECT request FROM queued WHERE conversation=? ORDER BY seq LIMIT 1',
+        )
+        .get(conversation);
+      if (!next) break;
+      const key = conversation + ':' + String(next.request);
+      const start = this.admissions.get(key);
+      this.admissions.delete(key);
+      if (!start) break;
+      start();
+    }
+  }
+
   private sendMessage(
     owner: string,
     op: Extract<ChatOperation, { action: 'send' }>,
@@ -542,51 +634,116 @@ export class RemoteBot {
         previous.text !== op.text ||
         (previous.files ?? '[]') !== JSON.stringify(op.files ?? [])
       )
-        throw new BotError(409, '这条消息编号已用于不同内容');
+        throw new BotError(
+          409,
+          'invalid_request',
+          'request id already used with different content',
+        );
       return { request: op.request };
     }
     if (op.replyTo && question?.id !== op.replyTo)
-      throw new BotError(409, '这条追问已经结束');
+      throw new BotError(409, 'invalid_request', 'question already closed');
     const queuedBody = JSON.stringify({ text: op.text, files: op.files ?? [] });
     const queued = this.db
       .prepare('SELECT body FROM queued WHERE conversation=? AND request=?')
       .get(conversation, op.request);
     if (queued && !promoted) {
       if (queued.body !== queuedBody)
-        throw new BotError(409, '这条消息编号已用于不同内容');
+        throw new BotError(
+          409,
+          'invalid_request',
+          'request id already used with different content',
+        );
       return { request: op.request, queued: true };
     }
-    if (!config || !config.key) throw new BotError(503, '机器人模型尚未启用');
-    if (op.text.includes(config.key))
-      throw new BotError(400, '消息包含机器人凭据');
+    if (!promoted && config !== undefined) this.configure(config);
+    const activeConfig = this.#activeConfig;
+    if (promoted && (!activeConfig || !activeConfig.key)) {
+      this.append(
+        conversation,
+        op.request,
+        'user',
+        op.text,
+        route,
+        op.files,
+        undefined,
+        question ? String(question.id) : undefined,
+      );
+      this.append(
+        conversation,
+        op.request,
+        'notice',
+        'bot model is disabled; queued message was not executed',
+        route,
+      );
+      return { request: op.request };
+    }
+    if (!activeConfig || !activeConfig.key)
+      throw new BotError(503, 'bot_not_enabled', 'bot model is not enabled');
+    if (op.text.includes(activeConfig.key)) {
+      if (promoted) {
+        this.append(
+          conversation,
+          op.request,
+          'user',
+          maskKey(op.text, activeConfig.key),
+          route,
+          op.files,
+          undefined,
+          question ? String(question.id) : undefined,
+        );
+        this.append(
+          conversation,
+          op.request,
+          'notice',
+          'message cannot contain bot credentials',
+          route,
+        );
+        return { request: op.request };
+      }
+      throw new BotError(
+        400,
+        'invalid_request',
+        'message cannot contain bot credentials',
+      );
+    }
     if (job) {
       if (
         (this.db
           .prepare('SELECT count(*) AS n FROM queued WHERE conversation=?')
           .get(conversation)!.n as number) >= 64
       )
-        throw new BotError(429, '排队消息已满');
+        throw new BotError(429, 'bot_busy', 'queued message limit reached');
       this.db
         .prepare(
           'INSERT INTO queued(conversation,request,body,at) VALUES(?,?,?,?)',
         )
         .run(conversation, op.request, queuedBody, new Date().toISOString());
       this.admissions.set(conversation + ':' + op.request, () => {
-        this.run(owner, op, config, route, true);
+        this.run(owner, op, undefined, route, true);
       });
       return { request: op.request, queued: true };
     }
     const rows = this.db
       .prepare(
-        "SELECT id,role,text FROM event WHERE conversation=? AND role IN ('user','assistant') ORDER BY cursor DESC LIMIT 100",
+        "SELECT e.id,e.role,e.text,a.files FROM event e LEFT JOIN attachments a ON a.id=e.id WHERE e.conversation=? AND e.role IN ('user','assistant') ORDER BY e.cursor DESC LIMIT 100",
       )
       .all(conversation)
       .reverse();
-    const messages: Message[] = rows.map((row) => ({
-      id: String(row.id),
-      role: row.role === 'user' ? 'user' : 'assistant',
-      content: String(row.text),
-    }));
+    const historyAttachments: Array<{ message: Message; files: ChatFile[] }> =
+      [];
+    const messages: Message[] = rows.map((row) => {
+      const message: Message = {
+        id: String(row.id),
+        role: row.role === 'user' ? 'user' : 'assistant',
+        content: String(row.text),
+      };
+      if (row.files) {
+        const parsed = JSON.parse(String(row.files)) as ChatFile[];
+        if (parsed.length) historyAttachments.push({ message, files: parsed });
+      }
+      return message;
+    });
     if (question) {
       const preceding = messages.find((m) => m.id === question.id);
       const call = JSON.parse(String(question.call)) as ToolCall;
@@ -597,7 +754,7 @@ export class RemoteBot {
           role: 'tool',
           tool_call_id: call.id,
           name: 'question',
-          content: op.text || '成员已补充附件',
+          content: op.text || 'member attached files',
         });
       }
     }
@@ -627,24 +784,36 @@ export class RemoteBot {
     let tail = '';
     running.done = Promise.all([
       mkdir(memberHome, { recursive: true, mode: 0o700 }),
-      attachFiles(
-        this.home,
-        owner,
-        op.files ?? [],
-        messages[messages.length - 1]!,
-      ),
+      (async () => {
+        let remaining = await attachFiles(
+          this.home,
+          owner,
+          op.files ?? [],
+          messages[messages.length - 1]!,
+        );
+        for (const entry of [...historyAttachments].reverse()) {
+          remaining = await attachFiles(
+            this.home,
+            owner,
+            entry.files,
+            entry.message,
+            remaining,
+            true,
+          );
+        }
+      })(),
     ])
       .then(() =>
-        this.complete(memberHome, config, messages, signal, (delta) => {
-          const accumulated = maskKey(tail + delta, config.key);
+        this.complete(memberHome, activeConfig, messages, signal, (delta) => {
+          const accumulated = maskKey(tail + delta, activeConfig.key);
           // Keep a possible split credential out of live updates as well as final history.
           let length = 0;
           for (
             let i = 1;
-            i <= Math.min(config.key.length - 1, accumulated.length);
+            i <= Math.min(activeConfig.key.length - 1, accumulated.length);
             i++
           )
-            if (accumulated.endsWith(config.key.slice(0, i))) length = i;
+            if (accumulated.endsWith(activeConfig.key.slice(0, i))) length = i;
           running.draft += accumulated.slice(0, accumulated.length - length);
           tail = accumulated.slice(accumulated.length - length);
         }),
@@ -655,7 +824,10 @@ export class RemoteBot {
           conversation,
           op.request,
           'assistant',
-          maskKey(typeof reply === 'string' ? reply : reply.text, config.key),
+          maskKey(
+            typeof reply === 'string' ? reply : reply.text,
+            activeConfig.key,
+          ),
           route,
           [],
           typeof reply === 'string' ? undefined : reply,
@@ -663,34 +835,15 @@ export class RemoteBot {
       })
       .catch((error: unknown) => {
         const text = running.abort.signal.aborted
-          ? '已停止本次回复'
+          ? 'reply stopped'
           : error instanceof BotError
             ? error.message
-            : '模型回复中断，结果未知';
+            : 'model reply interrupted; outcome unknown';
         this.append(conversation, op.request, 'notice', text, route);
       })
       .finally(() => {
         this.active.delete(conversation);
-        if (
-          this.stopping ||
-          this.db
-            .prepare(
-              'SELECT 1 FROM question WHERE conversation=? AND answered IS NULL',
-            )
-            .get(conversation)
-        )
-          return;
-        const next = this.db
-          .prepare(
-            'SELECT request FROM queued WHERE conversation=? ORDER BY seq LIMIT 1',
-          )
-          .get(conversation);
-        if (next) {
-          const key = conversation + ':' + String(next.request);
-          const start = this.admissions.get(key);
-          this.admissions.delete(key);
-          start?.();
-        }
+        this.drainQueue(conversation);
       });
     return { request: op.request };
   }
@@ -741,7 +894,11 @@ export class RemoteBot {
         .prepare('SELECT 1 FROM conversation WHERE owner=? AND id=?')
         .get(owner, conversation)
     )
-      throw new BotError(404, '会话不可用');
+      throw new BotError(
+        404,
+        'conversation_not_found',
+        'conversation not found',
+      );
     const question = this.db
       .prepare(
         'SELECT id,request,call FROM question WHERE conversation=? AND answered IS NULL',
