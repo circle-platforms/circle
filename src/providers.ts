@@ -120,13 +120,13 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     'zhipu',
     'Zhipu GLM · OpenAI',
     'https://open.bigmodel.cn/api/paas/v4',
-    ['glm-5.3', 'glm-5.2', 'glm-5.1', 'glm-4.7'],
+    ['glm-5.4', 'glm-5.3', 'glm-5.2', 'glm-5.1', 'glm-4.7'],
   ),
   preset(
     'zhipu-anthropic',
     'Zhipu GLM · Anthropic',
     'https://open.bigmodel.cn/api/anthropic',
-    ['glm-5.3', 'glm-5.2', 'glm-5.1', 'glm-4.7'],
+    ['glm-5.4', 'glm-5.3', 'glm-5.2', 'glm-5.1', 'glm-4.7'],
     'anthropic',
   ),
   preset(

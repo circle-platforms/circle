@@ -16,6 +16,7 @@ import {
   validCatalog,
   windowOverrides,
   CATALOG_SCHEMA,
+  FALLBACK_WINDOW,
 } from '../src/model_catalog.js';
 import {
   defaultSettings,
@@ -232,6 +233,153 @@ test('Kimi subscriptions use a paid twin only when that exact model is known', (
   const endpoint = settings('https://api.kimi.com/coding/v1');
   assert.equal(catalog.facts('k3', endpoint).priceProvider, 'moonshotai-cn');
   assert.equal(catalog.facts('kimi-for-coding', endpoint).rates, undefined);
+});
+// The shape of models.dev on 2026-11-23: a vendor's newest model is listed under its coding
+// plans only, at cost 0, while its pay-as-you-go entries on the same hosts do not list it yet.
+function onPlansOnly(id: string, paid: Record<string, unknown> = {}) {
+  const plan = {
+    limit: { context: 1_000_000, output: 131_072 },
+    cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+    modalities: { input: ['text', 'image', 'video', 'pdf'], output: ['text'] },
+  };
+  const older = {
+    limit: { context: 1_000_000, output: 131_072 },
+    cost: { input: 1.4, output: 4.4, cache_read: 0.26, cache_write: 0 },
+    modalities: { input: ['text'], output: ['text'] },
+  };
+  return {
+    zhipuai: {
+      api: 'https://open.bigmodel.cn/api/paas/v4',
+      models: { 'glm-5.3': older, ...paid },
+    },
+    'zhipuai-coding-plan': {
+      api: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      models: { [id]: plan },
+    },
+    zai: {
+      api: 'https://api.z.ai/api/paas/v4',
+      models: { 'glm-5.3': older },
+    },
+    'zai-coding-plan': {
+      api: 'https://api.z.ai/api/coding/paas/v4',
+      models: { [id]: plan },
+    },
+  };
+}
+test("a model only the vendor's coding plans list keeps its window, limits and image support and gets no price, whatever its name", (t) => {
+  for (const id of ['glm-5.4', 'newest-model']) {
+    const catalog = new ModelCatalog(scratch(t), {
+      data: slimCatalog(onPlansOnly(id)),
+      env: {},
+    });
+    for (const [url, protocol, provider] of [
+      [
+        'https://open.bigmodel.cn/api/anthropic',
+        'anthropic',
+        'zhipuai-coding-plan',
+      ],
+      ['https://open.bigmodel.cn/api/paas/v4', 'openai', 'zhipuai-coding-plan'],
+      [
+        'https://open.bigmodel.cn/api/coding/paas/v4',
+        'openai',
+        'zhipuai-coding-plan',
+      ],
+      ['https://api.z.ai/api/anthropic', 'anthropic', 'zai-coding-plan'],
+    ] as const) {
+      const facts = catalog.facts(id, settings(url, protocol));
+      const where = `${id} at ${url}`;
+      assert.equal(facts.contextWindow, 1_000_000, where);
+      assert.equal(facts.windowSource, 'models.dev', where);
+      assert.equal(facts.windowKnown, true, where);
+      assert.equal(facts.outputLimit, 131_072, where);
+      assert.equal(facts.imageInput, true, where);
+      assert.equal(facts.provider, provider, where);
+      // A subscription's 0 is not a price: nothing here is shown as money.
+      assert.equal(facts.rates, undefined, where);
+      assert.equal(facts.priceProvider, '', where);
+      const receipt = priceCall(facts, {
+        input_tokens: 1000,
+        output_tokens: 100,
+        cache_read_tokens: 0,
+      });
+      assert.equal(receipt.amount, null, where);
+      const total = new UsageCostTotals();
+      total.add(receipt);
+      assert.equal(formatCosts([total.snapshot()]), 'N/A', where);
+    }
+    // A host the catalog does not list gets the same by the model's name.
+    const gateway = catalog.facts(id, settings('https://gateway.example/v1'));
+    assert.equal(gateway.contextWindow, 1_000_000, id);
+    assert.equal(gateway.windowKnown, true, id);
+    assert.equal(gateway.outputLimit, 131_072, id);
+    assert.equal(gateway.imageInput, true, id);
+    assert.equal(gateway.rates, undefined, id);
+  }
+});
+test("the pay-as-you-go entry of the same host wins over the plan's once it lists the model", (t) => {
+  const catalog = new ModelCatalog(scratch(t), {
+    data: slimCatalog(
+      onPlansOnly('glm-5.4', {
+        'glm-5.4': {
+          limit: { context: 1_000_000, output: 98_304 },
+          cost: { input: 1.5, output: 4.5, cache_read: 0.3, cache_write: 0 },
+          modalities: { input: ['text', 'image'], output: ['text'] },
+        },
+      }),
+    ),
+    env: {},
+  });
+  for (const [url, protocol] of [
+    ['https://open.bigmodel.cn/api/anthropic', 'anthropic'],
+    ['https://open.bigmodel.cn/api/paas/v4', 'openai'],
+    ['https://open.bigmodel.cn/api/coding/paas/v4', 'openai'],
+  ] as const) {
+    const facts = catalog.facts('glm-5.4', settings(url, protocol));
+    assert.equal(facts.provider, 'zhipuai', url);
+    assert.equal(facts.priceProvider, 'zhipuai', url);
+    assert.equal(facts.outputLimit, 98_304, url);
+    assert.equal(facts.imageInput, true, url);
+    assert.deepEqual(facts.rates, {
+      input: 1.5,
+      output: 4.5,
+      cache_read: 0.3,
+      cache_write: 0,
+    });
+  }
+});
+test('a refresh brings in a model listed after the cache was made; until then its window is unverified and settings can set it', async (t) => {
+  const catalog = new ModelCatalog(scratch(t), {
+    data: slimCatalog(onPlansOnly('glm-5.3-older')),
+    env: {},
+    request: async () => Response.json(onPlansOnly('glm-5.4')),
+  });
+  const endpoint = settings(
+    'https://open.bigmodel.cn/api/anthropic',
+    'anthropic',
+  );
+  const before = catalog.facts('glm-5.4', endpoint);
+  assert.equal(before.contextWindow, FALLBACK_WINDOW);
+  assert.equal(before.windowKnown, false);
+  assert.equal(before.windowSource, 'fallback');
+  assert.equal(before.outputLimit, undefined);
+  assert.equal(before.rates, undefined);
+  assert.equal(before.imageInput, undefined);
+  endpoint.models = { 'glm-5.4': { context_window: 1_000_000 } };
+  const configured = catalog.facts('glm-5.4', endpoint);
+  assert.equal(configured.contextWindow, 1_000_000);
+  assert.equal(configured.windowSource, 'settings');
+  assert.equal(await catalog.refresh(), true);
+  assert.equal(catalog.source, 'cache');
+  const after = catalog.facts(
+    'glm-5.4',
+    settings('https://open.bigmodel.cn/api/anthropic', 'anthropic'),
+  );
+  assert.equal(after.contextWindow, 1_000_000);
+  assert.equal(after.windowSource, 'models.dev');
+  assert.equal(after.windowKnown, true);
+  assert.equal(after.outputLimit, 131_072);
+  assert.equal(after.imageInput, true);
+  assert.equal(after.rates, undefined);
 });
 test('offline snapshots work without network; an invalid fresh cache does not suppress repair', async (t) => {
   const root = scratch(t);
