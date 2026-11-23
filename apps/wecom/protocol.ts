@@ -43,6 +43,19 @@ export interface Channel {
   hub: string;
 }
 
+export interface DeliveryIntent {
+  sha256: string;
+  size: number;
+  text_sha256: string | null;
+  text_size: number;
+  file_sha256: string | null;
+  file_size: number | null;
+  name_sha256: string | null;
+}
+
+export type ReceiptOutcome =
+  'issued' | 'unknown' | 'target_rejected' | 'not_dispatched';
+
 export interface DeliveryItem {
   subject: string;
   receipt: string;
@@ -50,7 +63,8 @@ export interface DeliveryItem {
   text: string;
   sha256: string;
   size: number;
-  file?: FileRef;
+  file?: FileRef | null;
+  intent: DeliveryIntent;
 }
 
 export function safeAttachmentName(filename?: string): string {

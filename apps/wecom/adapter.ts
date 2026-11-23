@@ -5,8 +5,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import lockfile from 'proper-lockfile';
-import { WSClient } from '@wecom/aibot-node-sdk';
-import { postHub, transferHubFile } from './hub-client.ts';
+import { decryptFile, WSClient } from '@wecom/aibot-node-sdk';
+import { getFile, postHub, transferHubFile } from './hub-client.ts';
 import { WeComApplication, loginUrl } from './identity.ts';
 import {
   privateInput,
@@ -16,15 +16,102 @@ import {
   type FileRef,
   type Frame,
   type Identity,
+  type Media,
+  type ReceiptOutcome,
 } from './protocol.ts';
 
 export { privateInput };
 
 const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
+const WECOM_AES_PADDING_BYTES = 32;
 const MAX_INLINE_TEXT_BYTES = 20480;
+const MAX_BATCH_ATTEMPTS = 5;
+const BATCH_BACKOFF_BASE_MS = 1000;
+const BATCH_BACKOFF_MAX_MS = 60_000;
+const DEFAULT_WECOM_MEDIA_HOSTS = new Set([
+  'qyapi.weixin.qq.com',
+  'wwcdn.weixin.qq.com',
+  'wework.qpic.cn',
+  'wx.qlogo.cn',
+]);
 const quiet = { debug() {}, info() {}, warn() {}, error() {} };
 const digest = (value: unknown) =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const sha256Utf8 = (value: string) =>
+  createHash('sha256').update(value, 'utf8').digest('hex');
+
+function verifyDeliveryIntent(item: DeliveryItem) {
+  const intent = item.intent;
+  if (!intent || typeof item.text !== 'string')
+    throw new Error('delivery intent missing');
+  const textSize = Buffer.byteLength(item.text, 'utf8');
+  const textSha256 = textSize > 0 ? sha256Utf8(item.text) : null;
+  if (intent.text_size !== textSize || intent.text_sha256 !== textSha256)
+    throw new Error('text intent mismatch');
+  const file = item.file ?? null;
+  const fileSha256 = file ? file.sha256 : null;
+  const fileSize = file ? file.size : null;
+  const nameSha256 = file ? sha256Utf8(file.name) : null;
+  if (
+    file &&
+    (typeof file.name !== 'string' ||
+      !/^[0-9a-f]{64}$/.test(file.sha256) ||
+      !Number.isInteger(file.size) ||
+      file.size < 0 ||
+      file.size > MAX_ATTACHMENT_BYTES)
+  )
+    throw new Error('file declaration invalid');
+  if (
+    intent.file_sha256 !== fileSha256 ||
+    intent.file_size !== fileSize ||
+    intent.name_sha256 !== nameSha256
+  )
+    throw new Error('file intent mismatch');
+  const combinedSize = textSize + (fileSize ?? 0);
+  const combinedSha256 = sha256Utf8(
+    JSON.stringify({
+      file_sha256: fileSha256,
+      file_size: fileSize,
+      name_sha256: nameSha256,
+      text_sha256: textSha256,
+      text_size: textSize,
+    }),
+  );
+  if (
+    intent.size !== combinedSize ||
+    intent.sha256 !== combinedSha256 ||
+    item.size !== intent.size ||
+    item.sha256 !== intent.sha256
+  )
+    throw new Error('combined intent mismatch');
+}
+
+function maxUnixSocketPathBytes(platform = process.platform): number {
+  return platform === 'darwin' ? 103 : 107;
+}
+
+function parseMediaFilename(
+  contentDisposition: string | null,
+): string | undefined {
+  if (!contentDisposition) return undefined;
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;\s]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+  const match = contentDisposition.match(/filename="?([^";\s]+)"?/i);
+  if (match?.[1]) {
+    try {
+      return decodeURIComponent(match[1]);
+    } catch {
+      return match[1];
+    }
+  }
+  return undefined;
+}
 
 export class ChannelSession {
   readonly db: DatabaseSync;
@@ -43,6 +130,7 @@ export class ChannelSession {
   private boundApp?: { id: string; value: WeComApplication };
   readonly create: (channel: Channel) => WSClient;
   readonly fetcher: typeof fetch;
+  readonly mediaHosts: ReadonlySet<string>;
 
   constructor(
     directory: string,
@@ -55,16 +143,35 @@ export class ChannelSession {
       }),
     fetcher = fetch,
     now = Date.now,
+    mediaHosts: ReadonlySet<string> = DEFAULT_WECOM_MEDIA_HOSTS,
   ) {
     this.create = create;
     this.fetcher = fetcher;
     this.now = now;
+    this.mediaHosts = new Set([...mediaHosts].map((h) => h.toLowerCase()));
     this.db = new DatabaseSync(join(directory, 'channel.sqlite'));
     this.db.exec(`PRAGMA journal_mode=WAL;
-      CREATE TABLE IF NOT EXISTS batch(seq INTEGER PRIMARY KEY, scope TEXT NOT NULL,request TEXT NOT NULL,sender TEXT NOT NULL,state TEXT NOT NULL,due INTEGER NOT NULL,UNIQUE(scope,request));
+      CREATE TABLE IF NOT EXISTS batch(seq INTEGER PRIMARY KEY, scope TEXT NOT NULL,request TEXT NOT NULL,sender TEXT NOT NULL,state TEXT NOT NULL,due INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,error TEXT,UNIQUE(scope,request));
       CREATE TABLE IF NOT EXISTS part(seq INTEGER PRIMARY KEY,scope TEXT NOT NULL,platform_id TEXT NOT NULL,batch INTEGER NOT NULL,body TEXT NOT NULL,files TEXT,UNIQUE(scope,platform_id));
       CREATE TABLE IF NOT EXISTS peer(scope TEXT NOT NULL,subject TEXT NOT NULL,sender TEXT NOT NULL,PRIMARY KEY(scope,subject));
     `);
+    const batchColumns = new Set(
+      (
+        this.db.prepare('PRAGMA table_info(batch)').all() as Array<{
+          name: string;
+        }>
+      ).map((col) => col.name),
+    );
+    if (!batchColumns.has('attempts'))
+      this.db.exec(
+        'ALTER TABLE batch ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0',
+      );
+    if (!batchColumns.has('next_at'))
+      this.db.exec(
+        'ALTER TABLE batch ADD COLUMN next_at INTEGER NOT NULL DEFAULT 0',
+      );
+    if (!batchColumns.has('error'))
+      this.db.exec('ALTER TABLE batch ADD COLUMN error TEXT');
     this.db
       .prepare("UPDATE part SET files='[]',body=body||? WHERE files IS NULL")
       .run('（附件接收中断，请重新上传）');
@@ -170,6 +277,83 @@ export class ChannelSession {
     void pull.finally(() => this.downloads.delete(pull));
   }
 
+  private async downloadEncryptedMedia(
+    runtime: NonNullable<typeof this.current>,
+    media: Media,
+  ): Promise<{ buffer: Buffer; filename?: string }> {
+    if (!URL.canParse(media.url)) throw new Error('invalid media url');
+    const url = new URL(media.url);
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      !this.mediaHosts.has(url.hostname.toLowerCase())
+    )
+      throw new Error('media host not allowed');
+    const maxWireBytes = media.aeskey
+      ? MAX_ATTACHMENT_BYTES + WECOM_AES_PADDING_BYTES
+      : MAX_ATTACHMENT_BYTES;
+    const controller = new AbortController();
+    const response = await this.fetcher(url, {
+      method: 'GET',
+      redirect: 'error',
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120000)]),
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error('media download failed');
+    }
+    const contentLengthHeader = response.headers.get('content-length');
+    if (contentLengthHeader !== null) {
+      const declared = Number(contentLengthHeader);
+      if (
+        !Number.isFinite(declared) ||
+        declared < 0 ||
+        declared > maxWireBytes
+      ) {
+        await response.body?.cancel();
+        controller.abort();
+        throw new Error('attachment too large');
+      }
+    }
+    const filename = parseMediaFilename(
+      response.headers.get('content-disposition'),
+    );
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    if (response.body) {
+      const reader = response.body.getReader();
+      try {
+        while (true) {
+          if (runtime !== this.current) {
+            await reader.cancel().catch(() => {});
+            controller.abort();
+            throw new Error('channel changed');
+          }
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value?.byteLength) continue;
+          total += value.byteLength;
+          if (total > maxWireBytes) {
+            await reader.cancel().catch(() => {});
+            controller.abort();
+            throw new Error('attachment too large');
+          }
+          chunks.push(value);
+        }
+      } catch (error) {
+        await reader.cancel().catch(() => {});
+        controller.abort();
+        throw error;
+      }
+    }
+    const raw = Buffer.concat(chunks, total);
+    const buffer = media.aeskey ? decryptFile(raw, media.aeskey) : raw;
+    if (buffer.length > MAX_ATTACHMENT_BYTES)
+      throw new Error('attachment too large');
+    return { buffer, filename };
+  }
+
   private async downloadMedia(
     runtime: NonNullable<typeof this.current>,
     input: NonNullable<ReturnType<typeof privateInput>>,
@@ -185,9 +369,9 @@ export class ChannelSession {
       const files: FileRef[] = [];
       for (const media of input.media) {
         if (runtime !== this.current) throw new Error('channel changed');
-        const { buffer, filename } = await runtime.client.downloadFile(
-          media.url,
-          media.aeskey,
+        const { buffer, filename } = await this.downloadEncryptedMedia(
+          runtime,
+          media,
         );
         if (buffer.length > MAX_ATTACHMENT_BYTES)
           throw new Error('attachment too large');
@@ -239,54 +423,122 @@ export class ChannelSession {
     subject: string,
     sha: string,
     buffer?: Buffer,
+    receipt?: string,
   ) {
     if (run !== this.current) throw new Error('文件不可用');
-    return transferHubFile(this.fetcher, run.channel, subject, sha, buffer);
+    return transferHubFile(
+      this.fetcher,
+      run.channel,
+      subject,
+      sha,
+      buffer,
+      receipt,
+    );
+  }
+
+  private getFile(
+    run: { channel: Channel },
+    sha256: string,
+    subject: string,
+    receipt: string,
+  ) {
+    if (run !== this.current) throw new Error('文件不可用');
+    return getFile(this.fetcher, run.channel, sha256, subject, receipt);
   }
 
   private async flushInbound(run: NonNullable<typeof this.current>) {
-    const batch = this.db
+    const now = this.now();
+    const batches = this.db
       .prepare(
-        `SELECT * FROM batch b WHERE b.scope=? AND b.state IN ('open','sending') AND due<=? AND NOT EXISTS(SELECT 1 FROM part p WHERE p.batch=b.seq AND p.files IS NULL) ORDER BY b.seq LIMIT 1`,
+        `SELECT * FROM batch b WHERE b.scope=? AND b.state IN ('open','pending','sending') AND b.due<=? AND b.next_at<=? AND NOT EXISTS(SELECT 1 FROM part p WHERE p.batch=b.seq AND p.files IS NULL) ORDER BY b.seq`,
       )
-      .get(run.scope, this.now());
-    if (!batch) return;
-    this.db
-      .prepare("UPDATE batch SET state='sending',due=? WHERE seq=?")
-      .run(this.now() + 1000, Number(batch.seq));
-    const parts = this.db
-      .prepare('SELECT body,files FROM part WHERE batch=? ORDER BY seq')
-      .all(Number(batch.seq));
-    const files = parts.flatMap(
-      (p) => JSON.parse(String(p.files)) as FileRef[],
-    );
-    const subject = await run.app.fromBot(String(batch.sender));
-    const accepted = await this.post(run, {
-      action: 'inbound',
-      subject,
-      platformId: batch.request,
-      text: parts
-        .map((p) => p.body)
-        .filter(Boolean)
-        .join('\n'),
-      ...(files.length ? { files } : {}),
-    });
-    await accepted.body?.cancel();
-    if (accepted.ok || accepted.status === 403 || accepted.status === 400) {
-      if (accepted.ok)
-        this.db
-          .prepare(
-            'INSERT INTO peer VALUES(?,?,?) ON CONFLICT(scope,subject) DO UPDATE SET sender=excluded.sender',
-          )
-          .run(run.scope, subject, String(batch.sender));
-      this.tx(() => {
-        this.db
-          .prepare('UPDATE batch SET state=? WHERE seq=?')
-          .run(accepted.ok ? 'accepted' : 'refused', Number(batch.seq));
-        this.db
-          .prepare("UPDATE part SET body='',files='[]' WHERE batch=?")
-          .run(Number(batch.seq));
-      });
+      .all(run.scope, now, now);
+    for (const batch of batches) {
+      if (run !== this.current) break;
+      const seq = Number(batch.seq);
+      const attempts = Number(batch.attempts ?? 0);
+      this.db
+        .prepare("UPDATE batch SET state='sending',due=? WHERE seq=?")
+        .run(this.now() + 1000, seq);
+      const parts = this.db
+        .prepare('SELECT body,files FROM part WHERE batch=? ORDER BY seq')
+        .all(seq);
+      const files = parts.flatMap(
+        (p) => JSON.parse(String(p.files)) as FileRef[],
+      );
+      try {
+        const subject = await run.app.fromBot(String(batch.sender));
+        const accepted = await this.post(run, {
+          action: 'inbound',
+          subject,
+          platformId: batch.request,
+          text: parts
+            .map((p) => p.body)
+            .filter(Boolean)
+            .join('\n'),
+          ...(files.length ? { files } : {}),
+        });
+        await accepted.body?.cancel();
+        if (accepted.ok || accepted.status === 403 || accepted.status === 400) {
+          if (accepted.ok)
+            this.db
+              .prepare(
+                'INSERT INTO peer VALUES(?,?,?) ON CONFLICT(scope,subject) DO UPDATE SET sender=excluded.sender',
+              )
+              .run(run.scope, subject, String(batch.sender));
+          this.tx(() => {
+            this.db
+              .prepare('UPDATE batch SET state=?,error=NULL WHERE seq=?')
+              .run(accepted.ok ? 'accepted' : 'refused', seq);
+            this.db
+              .prepare("UPDATE part SET body='',files='[]' WHERE batch=?")
+              .run(seq);
+          });
+        } else {
+          throw new Error('hub inbound status ' + accepted.status);
+        }
+      } catch (error) {
+        if (run !== this.current) {
+          this.db
+            .prepare("UPDATE batch SET state='pending' WHERE seq=?")
+            .run(seq);
+          break;
+        }
+        const nextAttempts = attempts + 1;
+        const failAt = this.now();
+        const reason =
+          error instanceof Error
+            ? error.message.slice(0, 200)
+            : 'inbound failed';
+        if (nextAttempts >= MAX_BATCH_ATTEMPTS) {
+          this.db
+            .prepare(
+              "UPDATE batch SET state='failed',attempts=?,next_at=0,error=? WHERE seq=?",
+            )
+            .run(nextAttempts, reason, seq);
+          console.error('[wecom] inbound batch quarantined:', {
+            seq,
+            attempts: nextAttempts,
+            error: reason,
+          });
+        } else {
+          const backoff = Math.min(
+            BATCH_BACKOFF_MAX_MS,
+            BATCH_BACKOFF_BASE_MS * 2 ** (nextAttempts - 1),
+          );
+          this.db
+            .prepare(
+              "UPDATE batch SET state='pending',attempts=?,next_at=?,error=? WHERE seq=?",
+            )
+            .run(nextAttempts, failAt + backoff, reason, seq);
+          console.warn('[wecom] inbound batch retrying:', {
+            seq,
+            attempts: nextAttempts,
+            nextAt: failAt + backoff,
+            error: reason,
+          });
+        }
+      }
     }
   }
 
@@ -302,20 +554,23 @@ export class ChannelSession {
       .prepare('SELECT sender FROM peer WHERE scope=? AND subject=?')
       .get(run.scope, item.subject);
     const to = String(peer?.sender ?? item.subject);
-    const content = String(item.text);
-    let state: 'not_sent' | 'unknown' | 'sent' | 'refused' = 'not_sent';
+    let state: ReceiptOutcome = 'not_dispatched';
     let acknowledgment: { request: string; code: number } | undefined;
     try {
+      verifyDeliveryIntent(item);
       let result;
       if (item.file) {
-        if (item.file.sha256 !== item.sha256 || item.file.size !== item.size)
-          throw new Error('file declaration mismatch');
-        const got = await this.transfer(run, item.subject, item.file.sha256);
+        const got = await this.getFile(
+          run,
+          item.file.sha256,
+          item.subject,
+          item.receipt,
+        );
         const contentLength = got.headers.get('content-length');
         if (
           !got.ok ||
           contentLength === null ||
-          Number(contentLength) !== item.file.size ||
+          Number(contentLength) !== item.intent.file_size ||
           item.file.size > MAX_ATTACHMENT_BYTES
         ) {
           await got.body?.cancel();
@@ -323,8 +578,9 @@ export class ChannelSession {
         }
         const bytes = Buffer.from(await got.arrayBuffer());
         if (
-          bytes.length !== item.size ||
-          createHash('sha256').update(bytes).digest('hex') !== item.sha256
+          bytes.length !== item.intent.file_size ||
+          createHash('sha256').update(bytes).digest('hex') !==
+            item.intent.file_sha256
         )
           throw new Error('file integrity');
         const media = await run.client.uploadMedia(bytes, {
@@ -334,12 +590,9 @@ export class ChannelSession {
         state = 'unknown';
         result = await run.client.sendMediaMessage(to, 'file', media.media_id);
       } else {
-        if (
-          createHash('sha256').update(content).digest('hex') !== item.sha256 ||
-          Buffer.byteLength(content) !== item.size
-        )
-          throw new Error('message integrity');
-        if (item.size <= MAX_INLINE_TEXT_BYTES) {
+        const content =
+          item.role === 'user' ? '客户端消息：\n' + item.text : item.text;
+        if (Buffer.byteLength(content) <= MAX_INLINE_TEXT_BYTES) {
           state = 'unknown';
           result = await run.client.sendMessage(to, {
             msgtype: 'markdown',
@@ -360,6 +613,7 @@ export class ChannelSession {
       }
       if (
         typeof result.headers?.req_id === 'string' &&
+        result.headers.req_id.length > 0 &&
         typeof result.errcode === 'number'
       ) {
         acknowledgment = {
@@ -368,7 +622,7 @@ export class ChannelSession {
             .digest('hex'),
           code: result.errcode,
         };
-        state = result.errcode === 0 ? 'sent' : 'refused';
+        state = result.errcode === 0 ? 'issued' : 'target_rejected';
       }
     } catch {
       /* Keep the observed dispatch stage when no acknowledgment arrives. */
@@ -378,8 +632,14 @@ export class ChannelSession {
       receipt: item.receipt,
       state,
       reached_target:
-        state === 'not_sent' ? false : state === 'unknown' ? null : true,
+        state === 'not_dispatched' ? false : state === 'unknown' ? null : true,
       ...(acknowledgment ? { acknowledgment } : {}),
+      ...(state === 'unknown'
+        ? {
+            missing: ['未取得与本条消息对应的平台确认'],
+            next: '核对目标侧记录，不自动重发',
+          }
+        : {}),
     });
     await ack.body?.cancel();
   }
@@ -417,11 +677,18 @@ export async function serveChannel(directory: string) {
     stat.mode & 0o077
   )
     throw new Error('需要私有服务目录');
+  const socket = join(directory, 'channel.sock');
+  const maxSocketBytes = maxUnixSocketPathBytes();
+  const socketBytes = Buffer.byteLength(socket, 'utf8');
+  if (socketBytes > maxSocketBytes) {
+    throw new Error(
+      `unix socket path too long (${socketBytes} bytes, max ${maxSocketBytes}): ${socket}`,
+    );
+  }
   const release = await lockfile.lock(directory, {
     lockfilePath: join(directory, 'channel.lock'),
     retries: 0,
   });
-  const socket = join(directory, 'channel.sock');
   const adapter = new ChannelSession(directory);
   const server = createServer({ requestTimeout: 15000 }, async (req, res) => {
     const reply = (status: number, data: unknown) => {
@@ -476,9 +743,20 @@ export async function serveChannel(directory: string) {
       await unlink(socket);
     }
     await new Promise<void>((ok, fail) => {
-      server.once('error', fail);
+      const onError = (error: NodeJS.ErrnoException) => {
+        if (error.code === 'EINVAL' || error.code === 'ENAMETOOLONG') {
+          fail(
+            new Error(
+              `unix socket path too long (${socketBytes} bytes, max ${maxSocketBytes}): ${socket}`,
+            ),
+          );
+          return;
+        }
+        fail(error);
+      };
+      server.once('error', onError);
       server.listen(socket, () => {
-        server.off('error', fail);
+        server.off('error', onError);
         ok();
       });
     });

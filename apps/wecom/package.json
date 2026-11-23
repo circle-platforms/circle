@@ -12,6 +12,8 @@
   },
   "scripts": {
     "start": "node adapter.ts",
-    "test": "node --test *.test.ts"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test *.test.ts",
+    "test:paired": "node test-paired.mjs"
   }
 }

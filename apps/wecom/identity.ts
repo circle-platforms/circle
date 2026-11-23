@@ -23,7 +23,6 @@ export class WeComApplication {
   private token: string | null = null;
   private expires = 0;
   private fetching?: Promise<string>;
-  private failed = false;
   readonly app: Application;
   readonly fetcher: typeof fetch;
   constructor(app: Application, fetcher = fetch) {
@@ -56,7 +55,6 @@ export class WeComApplication {
   }
 
   private access() {
-    if (this.failed) throw new Error('企业应用尚未通过认证');
     if (this.token && this.expires > Date.now())
       return Promise.resolve(this.token);
     this.fetching ??= this.call('/cgi-bin/gettoken', {
@@ -75,7 +73,8 @@ export class WeComApplication {
         return result.access_token as string;
       })
       .catch(() => {
-        this.failed = true;
+        this.token = null;
+        this.expires = 0;
         throw new Error('企业应用尚未通过认证');
       })
       .finally(() => {
