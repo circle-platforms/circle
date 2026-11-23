@@ -114,7 +114,7 @@ jobs:
           npm --prefix apps/workbench run test:visual
       - run: npm --prefix apps/desktop test
         timeout-minutes: 5
-      - run: npx --prefix apps/wecom tsc --noEmit && npm --prefix apps/wecom test
+      - run: npx --prefix apps/wecom tsc --noEmit -p apps/wecom/tsconfig.json && npm --prefix apps/wecom test && npm --prefix apps/wecom run test:paired
         timeout-minutes: 5
       - name: Verify native developer tool resources
         timeout-minutes: 5
