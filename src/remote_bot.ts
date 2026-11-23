@@ -219,6 +219,36 @@ export async function remoteCompletion(
 }
 
 export const MAX_HISTORY_TEXT_BYTES = 256 * 1024;
+export const MAX_REPLY_DELIVERY_CHARS = 64_000;
+const REPLY_CHUNK_CHARS = 60_000;
+const NOTICE_CODE_PATTERN = /^[a-z0-9_]{1,64}$/;
+
+export function splitReplyText(text: string): string[] {
+  if (text.length <= MAX_REPLY_DELIVERY_CHARS) return [text];
+  const rawChunks: string[] = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = Math.min(start + REPLY_CHUNK_CHARS, text.length);
+    if (end < text.length) {
+      const last = text.charCodeAt(end - 1);
+      const next = text.charCodeAt(end);
+      if (
+        last >= 0xd800 &&
+        last <= 0xdbff &&
+        next >= 0xdc00 &&
+        next <= 0xdfff
+      ) {
+        end -= 1;
+      }
+    }
+    rawChunks.push(text.slice(start, end));
+    start = end;
+  }
+  const total = rawChunks.length;
+  return rawChunks.map(
+    (chunk, index) => `${chunk}\n\n(part ${index + 1}/${total})`,
+  );
+}
 
 export async function attachFiles(
   home: string,
@@ -303,6 +333,7 @@ export async function attachFiles(
 export class RemoteBot {
   readonly db: DatabaseSync;
   #activeConfig: RemoteModel | null = null;
+  #configVersion = 0;
   private stopping = false;
   private admissions = new Map<string, () => void>();
   private active = new Map<
@@ -364,16 +395,37 @@ export class RemoteBot {
       FROM event e WHERE e.role='user' AND NOT EXISTS (SELECT 1 FROM event f WHERE f.conversation=e.conversation AND f.request=e.request AND f.role<>'user')`);
   }
 
-  configure(config: RemoteModel | null): void {
-    this.#activeConfig = config && config.key ? { ...config } : null;
+  #applyConfig(config: RemoteModel | null, configVersion?: number): void {
+    if (configVersion !== undefined) {
+      if (
+        typeof configVersion !== 'number' ||
+        !Number.isSafeInteger(configVersion) ||
+        configVersion < 0
+      ) {
+        throw new BotError(400, 'invalid_request', 'invalid config version');
+      }
+      if (configVersion < this.#configVersion) return;
+      this.#configVersion = configVersion;
+    } else if (this.#configVersion !== 0) {
+      return;
+    }
+    if (config === null) {
+      this.#activeConfig = null;
+      for (const running of this.active.values()) {
+        running.disabled = true;
+        running.abort.abort();
+      }
+      return;
+    }
+    this.#activeConfig = config.key ? { ...config } : null;
   }
 
-  disable(): void {
-    this.#activeConfig = null;
-    for (const running of this.active.values()) {
-      running.disabled = true;
-      running.abort.abort();
-    }
+  configure(config: RemoteModel | null, configVersion?: number): void {
+    this.#applyConfig(config, configVersion);
+  }
+
+  disable(configVersion?: number): void {
+    this.#applyConfig(null, configVersion);
   }
 
   private tx<T>(fn: () => T): T {
@@ -405,6 +457,84 @@ export class RemoteBot {
     return { id, current };
   }
 
+  private appendInTx(
+    conversation: string,
+    request: string,
+    role: string,
+    text: string,
+    route?: ChatRoute,
+    files: ChatFile[] = [],
+    question?: PromptQuestion,
+    answer?: string,
+    code?: string,
+  ) {
+    if (code !== undefined && !NOTICE_CODE_PATTERN.test(code)) {
+      throw new Error(`invalid notice code: ${code}`);
+    }
+    const id = randomUUID();
+    this.db
+      .prepare(
+        'INSERT INTO event(conversation,id,request,role,code,text,at) VALUES(?,?,?,?,?,?,?)',
+      )
+      .run(
+        conversation,
+        id,
+        request,
+        role,
+        code ?? null,
+        text,
+        new Date().toISOString(),
+      );
+    if (role === 'user')
+      this.db
+        .prepare('DELETE FROM queued WHERE conversation=? AND request=?')
+        .run(conversation, request);
+    if (question)
+      this.db
+        .prepare(
+          'INSERT INTO question(id,conversation,request,call) VALUES(?,?,?,?)',
+        )
+        .run(id, conversation, request, JSON.stringify(question.call));
+    if (answer)
+      this.db
+        .prepare(
+          'UPDATE question SET answered=? WHERE conversation=? AND id=? AND answered IS NULL',
+        )
+        .run(id, conversation, answer);
+    if (files.length)
+      this.db
+        .prepare('INSERT INTO attachments VALUES(?,?)')
+        .run(id, JSON.stringify(files));
+    if (route && (role !== 'user' || route.source === 'client')) {
+      this.db
+        .prepare(
+          'INSERT INTO delivery(id,issuer,subject,source,state) VALUES(?,?,?,?,?)',
+        )
+        .run(
+          id,
+          route.issuer,
+          route.subject,
+          route.source,
+          route.subject ? 'queued' : 'unbound',
+        );
+    }
+    if (route && role === 'user' && route.source === 'client') {
+      for (const [slot, file] of files.entries())
+        this.db
+          .prepare(
+            'INSERT INTO file_delivery(event_id,slot,issuer,subject,file,state) VALUES(?,?,?,?,?,?)',
+          )
+          .run(
+            id,
+            slot,
+            route.issuer,
+            route.subject,
+            JSON.stringify(file),
+            route.subject ? 'queued' : 'unbound',
+          );
+    }
+  }
+
   private append(
     conversation: string,
     request: string,
@@ -416,70 +546,19 @@ export class RemoteBot {
     answer?: string,
     code?: string,
   ) {
-    const id = randomUUID();
-    this.tx(() => {
-      this.db
-        .prepare(
-          'INSERT INTO event(conversation,id,request,role,code,text,at) VALUES(?,?,?,?,?,?,?)',
-        )
-        .run(
-          conversation,
-          id,
-          request,
-          role,
-          code ?? null,
-          text,
-          new Date().toISOString(),
-        );
-      if (role === 'user')
-        this.db
-          .prepare('DELETE FROM queued WHERE conversation=? AND request=?')
-          .run(conversation, request);
-      if (question)
-        this.db
-          .prepare(
-            'INSERT INTO question(id,conversation,request,call) VALUES(?,?,?,?)',
-          )
-          .run(id, conversation, request, JSON.stringify(question.call));
-      if (answer)
-        this.db
-          .prepare(
-            'UPDATE question SET answered=? WHERE conversation=? AND id=? AND answered IS NULL',
-          )
-          .run(id, conversation, answer);
-      if (files.length)
-        this.db
-          .prepare('INSERT INTO attachments VALUES(?,?)')
-          .run(id, JSON.stringify(files));
-      if (route && (role !== 'user' || route.source === 'client')) {
-        this.db
-          .prepare(
-            'INSERT INTO delivery(id,issuer,subject,source,state) VALUES(?,?,?,?,?)',
-          )
-          .run(
-            id,
-            route.issuer,
-            route.subject,
-            route.source,
-            route.subject ? 'queued' : 'unbound',
-          );
-      }
-      if (route && role === 'user' && route.source === 'client') {
-        for (const [slot, file] of files.entries())
-          this.db
-            .prepare(
-              'INSERT INTO file_delivery(event_id,slot,issuer,subject,file,state) VALUES(?,?,?,?,?,?)',
-            )
-            .run(
-              id,
-              slot,
-              route.issuer,
-              route.subject,
-              JSON.stringify(file),
-              route.subject ? 'queued' : 'unbound',
-            );
-      }
-    });
+    this.tx(() =>
+      this.appendInTx(
+        conversation,
+        request,
+        role,
+        text,
+        route,
+        files,
+        question,
+        answer,
+        code,
+      ),
+    );
   }
 
   // Reserve before any external write. A lost acknowledgment cannot recreate permission to send.
@@ -556,8 +635,16 @@ export class RemoteBot {
     config: RemoteModel,
     route: ChatRoute,
     files: ChatFile[] = [],
+    configVersion?: number,
   ) {
-    this.configure(config);
+    this.#applyConfig(config, configVersion);
+    if (!this.#activeConfig?.key)
+      throw new BotError(
+        503,
+        'bot_not_enabled',
+        'bot model is not enabled',
+        'bot_not_enabled',
+      );
     const old = this.db
       .prepare(
         "SELECT e.conversation FROM (SELECT conversation,request FROM event WHERE role='user' UNION ALL SELECT conversation,request FROM queued) e JOIN conversation c ON c.id=e.conversation WHERE c.owner=? AND e.request=?",
@@ -625,6 +712,8 @@ export class RemoteBot {
       { action: 'send', request, text, files, conversation: current },
       config,
       route,
+      false,
+      configVersion,
     );
   }
 
@@ -716,7 +805,6 @@ export class RemoteBot {
     owner: string,
     op: Extract<ChatOperation, { action: 'send' }>,
     question: { id: unknown; request: unknown; call: unknown } | undefined,
-    config?: RemoteModel,
     route?: ChatRoute,
     promoted = false,
   ) {
@@ -754,7 +842,6 @@ export class RemoteBot {
         );
       return { request: op.request, queued: true };
     }
-    if (!promoted && config !== undefined) this.configure(config);
     const activeConfig = this.#activeConfig;
     if (promoted && (!activeConfig || !activeConfig.key)) {
       this.append(
@@ -900,30 +987,39 @@ export class RemoteBot {
     ]);
     const memberHome = join(this.home, 'members', ownerHash(owner));
     let tail = '';
-    let startedModel = false;
     running.done = Promise.all([
       mkdir(memberHome, { recursive: true, mode: 0o700 }),
       (async () => {
-        const mediaBudget = { media: MAX_MEDIA_BYTES };
-        await attachFiles(
-          this.home,
-          owner,
-          op.files ?? [],
-          messages[messages.length - 1]!,
-          mediaBudget,
-        );
-        const historyBudget = {
-          media: mediaBudget.media,
-          text: MAX_HISTORY_TEXT_BYTES,
-        };
-        for (const entry of [...historyAttachments].reverse()) {
+        try {
+          const mediaBudget = { media: MAX_MEDIA_BYTES };
           await attachFiles(
             this.home,
             owner,
-            entry.files,
-            entry.message,
-            historyBudget,
-            true,
+            op.files ?? [],
+            messages[messages.length - 1]!,
+            mediaBudget,
+          );
+          const historyBudget = {
+            media: mediaBudget.media,
+            text: MAX_HISTORY_TEXT_BYTES,
+          };
+          for (const entry of [...historyAttachments].reverse()) {
+            await attachFiles(
+              this.home,
+              owner,
+              entry.files,
+              entry.message,
+              historyBudget,
+              true,
+            );
+          }
+        } catch (error) {
+          if (error instanceof BotError) throw error;
+          throw new BotError(
+            422,
+            'attachment_unavailable',
+            'attachment could not be read',
+            'attachment_unavailable',
           );
         }
       })(),
@@ -952,7 +1048,6 @@ export class RemoteBot {
             'bot_not_enabled',
           );
         }
-        startedModel = true;
         return this.complete(
           memberHome,
           currentConfig,
@@ -976,15 +1071,25 @@ export class RemoteBot {
       })
       .then(({ reply, key }) => {
         signal.throwIfAborted();
-        this.append(
-          conversation,
-          op.request,
-          'assistant',
-          maskKey(typeof reply === 'string' ? reply : reply.text, key),
-          route,
-          [],
-          typeof reply === 'string' ? undefined : reply,
+        const masked = maskKey(
+          typeof reply === 'string' ? reply : reply.text,
+          key,
         );
+        const parts = splitReplyText(masked);
+        const promptQuestion = typeof reply === 'string' ? undefined : reply;
+        this.tx(() => {
+          for (const [index, part] of parts.entries()) {
+            this.appendInTx(
+              conversation,
+              index === 0 ? op.request : `${op.request}:part:${index + 1}`,
+              'assistant',
+              part,
+              route,
+              [],
+              index === parts.length - 1 ? promptQuestion : undefined,
+            );
+          }
+        });
       })
       .catch((error: unknown) => {
         const notice = running.disabled
@@ -999,15 +1104,10 @@ export class RemoteBot {
                   code: error.noticeCode ?? error.code,
                   text: error.message,
                 }
-              : !startedModel
-                ? {
-                    code: 'attachment_unavailable',
-                    text: 'attachment could not be read',
-                  }
-                : {
-                    code: 'reply_interrupted',
-                    text: 'model reply interrupted; outcome unknown',
-                  };
+              : {
+                  code: 'reply_interrupted',
+                  text: 'model reply interrupted; outcome unknown',
+                };
         this.append(
           conversation,
           op.request,
@@ -1030,40 +1130,61 @@ export class RemoteBot {
   run(
     owner: string,
     op: Extract<ChatOperation, { action: 'discover' }>,
+    config?: RemoteModel | null,
+    route?: ChatRoute,
+    promoted?: boolean,
+    configVersion?: number,
   ): { id: string; current: string; version: string };
   run(
     owner: string,
     op: Extract<ChatOperation, { action: 'new' }>,
+    config?: RemoteModel | null,
+    route?: ChatRoute,
+    promoted?: boolean,
+    configVersion?: number,
   ): { conversation: string };
   run(
     owner: string,
     op: Extract<ChatOperation, { action: 'history' }>,
+    config?: RemoteModel | null,
+    route?: ChatRoute,
+    promoted?: boolean,
+    configVersion?: number,
   ): ReturnType<RemoteBot['readHistory']>;
   run(
     owner: string,
     op: Extract<ChatOperation, { action: 'stop' }>,
+    config?: RemoteModel | null,
+    route?: ChatRoute,
+    promoted?: boolean,
+    configVersion?: number,
   ): { stopping: boolean };
   run(
     owner: string,
     op: Extract<ChatOperation, { action: 'send' }>,
-    config?: RemoteModel,
+    config?: RemoteModel | null,
     route?: ChatRoute,
     promoted?: boolean,
+    configVersion?: number,
   ): { request: string; queued?: boolean };
   run(
     owner: string,
     op: ChatOperation,
-    config?: RemoteModel,
+    config?: RemoteModel | null,
     route?: ChatRoute,
     promoted?: boolean,
+    configVersion?: number,
   ): unknown;
   run(
     owner: string,
     op: ChatOperation,
-    config?: RemoteModel,
+    config?: RemoteModel | null,
     route?: ChatRoute,
     promoted = false,
+    configVersion?: number,
   ) {
+    if (!promoted && config !== undefined)
+      this.#applyConfig(config, configVersion);
     const bot = this.ensureBot(owner);
     if (op.action === 'discover') return { ...bot, version: VERSION };
     if (op.action === 'new') return this.newConversation(owner, op.request);
@@ -1095,7 +1216,7 @@ export class RemoteBot {
       if (job?.request === op.request) job.abort.abort();
       return { stopping: job?.request === op.request };
     }
-    return this.sendMessage(owner, op, question, config, route, promoted);
+    return this.sendMessage(owner, op, question, route, promoted);
   }
 
   async close() {
