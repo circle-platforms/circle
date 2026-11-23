@@ -19,6 +19,18 @@ export function loginUrl(
   return url.href;
 }
 
+const EXPIRED_TOKEN_ERRCODES = new Set([42001, 40014, 42007]);
+
+export class WeComApiError extends Error {
+  readonly errcode: number;
+
+  constructor(errcode: number, message = '企业应用读取失败') {
+    super(message);
+    this.name = 'WeComApiError';
+    this.errcode = errcode;
+  }
+}
+
 export class WeComApplication {
   private token: string | null = null;
   private expires = 0;
@@ -48,9 +60,15 @@ export class WeComApplication {
           }
         : {}),
     });
-    if (!response.ok) throw new Error('企业应用读取失败');
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error('企业应用读取失败');
+    }
     const result = await response.json();
-    if (result.errcode !== 0) throw new Error('企业应用读取失败');
+    if (result.errcode !== 0) {
+      const code = typeof result.errcode === 'number' ? result.errcode : -1;
+      throw new WeComApiError(code, '企业应用读取失败');
+    }
     return result;
   }
 
@@ -67,15 +85,18 @@ export class WeComApplication {
           !result.access_token ||
           !Number.isFinite(result.expires_in)
         )
-          throw new Error('企业应用认证失败');
+          throw new WeComApiError(-1, '企业应用认证失败');
         this.expires = Date.now() + Math.max(0, result.expires_in - 60) * 1000;
         this.token = result.access_token;
         return result.access_token as string;
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         this.token = null;
         this.expires = 0;
-        throw new Error('企业应用尚未通过认证');
+        if (error instanceof WeComApiError) {
+          throw new WeComApiError(error.errcode, '企业应用尚未通过认证');
+        }
+        throw new Error('企业应用尚未通过认证', { cause: error });
       })
       .finally(() => {
         this.fetching = undefined;
@@ -83,9 +104,36 @@ export class WeComApplication {
     return this.fetching;
   }
 
+  private async callWithToken(
+    path: string,
+    params: Record<string, string>,
+    body?: unknown,
+  ) {
+    const token = await this.access();
+    try {
+      return await this.call(path, { ...params, access_token: token }, body);
+    } catch (error) {
+      if (
+        error instanceof WeComApiError &&
+        EXPIRED_TOKEN_ERRCODES.has(error.errcode)
+      ) {
+        if (this.token === token) {
+          this.token = null;
+          this.expires = 0;
+        }
+        const freshToken = await this.access();
+        return await this.call(
+          path,
+          { ...params, access_token: freshToken },
+          body,
+        );
+      }
+      throw error;
+    }
+  }
+
   async fromCode(code: string) {
-    const result = await this.call('/cgi-bin/auth/getuserinfo', {
-      access_token: await this.access(),
+    const result = await this.callWithToken('/cgi-bin/auth/getuserinfo', {
       code,
     });
     if (typeof result.userid !== 'string' || !result.userid)
@@ -94,9 +142,9 @@ export class WeComApplication {
   }
 
   async fromBot(sender: string) {
-    const result = await this.call(
+    const result = await this.callWithToken(
       '/cgi-bin/batch/openuserid_to_userid',
-      { access_token: await this.access() },
+      {},
       { open_userid_list: [sender] },
     );
     const pairs = result.userid_list;
@@ -113,9 +161,9 @@ export class WeComApplication {
       Array.isArray(result.invalid_open_userid_list) &&
       result.invalid_open_userid_list.length === 1 &&
       result.invalid_open_userid_list[0] === sender &&
-      (!pairs || pairs.length === 0)
+      (!pairs || (Array.isArray(pairs) && pairs.length === 0))
     )
       return sender;
-    throw new Error('未能核对机器人发件人');
+    throw new WeComApiError(-2, '未能核对机器人发件人');
   }
 }

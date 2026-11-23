@@ -1,13 +1,24 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdir, lstat, unlink } from 'node:fs/promises';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
+import {
+  chmod,
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  unlink,
+} from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import lockfile from 'proper-lockfile';
 import { decryptFile, WSClient } from '@wecom/aibot-node-sdk';
 import { getFile, postHub, transferHubFile } from './hub-client.ts';
-import { WeComApplication, loginUrl } from './identity.ts';
+import { WeComApiError, WeComApplication, loginUrl } from './identity.ts';
 import {
   privateInput,
   safeAttachmentName,
@@ -28,6 +39,7 @@ const MAX_INLINE_TEXT_BYTES = 20480;
 const MAX_BATCH_ATTEMPTS = 5;
 const BATCH_BACKOFF_BASE_MS = 1000;
 const BATCH_BACKOFF_MAX_MS = 60_000;
+const MAX_CONCURRENT_DOWNLOADS = 2;
 const DEFAULT_WECOM_MEDIA_HOSTS = new Set([
   'qyapi.weixin.qq.com',
   'wwcdn.weixin.qq.com',
@@ -40,7 +52,142 @@ const digest = (value: unknown) =>
 const sha256Utf8 = (value: string) =>
   createHash('sha256').update(value, 'utf8').digest('hex');
 
-function verifyDeliveryIntent(item: DeliveryItem) {
+const CHANNEL_NOTICE_MESSAGES: Record<string, string> = {
+  help: '发送文本或文件即可与机器人对话；发送 /new 或“新对话”开启新会话，发送 /stop 或“停止”可取消当前回复。',
+  conversation_started: '已开启新对话。',
+  stop_requested: '已请求停止当前回复。',
+  stop_idle: '当前没有正在生成的回复。',
+  disabled_queued: '机器人模型已停用，排队的请求未执行。',
+  bot_disabled_aborted: '机器人模型已停用，当前回复已中止。',
+  credential_blocked: '消息不能包含机器人凭据，未予处理。',
+  reply_stopped: '已停止回复。',
+  host_restarted_queued: '机器人宿主已重启，排队的请求未执行。',
+  host_restarted_interrupted:
+    '机器人宿主已重启，上一条请求结果未知，请按需重新发送。',
+  bot_not_enabled: '机器人模型尚未启用，请联系管理员配置。',
+  model_invalid_question: '模型提问格式无效，请稍后重试。',
+  model_credentials_blocked: '模型回复疑似包含凭据，已被拦截。',
+  model_empty_reply: '模型未返回有效回复，请稍后重试。',
+  model_auth_failed: '模型服务鉴权失败，请联系管理员检查配置。',
+  model_id_unavailable: '当前配置的模型标识不可用，请联系管理员检查配置。',
+  model_not_found: '未找到配置的模型或服务地址，请联系管理员检查配置。',
+  model_unreachable: '无法连接模型服务或请求超时，请稍后重试。',
+  model_invalid_reply: '模型未返回有效应答，请稍后重试。',
+  attachment_integrity_failed: '附件完整性校验失败，请重新上传后再试。',
+  invalid_attachment_digest: '附件摘要无效，请重新上传后再试。',
+  attachment_unavailable: '附件无法读取，请重新上传后再试。',
+  reply_interrupted: '模型回复已中断，结果未知，请按需重试。',
+};
+
+const LEGACY_ENGLISH_NOTICE_TEXTS: Record<string, string> = {
+  'send text or files to chat with your personal bot. send /new for a new conversation, or /stop to cancel the active reply.':
+    CHANNEL_NOTICE_MESSAGES.help!,
+  'started a new conversation': CHANNEL_NOTICE_MESSAGES.conversation_started!,
+  'requested stop for active reply': CHANNEL_NOTICE_MESSAGES.stop_requested!,
+  'no active reply to stop': CHANNEL_NOTICE_MESSAGES.stop_idle!,
+  'bot model is disabled; queued message was not executed':
+    CHANNEL_NOTICE_MESSAGES.disabled_queued!,
+  'bot model was disabled; active reply stopped':
+    CHANNEL_NOTICE_MESSAGES.bot_disabled_aborted!,
+  'message cannot contain bot credentials':
+    CHANNEL_NOTICE_MESSAGES.credential_blocked!,
+  'reply stopped': CHANNEL_NOTICE_MESSAGES.reply_stopped!,
+  'host restarted while queued; message not executed':
+    CHANNEL_NOTICE_MESSAGES.host_restarted_queued!,
+  'host restarted; previous request outcome unknown':
+    CHANNEL_NOTICE_MESSAGES.host_restarted_interrupted!,
+  'bot model is not enabled': CHANNEL_NOTICE_MESSAGES.bot_not_enabled!,
+  'model did not provide a valid question':
+    CHANNEL_NOTICE_MESSAGES.model_invalid_question!,
+  'model reply contained credentials':
+    CHANNEL_NOTICE_MESSAGES.model_credentials_blocked!,
+  'model returned an empty reply': CHANNEL_NOTICE_MESSAGES.model_empty_reply!,
+  'model endpoint rejected credentials':
+    CHANNEL_NOTICE_MESSAGES.model_auth_failed!,
+  'model id is unavailable': CHANNEL_NOTICE_MESSAGES.model_id_unavailable!,
+  'endpoint or model not found': CHANNEL_NOTICE_MESSAGES.model_not_found!,
+  'model endpoint unreachable or timed out':
+    CHANNEL_NOTICE_MESSAGES.model_unreachable!,
+  'model did not return a valid reply':
+    CHANNEL_NOTICE_MESSAGES.model_invalid_reply!,
+  'attachment integrity check failed':
+    CHANNEL_NOTICE_MESSAGES.attachment_integrity_failed!,
+  'invalid attachment digest':
+    CHANNEL_NOTICE_MESSAGES.invalid_attachment_digest!,
+  'attachment could not be read':
+    CHANNEL_NOTICE_MESSAGES.attachment_unavailable!,
+  'model reply interrupted; outcome unknown':
+    CHANNEL_NOTICE_MESSAGES.reply_interrupted!,
+};
+
+export function formatChannelNotice(
+  code: string | undefined,
+  fallbackText: string,
+): string {
+  if (code && Object.hasOwn(CHANNEL_NOTICE_MESSAGES, code)) {
+    return CHANNEL_NOTICE_MESSAGES[code]!;
+  }
+  const trimmed = fallbackText.trim();
+  if (trimmed && Object.hasOwn(LEGACY_ENGLISH_NOTICE_TEXTS, trimmed)) {
+    return LEGACY_ENGLISH_NOTICE_TEXTS[trimmed]!;
+  }
+  if (!trimmed) return '系统提示：处理状态已更新。';
+  if (/[\u4e00-\u9fff]/.test(trimmed)) return trimmed;
+  return '系统提示：' + trimmed;
+}
+
+export function sanitizeLogError(
+  error: unknown,
+  secrets: readonly string[] = [],
+  maxLength = 200,
+): string {
+  let text =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : String(error ?? '');
+  const uniqueSecrets = [
+    ...new Set(secrets.filter((s) => typeof s === 'string' && s.length > 0)),
+  ].sort((a, b) => b.length - a.length);
+  for (const secret of uniqueSecrets) {
+    if (text.includes(secret)) {
+      text = text.replaceAll(secret, '[REDACTED]');
+    }
+    const escaped = JSON.stringify(secret).slice(1, -1);
+    if (escaped !== secret && text.includes(escaped)) {
+      text = text.replaceAll(escaped, '[REDACTED]');
+    }
+  }
+  text = text
+    .replace(/Bearer\s+[^\s"',;}\]]+/gi, 'Bearer [REDACTED]')
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
+  if (!text) return 'inbound failed';
+  return maxLength > 0 ? text.slice(0, maxLength) : text;
+}
+
+class TransientInboundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TransientInboundError';
+  }
+}
+
+class PermanentInboundError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'PermanentInboundError';
+    this.status = status;
+  }
+}
+
+function verifyDeliveryIntent(
+  item: DeliveryItem,
+  maxAttachmentBytes = MAX_ATTACHMENT_BYTES,
+) {
   const intent = item.intent;
   if (!intent || typeof item.text !== 'string')
     throw new Error('delivery intent missing');
@@ -58,7 +205,7 @@ function verifyDeliveryIntent(item: DeliveryItem) {
       !/^[0-9a-f]{64}$/.test(file.sha256) ||
       !Number.isInteger(file.size) ||
       file.size < 0 ||
-      file.size > MAX_ATTACHMENT_BYTES)
+      file.size > maxAttachmentBytes)
   )
     throw new Error('file declaration invalid');
   if (
@@ -115,6 +262,8 @@ function parseMediaFilename(
 
 export class ChannelSession {
   readonly db: DatabaseSync;
+  private readonly directory: string;
+  private readonly stagingDir: string;
   private current?: {
     id: string;
     scope: string;
@@ -124,13 +273,18 @@ export class ChannelSession {
     ready: boolean;
   };
   private busy = false;
+  private flushing?: Promise<void>;
   private downloads = new Set<Promise<void>>();
+  private activeDownloadCount = 0;
+  private downloadQueue: Array<() => void> = [];
+  private activeStaging = new Map<string, number>();
   readonly now: () => number;
   private timer: NodeJS.Timeout;
   private boundApp?: { id: string; value: WeComApplication };
   readonly create: (channel: Channel) => WSClient;
   readonly fetcher: typeof fetch;
   readonly mediaHosts: ReadonlySet<string>;
+  readonly maxAttachmentBytes: number;
 
   constructor(
     directory: string,
@@ -144,11 +298,15 @@ export class ChannelSession {
     fetcher = fetch,
     now = Date.now,
     mediaHosts: ReadonlySet<string> = DEFAULT_WECOM_MEDIA_HOSTS,
+    maxAttachmentBytes = MAX_ATTACHMENT_BYTES,
   ) {
+    this.directory = directory;
+    this.stagingDir = join(directory, 'staging');
     this.create = create;
     this.fetcher = fetcher;
     this.now = now;
     this.mediaHosts = new Set([...mediaHosts].map((h) => h.toLowerCase()));
+    this.maxAttachmentBytes = maxAttachmentBytes;
     this.db = new DatabaseSync(join(directory, 'channel.sqlite'));
     this.db.exec(`PRAGMA journal_mode=WAL;
       CREATE TABLE IF NOT EXISTS batch(seq INTEGER PRIMARY KEY, scope TEXT NOT NULL,request TEXT NOT NULL,sender TEXT NOT NULL,state TEXT NOT NULL,due INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,error TEXT,UNIQUE(scope,request));
@@ -175,6 +333,7 @@ export class ChannelSession {
     this.db
       .prepare("UPDATE part SET files='[]',body=body||? WHERE files IS NULL")
       .run('（附件接收中断，请重新上传）');
+    this.sweepStagingSync();
     this.timer = setInterval(() => void this.flush(), 1000);
     this.timer.unref();
   }
@@ -272,9 +431,117 @@ export class ChannelSession {
           .run(now + 3000, batch);
     });
     if (!input.media.length) return;
-    const pull = this.downloadMedia(runtime, input);
+    const pull = this.withDownloadSlot(() =>
+      this.downloadMedia(runtime, input),
+    );
     this.downloads.add(pull);
     void pull.finally(() => this.downloads.delete(pull));
+  }
+
+  private async withDownloadSlot(task: () => Promise<void>): Promise<void> {
+    if (this.activeDownloadCount >= MAX_CONCURRENT_DOWNLOADS) {
+      await new Promise<void>((resolve) => {
+        this.downloadQueue.push(resolve);
+      });
+    } else {
+      this.activeDownloadCount++;
+    }
+    try {
+      await task();
+    } finally {
+      const next = this.downloadQueue.shift();
+      if (next) {
+        next();
+      } else {
+        this.activeDownloadCount--;
+      }
+    }
+  }
+
+  private retainActiveStaging(sha256: string) {
+    this.activeStaging.set(sha256, (this.activeStaging.get(sha256) ?? 0) + 1);
+  }
+
+  private releaseActiveStaging(sha256: string) {
+    const count = this.activeStaging.get(sha256) ?? 0;
+    if (count <= 1) this.activeStaging.delete(sha256);
+    else this.activeStaging.set(sha256, count - 1);
+  }
+
+  private referencedStagingShas(): Set<string> {
+    const refs = new Set<string>(this.activeStaging.keys());
+    const rows = this.db
+      .prepare(
+        "SELECT p.files FROM part p JOIN batch b ON b.seq=p.batch WHERE b.state IN ('open','pending','sending') AND p.files IS NOT NULL AND p.files<>'[]'",
+      )
+      .all() as Array<{ files: string }>;
+    for (const row of rows) {
+      try {
+        const parsed = JSON.parse(row.files) as Array<{ sha256?: unknown }>;
+        if (!Array.isArray(parsed)) continue;
+        for (const file of parsed) {
+          if (
+            typeof file?.sha256 === 'string' &&
+            /^[0-9a-f]{64}$/.test(file.sha256)
+          ) {
+            refs.add(file.sha256);
+          }
+        }
+      } catch {
+        // Ignore malformed legacy rows when collecting active digests.
+      }
+    }
+    return refs;
+  }
+
+  private sweepStagingSync() {
+    if (!existsSync(this.stagingDir)) return;
+    const keep = this.referencedStagingShas();
+    for (const entry of readdirSync(this.stagingDir)) {
+      if (!keep.has(entry)) {
+        rmSync(join(this.stagingDir, entry), { recursive: true, force: true });
+      }
+    }
+  }
+
+  private async sweepStaging() {
+    let entries: string[];
+    try {
+      entries = await readdir(this.stagingDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw error;
+    }
+    const keep = this.referencedStagingShas();
+    for (const entry of entries) {
+      if (!keep.has(entry)) {
+        await rm(join(this.stagingDir, entry), {
+          recursive: true,
+          force: true,
+        });
+      }
+    }
+  }
+
+  private async persistStagingFile(sha256: string, buffer: Buffer) {
+    if (!/^[0-9a-f]{64}$/.test(sha256))
+      throw new Error('invalid staging digest');
+    await mkdir(this.stagingDir, { recursive: true, mode: 0o700 });
+    await chmod(this.stagingDir, 0o700);
+    const temp = join(this.stagingDir, `${sha256}.${randomUUID()}.part`);
+    const target = join(this.stagingDir, sha256);
+    let handle: Awaited<ReturnType<typeof open>> | null = null;
+    try {
+      handle = await open(temp, 'wx', 0o600);
+      await handle.writeFile(buffer);
+      await handle.chmod(0o600);
+      await handle.close();
+      handle = null;
+      await rename(temp, target);
+    } finally {
+      if (handle) await handle.close().catch(() => {});
+      await rm(temp, { force: true }).catch(() => {});
+    }
   }
 
   private async downloadEncryptedMedia(
@@ -291,8 +558,8 @@ export class ChannelSession {
     )
       throw new Error('media host not allowed');
     const maxWireBytes = media.aeskey
-      ? MAX_ATTACHMENT_BYTES + WECOM_AES_PADDING_BYTES
-      : MAX_ATTACHMENT_BYTES;
+      ? this.maxAttachmentBytes + WECOM_AES_PADDING_BYTES
+      : this.maxAttachmentBytes;
     const controller = new AbortController();
     const response = await this.fetcher(url, {
       method: 'GET',
@@ -348,8 +615,9 @@ export class ChannelSession {
       }
     }
     const raw = Buffer.concat(chunks, total);
+    chunks.length = 0;
     const buffer = media.aeskey ? decryptFile(raw, media.aeskey) : raw;
-    if (buffer.length > MAX_ATTACHMENT_BYTES)
+    if (buffer.length > this.maxAttachmentBytes)
       throw new Error('attachment too large');
     return { buffer, filename };
   }
@@ -358,7 +626,10 @@ export class ChannelSession {
     runtime: NonNullable<typeof this.current>,
     input: NonNullable<ReturnType<typeof privateInput>>,
   ) {
+    const retainedShas: string[] = [];
+    let committed = false;
     try {
+      if (runtime !== this.current) throw new Error('channel changed');
       const subject = await runtime.app.fromBot(input.sender);
       const allowed = await this.post(runtime, {
         action: 'authorize',
@@ -373,10 +644,11 @@ export class ChannelSession {
           runtime,
           media,
         );
-        if (buffer.length > MAX_ATTACHMENT_BYTES)
-          throw new Error('attachment too large');
         const sha256 = createHash('sha256').update(buffer).digest('hex');
         const name = safeAttachmentName(filename);
+        this.retainActiveStaging(sha256);
+        retainedShas.push(sha256);
+        await this.persistStagingFile(sha256, buffer);
         const response = await this.transfer(runtime, subject, sha256, buffer);
         if (!response.ok) {
           await response.body?.cancel();
@@ -398,12 +670,20 @@ export class ChannelSession {
       this.db
         .prepare('UPDATE part SET files=? WHERE scope=? AND platform_id=?')
         .run(JSON.stringify(files), runtime.scope, input.platformId);
+      committed = true;
     } catch {
       this.db
         .prepare(
           "UPDATE part SET files='[]',body=body||? WHERE scope=? AND platform_id=?",
         )
         .run('（附件未接收，请重新上传）', runtime.scope, input.platformId);
+    } finally {
+      for (const sha of retainedShas) {
+        this.releaseActiveStaging(sha);
+      }
+      if (!committed && retainedShas.length > 0) {
+        await this.sweepStaging().catch(() => {});
+      }
     }
   }
 
@@ -446,99 +726,257 @@ export class ChannelSession {
     return getFile(this.fetcher, run.channel, sha256, subject, receipt);
   }
 
-  private async flushInbound(run: NonNullable<typeof this.current>) {
-    const now = this.now();
-    const batches = this.db
-      .prepare(
-        `SELECT * FROM batch b WHERE b.scope=? AND b.state IN ('open','pending','sending') AND b.due<=? AND b.next_at<=? AND NOT EXISTS(SELECT 1 FROM part p WHERE p.batch=b.seq AND p.files IS NULL) ORDER BY b.seq`,
-      )
-      .all(run.scope, now, now);
-    for (const batch of batches) {
-      if (run !== this.current) break;
-      const seq = Number(batch.seq);
-      const attempts = Number(batch.attempts ?? 0);
-      this.db
-        .prepare("UPDATE batch SET state='sending',due=? WHERE seq=?")
-        .run(this.now() + 1000, seq);
-      const parts = this.db
-        .prepare('SELECT body,files FROM part WHERE batch=? ORDER BY seq')
-        .all(seq);
-      const files = parts.flatMap(
-        (p) => JSON.parse(String(p.files)) as FileRef[],
+  private runtimeSecrets(run: NonNullable<typeof this.current>): string[] {
+    return [run.channel.token, run.channel.secret, run.app.app.secret].filter(
+      (s) => typeof s === 'string' && (s.length >= 4 || /[\r\n\s]/.test(s)),
+    );
+  }
+
+  private isTransientStatus(status: number): boolean {
+    return status === 401 || status === 408 || status === 429 || status >= 500;
+  }
+
+  private isTransientInboundError(error: unknown): boolean {
+    if (error instanceof TransientInboundError) return true;
+    if (error instanceof PermanentInboundError) return false;
+    if (error instanceof WeComApiError) return error.errcode === -1;
+    if (!(error instanceof Error)) return false;
+    if (
+      error.message === '企业应用尚未通过认证' ||
+      error.message === '企业应用读取失败'
+    ) {
+      return (
+        error.cause !== undefined && !(error.cause instanceof WeComApiError)
       );
+    }
+    return (
+      error.name === 'AbortError' ||
+      error.name === 'TimeoutError' ||
+      error instanceof TypeError ||
+      'code' in error
+    );
+  }
+
+  private async putStagingFiles(
+    run: NonNullable<typeof this.current>,
+    subject: string,
+    files: FileRef[],
+  ): Promise<void> {
+    const seen = new Set<string>();
+    for (const file of files) {
+      if (seen.has(file.sha256)) continue;
+      seen.add(file.sha256);
+      if (!/^[0-9a-f]{64}$/.test(file.sha256)) {
+        throw new PermanentInboundError(400, 'invalid attachment digest');
+      }
+      let bytes: Buffer;
       try {
-        const subject = await run.app.fromBot(String(batch.sender));
-        const accepted = await this.post(run, {
-          action: 'inbound',
-          subject,
-          platformId: batch.request,
-          text: parts
-            .map((p) => p.body)
-            .filter(Boolean)
-            .join('\n'),
-          ...(files.length ? { files } : {}),
-        });
-        await accepted.body?.cancel();
-        if (accepted.ok || accepted.status === 403 || accepted.status === 400) {
-          if (accepted.ok)
+        bytes = await readFile(join(this.stagingDir, file.sha256));
+      } catch {
+        throw new PermanentInboundError(400, 'local staging file missing');
+      }
+      if (
+        bytes.length !== file.size ||
+        createHash('sha256').update(bytes).digest('hex') !== file.sha256
+      ) {
+        throw new PermanentInboundError(400, 'local staging integrity failed');
+      }
+      const response = await this.transfer(run, subject, file.sha256, bytes);
+      if (!response.ok) {
+        await response.body?.cancel();
+        if (this.isTransientStatus(response.status)) {
+          throw new TransientInboundError(
+            'hub staging upload status ' + response.status,
+          );
+        }
+        throw new PermanentInboundError(
+          response.status,
+          'hub staging upload status ' + response.status,
+        );
+      }
+      let receipt: { sha256?: unknown; size?: unknown };
+      try {
+        receipt = (await response.json()) as {
+          sha256?: unknown;
+          size?: unknown;
+        };
+      } catch {
+        throw new PermanentInboundError(400, 'file integrity');
+      }
+      if (receipt.sha256 !== file.sha256 || receipt.size !== bytes.length) {
+        throw new PermanentInboundError(400, 'file integrity');
+      }
+    }
+  }
+
+  private async notifyRejectedSender(
+    run: NonNullable<typeof this.current>,
+    sender: string,
+    status: number,
+  ): Promise<void> {
+    if (!run.ready || typeof run.client.sendMessage !== 'function') return;
+    const content =
+      status === 403
+        ? '消息未送达：当前企业账号未绑定 Hub 账号或机器人访问权限已停用，请联系管理员处理。'
+        : status === 413
+          ? '消息未送达：附件数量、大小或存储配额超出限制，请精简后重试。'
+          : status === 0
+            ? '消息未送达：暂无法核对您的企业成员身份，请稍后重试或联系管理员。'
+            : '消息未送达：请求内容或附件校验未通过，请检查后重新发送。';
+    try {
+      await run.client.sendMessage(sender, {
+        msgtype: 'markdown',
+        markdown: { content },
+      });
+    } catch {
+      // Best-effort notification only; never roll back terminal quarantine state.
+    }
+  }
+
+  private async flushInbound(run: NonNullable<typeof this.current>) {
+    const deferredSenders = new Set<string>();
+    while (run === this.current) {
+      const now = this.now();
+      const batches = this.db
+        .prepare(
+          `SELECT * FROM batch b
+           WHERE b.scope=?
+             AND b.state IN ('open','pending','sending')
+             AND b.due<=?
+             AND b.next_at<=?
+             AND NOT EXISTS(SELECT 1 FROM part p WHERE p.batch=b.seq AND p.files IS NULL)
+             AND NOT EXISTS(
+               SELECT 1 FROM batch prev
+               WHERE prev.scope=b.scope
+                 AND prev.sender=b.sender
+                 AND prev.state IN ('open','pending','sending')
+                 AND prev.seq < b.seq
+             )
+           ORDER BY b.seq`,
+        )
+        .all(run.scope, now, now);
+      if (!batches.length) break;
+      let progressed = false;
+      for (const batch of batches) {
+        if (run !== this.current) break;
+        const sender = String(batch.sender);
+        if (deferredSenders.has(sender)) continue;
+        const seq = Number(batch.seq);
+        const attempts = Number(batch.attempts ?? 0);
+        this.db
+          .prepare("UPDATE batch SET state='sending',due=? WHERE seq=?")
+          .run(this.now() + 1000, seq);
+        const parts = this.db
+          .prepare('SELECT body,files FROM part WHERE batch=? ORDER BY seq')
+          .all(seq);
+        const files = parts.flatMap(
+          (p) => JSON.parse(String(p.files)) as FileRef[],
+        );
+        try {
+          const subject = await run.app.fromBot(sender);
+          const payload = {
+            action: 'inbound',
+            subject,
+            platformId: batch.request,
+            text: parts
+              .map((p) => p.body)
+              .filter(Boolean)
+              .join('\n'),
+            ...(files.length ? { files } : {}),
+          };
+          let accepted = await this.post(run, payload);
+          await accepted.body?.cancel();
+          if (accepted.status === 400 && files.length > 0) {
+            await this.putStagingFiles(run, subject, files);
+            accepted = await this.post(run, payload);
+            await accepted.body?.cancel();
+          }
+          if (accepted.ok) {
             this.db
               .prepare(
                 'INSERT INTO peer VALUES(?,?,?) ON CONFLICT(scope,subject) DO UPDATE SET sender=excluded.sender',
               )
-              .run(run.scope, subject, String(batch.sender));
-          this.tx(() => {
+              .run(run.scope, subject, sender);
+            this.tx(() => {
+              this.db
+                .prepare(
+                  "UPDATE batch SET state='accepted',error=NULL WHERE seq=?",
+                )
+                .run(seq);
+              this.db
+                .prepare("UPDATE part SET body='',files='[]' WHERE batch=?")
+                .run(seq);
+            });
+            await this.sweepStaging();
+            progressed = true;
+          } else if (this.isTransientStatus(accepted.status)) {
+            throw new TransientInboundError(
+              'hub inbound status ' + accepted.status,
+            );
+          } else {
+            throw new PermanentInboundError(
+              accepted.status,
+              'hub inbound status ' + accepted.status,
+            );
+          }
+        } catch (error) {
+          if (run !== this.current) {
             this.db
-              .prepare('UPDATE batch SET state=?,error=NULL WHERE seq=?')
-              .run(accepted.ok ? 'accepted' : 'refused', seq);
-            this.db
-              .prepare("UPDATE part SET body='',files='[]' WHERE batch=?")
+              .prepare("UPDATE batch SET state='pending' WHERE seq=?")
               .run(seq);
-          });
-        } else {
-          throw new Error('hub inbound status ' + accepted.status);
-        }
-      } catch (error) {
-        if (run !== this.current) {
-          this.db
-            .prepare("UPDATE batch SET state='pending' WHERE seq=?")
-            .run(seq);
-          break;
-        }
-        const nextAttempts = attempts + 1;
-        const failAt = this.now();
-        const reason =
-          error instanceof Error
-            ? error.message.slice(0, 200)
-            : 'inbound failed';
-        if (nextAttempts >= MAX_BATCH_ATTEMPTS) {
-          this.db
-            .prepare(
-              "UPDATE batch SET state='failed',attempts=?,next_at=0,error=? WHERE seq=?",
-            )
-            .run(nextAttempts, reason, seq);
-          console.error('[wecom] inbound batch quarantined:', {
-            seq,
-            attempts: nextAttempts,
-            error: reason,
-          });
-        } else {
-          const backoff = Math.min(
-            BATCH_BACKOFF_MAX_MS,
-            BATCH_BACKOFF_BASE_MS * 2 ** (nextAttempts - 1),
-          );
-          this.db
-            .prepare(
-              "UPDATE batch SET state='pending',attempts=?,next_at=?,error=? WHERE seq=?",
-            )
-            .run(nextAttempts, failAt + backoff, reason, seq);
-          console.warn('[wecom] inbound batch retrying:', {
-            seq,
-            attempts: nextAttempts,
-            nextAt: failAt + backoff,
-            error: reason,
-          });
+            break;
+          }
+          const nextAttempts = attempts + 1;
+          const failAt = this.now();
+          const reason = sanitizeLogError(error, this.runtimeSecrets(run));
+          const transient = this.isTransientInboundError(error);
+          if (
+            error instanceof PermanentInboundError ||
+            (!transient && nextAttempts >= MAX_BATCH_ATTEMPTS)
+          ) {
+            this.tx(() => {
+              this.db
+                .prepare(
+                  "UPDATE batch SET state='failed',attempts=?,next_at=0,error=? WHERE seq=?",
+                )
+                .run(nextAttempts, reason, seq);
+              this.db
+                .prepare("UPDATE part SET body='',files='[]' WHERE batch=?")
+                .run(seq);
+            });
+            await this.sweepStaging();
+            console.error('[wecom] inbound batch quarantined:', {
+              seq,
+              attempts: nextAttempts,
+              error: reason,
+            });
+            await this.notifyRejectedSender(
+              run,
+              sender,
+              error instanceof PermanentInboundError ? error.status : 0,
+            );
+            progressed = true;
+          } else {
+            const backoff = Math.min(
+              BATCH_BACKOFF_MAX_MS,
+              BATCH_BACKOFF_BASE_MS * 2 ** (nextAttempts - 1),
+            );
+            this.db
+              .prepare(
+                "UPDATE batch SET state='pending',attempts=?,next_at=?,error=? WHERE seq=?",
+              )
+              .run(nextAttempts, failAt + backoff, reason, seq);
+            console.warn('[wecom] inbound batch retrying:', {
+              seq,
+              attempts: nextAttempts,
+              nextAt: failAt + backoff,
+              error: reason,
+            });
+            deferredSenders.add(sender);
+          }
         }
       }
+      if (!progressed) break;
     }
   }
 
@@ -557,7 +995,7 @@ export class ChannelSession {
     let state: ReceiptOutcome = 'not_dispatched';
     let acknowledgment: { request: string; code: number } | undefined;
     try {
-      verifyDeliveryIntent(item);
+      verifyDeliveryIntent(item, this.maxAttachmentBytes);
       let result;
       if (item.file) {
         const got = await this.getFile(
@@ -571,7 +1009,7 @@ export class ChannelSession {
           !got.ok ||
           contentLength === null ||
           Number(contentLength) !== item.intent.file_size ||
-          item.file.size > MAX_ATTACHMENT_BYTES
+          item.file.size > this.maxAttachmentBytes
         ) {
           await got.body?.cancel();
           throw new Error('file unavailable');
@@ -591,7 +1029,11 @@ export class ChannelSession {
         result = await run.client.sendMediaMessage(to, 'file', media.media_id);
       } else {
         const content =
-          item.role === 'user' ? '客户端消息：\n' + item.text : item.text;
+          item.role === 'user'
+            ? '客户端消息：\n' + item.text
+            : item.role === 'notice'
+              ? formatChannelNotice(item.code, item.text)
+              : item.text;
         if (Buffer.byteLength(content) <= MAX_INLINE_TEXT_BYTES) {
           state = 'unknown';
           result = await run.client.sendMessage(to, {
@@ -648,21 +1090,27 @@ export class ChannelSession {
     const run = this.current;
     if (!run?.ready || this.busy) return;
     this.busy = true;
-    try {
-      await this.flushInbound(run);
-      await this.flushOutbound(run);
-    } catch {
-      /* The next poll can recover reads. Claimed writes stay unknown. */
-    } finally {
-      this.busy = false;
-    }
+    const task = (async () => {
+      try {
+        await this.flushInbound(run);
+        await this.flushOutbound(run);
+      } catch {
+        /* The next poll can recover reads. Claimed writes stay unknown. */
+      } finally {
+        this.busy = false;
+        this.flushing = undefined;
+      }
+    })();
+    this.flushing = task;
+    await task;
   }
 
   async close() {
     clearInterval(this.timer);
     this.disconnect();
     await Promise.allSettled(this.downloads);
-    while (this.busy) await new Promise((ok) => setTimeout(ok, 20));
+    await this.flushing;
+    await this.sweepStaging();
     this.db.close();
   }
 }
