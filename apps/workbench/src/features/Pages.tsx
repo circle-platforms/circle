@@ -456,6 +456,73 @@ export function ModelsPage({ onDialog }: { onDialog: Props['onDialog'] }) {
     </Page>
   );
 }
+function formatSkillToolProblem(line: string): string {
+  const notTool =
+    /^(.+?) (allowed-tools|disallowed-tools) (.+?): not a tool name · not applied$/.exec(
+      line,
+    );
+  if (notTool) {
+    return t('{name} {field} {entry}: not a tool name · not applied', {
+      name: notTool[1]!,
+      field: notTool[2]!,
+      entry: notTool[3]!,
+    });
+  }
+  const missingTools =
+    /^(.+?) names tools that do not exist in (allowed-tools|disallowed-tools): (.+?) · not applied$/.exec(
+      line,
+    );
+  if (missingTools) {
+    return t(
+      '{name} names tools that do not exist in {field}: {missing} · not applied',
+      {
+        name: missingTools[1]!,
+        field: missingTools[2]!,
+        missing: missingTools[3]!,
+      },
+    );
+  }
+  const onlyExecute =
+    /^(.+?) allowed-tools (.+?): only execute takes a pattern · not applied$/.exec(
+      line,
+    );
+  if (onlyExecute) {
+    return t(
+      '{name} allowed-tools {entry}: only execute takes a pattern · not applied',
+      {
+        name: onlyExecute[1]!,
+        entry: onlyExecute[2]!,
+      },
+    );
+  }
+  const wholeWithheld =
+    /^(.+?) disallowed-tools (.+?): a whole tool is withheld, never part of its calls · not applied$/.exec(
+      line,
+    );
+  if (wholeWithheld) {
+    return t(
+      '{name} disallowed-tools {entry}: a whole tool is withheld, never part of its calls · not applied',
+      {
+        name: wholeWithheld[1]!,
+        entry: wholeWithheld[2]!,
+      },
+    );
+  }
+  const alwaysOffered =
+    /^(.+?) disallowed-tools (.+?): always offered · not applied$/.exec(line);
+  if (alwaysOffered) {
+    return t('{name} disallowed-tools {entry}: always offered · not applied', {
+      name: alwaysOffered[1]!,
+      entry: alwaysOffered[2]!,
+    });
+  }
+  const genericNotApplied = /^(.+?) · not applied$/.exec(line);
+  if (genericNotApplied) {
+    return t('{detail} · not applied', { detail: genericNotApplied[1]! });
+  }
+  return line;
+}
+
 export function SkillsPage() {
   const { snapshot, runtime, act, perform, notify } = useRuntime();
   const [query, setQuery] = useState('');
@@ -612,17 +679,21 @@ export function SkillsPage() {
                 <code className="file-path">{selected.path}</code>
                 {selected.allowedTools?.length ? (
                   <p className="panel-note">
-                    allowed-tools: {selected.allowedTools.join(', ')}
+                    {t('allowed-tools: {tools}', {
+                      tools: selected.allowedTools.join(', '),
+                    })}
                   </p>
                 ) : null}
                 {selected.disallowedTools?.length ? (
                   <p className="panel-note">
-                    disallowed-tools: {selected.disallowedTools.join(', ')}
+                    {t('disallowed-tools: {tools}', {
+                      tools: selected.disallowedTools.join(', '),
+                    })}
                   </p>
                 ) : null}
                 {selected.toolProblems?.map((line) => (
                   <p className="panel-note" key={line}>
-                    {line}
+                    {formatSkillToolProblem(line)}
                   </p>
                 ))}
                 <Markdown text={selected.content} />

@@ -16,5 +16,7 @@ const SHELL_PAGE_TITLES: Record<string, () => string> = {
 };
 
 export function shellPageTitle(page: string): string {
-  return SHELL_PAGE_TITLES[page]?.() ?? page;
+  return Object.hasOwn(SHELL_PAGE_TITLES, page)
+    ? SHELL_PAGE_TITLES[page]!()
+    : page;
 }

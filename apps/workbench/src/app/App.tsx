@@ -1,5 +1,9 @@
 import { RemoteBotChat } from '../features/RemoteBotChat';
-import { findHubConnection, isHubConnected } from '../model/remote-bot';
+import {
+  findHubConnection,
+  isHubConnected,
+  shouldOpenInitialConnectionModal,
+} from '../model/remote-bot';
 import { KnowledgePage } from '../features/KnowledgePage';
 import { CommandTerminalNavigation } from '../components/CommandTerminalNavigation';
 import type {
@@ -827,10 +831,12 @@ export function App() {
   const automaticConnection = useRef(false);
   useEffect(() => {
     if (
-      runtime.mode === 'live' &&
-      snapshot.runtime?.configured === false &&
-      !findHubConnection(snapshot) &&
-      route.pathname !== '/page/remote-bot'
+      shouldOpenInitialConnectionModal({
+        mode: runtime.mode,
+        configured: snapshot.runtime?.configured,
+        snapshot,
+        pathname: route.pathname,
+      })
     ) {
       automaticConnection.current = true;
       setDialogSelection('');

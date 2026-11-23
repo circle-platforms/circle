@@ -9,17 +9,21 @@ import { Button, FileChip } from '../components/common';
 import { t, useLocale } from '../i18n';
 import {
   botIdentityKey,
+  classifyRemoteBotFailure,
   deliveryText,
   findHubConnection,
   isHubConnected,
   mergeDeliveryStates,
+  nextBotRetryDelay,
+  translateBotTransferError,
   type BotDiscovery,
   type BotHistory,
+  type RemoteBotFailure,
   type RemoteEvent,
 } from '../model/remote-bot';
 
 function errorMessage(reason: unknown, fallback: string) {
-  return reason instanceof Error && reason.message ? reason.message : fallback;
+  return translateBotTransferError(reason, fallback);
 }
 
 export function RemoteBotLink() {
@@ -67,6 +71,7 @@ function Chat({
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   const [offline, setOffline] = useState(false);
+  const [failure, setFailure] = useState<RemoteBotFailure>();
   const [sending, setSending] = useState(false);
   const [epoch, setEpoch] = useState(0);
   const identity = useRef('');
@@ -84,13 +89,15 @@ function Chat({
     if (!connected) {
       setBot(undefined);
       setActive(null);
+      setFailure(undefined);
       setOffline(true);
       return;
     }
     let closed = false;
-    let timer: ReturnType<typeof setTimeout>;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let backoffMs = 0;
     async function read() {
-      let delay = 1000;
+      let nextDelay: number | undefined = 1000;
       try {
         const current = (await invoke({ action: 'discover' })) as BotDiscovery;
         if (closed) return;
@@ -118,25 +125,37 @@ function Chat({
         if (history.events.length) {
           cursor.current = history.events[history.events.length - 1]!.cursor;
           setEvents((old) => old.concat(history.events));
-          if (history.events.length === 100) delay = 0;
+          if (history.events.length === 100) nextDelay = 0;
         }
         setQuestion(history.question ?? null);
         setBot(current);
         setActive(history.active);
+        setFailure(undefined);
         setOffline(false);
-      } catch {
+        backoffMs = 0;
+      } catch (reason) {
         if (!closed) {
+          const classified = classifyRemoteBotFailure(reason);
+          setFailure(classified);
           setOffline(true);
           setBot(undefined);
           setActive(null);
+          if (classified.retryable) {
+            backoffMs = nextBotRetryDelay(backoffMs);
+            nextDelay = backoffMs;
+          } else {
+            nextDelay = undefined;
+          }
         }
       }
-      if (!closed) timer = setTimeout(() => void read(), delay);
+      if (!closed && nextDelay !== undefined) {
+        timer = setTimeout(() => void read(), nextDelay);
+      }
     }
     void read();
     return () => {
       closed = true;
-      clearTimeout(timer);
+      if (timer !== undefined) clearTimeout(timer);
     };
   }, [invoke, epoch, connected]);
 
@@ -186,12 +205,26 @@ function Chat({
     }
   }
 
-  if (!connected || offline)
+  if (!connected)
     return (
       <div className="empty-state">
         <p role="status">{t('remote bot disconnected')}</p>
       </div>
     );
+  if (offline) {
+    const view = failure ?? classifyRemoteBotFailure(undefined);
+    return (
+      <div className="empty-state" data-bot-error-kind={view.kind}>
+        <h2>{view.title}</h2>
+        <p role="status">{view.cause}</p>
+        <p className="muted small">{view.action}</p>
+        {view.detail && <p className="muted small">{view.detail}</p>}
+        <Button type="button" onClick={() => setEpoch((n) => n + 1)}>
+          {t('retry')}
+        </Button>
+      </div>
+    );
+  }
   const inputLabel = question ? t('answer the bot') : t('message your bot');
   return (
     <section className="conversation" aria-label={t('my bot')}>
@@ -328,7 +361,12 @@ function Chat({
                     const selected = await desktopHost()?.attachBotFiles?.(
                       bot.binding,
                     );
-                    if (selected && key === identity.current) {
+                    if (
+                      selected &&
+                      selected.length > 0 &&
+                      key === identity.current
+                    ) {
+                      setError('');
                       setFiles(selected);
                     }
                   } catch (e) {

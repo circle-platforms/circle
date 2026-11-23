@@ -726,7 +726,12 @@ export class LiveRuntime implements RuntimePort {
           throw Error(
             t('destination branch changed; reopen the worktree menu'),
           );
-        throw Error(reply.error ?? t('runtime action failed'));
+        throw Object.assign(Error(reply.error ?? t('runtime action failed')), {
+          ...(reply.errorStatus !== undefined
+            ? { status: reply.errorStatus }
+            : {}),
+          ...(reply.errorCode !== undefined ? { code: reply.errorCode } : {}),
+        });
       }
       return reply.data;
     })().catch((error) => {
