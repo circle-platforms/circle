@@ -142,6 +142,8 @@ export const RUNTIME_COMMAND_WAIT_MS = 4_000;
 const RUNTIME_COMMAND_WAIT_TICK_MS = 1_000;
 /** How long the runtime may keep a command before it is said to have failed. */
 export const RUNTIME_COMMAND_TIMEOUT_MS = 120_000;
+/** Native remote-bot batch transfers upload up to 8 files (120s per file). */
+export const REMOTE_BOT_FILE_COMMAND_TIMEOUT_MS = 960_000;
 /** A close the runtime does not answer within this is ended with a kill: quitting must work. */
 export const RUNTIME_CLOSE_LIMIT_MS = 10_000;
 /** After the kill, the exit is waited on only this long before a SIGKILL settles it. */
@@ -154,6 +156,8 @@ export interface RuntimeSupervisorOptions {
   version?: string;
   /** How long a command may go unanswered; a test shortens what a person waits for. */
   commandTimeoutMs?: number;
+  /** Dedicated timeout for remote-bot-native-file batch transfers. */
+  botFileCommandTimeoutMs?: number;
   /** How long a command may be held before the windows are told the runtime is busy. */
   commandWaitMs?: number;
   /** After the close's kill, how long the exit is waited on; a test shortens it. */
@@ -1068,6 +1072,15 @@ export class RuntimeSupervisor {
       this.child!.postMessage(request);
     });
   }
+  private commandTimeoutFor(name: RuntimeCommand['name']): number {
+    if (name === 'remote-bot-native-file') {
+      return (
+        this.options.botFileCommandTimeoutMs ??
+        REMOTE_BOT_FILE_COMMAND_TIMEOUT_MS
+      );
+    }
+    return this.options.commandTimeoutMs ?? RUNTIME_COMMAND_TIMEOUT_MS;
+  }
   async command(command: RuntimeCommand): Promise<RuntimeReply> {
     if (!this.child) throw Error('runtime disconnected');
     if (this.pending.has(command.id)) throw Error('duplicate runtime command');
@@ -1092,7 +1105,7 @@ export class RuntimeSupervisor {
           ].join('\n'),
         );
         reject(commandTimeout(command.name, waited));
-      }, this.options.commandTimeoutMs ?? RUNTIME_COMMAND_TIMEOUT_MS);
+      }, this.commandTimeoutFor(command.name));
       this.pending.set(command.id, {
         resolve,
         reject,

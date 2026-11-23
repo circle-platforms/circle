@@ -28,6 +28,8 @@ const hub: McpServer = {
   args: '',
   url: 'http://127.0.0.1:7420/mcp',
   enabled: true,
+  hasAuthorizationHeader: false,
+  settingsPath: '/tmp/circle-ui/runtime-home/settings.json',
   status: 'connected',
   tools: [],
 };
@@ -57,7 +59,17 @@ let nextFailure:
 let attachOutcome:
   | { kind: 'files'; files: ChatFile[] }
   | { kind: 'cancel' }
-  | { kind: 'error'; message: string } = {
+  | {
+      kind: 'error';
+      message: string;
+      status?: number;
+      code?: string;
+      detail?: string;
+      errorUploaded?: number;
+      errorTotal?: number;
+      errorFileName?: string;
+      errorReason?: string;
+    } = {
   kind: 'files',
   files: [],
 };
@@ -93,7 +105,31 @@ const host = {
   }),
   attachBotFiles: async () => {
     if (attachOutcome.kind === 'cancel') return null;
-    if (attachOutcome.kind === 'error') throw new Error(attachOutcome.message);
+    if (attachOutcome.kind === 'error') {
+      throw Object.assign(new Error(attachOutcome.message), {
+        ...(attachOutcome.status !== undefined
+          ? { status: attachOutcome.status }
+          : {}),
+        ...(attachOutcome.code !== undefined
+          ? { code: attachOutcome.code }
+          : {}),
+        ...(attachOutcome.detail !== undefined
+          ? { detail: attachOutcome.detail }
+          : {}),
+        ...(attachOutcome.errorUploaded !== undefined
+          ? { errorUploaded: attachOutcome.errorUploaded }
+          : {}),
+        ...(attachOutcome.errorTotal !== undefined
+          ? { errorTotal: attachOutcome.errorTotal }
+          : {}),
+        ...(attachOutcome.errorFileName !== undefined
+          ? { errorFileName: attachOutcome.errorFileName }
+          : {}),
+        ...(attachOutcome.errorReason !== undefined
+          ? { errorReason: attachOutcome.errorReason }
+          : {}),
+      });
+    }
     return attachOutcome.files;
   },
   saveBotFile: async () => true,
@@ -186,6 +222,14 @@ Object.assign(window, {
       hub.error = error;
       emitSnapshot();
     },
+    setHubConfig: (config: {
+      hasAuthorizationHeader?: boolean;
+      settingsPath?: string;
+    }) => {
+      hub.hasAuthorizationHeader = config.hasAuthorizationHeader;
+      hub.settingsPath = config.settingsPath;
+      emitSnapshot();
+    },
     setEvents: (events: typeof currentEvents) => {
       currentEvents = events;
     },
@@ -203,8 +247,24 @@ Object.assign(window, {
     setAttachCancel: () => {
       attachOutcome = { kind: 'cancel' };
     },
-    setAttachError: (message: string) => {
-      attachOutcome = { kind: 'error', message };
+    setAttachError: (
+      input:
+        | string
+        | {
+            message: string;
+            status?: number;
+            code?: string;
+            detail?: string;
+            errorUploaded?: number;
+            errorTotal?: number;
+            errorFileName?: string;
+            errorReason?: string;
+          },
+    ) => {
+      attachOutcome =
+        typeof input === 'string'
+          ? { kind: 'error', message: input }
+          : { kind: 'error', ...input };
     },
   },
 });

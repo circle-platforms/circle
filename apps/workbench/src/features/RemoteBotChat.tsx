@@ -75,6 +75,8 @@ export function RemoteBotChat() {
       connected={connection.status === 'connected'}
       connectionStatus={connection.status}
       connectionError={connection.error}
+      hasAuthorizationHeader={connection.hasAuthorizationHeader}
+      settingsPath={connection.settingsPath}
       request={runtime.request}
     />
   ) : (
@@ -95,10 +97,14 @@ function Chat({
   connected,
   connectionStatus,
   connectionError,
+  hasAuthorizationHeader,
+  settingsPath,
 }: {
   connected: boolean;
   connectionStatus: string;
   connectionError?: string;
+  hasAuthorizationHeader?: boolean;
+  settingsPath?: string;
   request: ReturnType<typeof useRuntime>['runtime']['request'];
 }) {
   useLocale();
@@ -177,7 +183,10 @@ function Chat({
         backoffMs = 0;
       } catch (reason) {
         if (!closed) {
-          const classified = classifyRemoteBotFailure(reason);
+          const classified = classifyRemoteBotFailure(reason, {
+            hasAuthorizationHeader,
+            settingsPath,
+          });
           setFailure(classified);
           setOffline(true);
           setBot(undefined);
@@ -199,7 +208,7 @@ function Chat({
       closed = true;
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [invoke, epoch, connected]);
+  }, [invoke, epoch, connected, hasAuthorizationHeader, settingsPath]);
 
   async function act(action: 'send' | 'stop' | 'new') {
     if (!bot || sending) return;
@@ -269,7 +278,12 @@ function Chat({
       />
     );
   if (offline) {
-    const view = failure ?? classifyRemoteBotFailure(undefined);
+    const view =
+      failure ??
+      classifyRemoteBotFailure(undefined, {
+        hasAuthorizationHeader,
+        settingsPath,
+      });
     return (
       <div className="empty-state" data-bot-error-kind={view.kind}>
         <h2>{view.title}</h2>

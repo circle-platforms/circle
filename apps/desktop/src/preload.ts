@@ -35,9 +35,17 @@ const unwrapBotTransfer = <T>(reply: unknown): T => {
       errorStatus?: number;
       errorCode?: string;
       errorDetail?: string;
+      errorUploaded?: number;
+      errorTotal?: number;
+      errorFileName?: string;
+      errorReason?: string;
     };
     if (envelope.ok) return envelope.data as T;
-    throw Object.assign(Error(envelope.error ?? 'file transfer failed'), {
+    // Electron's contextBridge strips custom own properties (including cause)
+    // when cloning Error rejections across worlds, so reject with a plain object.
+    throw {
+      name: 'Error',
+      message: envelope.error ?? 'file transfer failed',
       ...(envelope.errorStatus !== undefined
         ? { status: envelope.errorStatus }
         : {}),
@@ -45,7 +53,19 @@ const unwrapBotTransfer = <T>(reply: unknown): T => {
       ...(envelope.errorDetail !== undefined
         ? { detail: envelope.errorDetail }
         : {}),
-    });
+      ...(envelope.errorUploaded !== undefined
+        ? { errorUploaded: envelope.errorUploaded }
+        : {}),
+      ...(envelope.errorTotal !== undefined
+        ? { errorTotal: envelope.errorTotal }
+        : {}),
+      ...(envelope.errorFileName !== undefined
+        ? { errorFileName: envelope.errorFileName }
+        : {}),
+      ...(envelope.errorReason !== undefined
+        ? { errorReason: envelope.errorReason }
+        : {}),
+    };
   }
   return reply as T;
 };

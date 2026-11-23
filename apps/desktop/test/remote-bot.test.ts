@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -13,6 +14,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test, { type TestContext } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
+import { build } from 'esbuild';
+import type { DesktopBridge } from '../src/contracts.ts';
 import type { McpBearerConnection } from '../../../src/mcp_loader.js';
 import { HUB_SERVER } from '../../../src/hub_connection.js';
 import {
@@ -458,7 +463,7 @@ test('remoteBotRequest sends bot-client-version header and attaches structured e
 
   for (const scenario of [
     {
-      status: 409,
+      status: 400,
       body: { code: 'BOT_VERSION_MISMATCH', message: 'client too old' },
       expectedCode: 'BOT_VERSION_MISMATCH',
       expectedMessage: 'client too old',
@@ -983,6 +988,7 @@ test('C20: RuntimeController upload-batch pre-validates all files locally before
       assert.equal(error.uploaded, 2);
       assert.equal(error.total, 5);
       assert.equal(error.fileName, 'c.txt');
+      assert.equal(error.reason, 'quota exceeded');
       assert.equal(error.status, 413);
       assert.equal(error.code, 'BOT_QUOTA_EXCEEDED');
       assert.equal(
@@ -991,5 +997,238 @@ test('C20: RuntimeController upload-batch pre-validates all files locally before
       );
       return true;
     },
+  );
+});
+
+test('T2: preload unwrapBotTransfer preserves structured error metadata and fails on error envelopes', async () => {
+  const result = await build({
+    entryPoints: [fileURLToPath(new URL('../src/preload.ts', import.meta.url))],
+    platform: 'node',
+    format: 'cjs',
+    bundle: true,
+    external: ['electron'],
+    write: false,
+  });
+  let bridge!: DesktopBridge;
+  let nextReply: unknown;
+  runInNewContext(result.outputFiles[0]!.text, {
+    require: () => ({
+      contextBridge: {
+        exposeInMainWorld: (_key: string, api: DesktopBridge) => {
+          bridge = api;
+        },
+      },
+      ipcRenderer: {
+        invoke: async () => nextReply,
+        send: () => {},
+        on: () => {},
+        removeListener: () => {},
+      },
+    }),
+  });
+
+  nextReply = {
+    ok: true,
+    data: [{ name: 'ok.txt', sha256: 'a'.repeat(64), size: 2 }],
+  };
+  assert.deepEqual(await bridge.attachBotFiles!('b1'), [
+    { name: 'ok.txt', sha256: 'a'.repeat(64), size: 2 },
+  ]);
+
+  nextReply = {
+    ok: false,
+    error: 'Uploaded 1 of 3 files; failed on c: d.txt: fetch failed',
+    errorStatus: 413,
+    errorCode: 'BOT_QUOTA_EXCEEDED',
+    errorDetail: 'quota full',
+    errorUploaded: 1,
+    errorTotal: 3,
+    errorFileName: 'c: d.txt',
+    errorReason: 'fetch failed',
+  };
+  await assert.rejects(
+    () => bridge.attachBotFiles!('b1'),
+    (error: unknown) => {
+      const meta = error as {
+        message?: unknown;
+        status?: number;
+        code?: string;
+        detail?: string;
+        errorUploaded?: number;
+        errorTotal?: number;
+        errorFileName?: string;
+        errorReason?: string;
+      };
+      return (
+        meta?.message ===
+          'Uploaded 1 of 3 files; failed on c: d.txt: fetch failed' &&
+        meta.status === 413 &&
+        meta.code === 'BOT_QUOTA_EXCEEDED' &&
+        meta.detail === 'quota full' &&
+        meta.errorUploaded === 1 &&
+        meta.errorTotal === 3 &&
+        meta.errorFileName === 'c: d.txt' &&
+        meta.errorReason === 'fetch failed'
+      );
+    },
+  );
+
+  nextReply = {
+    ok: false,
+    error: 'attachment quota exceeded',
+    errorStatus: 413,
+    errorCode: 'BOT_QUOTA_EXCEEDED',
+  };
+  await assert.rejects(
+    () =>
+      bridge.saveBotFile!('b1', {
+        name: 'ok.txt',
+        sha256: 'a'.repeat(64),
+        size: 2,
+      }),
+    (error: unknown) => {
+      const meta = error as {
+        message?: unknown;
+        status?: number;
+        code?: string;
+      };
+      return (
+        meta?.message === 'attachment quota exceeded' &&
+        meta.status === 413 &&
+        meta.code === 'BOT_QUOTA_EXCEEDED'
+      );
+    },
+  );
+});
+
+test('F14/F19: RuntimeController exposes hasAuthorizationHeader + settingsPath on mcp entries, preserves PartialBatchUploadError fields, and sanitizes fs errors', async (t: TestContext) => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-bot-f14-f19-'));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(home, { recursive: true });
+  await mkdir(workspace, { recursive: true });
+  const settings = defaultSettings();
+  settings.mcpServers[HUB_SERVER] = {
+    type: 'http',
+    url: 'http://127.0.0.1:7420/mcp',
+    headers: { Authorization: 'Bearer member-tok' },
+  };
+  saveSettings(settings, home);
+  const binding = remoteBotPort(home).binding;
+
+  const fileA = join(root, 'a.txt');
+  const fileColon = join(root, 'c: d.txt');
+  const fileC = join(root, 'e.txt');
+  await writeFile(fileA, 'alpha');
+  await writeFile(fileColon, 'colon');
+  await writeFile(fileC, 'gamma');
+
+  let uploadCalls = 0;
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    uploadCalls++;
+    if (uploadCalls === 2) {
+      throw new Error('fetch failed');
+    }
+    const shaHex = String(input).split('/').pop() ?? '';
+    return new Response(JSON.stringify({ sha256: shaHex, size: 5 }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model: new ScriptedModel([]),
+    emit: () => {},
+  });
+  t.after(async () => {
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const hubEntry = controller.snapshot().mcp.find((m) => m.name === HUB_SERVER);
+  assert.equal(hubEntry?.hasAuthorizationHeader, true);
+  assert.equal(hubEntry?.settingsPath, join(home, 'settings.json'));
+
+  const batchReply = await controller.dispatch({
+    id: randomUUID(),
+    name: 'remote-bot-native-file',
+    payload: {
+      action: 'upload-batch',
+      binding,
+      paths: [fileA, fileColon, fileC],
+    },
+    sessionId: controller.snapshot().activeSessionId,
+  });
+  assert.equal(batchReply.ok, false);
+  assert.equal(batchReply.errorUploaded, 1);
+  assert.equal(batchReply.errorTotal, 3);
+  assert.equal(batchReply.errorFileName, 'c: d.txt');
+  assert.equal(batchReply.errorReason, 'fetch failed');
+
+  const missingPath = join(root, 'secret-missing-path.txt');
+  await assert.rejects(
+    () => uploadSelected(remoteBotPort(home), missingPath, fetch),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message === 'file unavailable' &&
+      !error.message.includes(root),
+  );
+
+  if (process.platform !== 'win32' && process.getuid?.() !== 0) {
+    const locked = join(root, 'locked.txt');
+    await writeFile(locked, 'secret');
+    await chmod(locked, 0o000);
+    await assert.rejects(
+      () => uploadSelected(remoteBotPort(home), locked, fetch),
+      (error: unknown) =>
+        error instanceof Error &&
+        error.message === 'file permission denied' &&
+        !error.message.includes(root),
+    );
+  }
+});
+
+test('F11/F15: docs/extensions.md and CHANGELOG.md document remote-bot contracts cleanly without accidental blank lines', async () => {
+  const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
+  const extensionsDoc = await readFile(
+    join(repoRoot, 'docs', 'extensions.md'),
+    'utf8',
+  );
+  assert.match(extensionsDoc, /configVersion/);
+  assert.match(extensionsDoc, /disable.*bot_disabled_aborted/);
+  assert.match(extensionsDoc, /16,000/);
+  assert.match(extensionsDoc, /8 files/);
+  assert.match(extensionsDoc, /64,000/);
+  assert.match(extensionsDoc, /256 KiB/);
+  assert.match(extensionsDoc, /20 MiB/);
+  assert.match(
+    extensionsDoc,
+    /test:remote-bot.*fixture.*rather than opening OS file-picker dialogs/s,
+  );
+  assert.match(
+    extensionsDoc,
+    /test:remote-bot.*without.*asserting notice classification/s,
+  );
+  assert.match(
+    extensionsDoc,
+    /test:paired.*WeCom adapter.*WeCom SDK.*\/api\/bot-channel\/v1.*direct `?\/api\/bot\/v1`?.*not Desktop's/s,
+  );
+
+  const changelog = await readFile(join(repoRoot, 'CHANGELOG.md'), 'utf8');
+  assert.doesNotMatch(changelog, /^### Added\n\n- \*\*Private remote chat/m);
+  assert.doesNotMatch(
+    changelog,
+    /^### Changed\n\n- \*\*Finished background jobs/m,
+  );
+  assert.doesNotMatch(
+    changelog,
+    /^### Fixed\n\n- \*\*Pack scripts in the desktop app/m,
+  );
+  assert.doesNotMatch(
+    changelog,
+    /The narrow settings dialog stays on whole pixels\..*\n\n## 1\.14\.0/m,
   );
 });

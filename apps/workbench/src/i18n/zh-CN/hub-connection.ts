@@ -55,13 +55,47 @@ export const hubConnection: Record<string, string> = {
     'Hub 拒绝了 OAuth 登录令牌对机器人接口的访问。',
   'Configure a direct member Bearer token in the Hub MCP settings, then retry.':
     '请在 Hub 的 MCP 设置中配置直接成员 Bearer 令牌后再重试。',
-  'Add a direct member Bearer Authorization header for Hub in settings.json, then retry.':
-    '请先在 settings.json 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌后再重试。',
+  '<app data folder>/runtime-home/settings.json':
+    '<应用数据文件夹>/runtime-home/settings.json',
+  'Add a direct member Bearer Authorization header (format: Bearer <token>) for Hub in {path}, then retry.':
+    '请先在 {path} 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌（格式：Bearer <令牌>），然后再重试。',
+  'console credential not allowed': '不能使用控制台凭据',
+  'Hub rejected the console session credential for my bot API.':
+    'Hub 拒绝了控制台会话凭据对机器人接口的访问。',
+  'Configure a direct member Bearer token (format: Bearer <token>) for Hub headers.Authorization in {path}, then retry.':
+    '请先在 {path} 的 Hub 配置 headers.Authorization 中填入直接成员 Bearer 令牌（格式：Bearer <令牌>），然后再重试。',
+  'request origin or host rejected': '请求 Host 或 Origin 被拒绝',
+  'Hub rejected the request Host or Origin header for my bot API.':
+    'Hub 拒绝了当前请求的 Host 或 Origin 请求头。',
+  'Check the Hub address in Settings -> Extensions or allowed hosts on Hub, then retry.':
+    '请在 设置 -> 扩展 中检查 Hub 地址或确认 Hub 允许的 Host/Origin 配置后再重试。',
   'bot sign-in expired': '机器人登录已过期',
   'Hub rejected the credential because it expired or was revoked.':
     'Hub 拒绝了当前凭据，可能已过期或被撤销。',
+  'Update the direct member Bearer token (format: Bearer <token>) for Hub in {path}, then retry.':
+    '请更新 {path} 中 Hub 的直接成员 Bearer 令牌（格式：Bearer <令牌>），然后再重试。',
   'Sign in to Hub again in Settings -> Extensions, then retry.':
     '请在 设置 -> 扩展 中重新登录 Hub 后再重试。',
+  'Hub authorization secret missing': '缺少 Hub 授权密钥',
+  'The Hub Authorization header references missing secret {name}.':
+    'Hub 的 Authorization 请求头引用了未设置的密钥 {name}。',
+  'Save secret {secret} (/secrets {secret}) in Settings -> Variables & Secrets or update headers.Authorization in {path}, then retry.':
+    '请在 设置 -> 变量与密钥 中保存密钥 {secret}（或使用 /secrets {secret}），或在 {path} 中更新 headers.Authorization 后再重试。',
+  'invalid Hub authorization header': 'Hub 授权请求头格式无效',
+  'The Hub Authorization header is missing a valid Bearer prefix or token.':
+    'Hub 的 Authorization 请求头缺少有效的 Bearer 前缀或令牌。',
+  'Update Hub headers.Authorization in {path} using Bearer <token> format, then retry.':
+    '请在 {path} 中将 Hub 的 headers.Authorization 修改为 Bearer <令牌> 格式后再重试。',
+  'Hub sign-in required': '需要登录 Hub',
+  'Hub connection is missing a valid local sign-in credential.':
+    '当前 Hub 连接缺少有效的本地登录凭据。',
+  'Sign in to Hub in Settings -> Extensions or add a direct member Bearer token (format: Bearer <token>) in {path}, then retry.':
+    '请在 设置 -> 扩展 中登录 Hub，或在 {path} 中填入直接成员 Bearer 令牌（格式：Bearer <令牌>）后再重试。',
+  'HTTPS required for remote bot': '远程机器人需要 HTTPS 连接',
+  'Remote bot connections require an https:// address or a loopback http:// address.':
+    '远程机器人连接需要使用 https:// 地址或本机回环 http:// 地址。',
+  'Update the Hub URL to https:// in Settings -> Extensions or {path}, then retry.':
+    '请在 设置 -> 扩展 或 {path} 中将 Hub 地址改为 https:// 后再重试。',
   'Cannot reach the Hub bot endpoint right now.':
     '暂时无法连接到 Hub 机器人接口。',
   'Circle will retry automatically with backoff, or retry now.':
@@ -128,6 +162,13 @@ export const hubConnection: Record<string, string> = {
   'oauth client token rejected':
     'Hub 拒绝了 OAuth 登录令牌，请先在 settings.json 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌后再重试',
   'remote bot request timed out': '机器人请求接收超时',
+  'untrusted IPC sender': '不受信任的窗口请求，请刷新或重新打开窗口后再试',
+  'MCP sign-in is required':
+    '需要先完成 Hub 授权登录，或配置格式正确的 Bearer 令牌',
+  'Authorization header secret {name} is not set; save {secret} in Variables & Secrets first.':
+    '授权请求头引用的密钥 {name} 尚未设置，请先在变量与密钥中保存 {secret} 后再重试',
+  'file permission denied': '没有文件访问权限',
+  'cannot access a directory as a file': '无法将文件夹当作文件操作',
   'Uploaded {uploaded} of {total} files; failed on {name}: {reason}':
     '已上传 {uploaded}/{total} 个文件；{name} 上传失败：{reason}',
   'send text or files to chat with your personal bot. send /new for a new conversation, or /stop to cancel the active reply.':

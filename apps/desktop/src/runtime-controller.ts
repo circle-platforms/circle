@@ -3804,6 +3804,19 @@ export class RuntimeController {
         const status = inspecting
           ? undefined
           : runtime.mcp.status.find((row) => row.name === name);
+        const rawHeaders =
+          spec.headers &&
+          typeof spec.headers === 'object' &&
+          !Array.isArray(spec.headers)
+            ? (spec.headers as Record<string, unknown>)
+            : undefined;
+        const hasAuthorizationHeader = Boolean(
+          rawHeaders &&
+          Object.entries(rawHeaders).some(
+            ([key, value]) =>
+              key.toLowerCase() === 'authorization' && Boolean(value),
+          ),
+        );
         return {
           id: name,
           name,
@@ -3812,6 +3825,8 @@ export class RuntimeController {
           args: Array.isArray(spec.args) ? formatMcpArguments(spec.args) : '',
           url: String(spec.url ?? ''),
           enabled: spec.enabled !== false,
+          hasAuthorizationHeader,
+          settingsPath: join(this.home, 'settings.json'),
           status: pendingReload
             ? 'reload required'
             : spec.enabled === false
@@ -4884,6 +4899,10 @@ export class RuntimeController {
                 code?: unknown;
                 detail?: unknown;
                 remoteMessage?: unknown;
+                uploaded?: unknown;
+                total?: unknown;
+                fileName?: unknown;
+                reason?: unknown;
               })
             : undefined;
         const errorDetail =
@@ -4902,6 +4921,18 @@ export class RuntimeController {
             : {}),
           ...(typeof meta?.code === 'string' ? { errorCode: meta.code } : {}),
           ...(errorDetail ? { errorDetail } : {}),
+          ...(typeof meta?.uploaded === 'number'
+            ? { errorUploaded: meta.uploaded }
+            : {}),
+          ...(typeof meta?.total === 'number'
+            ? { errorTotal: meta.total }
+            : {}),
+          ...(typeof meta?.fileName === 'string'
+            ? { errorFileName: meta.fileName }
+            : {}),
+          ...(typeof meta?.reason === 'string'
+            ? { errorReason: meta.reason }
+            : {}),
         };
       }
     };

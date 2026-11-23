@@ -12,8 +12,15 @@ export type RemoteBotFailureKind =
   | 'disabled'
   | 'auth'
   | 'oauth-forbidden'
+  | 'local-credential'
+  | 'local-https'
   | 'transient'
   | 'other';
+
+export interface RemoteBotFailureContext {
+  hasAuthorizationHeader?: boolean;
+  settingsPath?: string;
+}
 
 export interface RemoteBotFailure {
   kind: RemoteBotFailureKind;
@@ -168,6 +175,10 @@ function readFailureMeta(reason: unknown): {
   message?: string;
   detail?: string;
   isTimeout?: boolean;
+  errorUploaded?: number;
+  errorTotal?: number;
+  errorFileName?: string;
+  errorReason?: string;
 } {
   if (!reason || typeof reason !== 'object') {
     return typeof reason === 'string'
@@ -181,6 +192,14 @@ function readFailureMeta(reason: unknown): {
     message?: unknown;
     detail?: unknown;
     remoteMessage?: unknown;
+    errorUploaded?: unknown;
+    uploaded?: unknown;
+    errorTotal?: unknown;
+    total?: unknown;
+    errorFileName?: unknown;
+    fileName?: unknown;
+    errorReason?: unknown;
+    reason?: unknown;
     cause?: unknown;
   };
   const nested =
@@ -192,6 +211,14 @@ function readFailureMeta(reason: unknown): {
           message?: unknown;
           detail?: unknown;
           remoteMessage?: unknown;
+          errorUploaded?: unknown;
+          uploaded?: unknown;
+          errorTotal?: unknown;
+          total?: unknown;
+          errorFileName?: unknown;
+          fileName?: unknown;
+          errorReason?: unknown;
+          reason?: unknown;
         })
       : undefined;
   const status =
@@ -224,24 +251,67 @@ function readFailureMeta(reason: unknown): {
             : undefined;
   const isTimeout =
     err.name === 'TimeoutError' || nested?.name === 'TimeoutError';
+  const errorUploaded =
+    typeof err.errorUploaded === 'number'
+      ? err.errorUploaded
+      : typeof err.uploaded === 'number'
+        ? err.uploaded
+        : typeof nested?.errorUploaded === 'number'
+          ? nested.errorUploaded
+          : typeof nested?.uploaded === 'number'
+            ? nested.uploaded
+            : undefined;
+  const errorTotal =
+    typeof err.errorTotal === 'number'
+      ? err.errorTotal
+      : typeof err.total === 'number'
+        ? err.total
+        : typeof nested?.errorTotal === 'number'
+          ? nested.errorTotal
+          : typeof nested?.total === 'number'
+            ? nested.total
+            : undefined;
+  const errorFileName =
+    typeof err.errorFileName === 'string'
+      ? err.errorFileName
+      : typeof err.fileName === 'string'
+        ? err.fileName
+        : typeof nested?.errorFileName === 'string'
+          ? nested.errorFileName
+          : typeof nested?.fileName === 'string'
+            ? nested.fileName
+            : undefined;
+  const errorReason =
+    typeof err.errorReason === 'string'
+      ? err.errorReason
+      : typeof err.reason === 'string'
+        ? err.reason
+        : typeof nested?.errorReason === 'string'
+          ? nested.errorReason
+          : typeof nested?.reason === 'string'
+            ? nested.reason
+            : undefined;
   return {
     status,
     code,
     ...(rawMessage ? { message: stripInvokeErrorPrefix(rawMessage) } : {}),
     ...(detail ? { detail } : {}),
     ...(isTimeout ? { isTimeout: true } : {}),
+    ...(errorUploaded !== undefined ? { errorUploaded } : {}),
+    ...(errorTotal !== undefined ? { errorTotal } : {}),
+    ...(errorFileName !== undefined ? { errorFileName } : {}),
+    ...(errorReason !== undefined ? { errorReason } : {}),
   };
 }
 
-function isAttachmentIntegrityError(text: string): boolean {
-  return /attachment_integrity_failed|attachment integrity check failed/i.test(
-    text,
-  );
-}
-
-export function classifyRemoteBotFailure(reason: unknown): RemoteBotFailure {
+export function classifyRemoteBotFailure(
+  reason: unknown,
+  ctx?: RemoteBotFailureContext,
+): RemoteBotFailure {
   const { status, code, message, detail, isTimeout } = readFailureMeta(reason);
   const combinedDetail = [message, detail].filter(Boolean).join('\n');
+  const settingsPath =
+    ctx?.settingsPath || t('<app data folder>/runtime-home/settings.json');
   if (code === 'BOT_VERSION_MISMATCH' || status === 426) {
     return {
       kind: 'version-mismatch',
@@ -277,17 +347,117 @@ export function classifyRemoteBotFailure(reason: unknown): RemoteBotFailure {
       cause: t(
         'Hub rejected the credential because it expired or was revoked.',
       ),
-      action: t('Sign in to Hub again in Settings -> Extensions, then retry.'),
+      action: ctx?.hasAuthorizationHeader
+        ? t(
+            'Update the direct member Bearer token (format: Bearer <token>) for Hub in {path}, then retry.',
+            { path: settingsPath },
+          )
+        : t('Sign in to Hub again in Settings -> Extensions, then retry.'),
     };
   }
-  if (code === 'BOT_CLIENT_FORBIDDEN') {
+  if (code === 'BOT_CLIENT_FORBIDDEN' || status === 403) {
+    if (/控制台|console credential/i.test(combinedDetail)) {
+      return {
+        kind: 'oauth-forbidden',
+        retryable: false,
+        title: t('console credential not allowed'),
+        cause: t('Hub rejected the console session credential for my bot API.'),
+        action: t(
+          'Configure a direct member Bearer token (format: Bearer <token>) for Hub headers.Authorization in {path}, then retry.',
+          { path: settingsPath },
+        ),
+        ...(detail || message ? { detail: detail ?? message } : {}),
+      };
+    }
+    if (/\b(?:Host|Origin)\b/i.test(combinedDetail)) {
+      return {
+        kind: 'oauth-forbidden',
+        retryable: false,
+        title: t('request origin or host rejected'),
+        cause: t(
+          'Hub rejected the request Host or Origin header for my bot API.',
+        ),
+        action: t(
+          'Check the Hub address in Settings -> Extensions or allowed hosts on Hub, then retry.',
+        ),
+        ...(detail || message ? { detail: detail ?? message } : {}),
+      };
+    }
     return {
       kind: 'oauth-forbidden',
       retryable: false,
       title: t('direct member token required'),
       cause: t('Hub refused the OAuth sign-in token for my bot API.'),
       action: t(
-        'Add a direct member Bearer Authorization header for Hub in settings.json, then retry.',
+        'Add a direct member Bearer Authorization header (format: Bearer <token>) for Hub in {path}, then retry.',
+        { path: settingsPath },
+      ),
+    };
+  }
+  const unsetSecretMatch =
+    message !== undefined
+      ? /the Authorization header names \$\{([^}]+)\}, which is not set(?:;\s*save it with \/secrets ([A-Za-z0-9_]+))?/i.exec(
+          message,
+        )
+      : null;
+  if (unsetSecretMatch) {
+    const secretName =
+      unsetSecretMatch[2] ?? unsetSecretMatch[1]!.replace(/^secret:/, '');
+    return {
+      kind: 'local-credential',
+      retryable: false,
+      title: t('Hub authorization secret missing'),
+      cause: t(
+        'The Hub Authorization header references missing secret {name}.',
+        { name: '${' + unsetSecretMatch[1] + '}' },
+      ),
+      action: t(
+        'Save secret {secret} (/secrets {secret}) in Settings -> Variables & Secrets or update headers.Authorization in {path}, then retry.',
+        { secret: secretName, path: settingsPath },
+      ),
+    };
+  }
+  if (message !== undefined && /MCP sign-in is required/i.test(message)) {
+    return {
+      kind: 'local-credential',
+      retryable: false,
+      ...(ctx?.hasAuthorizationHeader
+        ? {
+            title: t('invalid Hub authorization header'),
+            cause: t(
+              'The Hub Authorization header is missing a valid Bearer prefix or token.',
+            ),
+            action: t(
+              'Update Hub headers.Authorization in {path} using Bearer <token> format, then retry.',
+              { path: settingsPath },
+            ),
+          }
+        : {
+            title: t('Hub sign-in required'),
+            cause: t(
+              'Hub connection is missing a valid local sign-in credential.',
+            ),
+            action: t(
+              'Sign in to Hub in Settings -> Extensions or add a direct member Bearer token (format: Bearer <token>) in {path}, then retry.',
+              { path: settingsPath },
+            ),
+          }),
+    };
+  }
+  const unsafeTransport =
+    message !== undefined &&
+    /requires https or loopback http|invalid remote bot server/i.test(message);
+  if (unsafeTransport) {
+    return {
+      kind: 'local-https',
+      retryable: false,
+      title: t('HTTPS required for remote bot'),
+      cause: t(
+        'Remote bot connections require an https:// address or a loopback http:// address.',
+      ),
+      action: t(
+        'Update the Hub URL to https:// in Settings -> Extensions or {path}, then retry.',
+        { path: settingsPath },
       ),
     };
   }
@@ -300,18 +470,14 @@ export function classifyRemoteBotFailure(reason: unknown): RemoteBotFailure {
       action: t('Circle will retry shortly with backoff, or retry now.'),
     };
   }
-  const unsafeTransport =
-    message !== undefined &&
-    /requires https or loopback http|invalid remote bot server/i.test(message);
   if (
-    !unsafeTransport &&
-    (isTimeout ||
-      status === undefined ||
-      status === 408 ||
-      status === 500 ||
-      status === 502 ||
-      status === 503 ||
-      status === 504)
+    isTimeout ||
+    status === undefined ||
+    status === 408 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504
   ) {
     return {
       kind: 'transient',
@@ -355,24 +521,22 @@ export function classifyRemoteBotFailure(reason: unknown): RemoteBotFailure {
       ...(detail || message ? { detail: detail ?? message } : {}),
     };
   }
+  if (status === 422 && code === 'BOT_INVALID_REQUEST') {
+    return {
+      kind: 'other',
+      retryable: false,
+      title: t('attachment integrity check failed'),
+      cause: t('Hub rejected the message because the attachment check failed.'),
+      action: t('Remove and attach the file again, then retry.'),
+      ...(detail || message ? { detail: detail ?? message } : {}),
+    };
+  }
   if (
     code === 'BOT_INVALID_REQUEST' ||
     status === 400 ||
     status === 413 ||
     status === 422
   ) {
-    if (isAttachmentIntegrityError(combinedDetail)) {
-      return {
-        kind: 'other',
-        retryable: false,
-        title: t('attachment integrity check failed'),
-        cause: t(
-          'Hub rejected the message because the attachment check failed.',
-        ),
-        action: t('Remove and attach the file again, then retry.'),
-        ...(detail || message ? { detail: detail ?? message } : {}),
-      };
-    }
     return {
       kind: 'other',
       retryable: false,
@@ -434,6 +598,10 @@ const TRANSFER_TEXT_LABELS: Readonly<Record<string, () => string>> = {
   'remote bot request timed out': () => t('remote bot request timed out'),
   'attachment integrity check failed': () =>
     t('attachment integrity check failed'),
+  'untrusted IPC sender': () => t('untrusted IPC sender'),
+  'file permission denied': () => t('file permission denied'),
+  'cannot access a directory as a file': () =>
+    t('cannot access a directory as a file'),
 };
 
 const LOCAL_TRANSFER_ERRORS = new Set([
@@ -453,6 +621,9 @@ const LOCAL_TRANSFER_ERRORS = new Set([
   'invalid remote file operation',
   'unknown remote bot operation',
   'runtime not enabled',
+  'untrusted IPC sender',
+  'file permission denied',
+  'cannot access a directory as a file',
 ]);
 
 function translateTransferReason(
@@ -466,6 +637,47 @@ function translateTransferReason(
 ): string | undefined {
   if (LOCAL_TRANSFER_ERRORS.has(cleaned)) {
     return TRANSFER_TEXT_LABELS[cleaned]!();
+  }
+  if (/untrusted IPC sender/i.test(cleaned)) {
+    return t('untrusted IPC sender');
+  }
+  if (/MCP sign-in is required/i.test(cleaned)) {
+    return t('MCP sign-in is required');
+  }
+  const unsetSecret =
+    /the Authorization header names \$\{([^}]+)\}, which is not set(?:;\s*save it with \/secrets ([A-Za-z0-9_]+))?/i.exec(
+      cleaned,
+    );
+  if (unsetSecret) {
+    const secretName =
+      unsetSecret[2] ?? unsetSecret[1]!.replace(/^secret:/, '');
+    return t(
+      'Authorization header secret {name} is not set; save {secret} in Variables & Secrets first.',
+      { name: '${' + unsetSecret[1] + '}', secret: secretName },
+    );
+  }
+  if (
+    meta.code === 'ENOENT' ||
+    /\bENOENT\b|no such file or directory/i.test(cleaned)
+  ) {
+    return t('file unavailable');
+  }
+  if (
+    meta.code === 'EACCES' ||
+    meta.code === 'EPERM' ||
+    /\bEACCES\b|\bEPERM\b|permission denied|operation not permitted|file permission denied/i.test(
+      cleaned,
+    )
+  ) {
+    return t('file permission denied');
+  }
+  if (
+    meta.code === 'EISDIR' ||
+    /\bEISDIR\b|illegal operation on a directory|cannot access a directory as a file/i.test(
+      cleaned,
+    )
+  ) {
+    return t('cannot access a directory as a file');
   }
   if (/^fetch failed(?:\b|:)/i.test(cleaned)) {
     return t('fetch failed');
@@ -486,7 +698,13 @@ function translateTransferReason(
   if (meta.status === 401) {
     return t('bot sign-in expired');
   }
-  if (meta.code === 'BOT_CLIENT_FORBIDDEN') {
+  if (meta.code === 'BOT_CLIENT_FORBIDDEN' || meta.status === 403) {
+    if (/控制台|console credential/i.test(combinedDetail)) {
+      return t('console credential not allowed');
+    }
+    if (/\b(?:Host|Origin)\b/i.test(combinedDetail)) {
+      return t('request origin or host rejected');
+    }
     return t('oauth client token rejected');
   }
   if (meta.code === 'BOT_QUOTA_EXCEEDED') {
@@ -504,15 +722,15 @@ function translateTransferReason(
   if (meta.code === 'BOT_REQUEST_TIMEOUT' || meta.status === 408) {
     return t('remote bot request timed out');
   }
+  if (meta.status === 422 && meta.code === 'BOT_INVALID_REQUEST') {
+    return t('attachment integrity check failed');
+  }
   if (
     meta.code === 'BOT_INVALID_REQUEST' ||
     meta.status === 400 ||
     meta.status === 413 ||
     meta.status === 422
   ) {
-    if (isAttachmentIntegrityError(combinedDetail)) {
-      return t('attachment integrity check failed');
-    }
     if (meta.status === 413 && /100\s*MiB|file exceeds/i.test(combinedDetail)) {
       return t('file exceeds the 100 MiB limit');
     }
@@ -541,6 +759,30 @@ export function translateBotTransferError(
   fallback: string,
 ): string {
   const meta = readFailureMeta(reason);
+  if (
+    meta.errorUploaded !== undefined &&
+    meta.errorTotal !== undefined &&
+    meta.errorFileName !== undefined &&
+    meta.errorReason !== undefined
+  ) {
+    const inner = stripInvokeErrorPrefix(meta.errorReason);
+    const translatedInner =
+      translateTransferReason(inner, {
+        status: meta.status,
+        code: meta.code,
+        detail: meta.detail,
+        isTimeout: meta.isTimeout,
+      }) ?? inner;
+    return t(
+      'Uploaded {uploaded} of {total} files; failed on {name}: {reason}',
+      {
+        uploaded: meta.errorUploaded,
+        total: meta.errorTotal,
+        name: meta.errorFileName,
+        reason: translatedInner,
+      },
+    );
+  }
   const raw =
     meta.message ??
     (reason instanceof Error

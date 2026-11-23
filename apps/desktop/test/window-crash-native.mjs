@@ -1,5 +1,7 @@
 import { _electron as electron } from 'playwright';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -99,6 +101,41 @@ try {
     );
   }, 'the main window snapshot on disk');
   assert.ok(mainSample.pid > 0);
+
+  // F12: a second launch that exits on single-instance lock must NOT rotate/clobber window-samples.previous.json.
+  const previousFile = join(dataDir, 'logs', 'window-samples.previous.json');
+  const sentinelPayload = JSON.stringify({ sentinel: 'keep-previous' });
+  await writeFile(previousFile, sentinelPayload);
+  const secondLaunch = spawn(
+    process.env.CIRCLE_DESKTOP_EXECUTABLE ?? require('electron'),
+    [resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? root)],
+    { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  let secondStderr = '';
+  secondLaunch.stderr?.on('data', (chunk) => {
+    secondStderr += chunk;
+  });
+  const secondExit = await Promise.race([
+    once(secondLaunch, 'exit'),
+    new Promise((_, reject) =>
+      setTimeout(() => {
+        secondLaunch.kill('SIGKILL');
+        reject(new Error(`second launch timed out: ${secondStderr}`));
+      }, 20000),
+    ),
+  ]);
+  assert.equal(secondExit[0], 0, secondStderr);
+  assert.equal(secondExit[1], null, secondStderr);
+  assert.equal(
+    await readFile(previousFile, 'utf8'),
+    sentinelPayload,
+    'second launch must not overwrite window-samples.previous.json',
+  );
+  assert.ok(
+    await snapshotData(),
+    'primary window-samples.json must remain intact after second launch exit',
+  );
+
   await inMain('contents.forcefullyCrashRenderer()');
   const entry = await until(async () => {
     const text = await logText();
@@ -177,7 +214,10 @@ try {
     const snap = await snapshotData();
     const entries = snap?.windows ? Object.values(snap.windows) : [];
     return entries.find(
-      (w) => w.name === 'popout' && w.pid > 0 && w.samples.length > 0,
+      (w) =>
+        w.name === 'popout' &&
+        w.pid > 0 &&
+        (w.samples.at(-1)?.windowMb ?? 0) > 20,
     );
   }, 'popout window snapshot on disk');
   assert.ok(popoutSample.samples.at(-1).windowMb > 20);
@@ -233,7 +273,7 @@ try {
   assert.equal(mainSampleAfterCrash.pid, mainBeforePopoutCrash.pid);
   assert.doesNotMatch(
     await logText(),
-    /window main renderer gone.*window main renderer gone/,
+    /window main renderer gone.*window main renderer gone/s,
     'popout crash must not emit a duplicate main crash log',
   );
   await application.evaluate(({ BrowserWindow, Menu }) => {
@@ -264,6 +304,47 @@ try {
       .catch(() => false);
   }, 'crashed popout window to reload');
   assert.doesNotMatch(printed, /Render frame was disposed/);
+
+  // T4: prove main.ts checkSender rejects an untrusted BrowserWindow calling ipcMain.handle('circle:info').
+  const untrustedRejection = await application.evaluate(
+    async ({ app, BrowserWindow }) => {
+      const sep = process.platform === 'win32' ? '\\' : '/';
+      const untrusted = new BrowserWindow({
+        show: false,
+        webPreferences: {
+          preload: `${app.getAppPath()}${sep}dist${sep}preload.cjs`,
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+        },
+      });
+      try {
+        await untrusted.loadURL(
+          'data:text/html,<!doctype html><title>untrusted</title>',
+        );
+        try {
+          await untrusted.webContents.executeJavaScript(
+            'window.circleDesktop.info()',
+          );
+          return { rejected: false, message: 'unexpectedly succeeded' };
+        } catch (error) {
+          return {
+            rejected: true,
+            message: error instanceof Error ? error.message : String(error),
+          };
+        }
+      } finally {
+        if (!untrusted.isDestroyed()) untrusted.destroy();
+      }
+    },
+  );
+  assert.equal(
+    untrustedRejection.rejected,
+    true,
+    `expected untrusted IPC rejection, got: ${untrustedRejection.message}`,
+  );
+  assert.match(untrustedRejection.message, /untrusted IPC sender/);
+
   console.log('window crash: logged, isolated, popout reloaded');
 } catch (error) {
   console.error('window-crash-native failed:', error, {

@@ -420,6 +420,8 @@ export interface McpServer {
   args: string;
   url: string;
   enabled: boolean;
+  hasAuthorizationHeader?: boolean;
+  settingsPath?: string;
   status:
     'sample' | 'not connected' | 'connected' | 'error' | 'reload required';
   tools: { name: string; description: string; schema: unknown }[];

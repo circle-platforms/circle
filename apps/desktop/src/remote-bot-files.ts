@@ -22,17 +22,51 @@ interface PreparedSelectedFile {
   size: number;
 }
 
+function sanitizeFileSystemError(
+  error: unknown,
+  context: 'attach' | 'save',
+): never {
+  const code =
+    error && typeof error === 'object'
+      ? (error as { code?: unknown }).code
+      : undefined;
+  if (code === 'ENOENT') {
+    throw Object.assign(new Error('file unavailable'), { code: 'ENOENT' });
+  }
+  if (code === 'EACCES' || code === 'EPERM') {
+    throw Object.assign(new Error('file permission denied'), { code });
+  }
+  if (code === 'EISDIR') {
+    throw Object.assign(
+      new Error(
+        context === 'attach'
+          ? 'only a regular file can be attached'
+          : 'cannot access a directory as a file',
+      ),
+      { code: 'EISDIR' },
+    );
+  }
+  throw error;
+}
+
 async function prepareSelectedFile(
   path: string,
 ): Promise<PreparedSelectedFile> {
-  const link = await lstat(path, { bigint: true });
+  let link;
+  try {
+    link = await lstat(path, { bigint: true });
+  } catch (error) {
+    sanitizeFileSystemError(error, 'attach');
+  }
   if (link.isSymbolicLink())
     throw new Error('symbolic links cannot be attached');
   if (!link.isFile()) throw new Error('only a regular file can be attached');
-  const handle = await open(
-    path,
-    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
-  );
+  let handle: FileHandle;
+  try {
+    handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  } catch (error) {
+    sanitizeFileSystemError(error, 'attach');
+  }
   try {
     const stat = await handle.stat({ bigint: true });
     if (!stat.isFile() || stat.dev !== link.dev || stat.ino !== link.ino)
@@ -54,7 +88,7 @@ async function prepareSelectedFile(
     };
   } catch (error) {
     await handle.close().catch(() => {});
-    throw error;
+    sanitizeFileSystemError(error, 'attach');
   }
 }
 
@@ -113,6 +147,7 @@ export class PartialBatchUploadError extends Error {
   readonly uploaded: number;
   readonly total: number;
   readonly fileName: string;
+  readonly reason: string;
   readonly status?: number;
   readonly code?: string;
   readonly remoteMessage?: string;
@@ -132,6 +167,7 @@ export class PartialBatchUploadError extends Error {
     this.uploaded = uploaded;
     this.total = total;
     this.fileName = fileName;
+    this.reason = reason;
     if (cause && typeof cause === 'object') {
       const meta = cause as {
         status?: unknown;
@@ -223,7 +259,12 @@ export async function saveRemoteFile(
   const hash = createHash('sha256');
   let size = 0;
   const temp = join(dirname(path), '.circle-' + randomUUID() + '.part');
-  const handle = await open(temp, 'wx', 0o600);
+  let handle: FileHandle;
+  try {
+    handle = await open(temp, 'wx', 0o600);
+  } catch (error) {
+    sanitizeFileSystemError(error, 'save');
+  }
   try {
     const verify = new Transform({
       transform(chunk, _encoding, done) {
@@ -243,6 +284,8 @@ export async function saveRemoteFile(
       throw new Error('file digest mismatch');
     port.assertActive();
     await rename(temp, path);
+  } catch (error) {
+    sanitizeFileSystemError(error, 'save');
   } finally {
     await handle.close();
     await unlink(temp).catch(() => {});

@@ -92,6 +92,10 @@ export interface RuntimeReply {
   errorStatus?: number;
   errorCode?: string;
   errorDetail?: string;
+  errorUploaded?: number;
+  errorTotal?: number;
+  errorFileName?: string;
+  errorReason?: string;
   data?: unknown;
   /** The exact authoritative full publication made after this command's effect. */
   appliedState?: { epoch: string; seq: number };

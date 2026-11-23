@@ -28,6 +28,8 @@ async function startStandaloneBackend() {
   await auth.start();
 
   const memberToken = 'synthetic-direct-member-token';
+  const secretKey = 'synthetic-model-key-standalone';
+  const logs = [];
   const storedFiles = new Map();
   const seenBotHeaders = [];
   let cursorSeq = 0;
@@ -38,6 +40,8 @@ async function startStandaloneBackend() {
   ]);
   let phase2Token = false;
   let forceUnauthenticated = false;
+  let forceVersionMismatch = false;
+  let forceQuotaExceeded = false;
 
   const readBytes = async (req) => {
     const chunks = [];
@@ -56,6 +60,7 @@ async function startStandaloneBackend() {
   const server = createServer(async (req, res) => {
     const reqUrl = new URL(req.url ?? '/', 'http://127.0.0.1');
     if (reqUrl.pathname === '/api/bot/v1') {
+      logs.push(`POST /api/bot/v1\n`);
       seenBotHeaders.push({ ...req.headers });
       if (req.headers['bot-client-version'] !== VERSION) {
         return json(res, 400, {
@@ -74,6 +79,12 @@ async function startStandaloneBackend() {
         return json(res, 401, {
           code: 'BOT_UNAUTHENTICATED',
           message: 'unauthorized',
+        });
+      }
+      if (forceVersionMismatch) {
+        return json(res, 400, {
+          code: 'BOT_VERSION_MISMATCH',
+          message: 'client version mismatch',
         });
       }
       if (authHeader === `Bearer ${auth.token}` && !phase2Token) {
@@ -197,6 +208,12 @@ async function startStandaloneBackend() {
           message: 'unauthorized',
         });
       }
+      if (forceQuotaExceeded) {
+        return json(res, 413, {
+          code: 'BOT_QUOTA_EXCEEDED',
+          message: 'attachment quota exceeded',
+        });
+      }
       const shaHex = reqUrl.pathname.slice('/api/bot/v1/files/'.length);
       if (req.method === 'PUT') {
         const bytes = await readBytes(req);
@@ -232,10 +249,17 @@ async function startStandaloneBackend() {
   return {
     url: origin,
     memberToken,
-    logs: [],
+    secretKey,
+    logs,
     seenBotHeaders,
     setForceUnauthenticated: (value) => {
       forceUnauthenticated = value;
+    },
+    setForceVersionMismatch: (value) => {
+      forceVersionMismatch = value;
+    },
+    setForceQuotaExceeded: (value) => {
+      forceQuotaExceeded = value;
     },
     async approveOAuth() {
       auth.deviceApproved = true;
@@ -532,6 +556,7 @@ try {
   const outputFile = join(scratch, 'downloaded.txt');
   await writeFile(inputFile, 'synthetic private attachment');
   const data = join(scratch, 'desktop');
+  const settingsPath = join(data, 'runtime-home', 'settings.json');
   await mkdir(data, { recursive: true });
   const require = createRequire(import.meta.url);
   const packaged =
@@ -626,19 +651,19 @@ try {
   await page
     .getByRole('heading', { name: 'direct member token required', exact: true })
     .waitFor();
-  assert.match(
+  const enForbiddenText =
     (await page
       .locator('[data-bot-error-kind="oauth-forbidden"]')
-      .textContent()) ?? '',
-    /settings\.json/,
-  );
+      .textContent()) ?? '';
+  assert.ok(enForbiddenText.includes(settingsPath), enForbiddenText);
+  assert.ok(enForbiddenText.includes('Bearer <token>'), enForbiddenText);
   if (standalone) {
     assert.ok(backend.seenBotHeaders.length >= 1);
     assert.equal(backend.seenBotHeaders[0]['bot-client-version'], VERSION);
     assert.equal(backend.seenBotHeaders[0]['circle-version'], undefined);
   }
 
-  // Verify zh-CN error localization on native Electron for 403 BOT_CLIENT_FORBIDDEN (and 401 BOT_UNAUTHENTICATED in standalone).
+  // Verify zh-CN error localization on native Electron for 403 BOT_CLIENT_FORBIDDEN (and 401 / 400 BOT_VERSION_MISMATCH in standalone).
   await Promise.race([app.close().catch(() => {}), delay(4000)]);
   try {
     app.process()?.kill('SIGKILL');
@@ -655,10 +680,9 @@ try {
   await zhForbidden.waitFor({ timeout: 20000 });
   const zhForbiddenText = (await zhForbidden.textContent()) ?? '';
   assert.match(zhForbiddenText, /需要使用直接成员令牌/);
-  assert.match(
-    zhForbiddenText,
-    /请先在 settings\.json 的 Hub 配置 headers\.Authorization/,
-  );
+  assert.ok(zhForbiddenText.includes(settingsPath), zhForbiddenText);
+  assert.ok(zhForbiddenText.includes('Bearer <令牌>'), zhForbiddenText);
+  assert.match(zhForbiddenText, /headers\.Authorization/);
   if (standalone) {
     backend.setForceUnauthenticated(true);
     await zhForbidden
@@ -668,6 +692,18 @@ try {
     await zhAuth.waitFor({ timeout: 20000 });
     assert.match((await zhAuth.textContent()) ?? '', /机器人登录已过期/);
     backend.setForceUnauthenticated(false);
+
+    backend.setForceVersionMismatch(true);
+    await zhAuth.getByRole('button', { name: '重试', exact: true }).click();
+    const zhVersionMismatch = page.locator(
+      '[data-bot-error-kind="version-mismatch"]',
+    );
+    await zhVersionMismatch.waitFor({ timeout: 20000 });
+    assert.match(
+      (await zhVersionMismatch.textContent()) ?? '',
+      /需要更新 Circle/,
+    );
+    backend.setForceVersionMismatch(false);
   }
 
   // Phase 2: Direct member Bearer token configured on Hub MCP entry completes full round trip.
@@ -678,7 +714,6 @@ try {
   app = undefined;
   page = undefined;
 
-  const settingsPath = join(data, 'runtime-home', 'settings.json');
   const settings = JSON.parse(await readFile(settingsPath, 'utf8'));
   settings.mcpServers.Hub = {
     ...settings.mcpServers.Hub,
@@ -736,6 +771,11 @@ try {
       'synthetic private attachment',
     'verified native download',
   );
+  const domTextPhase2 = await page.locator('body').innerText();
+  if (backend.secretKey) {
+    assert.ok(!domTextPhase2.includes(backend.secretKey));
+  }
+  assert.ok(!domTextPhase2.includes(backend.memberToken));
   await input.fill(afterExit);
   await page.getByRole('button', { name: 'send', exact: true }).click();
   await waitFor(
@@ -774,11 +814,66 @@ try {
       ).events.some((e) => e.text === 'finished without desktop'),
     'host completed after Mac exit',
   );
-  if (!standalone && backend.secretKey) {
+  if (standalone) {
+    // T2: exercise real main.ts -> preload.ts unwrapBotTransfer IPC failure path on saveBotFile & attachBotFiles.
+    backend.setForceQuotaExceeded(true);
+    ({ launched: app, win: page } = await launchElectron('zh-CN'));
+    await page.keyboard.press('Escape');
+    await page
+      .getByRole('link', { name: '我的机器人', exact: true })
+      .first()
+      .click({ timeout: 30000 });
+    const saveChip = page
+      .getByRole('button', { name: /fixture\.txt ·/ })
+      .first();
+    await saveChip.waitFor({ timeout: 20000 });
+    await saveChip.click();
+    await waitFor(
+      async () =>
+        (
+          (await page
+            .locator('.composer-area [role="status"]')
+            .textContent()
+            .catch(() => '')) ?? ''
+        ).includes('机器人附件配额已满'),
+      'localized saveBotFile 413 BOT_QUOTA_EXCEEDED error',
+    );
+    await page.reload();
+    await page.locator('#remote-bot-input').waitFor({ timeout: 20000 });
+    await page.getByRole('button', { name: '附加文件…', exact: true }).click();
+    await waitFor(
+      async () =>
+        (
+          (await page
+            .locator('.composer-area [role="status"]')
+            .textContent()
+            .catch(() => '')) ?? ''
+        ).includes('机器人附件配额已满'),
+      'localized attachBotFiles 413 BOT_QUOTA_EXCEEDED error',
+    );
+    const zhDomText = await page.locator('body').innerText();
+    assert.ok(!zhDomText.includes(backend.secretKey));
+    assert.ok(!zhDomText.includes(backend.memberToken));
+    await Promise.race([app.close().catch(() => {}), delay(4000)]);
+    try {
+      app.process()?.kill('SIGKILL');
+    } catch {}
+    app = undefined;
+    page = undefined;
+    backend.setForceQuotaExceeded(false);
+  }
+  if (backend.secretKey) {
     assert.ok(!JSON.stringify(issued).includes(backend.secretKey));
     assert.ok(!backend.logs.join('').includes(backend.secretKey));
     assert.ok(
       !(await readFile(settingsPath, 'utf8')).includes(backend.secretKey),
+    );
+    assert.ok(
+      !(
+        await readFile(join(data, 'logs', 'runtime.log'), 'utf8').catch(
+          () => '',
+        )
+      ).includes(backend.secretKey),
     );
   }
   console.log(
@@ -814,6 +909,11 @@ try {
           notices: Array.from(document.querySelectorAll('[role=alert]')).map(
             (e) => e.textContent,
           ),
+          statuses: Array.from(document.querySelectorAll('[role=status]')).map(
+            (e) => e.textContent,
+          ),
+          composerHtml:
+            document.querySelector('.composer-area')?.innerHTML ?? null,
         }))
         .catch(() => null),
     );

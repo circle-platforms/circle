@@ -10,7 +10,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import v8 from 'node:v8';
 import vm from 'node:vm';
@@ -591,4 +592,20 @@ test('S9/C21: rotates an existing snapshotFile to window-samples.previous.json o
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('F12: main.ts acquires single-instance lock and verifies sandbox flags before creating windowDiagnostics', () => {
+  const mainSource = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'main.ts'),
+    'utf8',
+  );
+  const lockIndex = mainSource.indexOf('app.requestSingleInstanceLock(');
+  const noSandboxIndex = mainSource.indexOf("hasSwitch('no-sandbox')");
+  const diagIndex = mainSource.indexOf('createWindowDiagnostics(');
+  assert.ok(lockIndex >= 0);
+  assert.ok(noSandboxIndex > lockIndex);
+  assert.ok(
+    diagIndex > noSandboxIndex,
+    'createWindowDiagnostics must run only after requestSingleInstanceLock and --no-sandbox checks',
+  );
 });

@@ -138,36 +138,13 @@ const dataPath = (() => {
 })();
 app.setPath('userData', dataPath);
 const circleVersion = circleAppVersion(app.isPackaged, app.getVersion());
-const rawSampleMs = process.env.CIRCLE_WORKBENCH_TEST_PROFILE
-  ? Number(process.env.CIRCLE_WORKBENCH_WINDOW_SAMPLE_MS)
-  : NaN;
-const windowSampleMs =
-  Number.isFinite(rawSampleMs) && rawSampleMs >= 50 && rawSampleMs <= 30_000
-    ? rawSampleMs
-    : undefined;
-const windowDiagnostics = createWindowDiagnostics({
-  log: (text) =>
-    appendDiagnosticLog(
-      join(dataPath, 'logs', 'runtime.log'),
-      circleVersion,
-      text,
-    ),
-  windowPids: () =>
-    appWindows()
-      .filter(
-        (one) => !one.webContents.isDestroyed() && !one.webContents.isCrashed(),
-      )
-      .map((one) => one.webContents.getOSProcessId()),
-  metrics: () => app.getAppMetrics(),
-  snapshotFile: join(dataPath, 'logs', 'window-samples.json'),
-  ...(windowSampleMs !== undefined ? { sampleMs: windowSampleMs } : {}),
-});
 const instanceIdentity: InstanceIdentity = {
   protocol: 'circle-instance/1',
   build: app.getAppPath(),
   version: circleVersion,
 };
-if (!app.requestSingleInstanceLock(instanceIdentity)) app.exit(0);
+const hasSingleInstanceLock = app.requestSingleInstanceLock(instanceIdentity);
+if (!hasSingleInstanceLock) app.exit(0);
 // --no-sandbox contradicts enableSandbox(): the main process then crashes
 // with an access violation when the first child process starts
 // (https://github.com/electron/electron/issues/54838).
@@ -178,6 +155,33 @@ if (app.commandLine.hasSwitch('no-sandbox')) {
   process.exit(1);
 }
 app.enableSandbox();
+const rawSampleMs = process.env.CIRCLE_WORKBENCH_TEST_PROFILE
+  ? Number(process.env.CIRCLE_WORKBENCH_WINDOW_SAMPLE_MS)
+  : NaN;
+const windowSampleMs =
+  Number.isFinite(rawSampleMs) && rawSampleMs >= 50 && rawSampleMs <= 30_000
+    ? rawSampleMs
+    : undefined;
+const windowDiagnostics = hasSingleInstanceLock
+  ? createWindowDiagnostics({
+      log: (text) =>
+        appendDiagnosticLog(
+          join(dataPath, 'logs', 'runtime.log'),
+          circleVersion,
+          text,
+        ),
+      windowPids: () =>
+        appWindows()
+          .filter(
+            (one) =>
+              !one.webContents.isDestroyed() && !one.webContents.isCrashed(),
+          )
+          .map((one) => one.webContents.getOSProcessId()),
+      metrics: () => app.getAppMetrics(),
+      snapshotFile: join(dataPath, 'logs', 'window-samples.json'),
+      ...(windowSampleMs !== undefined ? { sampleMs: windowSampleMs } : {}),
+    })
+  : undefined;
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'circle',
@@ -276,7 +280,7 @@ function appWindows(): BrowserWindow[] {
 /** What the runtime, the browser and the terminals tell the window, told to every window. */
 function broadcast(channel: string, ...args: unknown[]) {
   const targets = liveBroadcastTargets(appWindows());
-  windowDiagnostics.sent(
+  windowDiagnostics?.sent(
     channel,
     args,
     targets.map((one) => one.webContents.id),
@@ -562,7 +566,7 @@ function showAttention(update: Parameters<typeof attention>[0]) {
  * main window and for one a mode of the drawer was popped out into.
  */
 function installWindowChrome(target: BrowserWindow) {
-  windowDiagnostics.watch(target === window ? 'main' : 'popout', target);
+  windowDiagnostics?.watch(target === window ? 'main' : 'popout', target);
   // Electron gives the window no right-click menu of its own. A text field gets the
   // system's editing commands, selected text gets Copy; the page asks nothing of the
   // main process for it, so the preload bridge stays as it is.
@@ -991,7 +995,7 @@ app
       ) {
         return;
       }
-      windowDiagnostics.rendererMemory(event.sender.id, {
+      windowDiagnostics?.rendererMemory(event.sender.id, {
         jsHeapMb: Math.round(stats.jsHeapMb),
         jsHeapLimitMb: Math.round(stats.jsHeapLimitMb),
         blinkAllocatedMb: Math.round(stats.blinkAllocatedMb),
@@ -1228,6 +1232,18 @@ app
           ...(result.errorDetail !== undefined
             ? { detail: result.errorDetail }
             : {}),
+          ...(result.errorUploaded !== undefined
+            ? { uploaded: result.errorUploaded }
+            : {}),
+          ...(result.errorTotal !== undefined
+            ? { total: result.errorTotal }
+            : {}),
+          ...(result.errorFileName !== undefined
+            ? { fileName: result.errorFileName }
+            : {}),
+          ...(result.errorReason !== undefined
+            ? { reason: result.errorReason }
+            : {}),
         });
       }
       return result.data;
@@ -1243,6 +1259,10 @@ app
                 code?: unknown;
                 detail?: unknown;
                 remoteMessage?: unknown;
+                uploaded?: unknown;
+                total?: unknown;
+                fileName?: unknown;
+                reason?: unknown;
               })
             : undefined;
         return {
@@ -1257,6 +1277,18 @@ app
             : typeof meta?.remoteMessage === 'string'
               ? { errorDetail: meta.remoteMessage }
               : {}),
+          ...(typeof meta?.uploaded === 'number'
+            ? { errorUploaded: meta.uploaded }
+            : {}),
+          ...(typeof meta?.total === 'number'
+            ? { errorTotal: meta.total }
+            : {}),
+          ...(typeof meta?.fileName === 'string'
+            ? { errorFileName: meta.fileName }
+            : {}),
+          ...(typeof meta?.reason === 'string'
+            ? { errorReason: meta.reason }
+            : {}),
         };
       }
     }
@@ -1862,7 +1894,7 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 app.on('child-process-gone', (_event, details) =>
-  windowDiagnostics.childGone(details),
+  windowDiagnostics?.childGone(details),
 );
 let quitting = false;
 let quitPending = false;

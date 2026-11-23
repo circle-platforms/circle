@@ -139,7 +139,7 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
     setLanguage(lang);
     const nonTransientCases = [
       {
-        err: makeErr(409, 'BOT_VERSION_MISMATCH', 'client too old'),
+        err: makeErr(400, 'BOT_VERSION_MISMATCH', 'client too old'),
         kind: 'version-mismatch',
         retryable: false,
       },
@@ -161,6 +161,20 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
       {
         err: makeErr(401, 'BOT_UNAUTHENTICATED', 'token revoked'),
         kind: 'auth',
+        retryable: false,
+      },
+      {
+        err: makeErr(undefined, undefined, 'MCP sign-in is required'),
+        kind: 'local-credential',
+        retryable: false,
+      },
+      {
+        err: makeErr(
+          undefined,
+          undefined,
+          'remote bot requires https or loopback http',
+        ),
+        kind: 'local-https',
         retryable: false,
       },
     ] as const;
@@ -190,12 +204,32 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
     assert.equal(authWithForbiddenCode.kind, 'auth');
     assert.equal(authWithForbiddenCode.retryable, false);
 
-    // 403 BOT_CLIENT_FORBIDDEN action honestly instructs adding Bearer token in settings.json.
+    // 403 BOT_CLIENT_FORBIDDEN action honestly instructs adding Bearer token in settings.json with settingsPath and format.
     const forbidden = classifyRemoteBotFailure(
       makeErr(403, 'BOT_CLIENT_FORBIDDEN', 'oauth client token rejected'),
     );
     assert.match(forbidden.action, /settings\.json/);
-    assert.match(forbidden.action, /Authorization|Bearer/);
+    assert.match(forbidden.action, /Bearer/);
+
+    const customSettingsPath = '/tmp/circle-data/runtime-home/settings.json';
+    const forbiddenWithPath = classifyRemoteBotFailure(
+      makeErr(403, 'BOT_CLIENT_FORBIDDEN', 'oauth client token rejected'),
+      { settingsPath: customSettingsPath },
+    );
+    assert.ok(forbiddenWithPath.action.includes(customSettingsPath));
+
+    // 401 with hasAuthorizationHeader gives settings.json token-update instructions instead of Settings -> Extensions.
+    const authFixedHeader = classifyRemoteBotFailure(
+      makeErr(401, 'BOT_UNAUTHENTICATED', 'token revoked'),
+      { hasAuthorizationHeader: true, settingsPath: customSettingsPath },
+    );
+    assert.equal(authFixedHeader.kind, 'auth');
+    assert.equal(authFixedHeader.retryable, false);
+    assert.ok(authFixedHeader.action.includes(customSettingsPath));
+    assert.doesNotMatch(
+      authFixedHeader.action,
+      /Settings -> Extensions|设置 -> 扩展/,
+    );
 
     // Transient codes/statuses including 408, 429 BOT_BUSY, 500, 502, 503, 504, undefined.
     for (const transientErr of [
@@ -232,24 +266,261 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
       false,
     );
     const integrity = classifyRemoteBotFailure(
-      makeErr(422, 'BOT_INVALID_REQUEST', 'attachment_integrity_failed'),
+      makeErr(
+        422,
+        'BOT_INVALID_REQUEST',
+        '参数无效：机器人附件完整性校验未通过。请重新上传附件后再试。',
+      ),
     );
     assert.equal(integrity.kind, 'other');
     assert.equal(integrity.retryable, false);
 
     if (lang === 'zh-CN') {
       assert.equal(authWithForbiddenCode.title, '机器人登录已过期');
-      assert.match(forbidden.action, /settings\.json.*headers\.Authorization/);
       assert.equal(
-        classifyRemoteBotFailure(makeErr(429, 'BOT_BUSY', 'busy')).title,
-        '机器人请求繁忙',
+        authWithForbiddenCode.cause,
+        'Hub 拒绝了当前凭据，可能已过期或被撤销。',
       );
       assert.equal(
-        classifyRemoteBotFailure(makeErr(503, 'BOT_DISABLED', 'disabled'))
-          .title,
-        '我的机器人已停用',
+        authWithForbiddenCode.action,
+        '请在 设置 -> 扩展 中重新登录 Hub 后再重试。',
       );
+      assert.equal(authFixedHeader.title, '机器人登录已过期');
+      assert.equal(
+        authFixedHeader.cause,
+        'Hub 拒绝了当前凭据，可能已过期或被撤销。',
+      );
+      assert.equal(
+        authFixedHeader.action,
+        `请更新 ${customSettingsPath} 中 Hub 的直接成员 Bearer 令牌（格式：Bearer <令牌>），然后再重试。`,
+      );
+
+      assert.equal(
+        forbidden.action,
+        '请先在 <应用数据文件夹>/runtime-home/settings.json 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌（格式：Bearer <令牌>），然后再重试。',
+      );
+      assert.equal(forbiddenWithPath.title, '需要使用直接成员令牌');
+      assert.equal(
+        forbiddenWithPath.cause,
+        'Hub 拒绝了 OAuth 登录令牌对机器人接口的访问。',
+      );
+      assert.equal(
+        forbiddenWithPath.action,
+        `请先在 ${customSettingsPath} 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌（格式：Bearer <令牌>），然后再重试。`,
+      );
+
+      const forbiddenConsole = classifyRemoteBotFailure(
+        makeErr(
+          403,
+          'BOT_CLIENT_FORBIDDEN',
+          '禁止使用控制台登录凭据调用机器人接口',
+        ),
+        { settingsPath: customSettingsPath },
+      );
+      assert.equal(forbiddenConsole.kind, 'oauth-forbidden');
+      assert.equal(forbiddenConsole.retryable, false);
+      assert.equal(forbiddenConsole.title, '不能使用控制台凭据');
+      assert.equal(
+        forbiddenConsole.cause,
+        'Hub 拒绝了控制台会话凭据对机器人接口的访问。',
+      );
+      assert.equal(
+        forbiddenConsole.action,
+        `请先在 ${customSettingsPath} 的 Hub 配置 headers.Authorization 中填入直接成员 Bearer 令牌（格式：Bearer <令牌>），然后再重试。`,
+      );
+
+      const forbiddenOrigin = classifyRemoteBotFailure(
+        makeErr(403, 'BOT_CLIENT_FORBIDDEN', '请求 Origin header 不在允许列表'),
+      );
+      assert.equal(forbiddenOrigin.kind, 'oauth-forbidden');
+      assert.equal(forbiddenOrigin.retryable, false);
+      assert.equal(forbiddenOrigin.title, '请求 Host 或 Origin 被拒绝');
+      assert.equal(
+        forbiddenOrigin.cause,
+        'Hub 拒绝了当前请求的 Host 或 Origin 请求头。',
+      );
+      assert.equal(
+        forbiddenOrigin.action,
+        '请在 设置 -> 扩展 中检查 Hub 地址或确认 Hub 允许的 Host/Origin 配置后再重试。',
+      );
+
+      const versionMismatch = classifyRemoteBotFailure(
+        makeErr(400, 'BOT_VERSION_MISMATCH', '版本不匹配'),
+      );
+      assert.equal(versionMismatch.kind, 'version-mismatch');
+      assert.equal(versionMismatch.title, '需要更新 Circle');
+      assert.equal(
+        versionMismatch.cause,
+        'Hub 拒绝了当前 Circle 版本的机器人连接。',
+      );
+      assert.equal(versionMismatch.action, '请更新 Circle 桌面版后重新连接。');
+
+      const versionInvalid = classifyRemoteBotFailure(
+        makeErr(400, 'BOT_VERSION_INVALID', 'bad version'),
+      );
+      assert.equal(versionInvalid.kind, 'version-invalid');
+      assert.equal(versionInvalid.title, '客户端版本无效');
+      assert.equal(
+        versionInvalid.cause,
+        'Hub 无法识别当前 Circle 客户端版本头。',
+      );
+      assert.equal(
+        versionInvalid.action,
+        '请重新安装或更新 Circle 桌面版后再重试。',
+      );
+
+      const disabled = classifyRemoteBotFailure(
+        makeErr(503, 'BOT_DISABLED', 'disabled'),
+      );
+      assert.equal(disabled.kind, 'disabled');
+      assert.equal(disabled.title, '我的机器人已停用');
+      assert.equal(disabled.cause, 'Hub 管理员已停用机器人功能。');
+      assert.equal(disabled.action, '请联系 Hub 管理员启用后再重试。');
+
+      const busy = classifyRemoteBotFailure(makeErr(429, 'BOT_BUSY', 'busy'));
+      assert.equal(busy.kind, 'transient');
+      assert.equal(busy.title, '机器人请求繁忙');
+      assert.equal(busy.cause, '机器人队列已满或触发限流，请稍候。');
+      assert.equal(
+        busy.action,
+        'Circle 将在短时间退避后自动重试，也可以立即手动重试。',
+      );
+
+      const transient = classifyRemoteBotFailure(
+        makeErr(502, undefined, 'remote bot unavailable'),
+      );
+      assert.equal(transient.kind, 'transient');
+      assert.equal(transient.title, '机器人连接中断');
+      assert.equal(transient.cause, '暂时无法连接到 Hub 机器人接口。');
+      assert.equal(
+        transient.action,
+        'Circle 将按退避间隔自动重试，也可以立即手动重试。',
+      );
+
+      const quota = classifyRemoteBotFailure(
+        makeErr(413, 'BOT_QUOTA_EXCEEDED', 'quota exceeded'),
+      );
+      assert.equal(quota.kind, 'other');
+      assert.equal(quota.title, '机器人附件配额已满');
+      assert.equal(quota.cause, '当前成员的机器人附件存储已达到上限。');
+      assert.equal(
+        quota.action,
+        '请等待旧附件过期清理后再上传，或先发送不带附件的消息。',
+      );
+
+      const notFound = classifyRemoteBotFailure(
+        makeErr(404, 'BOT_NOT_FOUND', 'not found'),
+      );
+      assert.equal(notFound.kind, 'other');
+      assert.equal(notFound.title, '未找到机器人目标资源');
+      assert.equal(notFound.cause, 'Hub 未找到请求的机器人对话或文件。');
+      assert.equal(notFound.action, '请新建机器人对话后重试。');
+
+      const conflict = classifyRemoteBotFailure(
+        makeErr(409, 'BOT_CONFLICT', 'conflict'),
+      );
+      assert.equal(conflict.kind, 'other');
+      assert.equal(conflict.title, '机器人请求状态冲突');
+      assert.equal(
+        conflict.cause,
+        '该请求与已有机器人对话或请求记录状态冲突。',
+      );
+      assert.equal(conflict.action, '请刷新机器人对话后重新发送请求。');
+
       assert.equal(integrity.title, '附件完整性校验失败');
+      assert.equal(integrity.cause, '附件校验未通过，Hub 拒绝了该消息。');
+      assert.equal(integrity.action, '请移除并重新附加该文件后再试。');
+
+      const invalidReq = classifyRemoteBotFailure(
+        makeErr(400, 'BOT_INVALID_REQUEST', 'bad text'),
+      );
+      assert.equal(invalidReq.kind, 'other');
+      assert.equal(invalidReq.title, '机器人请求无效');
+      assert.equal(
+        invalidReq.cause,
+        '请求参数或内容长度不符合要求，已被 Hub 拒绝。',
+      );
+      assert.equal(invalidReq.action, '请检查消息内容或附件限制后再重试。');
+
+      const otherErr = classifyRemoteBotFailure(
+        makeErr(415, undefined, 'unsupported media type'),
+      );
+      assert.equal(otherErr.kind, 'other');
+      assert.equal(otherErr.title, '机器人请求失败');
+      assert.equal(otherErr.cause, 'Hub 返回了未预期的机器人错误。');
+      assert.equal(otherErr.action, '请检查 Hub 连接状态后再重试。');
+
+      const localMissingSecret = classifyRemoteBotFailure(
+        makeErr(
+          undefined,
+          undefined,
+          'the Authorization header names ${HUB_TOKEN}, which is not set; save it with /secrets HUB_TOKEN',
+        ),
+        { hasAuthorizationHeader: true, settingsPath: customSettingsPath },
+      );
+      assert.equal(localMissingSecret.kind, 'local-credential');
+      assert.equal(localMissingSecret.retryable, false);
+      assert.equal(localMissingSecret.title, '缺少 Hub 授权密钥');
+      assert.equal(
+        localMissingSecret.cause,
+        'Hub 的 Authorization 请求头引用了未设置的密钥 ${HUB_TOKEN}。',
+      );
+      assert.equal(
+        localMissingSecret.action,
+        `请在 设置 -> 变量与密钥 中保存密钥 HUB_TOKEN（或使用 /secrets HUB_TOKEN），或在 ${customSettingsPath} 中更新 headers.Authorization 后再重试。`,
+      );
+
+      const localBadBearer = classifyRemoteBotFailure(
+        makeErr(undefined, undefined, 'MCP sign-in is required'),
+        { hasAuthorizationHeader: true, settingsPath: customSettingsPath },
+      );
+      assert.equal(localBadBearer.kind, 'local-credential');
+      assert.equal(localBadBearer.retryable, false);
+      assert.equal(localBadBearer.title, 'Hub 授权请求头格式无效');
+      assert.equal(
+        localBadBearer.cause,
+        'Hub 的 Authorization 请求头缺少有效的 Bearer 前缀或令牌。',
+      );
+      assert.equal(
+        localBadBearer.action,
+        `请在 ${customSettingsPath} 中将 Hub 的 headers.Authorization 修改为 Bearer <令牌> 格式后再重试。`,
+      );
+
+      const localMissingLogin = classifyRemoteBotFailure(
+        makeErr(undefined, undefined, 'MCP sign-in is required'),
+        { hasAuthorizationHeader: false, settingsPath: customSettingsPath },
+      );
+      assert.equal(localMissingLogin.kind, 'local-credential');
+      assert.equal(localMissingLogin.retryable, false);
+      assert.equal(localMissingLogin.title, '需要登录 Hub');
+      assert.equal(
+        localMissingLogin.cause,
+        '当前 Hub 连接缺少有效的本地登录凭据。',
+      );
+      assert.equal(
+        localMissingLogin.action,
+        `请在 设置 -> 扩展 中登录 Hub，或在 ${customSettingsPath} 中填入直接成员 Bearer 令牌（格式：Bearer <令牌>）后再重试。`,
+      );
+
+      const localHttps = classifyRemoteBotFailure(
+        makeErr(
+          undefined,
+          undefined,
+          'remote bot requires https or loopback http',
+        ),
+        { settingsPath: customSettingsPath },
+      );
+      assert.equal(localHttps.kind, 'local-https');
+      assert.equal(localHttps.retryable, false);
+      assert.equal(localHttps.title, '远程机器人需要 HTTPS 连接');
+      assert.equal(
+        localHttps.cause,
+        '远程机器人连接需要使用 https:// 地址或本机回环 http:// 地址。',
+      );
+      assert.equal(
+        localHttps.action,
+        `请在 设置 -> 扩展 或 ${customSettingsPath} 中将 Hub 地址改为 https:// 后再重试。`,
+      );
     }
   }
 });
@@ -358,6 +629,78 @@ test('S11/S12: translateBotTransferError localizes transfer errors, HTTP metadat
     ),
     '已上传 2/5 个文件；c.txt 上传失败：网络请求失败',
   );
+  assert.equal(
+    translateBotTransferError(
+      Object.assign(
+        new Error('Uploaded 1 of 3 files; failed on c: d.txt: fetch failed'),
+        {
+          name: 'PartialBatchUploadError',
+          errorUploaded: 1,
+          errorTotal: 3,
+          errorFileName: 'c: d.txt',
+          errorReason: 'fetch failed',
+        },
+      ),
+      'fallback',
+    ),
+    '已上传 1/3 个文件；c: d.txt 上传失败：网络请求失败',
+  );
+  assert.equal(
+    translateBotTransferError(
+      Object.assign(new Error('参数无效：机器人附件完整性校验未通过。'), {
+        status: 422,
+        code: 'BOT_INVALID_REQUEST',
+      }),
+      'fallback',
+    ),
+    '附件完整性校验失败',
+  );
+  assert.equal(
+    translateBotTransferError(new Error('untrusted IPC sender'), 'fallback'),
+    '不受信任的窗口请求，请刷新或重新打开窗口后再试',
+  );
+  assert.equal(
+    translateBotTransferError(new Error('MCP sign-in is required'), 'fallback'),
+    '需要先完成 Hub 授权登录，或配置格式正确的 Bearer 令牌',
+  );
+  assert.equal(
+    translateBotTransferError(
+      new Error(
+        'the Authorization header names ${HUB_TOKEN}, which is not set; save it with /secrets HUB_TOKEN',
+      ),
+      'fallback',
+    ),
+    '授权请求头引用的密钥 ${HUB_TOKEN} 尚未设置，请先在变量与密钥中保存 HUB_TOKEN 后再重试',
+  );
+  for (const [fsMsg, code, expected] of [
+    [
+      "ENOENT: no such file or directory, open '/Users/alice/private/secret.txt'",
+      'ENOENT',
+      '文件不可用',
+    ],
+    [
+      "EACCES: permission denied, open '/Users/alice/private/secret.txt'",
+      'EACCES',
+      '没有文件访问权限',
+    ],
+    [
+      "EPERM: operation not permitted, open '/Users/alice/private/secret.txt'",
+      'EPERM',
+      '没有文件访问权限',
+    ],
+    [
+      "EISDIR: illegal operation on a directory, open '/Users/alice/private'",
+      'EISDIR',
+      '无法将文件夹当作文件操作',
+    ],
+  ] as const) {
+    const translated = translateBotTransferError(
+      Object.assign(new Error(fsMsg), { code }),
+      'fallback',
+    );
+    assert.equal(translated, expected);
+    assert.doesNotMatch(translated, /\/Users\/alice/);
+  }
 });
 
 test('LiveRuntime.request forwards structured errorStatus and errorCode across IPC', async () => {
