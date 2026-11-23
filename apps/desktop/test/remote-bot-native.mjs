@@ -339,10 +339,20 @@ async function startPairedBackend(repoRoot) {
     'host',
   );
 
-  for (const [change, status, message] of [
-    [{ key: 'synthetic-bad' }, 422, '模型端点拒绝凭据'],
-    [{ model: 'absent-model' }, 422, '模型 ID 不可用'],
-    [{}, 200, null],
+  for (const [change, status, code, message] of [
+    [
+      { key: 'synthetic-bad' },
+      422,
+      'model_auth_failed',
+      'model endpoint rejected credentials',
+    ],
+    [
+      { model: 'absent-model' },
+      422,
+      'model_not_found',
+      'model id is unavailable',
+    ],
+    [{}, 200, null, null],
   ]) {
     const result = await callBot(hub.deps.config.dataDir, {
       owner: hub.admin.principal.id,
@@ -350,8 +360,12 @@ async function startPairedBackend(repoRoot) {
       config: { ...config, ...change },
     });
     assert.equal(result.status, status);
-    if (message) assert.equal(result.body.message, message);
-    else assert.equal(result.body.tested, true);
+    if (message) {
+      assert.equal(result.body.code, code);
+      assert.equal(result.body.message, message);
+    } else {
+      assert.equal(result.body.tested, true);
+    }
   }
 
   const admin = await request.newContext({
@@ -404,15 +418,15 @@ async function startPairedBackend(repoRoot) {
     await setup();
     await testBot('机器人已用指定模型收到回复');
     acceptedKey = 'synthetic-model-key-B';
-    await testBot('模型端点拒绝凭据');
+    await testBot('model endpoint rejected credentials');
     await setup({ model: 'missing-model' });
-    await testBot('模型 ID 不可用');
+    await testBot('model id is unavailable');
     const closed = createServer();
     await new Promise((done) => closed.listen(0, '127.0.0.1', done));
     const closedPort = closed.address().port;
     await new Promise((done) => closed.close(done));
     await setup({ endpoint: 'http://127.0.0.1:' + closedPort });
-    await testBot('模型端点未能建立连接或响应超时');
+    await testBot('model endpoint unreachable or timed out');
     await setup();
     await testBot('机器人已用指定模型收到回复');
   } finally {

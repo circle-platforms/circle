@@ -429,10 +429,17 @@ export class RemoteBot {
           "UPDATE file_delivery SET state='unknown',receipt=? WHERE event_id=? AND slot=? AND state='queued'",
         )
         .run(receipt, String(row.id), Number(row.slot));
+    const file = row.file
+      ? (JSON.parse(String(row.file)) as ChatFile)
+      : undefined;
     return {
-      ...row,
-      file: row.file ? (JSON.parse(String(row.file)) as ChatFile) : null,
+      id: String(row.id),
+      owner: String(row.owner),
+      subject: String(row.subject),
       receipt,
+      role: String(row.role),
+      text: String(row.text),
+      ...(file ? { file } : {}),
     };
   }
 

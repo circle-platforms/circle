@@ -1087,3 +1087,92 @@ test('serveRemoteBot accepts EffectOutcomeSchema receipt states and enforces Sem
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('RemoteBot.claim returns strict Hub deliverySchema shape without internal slot or null file', async () => {
+  const { createHash } = await import('node:crypto');
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const home = await mkdtemp(join(tmpdir(), 'remote-bot-claim-'));
+  const host = new RemoteBot(home, async () => 'reply ok');
+  try {
+    const { current } = host.run('member', { action: 'discover' }) as {
+      current: string;
+    };
+    const content = Buffer.from('attachment bytes');
+    const sha = createHash('sha256').update(content).digest('hex');
+    const ownerDir = join(
+      home,
+      'files',
+      createHash('sha256').update('member').digest('hex'),
+    );
+    await mkdir(ownerDir, { recursive: true, mode: 0o700 });
+    await writeFile(join(ownerDir, sha), content);
+
+    const route: import('../src/remote_bot.js').ChatRoute = {
+      source: 'desktop',
+      issuer: 'issuer-1',
+      subject: 'bound-member',
+    };
+    host.run(
+      'member',
+      {
+        action: 'send',
+        conversation: current,
+        request: randomUUID(),
+        text: 'with file',
+        files: [{ name: 'note.txt', size: content.length, sha256: sha }],
+      },
+      config,
+      route,
+    );
+    const deadline = Date.now() + 5000;
+    while (
+      host.run('member', { action: 'history', conversation: current, after: 0 })
+        .active
+    ) {
+      if (Date.now() > deadline) throw new Error('timed out waiting for reply');
+      await new Promise((ok) => setImmediate(ok));
+    }
+
+    const first = host.claim('issuer-1');
+    assert.ok(first);
+    assert.deepEqual(Object.keys(first).sort(), [
+      'id',
+      'owner',
+      'receipt',
+      'role',
+      'subject',
+      'text',
+    ]);
+    assert.equal('slot' in first, false);
+    assert.equal('file' in first, false);
+    assert.equal(first.role, 'user');
+    assert.equal(first.text, 'with file');
+
+    const second = host.claim('issuer-1');
+    assert.ok(second);
+    assert.deepEqual(Object.keys(second).sort(), [
+      'file',
+      'id',
+      'owner',
+      'receipt',
+      'role',
+      'subject',
+      'text',
+    ]);
+    assert.equal('slot' in second, false);
+    assert.deepEqual(second.file, {
+      name: 'note.txt',
+      size: content.length,
+      sha256: sha,
+    });
+
+    const third = host.claim('issuer-1');
+    assert.ok(third);
+    assert.equal('file' in third, false);
+    assert.equal(third.role, 'assistant');
+    assert.equal(third.text, 'reply ok');
+  } finally {
+    await host.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
