@@ -5,6 +5,8 @@ import {
   credentialsAfter,
 } from './private-credentials';
 import { nativeHttpsUrl } from './native-links';
+import { appendDiagnosticLog } from './diagnostic-log';
+import { createWindowDiagnostics } from './window-diagnostics';
 import { BrowserSessions } from './browser';
 import {
   devToolsMenuShortcut,
@@ -135,6 +137,16 @@ const dataPath = (() => {
 })();
 app.setPath('userData', dataPath);
 const circleVersion = circleAppVersion(app.isPackaged, app.getVersion());
+const windowDiagnostics = createWindowDiagnostics({
+  log: (text) =>
+    appendDiagnosticLog(
+      join(dataPath, 'logs', 'runtime.log'),
+      circleVersion,
+      text,
+    ),
+  windowPids: () => appWindows().map((one) => one.webContents.getOSProcessId()),
+  metrics: () => app.getAppMetrics(),
+});
 const instanceIdentity: InstanceIdentity = {
   protocol: 'circle-instance/1',
   build: app.getAppPath(),
@@ -248,7 +260,10 @@ function appWindows(): BrowserWindow[] {
 }
 /** What the runtime, the browser and the terminals tell the window, told to every window. */
 function broadcast(channel: string, ...args: unknown[]) {
-  for (const one of appWindows()) one.webContents.send(channel, ...args);
+  windowDiagnostics.sent(channel, args);
+  for (const one of appWindows()) {
+    if (!one.webContents.isCrashed()) one.webContents.send(channel, ...args);
+  }
 }
 /** The application's window that sent a message, or a throw for anything else. */
 function checkSender(event: {
@@ -526,6 +541,7 @@ function showAttention(update: Parameters<typeof attention>[0]) {
  * main window and for one a mode of the drawer was popped out into.
  */
 function installWindowChrome(target: BrowserWindow) {
+  windowDiagnostics.watch(target === window ? 'main' : 'popout', target);
   // Electron gives the window no right-click menu of its own. A text field gets the
   // system's editing commands, selected text gets Copy; the page asks nothing of the
   // main process for it, so the preload bridge stays as it is.
@@ -1004,6 +1020,8 @@ app
     handle('circle:runtime-command', async (value) => {
       if (!runtime) throw Error('runtime not enabled');
       const command = validateRuntimeCommand(value);
+      if (command.name === 'remote-bot-native-file')
+        throw Error('native file selection required');
       if (
         command.name === 'open-workspace' ||
         command.name === 'set-default-workspace' ||
@@ -1141,6 +1159,56 @@ app
           await ownerRuntime.revokeExternalFileGrant(owner, id);
         },
       });
+    });
+    async function transferSelectedFile(payload: Record<string, unknown>) {
+      if (!runtime) throw Error('runtime not enabled');
+      const result = await runtime.command({
+        id: randomUUID(),
+        name: 'remote-bot-native-file',
+        payload,
+      });
+      if (!result.ok) throw Error(result.error ?? 'file transfer failed');
+      return result.data;
+    }
+    handle('circle:attach-bot-files', async (binding) => {
+      if (typeof binding !== 'string')
+        throw Error('invalid remote bot connection');
+      const paths =
+        fixtureProfile?.files ??
+        (
+          await dialog.showOpenDialog(window!, {
+            title: text('choose files'),
+            properties: ['openFile', 'multiSelections'],
+          })
+        ).filePaths;
+      if (paths.length > 8) throw Error('select up to eight files');
+      const files = [];
+      for (const path of paths)
+        files.push(
+          await transferSelectedFile({ action: 'upload', binding, path }),
+        );
+      return files;
+    });
+    handle('circle:save-bot-file', async (binding, file) => {
+      if (typeof binding !== 'string' || !file || typeof file !== 'object')
+        throw Error('invalid remote file');
+      const descriptor =
+        file as import('../../../src/remote_bot_protocol.js').ChatFile;
+      const name = validSaveName(descriptor.name);
+      const result = fixtureProfile?.exportPath
+        ? { canceled: false, filePath: fixtureProfile.exportPath }
+        : await dialog.showSaveDialog(window!, {
+            defaultPath: name,
+            properties: ['showOverwriteConfirmation'],
+          });
+      if (result.canceled || !result.filePath) return false;
+      await transferSelectedFile({
+        action: 'save',
+        binding,
+        file: descriptor,
+        path: result.filePath,
+      });
+      return true;
     });
     handle('circle:choose-files', async (purpose) => {
       if (!['attach', 'import', 'source'].includes(String(purpose)))
@@ -1697,6 +1765,9 @@ app
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
+app.on('child-process-gone', (_event, details) =>
+  windowDiagnostics.childGone(details),
+);
 let quitting = false;
 let quitPending = false;
 // Quitting always ends the process. A runtime that cannot stop is ended by the bounded

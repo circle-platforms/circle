@@ -3,11 +3,11 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { useRuntime } from '../app/context';
 import { desktopHost } from '../host';
 import { locale, t, tn } from '../i18n';
+import { HUB_SERVER } from '../model/remote-bot';
 import type { McpServer } from '../model/types';
 import { Badge, Button, CopyButton, DeviceCode, Switch } from './common';
 
-/** The MCP entry the Hub extension keeps (src/hub_connection.ts). */
-export const HUB_SERVER = 'Hub';
+export { HUB_SERVER };
 
 /**
  * The state of a connection an extension keeps as an MCP server entry, as its card shows it: connected, waiting for its

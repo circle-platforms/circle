@@ -226,6 +226,7 @@ export class GatewayModel implements ChatModel {
     modelOverride?: string,
     guardOptions: GuardOptions = {},
     catalog?: ModelCatalog,
+    suppliedKey?: string,
   ) {
     this.model = modelOverride || settings.auth.model;
     this.catalog = catalog ?? new ModelCatalog(circleHome(home));
@@ -242,18 +243,22 @@ export class GatewayModel implements ChatModel {
       identity = chatgptIdentityIfSignedIn(signedIn) ?? 'chatgpt signed out';
       apiKey = () => chatgptAccessToken(signedIn);
     } else {
-      const credentials = loadCredentials(home);
-      const key = credentials[settings.auth.api_key_ref] || credentials.api_key;
+      const credentials =
+        suppliedKey === undefined ? loadCredentials(home) : {};
+      const key =
+        suppliedKey ??
+        (credentials[settings.auth.api_key_ref] || credentials.api_key);
       if (!key)
         throw new Error(desktopText('missing API key; re-run circle --init'));
       apiKey = identity = key;
-      this.searchConnection = Object.freeze({
-        baseUrl: settings.auth.base_url,
-        protocol:
-          settings.auth.protocol === 'anthropic' ? 'anthropic' : 'openai',
-        model: this.model,
-        apiKey: key,
-      });
+      if (suppliedKey === undefined)
+        this.searchConnection = Object.freeze({
+          baseUrl: settings.auth.base_url,
+          protocol:
+            settings.auth.protocol === 'anthropic' ? 'anthropic' : 'openai',
+          model: this.model,
+          apiKey: key,
+        });
     }
     // Keyed identity lets saved history detect account/endpoint/model changes without
     // storing a key or endpoint in the transcript. Rotation conservatively drops replay.

@@ -215,3 +215,9 @@ Subagents' turns and tool results fire the same events. Handlers may be `async`.
 | `/extensions` (`/ext`)                                    | List extensions with their tool and command counts, load errors and handler errors.                                                |
 | `/extensions reload`                                      | Re-read settings, reconnect MCP servers and reload every extension. Not while a turn runs.                                         |
 | `/extensions enable <name>`, `/extensions disable <name>` | Save `enabled` for that extension in `settings.json` and reload, so the choice holds in later sessions too. Not while a turn runs. |
+
+### Private remote chat
+
+After signing in, **my bot** opens the member's server-side conversation. Desktop and web use the existing MCP sign-in to access the same origin's member chat API, and attachments use its sibling file endpoints. A local model connection is optional. Closing the window leaves accepted messages with the server. Opening the conversation again retrieves its history.
+
+The matching Circle distribution runs the host with `circle remote-bot <private service directory>`. Use the Hub data directory's `bot-runtime` subdirectory, owned by the service account with mode 0700, on Linux or macOS. The host listens on a Unix socket. It stores conversations there and reads the model connection from the authenticated Hub request. Start a single host for the directory. If it restarts during a model call the conversation records an unknown outcome.

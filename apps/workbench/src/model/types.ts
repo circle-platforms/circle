@@ -40,6 +40,7 @@ export type SettingsSectionId =
   | 'sync';
 /** `settings` opens the dialog at its first group; every group also has its own page id. */
 export type PageId =
+  | 'remote-bot'
   | 'sessions'
   | 'knowledge'
   | 'memory'

@@ -22,6 +22,10 @@ const raiseBrowserError = (error: unknown): never => {
 };
 const bridge: DesktopBridge = {
   apiVersion: 1,
+  attachBotFiles: (binding) =>
+    ipcRenderer.invoke('circle:attach-bot-files', binding),
+  saveBotFile: (binding, file) =>
+    ipcRenderer.invoke('circle:save-bot-file', binding, file),
   nativeAccessibility: () => ipcRenderer.invoke('circle:native-accessibility'),
   onNativeAccessibility: (listener) => {
     const handler = (_event: unknown, state: Parameters<typeof listener>[0]) =>

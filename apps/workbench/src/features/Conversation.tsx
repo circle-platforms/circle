@@ -1,3 +1,4 @@
+import { RemoteBotLink } from './RemoteBotChat';
 import { SafeFileUndo } from './SafeFileUndo';
 import { CompactionRow } from './CompactionStatus';
 import {
@@ -849,6 +850,7 @@ export function Conversation({
             <div className="welcome">
               <span className="circle-logo large" />
               <h2>{t('what are we working on?')}</h2>
+              <RemoteBotLink />
               <button
                 onClick={() => onDialog('trust')}
                 className="workspace-trust"

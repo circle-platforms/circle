@@ -1175,6 +1175,7 @@ export class LiveRuntime implements RuntimePort {
         'check-update': 'check-update',
         'dismiss-whats-new': 'dismiss-whats-new',
         'link-opened': 'link-opened',
+        'remote-bot': 'remote-bot',
         'hub-connect': 'hub-connect',
         'hub-disconnect': 'hub-disconnect',
         'discover-models': 'discover-models',
@@ -1209,30 +1210,27 @@ export class LiveRuntime implements RuntimePort {
       }
       const name = names[kind];
       if (!name) throw Error(t('{kind} is not connected yet', { kind }));
-      // The Hub card says why it could not connect or disconnect, in its own words: no notice says it again
       return this.native(
         name,
         payload,
         sessionId,
-        kind !== 'hub-connect' && kind !== 'hub-disconnect',
+        kind !== 'remote-bot' &&
+          kind !== 'hub-connect' &&
+          kind !== 'hub-disconnect',
       );
     };
     const result = operation();
-    // This settings action reports its Promise result in its original row,
-    // including superseded intents; it must not become a conversation failure.
     if (
       ![
         'extension.enabled',
-        // Checkout menus show failures at the control that made the request.
         'checkouts',
         'checkout-branches',
         'checkout-move-status',
         'switch-checkout',
         'list-external-file-grants',
         'revoke-external-file-grant',
-        // The card says why its command was not typed.
         'run-in-terminal',
-        // The Hub card shows why it could not connect or disconnect.
+        'remote-bot',
         'hub-connect',
         'hub-disconnect',
       ].includes(kind)

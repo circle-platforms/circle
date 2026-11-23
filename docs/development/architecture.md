@@ -146,6 +146,9 @@ remembered for that model instance like a rejected signature.
 | `mcp_loader.ts`   | Connects MCP servers and offers their tools under the same policy as built-in ones.                                                 |
 | `mcp_websocket.ts` | The MCP connection over WebSocket (`"type": "ws"`), which the MCP library does not have.                                         |
 | `mcp_protocol.ts` | Which MCP revision a server is asked for, and what a program answered, kept for 7 days in `mcp-protocol.json`.                     |
+| `remote_bot.ts`   | Server-side private chat host: Unix socket SQLite store, per-member sessions and model streaming using the request's model config. |
+| `remote_bot_service.ts` | Standalone `circle remote-bot` process wrapper managing the Unix socket service and owner lock.                            |
+| `remote_bot_protocol.ts` | Typed NDJSON/HTTP request and event structures shared with the remote chat host and adapters.                              |
 | `extensions.ts`   | Loads extensions and what they register: tools, commands, middleware, renderers and event handlers.                                 |
 | `net.ts`          | The proxy and certificate settings for every request Circle makes itself.                                                           |
 

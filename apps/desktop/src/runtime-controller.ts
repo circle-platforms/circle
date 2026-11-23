@@ -1,3 +1,5 @@
+import { uploadSelected, saveRemoteFile } from './remote-bot-files.js';
+import { remoteBotPort, remoteBotRequest } from './remote-bot.js';
 import {
   activeChatGPTAccount,
   CHATGPT_RESOURCE,
@@ -4790,12 +4792,17 @@ export class RuntimeController {
             'workspace-service',
             'list-external-file-grants',
             'revoke-external-file-grant',
+            'remote-bot',
           ].includes(command.name)
         )
           throw Error('session changed; retry from the current session');
         const data = await this.execute(command);
         let appliedState: RuntimeReply['appliedState'];
-        if (!this.closing && command.name !== 'workspace-service') {
+        if (
+          !this.closing &&
+          command.name !== 'workspace-service' &&
+          command.name !== 'remote-bot'
+        ) {
           const publication = this.publish();
           if (publication?.tokenStream)
             appliedState = {
@@ -5277,6 +5284,22 @@ export class RuntimeController {
       }
       return {};
     }
+    if (command.name === 'remote-bot-native-file') {
+      const { binding, path, action, file } = command.payload;
+      if (typeof binding !== 'string' || typeof path !== 'string')
+        throw Error('invalid remote file');
+      const port = remoteBotPort(this.home, binding);
+      if (action === 'upload') return uploadSelected(port, path);
+      if (action === 'save')
+        return saveRemoteFile(
+          port,
+          file as import('../../../src/remote_bot_protocol.js').ChatFile,
+          path,
+        );
+      throw Error('invalid remote file operation');
+    }
+    if (command.name === 'remote-bot')
+      return remoteBotRequest(remoteBotPort(this.home), command.payload);
     if (command.name === 'knowledge') {
       if (command.sessionId && command.sessionId !== this.selectedSessionId)
         throw Error('knowledge-changed');

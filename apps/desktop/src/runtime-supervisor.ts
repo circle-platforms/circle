@@ -1,7 +1,7 @@
 import { utilityProcess, type UtilityProcess } from 'electron';
-import { dirname, join } from 'node:path';
-import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { appendDiagnosticLog } from './diagnostic-log';
 import type { WorkspaceServiceEvent } from './workspace-protocol';
 import {
   executeCredentialRequest,
@@ -136,7 +136,6 @@ const STDERR_TAIL = 16 * 1024;
 // What the runtime wrote on stdout, kept for the one diagnosis stderr cannot give:
 // what a command that never answered was waiting on. It never reaches the window.
 const STDOUT_TAIL = 64 * 1024;
-const LOG_LIMIT = 1024 * 1024;
 /** A command this far from an answer is said to the windows: the runtime is busy. */
 export const RUNTIME_COMMAND_WAIT_MS = 4_000;
 /** How often that wait is restated, so a window can count the seconds. */
@@ -664,19 +663,7 @@ export class RuntimeSupervisor {
   }
   private log(text: string) {
     const file = this.options.logFile;
-    if (!file) return;
-    try {
-      mkdirSync(dirname(file), { recursive: true });
-      try {
-        if (statSync(file).size > LOG_LIMIT) renameSync(file, `${file}.1`);
-      } catch {
-        /* no log yet */
-      }
-      const where = `circle ${this.options.version ?? '?'} · electron ${process.versions.electron ?? '?'} · ${process.platform} ${process.arch}`;
-      appendFileSync(file, `${new Date().toISOString()} ${where}\n${text}\n\n`);
-    } catch {
-      /* the log is best effort */
-    }
+    if (file) appendDiagnosticLog(file, this.options.version, text);
   }
   /** Who carries out the runtime's browser requests: the window's browser sessions. */
   onBrowser(handler: BrowserHandler) {

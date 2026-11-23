@@ -564,6 +564,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   let runtime: import('./runtime.js').AgentRuntime | undefined;
   let offSignals: (() => void) | undefined;
   try {
+    if (argv[0] === 'remote-bot') {
+      const { runRemoteBot } = await import('./remote_bot_service.js');
+      return runRemoteBot(argv.slice(1));
+    }
     // HTTPS_PROXY, NO_PROXY, SSL_CERT_FILE and SSL_CERT_DIR, and trust_cert_files from
     // settings, before the first request (the update check and `circle update` need them too)
     if (!networkConfigured) {
