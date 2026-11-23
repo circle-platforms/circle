@@ -21,6 +21,25 @@ export function remoteBotPort(home: string, binding?: string) {
   return port;
 }
 
+export async function fetchWithRefresh(
+  port: McpBearerConnection,
+  signal: AbortSignal,
+  attempt: (token: string) => Promise<Response>,
+) {
+  const send = (token: string) => {
+    port.assertActive();
+    return attempt(token);
+  };
+  const token = await port.token(signal);
+  let response = await send(token);
+  if (response.status === 401) {
+    await response.body?.cancel();
+    response = await send(await port.token(signal, token));
+  }
+  port.assertActive();
+  return response;
+}
+
 export async function remoteBotRequest(
   port: McpBearerConnection,
   payload: Record<string, unknown>,
@@ -35,9 +54,8 @@ export async function remoteBotRequest(
     throw new Error('unknown remote bot operation');
   const url = new URL('/api/bot/v1', port.server);
   const signal = AbortSignal.timeout(25000);
-  const send = async (token: string) => {
-    port.assertActive();
-    return fetcher(url, {
+  const response = await fetchWithRefresh(port, signal, (token) =>
+    fetcher(url, {
       method: 'POST',
       redirect: 'error',
       signal,
@@ -47,21 +65,20 @@ export async function remoteBotRequest(
         'circle-version': VERSION,
       },
       body: JSON.stringify(op),
-    });
-  };
-  const token = await port.token(signal);
-  let response = await send(token);
-  if (response.status === 401) {
-    await response.body?.cancel();
-    response = await send(await port.token(signal, token));
+    }),
+  );
+  if (!response.ok) {
+    let message: unknown;
+    try {
+      const text = await response.text();
+      message = (JSON.parse(text) as { message?: unknown } | null)?.message;
+    } catch {
+      message = undefined;
+    }
+    throw new Error(
+      typeof message === 'string' ? message : 'remote bot unavailable',
+    );
   }
   const result = await response.json();
-  port.assertActive();
-  if (!response.ok)
-    throw new Error(
-      typeof result?.message === 'string'
-        ? result.message
-        : 'remote bot unavailable',
-    );
   return { ...result, binding: port.binding };
 }

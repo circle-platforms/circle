@@ -247,3 +247,114 @@ test('a file followed by its caption becomes one verified input across platform 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('non-JSON upload failures and missing download content-length cancel response bodies cleanly', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wecom-error-bodies-'));
+  let time = 100;
+  let cancelledUpload = false;
+  let cancelledDownload = false;
+  const receipts: Array<Record<string, unknown>> = [];
+  const inputs: Array<Record<string, unknown>> = [];
+  const emitter = new EventEmitter();
+  const sdk = Object.assign(emitter, {
+    connect() {
+      emitter.emit('authenticated');
+    },
+    disconnect() {},
+    async downloadFile() {
+      return { buffer: Buffer.from('attachment'), filename: 'broken.txt' };
+    },
+  });
+  let servedOutbound = false;
+  const sha = createHash('sha256').update('outbound').digest('hex');
+  const adapter = new ChannelSession(
+    dir,
+    () => sdk as unknown as WSClient,
+    async (url, init) => {
+      const path = new URL(String(url)).pathname;
+      if (path.endsWith('/gettoken'))
+        return Response.json({
+          errcode: 0,
+          expires_in: 7200,
+          access_token: 'test',
+        });
+      if (path.endsWith('/openuserid_to_userid'))
+        return Response.json({
+          errcode: 0,
+          userid_list: [{ open_userid: 'peer', userid: 'member' }],
+        });
+      if (init?.method === 'PUT') {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(Buffer.from('Bad Gateway'));
+            controller.close();
+          },
+          cancel() {
+            cancelledUpload = true;
+          },
+        });
+        return new Response(body, { status: 502 });
+      }
+      if (path.includes('/files/')) {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(Buffer.from('missing length'));
+            controller.close();
+          },
+          cancel() {
+            cancelledDownload = true;
+          },
+        });
+        return new Response(body, { status: 200 });
+      }
+      const op = JSON.parse(String(init?.body));
+      if (op.action === 'inbound') inputs.push(op);
+      if (op.action === 'receipt') receipts.push(op);
+      if (op.action === 'next' && !servedOutbound) {
+        servedOutbound = true;
+        return Response.json({
+          delivery: {
+            receipt: 'r-file-1',
+            subject: 'member',
+            text: '',
+            sha256: sha,
+            size: 8,
+            file: { name: 'out.bin', sha256: sha, size: 8 },
+          },
+        });
+      }
+      return Response.json(
+        op.action === 'authorize' ? { bound: true } : { delivery: null },
+      );
+    },
+    () => time,
+  );
+  try {
+    adapter.configure(channel, identity);
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'peer' },
+        msgtype: 'file',
+        msgid: 'bad-file',
+        file: {
+          url: 'https://media.example.invalid/file',
+          aeskey: 'synthetic',
+        },
+      },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    time += 3001;
+    await adapter.flush();
+    assert.equal(cancelledUpload, true);
+    assert.equal(inputs.length, 1);
+    assert.equal(inputs[0]!.text, '（附件未接收，请重新上传）');
+    assert.equal(cancelledDownload, true);
+    assert.equal(receipts.length, 1);
+    assert.equal(receipts[0]!.state, 'not_sent');
+  } finally {
+    await adapter.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
