@@ -135,7 +135,8 @@ export interface CommandHost {
   setTheme(mode: CircleSettings['theme']): void;
   trustWorkspace(): void;
   clipboard(text: string): Promise<boolean>;
-  // While `list` is open it takes `rows()` again whenever a job starts, changes or ends.
+  // While `list` is open it takes `rows()` again whenever a job starts, changes or ends. Following also says that the list
+  // only shows the jobs: a job that ends while it is open still starts its turn. Never follow a list the person chooses from.
   followJobs(list: Picker, rows: () => PickerItem[]): void;
   // Open the page of a subagent of this conversation, by its session: false when there is none.
   openAgent?(id: string): boolean;

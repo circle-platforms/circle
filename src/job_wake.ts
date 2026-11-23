@@ -11,7 +11,7 @@ export {
 export interface JobWakeHost {
   /** A finished job's notice may start a turn. */
   hasNotice(): boolean;
-  /** A turn or a card holds the conversation now. */
+  /** A turn or a card holds the conversation now; in the terminal also what the person types or chooses from. */
   occupied(): boolean;
   /** The conversation can no longer run a turn. */
   closed(): boolean;
