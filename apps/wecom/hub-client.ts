@@ -40,7 +40,7 @@ export function transferHubFile(
   return fetcher(new URL('/api/bot-channel/v1/files/' + sha, channel.hub), {
     method: buffer ? 'PUT' : 'GET',
     redirect: 'error',
-    signal: AbortSignal.timeout(120000),
+    signal: AbortSignal.timeout(900000),
     headers: {
       authorization: 'Bearer ' + channel.token,
       'Bot-Member-Subject': Buffer.from(subject).toString('base64url'),
