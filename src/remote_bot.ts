@@ -26,6 +26,7 @@ export class BotError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly noticeCode?: string,
   ) {
     super(message);
   }
@@ -51,7 +52,7 @@ export type ChatOperation =
   | { action: 'stop'; conversation: string; request: string };
 
 export interface ChatRoute {
-  source: 'desktop' | 'channel';
+  source: 'client' | 'channel';
   issuer: string;
   subject: string | null;
 }
@@ -82,6 +83,7 @@ function describeQuestion(call: ToolCall): PromptQuestion {
       502,
       'model_output_blocked',
       'model did not provide a valid question',
+      'model_invalid_question',
     );
   const text = questions
     .map((q) => {
@@ -117,7 +119,12 @@ export async function remoteCompletion(
   test = false,
 ) {
   if (!config.key)
-    throw new BotError(503, 'bot_not_enabled', 'bot model is not enabled');
+    throw new BotError(
+      503,
+      'bot_not_enabled',
+      'bot model is not enabled',
+      'bot_not_enabled',
+    );
   const settings = defaultSettings();
   settings.auth = {
     protocol: config.protocol,
@@ -155,6 +162,7 @@ export async function remoteCompletion(
           502,
           'model_output_blocked',
           'model reply contained credentials',
+          'model_credentials_blocked',
         );
       return describeQuestion(call);
     }
@@ -163,6 +171,7 @@ export async function remoteCompletion(
         502,
         'model_empty_reply',
         'model returned an empty reply',
+        'model_empty_reply',
       );
     return response.message.content;
   } catch (error) {
@@ -173,40 +182,72 @@ export async function remoteCompletion(
         422,
         'model_auth_failed',
         'model endpoint rejected credentials',
+        'model_auth_failed',
       );
     if (
       providerErrorRecords(error).some(
         (row) => row.code === 'model_not_found' || row.code === 'invalid_model',
       )
     )
-      throw new BotError(422, 'model_not_found', 'model id is unavailable');
+      throw new BotError(
+        422,
+        'model_not_found',
+        'model id is unavailable',
+        'model_id_unavailable',
+      );
     if (status === 404)
-      throw new BotError(422, 'model_not_found', 'endpoint or model not found');
+      throw new BotError(
+        422,
+        'model_not_found',
+        'endpoint or model not found',
+        'model_not_found',
+      );
     if (signal.aborted || isNetworkFailure(error))
       throw new BotError(
         503,
         'model_unreachable',
         'model endpoint unreachable or timed out',
+        'model_unreachable',
       );
     throw new BotError(
       502,
       'model_unreachable',
       'model did not return a valid reply',
+      'model_invalid_reply',
     );
   }
 }
 
-async function attachFiles(
+export const MAX_HISTORY_TEXT_BYTES = 256 * 1024;
+
+export async function attachFiles(
   home: string,
   owner: string,
   files: ChatFile[],
   message: Message,
-  remaining = MAX_MEDIA_BYTES,
+  budget: { media: number; text?: number } = { media: MAX_MEDIA_BYTES },
   allowMissing = false,
-): Promise<number> {
+): Promise<void> {
   for (const file of files) {
-    if (!/^[a-f0-9]{64}$/.test(file.sha256))
-      throw new BotError(400, 'invalid_request', 'invalid attachment digest');
+    if (!/^[a-f0-9]{64}$/.test(file.sha256)) {
+      if (allowMissing) {
+        message.content +=
+          '\n' +
+          JSON.stringify({
+            name: file.name,
+            size: file.size,
+            sha256: file.sha256,
+          }) +
+          ' (file unavailable)';
+        continue;
+      }
+      throw new BotError(
+        400,
+        'invalid_request',
+        'invalid attachment digest',
+        'invalid_attachment_digest',
+      );
+    }
     message.content +=
       '\n' +
       JSON.stringify({ name: file.name, size: file.size, sha256: file.sha256 });
@@ -214,37 +255,49 @@ async function attachFiles(
     const text =
       /\.(txt|md|json|csv|tsv|xml|km)$/i.test(file.name) &&
       file.size <= 128 * 1024;
-    if ((!mime && !text) || file.size > remaining) {
+    const available = mime ? budget.media : (budget.text ?? budget.media);
+    if ((!mime && !text) || file.size > available) {
       message.content += ' (file reference only)';
       continue;
     }
-    let bytes: Buffer;
     try {
-      bytes = await readFile(
+      const bytes = await readFile(
         join(home, 'files', ownerHash(owner), file.sha256),
       );
+      if (
+        bytes.length !== file.size ||
+        createHash('sha256').update(bytes).digest('hex') !== file.sha256
+      ) {
+        throw new BotError(
+          422,
+          'attachment_integrity_failed',
+          'attachment integrity check failed',
+          'attachment_integrity_failed',
+        );
+      }
+      if (mime) {
+        const attachment = makeAttachment(bytes, mime, file.name);
+        (message.attachments ??= []).push(attachment);
+        budget.media -= bytes.length;
+      } else {
+        message.content += '\n' + bytes.toString('utf8');
+        if (budget.text !== undefined) budget.text -= bytes.length;
+        else budget.media -= bytes.length;
+      }
     } catch (error) {
-      if (allowMissing && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (allowMissing) {
         message.content += ' (file unavailable)';
         continue;
       }
-      throw error;
-    }
-    if (
-      bytes.length !== file.size ||
-      createHash('sha256').update(bytes).digest('hex') !== file.sha256
-    )
+      if (error instanceof BotError) throw error;
       throw new BotError(
         422,
-        'invalid_request',
-        'attachment integrity check failed',
+        'attachment_unavailable',
+        'attachment could not be read',
+        'attachment_unavailable',
       );
-    remaining -= bytes.length;
-    if (mime)
-      (message.attachments ??= []).push(makeAttachment(bytes, mime, file.name));
-    else message.content += '\n' + bytes.toString('utf8');
+    }
   }
-  return remaining;
 }
 
 export class RemoteBot {
@@ -259,6 +312,7 @@ export class RemoteBot {
       abort: AbortController;
       draft: string;
       done: Promise<void>;
+      disabled?: boolean;
     }
   >();
 
@@ -273,7 +327,7 @@ export class RemoteBot {
       CREATE TABLE IF NOT EXISTS bot(owner TEXT PRIMARY KEY, id TEXT NOT NULL UNIQUE, current TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS conversation(id TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES bot(owner), request TEXT NOT NULL, UNIQUE(owner, request));
       CREATE TABLE IF NOT EXISTS event(cursor INTEGER PRIMARY KEY, conversation TEXT NOT NULL REFERENCES conversation(id), id TEXT NOT NULL UNIQUE,
-        request TEXT NOT NULL, role TEXT NOT NULL, text TEXT NOT NULL, at TEXT NOT NULL, UNIQUE(conversation,request,role));
+        request TEXT NOT NULL, role TEXT NOT NULL, code TEXT, text TEXT NOT NULL, at TEXT NOT NULL, UNIQUE(conversation,request,role));
       CREATE TABLE IF NOT EXISTS queued(seq INTEGER PRIMARY KEY,conversation TEXT NOT NULL REFERENCES conversation(id),request TEXT NOT NULL,body TEXT NOT NULL,at TEXT NOT NULL,UNIQUE(conversation,request));
       CREATE TABLE IF NOT EXISTS question(id TEXT PRIMARY KEY,conversation TEXT NOT NULL REFERENCES conversation(id),request TEXT NOT NULL,call TEXT NOT NULL,answered TEXT);
       CREATE UNIQUE INDEX IF NOT EXISTS open_question ON question(conversation) WHERE answered IS NULL;
@@ -287,16 +341,26 @@ export class RemoteBot {
         state TEXT NOT NULL, receipt TEXT UNIQUE
       );
     `);
+    const eventColumns = new Set(
+      (
+        this.db.prepare('PRAGMA table_info(event)').all() as Array<{
+          name: string;
+        }>
+      ).map((col) => col.name),
+    );
+    if (!eventColumns.has('code')) {
+      this.db.exec('ALTER TABLE event ADD COLUMN code TEXT');
+    }
     // A claimed message may already have left the host.
     this.db.exec("UPDATE delivery SET state='unknown' WHERE state='sending'");
     this.db.exec(`BEGIN IMMEDIATE;
-      INSERT INTO event(conversation,id,request,role,text,at) SELECT conversation,lower(hex(randomblob(16))),request,'user',json_extract(body,'$.text'),at FROM queued ORDER BY seq;
+      INSERT INTO event(conversation,id,request,role,code,text,at) SELECT conversation,lower(hex(randomblob(16))),request,'user',NULL,json_extract(body,'$.text'),at FROM queued ORDER BY seq;
       INSERT INTO attachments SELECT e.id,json_extract(q.body,'$.files') FROM queued q JOIN event e ON e.conversation=q.conversation AND e.request=q.request AND e.role='user' WHERE json_array_length(json_extract(q.body,'$.files'))>0;
-      INSERT INTO event(conversation,id,request,role,text,at) SELECT conversation,lower(hex(randomblob(16))),request,'notice','host restarted while queued; message not executed',strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM queued ORDER BY seq;
+      INSERT INTO event(conversation,id,request,role,code,text,at) SELECT conversation,lower(hex(randomblob(16))),request,'notice','host_restarted_queued','host restarted while queued; message not executed',strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM queued ORDER BY seq;
       DELETE FROM queued; COMMIT;`);
     // An interrupted call may have reached the endpoint. Preserve the input and never resend it.
-    this.db.exec(`INSERT INTO event(conversation,id,request,role,text,at)
-      SELECT e.conversation, lower(hex(randomblob(16))), e.request,'notice','host restarted; previous request outcome unknown',strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    this.db.exec(`INSERT INTO event(conversation,id,request,role,code,text,at)
+      SELECT e.conversation, lower(hex(randomblob(16))), e.request,'notice','host_restarted_interrupted','host restarted; previous request outcome unknown',strftime('%Y-%m-%dT%H:%M:%fZ','now')
       FROM event e WHERE e.role='user' AND NOT EXISTS (SELECT 1 FROM event f WHERE f.conversation=e.conversation AND f.request=e.request AND f.role<>'user')`);
   }
 
@@ -306,6 +370,10 @@ export class RemoteBot {
 
   disable(): void {
     this.#activeConfig = null;
+    for (const running of this.active.values()) {
+      running.disabled = true;
+      running.abort.abort();
+    }
   }
 
   private tx<T>(fn: () => T): T {
@@ -346,14 +414,23 @@ export class RemoteBot {
     files: ChatFile[] = [],
     question?: PromptQuestion,
     answer?: string,
+    code?: string,
   ) {
     const id = randomUUID();
     this.tx(() => {
       this.db
         .prepare(
-          'INSERT INTO event(conversation,id,request,role,text,at) VALUES(?,?,?,?,?,?)',
+          'INSERT INTO event(conversation,id,request,role,code,text,at) VALUES(?,?,?,?,?,?,?)',
         )
-        .run(conversation, id, request, role, text, new Date().toISOString());
+        .run(
+          conversation,
+          id,
+          request,
+          role,
+          code ?? null,
+          text,
+          new Date().toISOString(),
+        );
       if (role === 'user')
         this.db
           .prepare('DELETE FROM queued WHERE conversation=? AND request=?')
@@ -374,7 +451,7 @@ export class RemoteBot {
         this.db
           .prepare('INSERT INTO attachments VALUES(?,?)')
           .run(id, JSON.stringify(files));
-      if (route && (role !== 'user' || route.source === 'desktop')) {
+      if (route && (role !== 'user' || route.source === 'client')) {
         this.db
           .prepare(
             'INSERT INTO delivery(id,issuer,subject,source,state) VALUES(?,?,?,?,?)',
@@ -387,7 +464,7 @@ export class RemoteBot {
             route.subject ? 'queued' : 'unbound',
           );
       }
-      if (route && role === 'user' && route.source === 'desktop') {
+      if (route && role === 'user' && route.source === 'client') {
         for (const [slot, file] of files.entries())
           this.db
             .prepare(
@@ -409,7 +486,7 @@ export class RemoteBot {
   claim(issuer: string) {
     const row = this.db
       .prepare(
-        `SELECT q.id,q.slot,q.subject,c.owner,e.role,e.text,q.file FROM (
+        `SELECT q.id,q.slot,q.subject,c.owner,e.role,e.code,e.text,q.file FROM (
       SELECT id,-1 AS slot,subject,NULL AS file FROM delivery WHERE state='queued' AND issuer=?
       UNION ALL SELECT event_id,slot,subject,file FROM file_delivery WHERE state='queued' AND issuer=?
       ) q JOIN event e ON e.id=q.id JOIN conversation c ON c.id=e.conversation ORDER BY e.cursor,q.slot LIMIT 1`,
@@ -438,6 +515,7 @@ export class RemoteBot {
       subject: String(row.subject),
       receipt,
       role: String(row.role),
+      ...(row.code ? { code: String(row.code) } : {}),
       text: String(row.text),
       ...(file ? { file } : {}),
     };
@@ -501,6 +579,10 @@ export class RemoteBot {
           'notice',
           'send text or files to chat with your personal bot. send /new for a new conversation, or /stop to cancel the active reply.',
           route,
+          [],
+          undefined,
+          undefined,
+          'help',
         );
         return { request };
       }
@@ -512,6 +594,10 @@ export class RemoteBot {
           'notice',
           'started a new conversation',
           route,
+          [],
+          undefined,
+          undefined,
+          'conversation_started',
         );
         return { request };
       }
@@ -526,6 +612,10 @@ export class RemoteBot {
           'notice',
           job ? 'requested stop for active reply' : 'no active reply to stop',
           route,
+          [],
+          undefined,
+          undefined,
+          job ? 'stop_requested' : 'stop_idle',
         );
         return { request };
       }
@@ -561,7 +651,7 @@ export class RemoteBot {
     const job = this.active.get(conversation);
     const events = this.db
       .prepare(
-        'SELECT e.cursor,e.id,e.request,e.role,e.text,e.at,d.state,a.files FROM event e LEFT JOIN attachments a ON a.id=e.id LEFT JOIN delivery d ON d.id=e.id WHERE conversation=? AND cursor>? ORDER BY cursor LIMIT 100',
+        'SELECT e.cursor,e.id,e.request,e.role,e.code,e.text,e.at,d.state,a.files FROM event e LEFT JOIN attachments a ON a.id=e.id LEFT JOIN delivery d ON d.id=e.id WHERE conversation=? AND cursor>? ORDER BY cursor LIMIT 100',
       )
       .all(conversation, after)
       .map((row) => ({
@@ -571,6 +661,7 @@ export class RemoteBot {
         id: String(row.id),
         request: String(row.request),
         role: String(row.role),
+        ...(row.code ? { code: String(row.code) } : {}),
         text: String(row.text),
         at: String(row.at),
       }));
@@ -682,11 +773,20 @@ export class RemoteBot {
         'notice',
         'bot model is disabled; queued message was not executed',
         route,
+        [],
+        undefined,
+        undefined,
+        'disabled_queued',
       );
       return { request: op.request };
     }
     if (!activeConfig || !activeConfig.key)
-      throw new BotError(503, 'bot_not_enabled', 'bot model is not enabled');
+      throw new BotError(
+        503,
+        'bot_not_enabled',
+        'bot model is not enabled',
+        'bot_not_enabled',
+      );
     if (op.text.includes(activeConfig.key)) {
       if (promoted) {
         this.append(
@@ -705,6 +805,10 @@ export class RemoteBot {
           'notice',
           'message cannot contain bot credentials',
           route,
+          [],
+          undefined,
+          undefined,
+          'credential_blocked',
         );
         return { request: op.request };
       }
@@ -712,6 +816,7 @@ export class RemoteBot {
         400,
         'invalid_request',
         'message cannot contain bot credentials',
+        'credential_blocked',
       );
     }
     if (job) {
@@ -776,7 +881,13 @@ export class RemoteBot {
       question ? String(question.id) : undefined,
     );
     messages.push({ id: op.request, role: 'user', content: op.text });
-    const running = {
+    const running: {
+      request: string;
+      abort: AbortController;
+      draft: string;
+      done: Promise<void>;
+      disabled?: boolean;
+    } = {
       request: op.request,
       abort: new AbortController(),
       draft: '',
@@ -789,64 +900,125 @@ export class RemoteBot {
     ]);
     const memberHome = join(this.home, 'members', ownerHash(owner));
     let tail = '';
+    let startedModel = false;
     running.done = Promise.all([
       mkdir(memberHome, { recursive: true, mode: 0o700 }),
       (async () => {
-        let remaining = await attachFiles(
+        const mediaBudget = { media: MAX_MEDIA_BYTES };
+        await attachFiles(
           this.home,
           owner,
           op.files ?? [],
           messages[messages.length - 1]!,
+          mediaBudget,
         );
+        const historyBudget = {
+          media: mediaBudget.media,
+          text: MAX_HISTORY_TEXT_BYTES,
+        };
         for (const entry of [...historyAttachments].reverse()) {
-          remaining = await attachFiles(
+          await attachFiles(
             this.home,
             owner,
             entry.files,
             entry.message,
-            remaining,
+            historyBudget,
             true,
           );
         }
       })(),
     ])
-      .then(() =>
-        this.complete(memberHome, activeConfig, messages, signal, (delta) => {
-          const accumulated = maskKey(tail + delta, activeConfig.key);
-          // Keep a possible split credential out of live updates as well as final history.
-          let length = 0;
-          for (
-            let i = 1;
-            i <= Math.min(activeConfig.key.length - 1, accumulated.length);
-            i++
-          )
-            if (accumulated.endsWith(activeConfig.key.slice(0, i))) length = i;
-          running.draft += accumulated.slice(0, accumulated.length - length);
-          tail = accumulated.slice(accumulated.length - length);
-        }),
-      )
-      .then((reply) => {
+      .then(() => {
+        const currentConfig = this.#activeConfig;
+        if (running.disabled) {
+          running.abort.abort();
+          running.abort.signal.throwIfAborted();
+        }
+        if (signal.aborted) {
+          if (running.abort.signal.aborted)
+            running.abort.signal.throwIfAborted();
+          throw new BotError(
+            503,
+            'model_unreachable',
+            'model endpoint unreachable or timed out',
+            'model_unreachable',
+          );
+        }
+        if (!currentConfig?.key) {
+          throw new BotError(
+            503,
+            'bot_not_enabled',
+            'bot model is not enabled',
+            'bot_not_enabled',
+          );
+        }
+        startedModel = true;
+        return this.complete(
+          memberHome,
+          currentConfig,
+          messages,
+          signal,
+          (delta) => {
+            const accumulated = maskKey(tail + delta, currentConfig.key);
+            // Keep a possible split credential out of live updates as well as final history.
+            let length = 0;
+            for (
+              let i = 1;
+              i <= Math.min(currentConfig.key.length - 1, accumulated.length);
+              i++
+            )
+              if (accumulated.endsWith(currentConfig.key.slice(0, i)))
+                length = i;
+            running.draft += accumulated.slice(0, accumulated.length - length);
+            tail = accumulated.slice(accumulated.length - length);
+          },
+        ).then((reply) => ({ reply, key: currentConfig.key }));
+      })
+      .then(({ reply, key }) => {
         signal.throwIfAborted();
         this.append(
           conversation,
           op.request,
           'assistant',
-          maskKey(
-            typeof reply === 'string' ? reply : reply.text,
-            activeConfig.key,
-          ),
+          maskKey(typeof reply === 'string' ? reply : reply.text, key),
           route,
           [],
           typeof reply === 'string' ? undefined : reply,
         );
       })
       .catch((error: unknown) => {
-        const text = running.abort.signal.aborted
-          ? 'reply stopped'
-          : error instanceof BotError
-            ? error.message
-            : 'model reply interrupted; outcome unknown';
-        this.append(conversation, op.request, 'notice', text, route);
+        const notice = running.disabled
+          ? {
+              code: 'bot_disabled_aborted',
+              text: 'bot model was disabled; active reply stopped',
+            }
+          : running.abort.signal.aborted
+            ? { code: 'reply_stopped', text: 'reply stopped' }
+            : error instanceof BotError
+              ? {
+                  code: error.noticeCode ?? error.code,
+                  text: error.message,
+                }
+              : !startedModel
+                ? {
+                    code: 'attachment_unavailable',
+                    text: 'attachment could not be read',
+                  }
+                : {
+                    code: 'reply_interrupted',
+                    text: 'model reply interrupted; outcome unknown',
+                  };
+        this.append(
+          conversation,
+          op.request,
+          'notice',
+          notice.text,
+          route,
+          [],
+          undefined,
+          undefined,
+          notice.code,
+        );
       })
       .finally(() => {
         this.active.delete(conversation);
