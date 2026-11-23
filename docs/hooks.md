@@ -309,7 +309,7 @@ hooks:
 ---
 ```
 
-They start when this session loads the skill and run for the rest of it. `once: true` removes one after its first run that did not fail. Installing a skill runs nothing.
+They start when this session loads the skill and run for the rest of it. `once: true` removes one after its first run that did not fail. Installing a skill runs nothing. A skill's `allowed-tools` and `disallowed-tools` are not hooks and do not last the session: they end with your next message ([Skills](skills.md#tools-a-skill-pre-approves-or-withholds)).
 
 An installed pack's `hooks/hooks.json` runs in every session while the pack is installed. A pack's hooks that belong to its skill go in the frontmatter instead.
 

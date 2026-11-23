@@ -30,6 +30,17 @@ Add entries under `## Unreleased`, newest first, one line each ...
 
 A skill is a folder below the skills folder, `skills/changelog/SKILL.md`, or one level deeper inside a folder that has no `SKILL.md` of its own, `skills/team/changelog/SKILL.md`.
 
+Circle reads these keys of the frontmatter:
+
+| Key                | Needed                      | What it does                                                                                                                                                                                                                        |
+| ------------------ | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`             | no: the folder name is used | lowercase letters, digits and hyphens                                                                                                                                                                                               |
+| `description`      | no, but write one           | what the skill does and when to use it, cut at 1,024 characters                                                                                                                                                                     |
+| `allowed-tools`    | no                          | tools that run without an approval card in the turn that loads the skill. A string with commas or spaces between the names, or a YAML list. See [Tools a skill pre-approves or withholds](#tools-a-skill-pre-approves-or-withholds) |
+| `disallowed-tools` | no                          | tools the model is not offered in that turn. The same forms                                                                                                                                                                         |
+
+Any other key, such as Claude Code's `model` or `context`, is left alone, so a skill written for another agent still loads.
+
 ## How Circle uses skills
 
 Circle puts each skill's name and description in the system prompt. When a task matches, the model calls the `skill` tool (or reads the file), and follows it. Skills load only what a task needs.
@@ -44,7 +55,7 @@ You can also load one yourself:
 /skill:changelog v0.2.0    load it and pass an argument
 ```
 
-A skill loaded this way is added to the conversation without starting a turn; the model reads it with your next message and follows it "until the user says otherwise". Typing `/skill:` in the input box lists the skills too.
+A skill loaded this way is added to the conversation without starting a turn; the model reads it with your next message and follows it "until the user says otherwise". Typing `/skill:` in the input box lists the skills too. `/skill` shows a skill's `allowed-tools` and `disallowed-tools` under it, and the desktop application's skills page shows them under the file's path.
 
 Circle reads the skill folders again each time it builds the system prompt: when a session starts, on `/new`, `/resume`, `/reload`, a change of model or thinking depth, and `/plan`. The list in the prompt and the model's `skill` tool always come from the same reading. `/skill` reads them each time, so a skill added during a session can be loaded at once.
 
@@ -112,6 +123,57 @@ For a skill only you use, copy it into `~/.circle/skills/<name>/`.
 
 A skill's hooks are `hooks:` in its `SKILL.md` frontmatter. They do not run because the skill is installed: they start when this session loads the skill, with `/skill` or the `skill` tool, and run for the rest of it. A project skill's hooks also wait until the folder is trusted. An installed pack can also have `hooks/hooks.json`, which runs in every session while it is installed. Their hooks run in the workspace and find the skill's own scripts through `${CIRCLE_SKILL_DIR}`, best as `"command": "node", "args": ["${CIRCLE_SKILL_DIR}/scripts/log.mjs"]`. See [Skills and packs](hooks.md#skills-and-packs).
 
+## Tools a skill pre-approves or withholds
+
+`allowed-tools` and `disallowed-tools` are Claude Code's skill fields of the same names, so a skill written for Claude Code keeps its meaning here.
+
+```markdown
+---
+name: commit
+description: Stage and commit the current changes. Use when asked to commit.
+allowed-tools: Bash(git add *) Bash(git commit *) Bash(git status *)
+disallowed-tools:
+  - AskUserQuestion
+---
+```
+
+- **`allowed-tools` pre-approves.** The tools it names run without an approval card in the turn that loads the skill. It restricts nothing: every tool stays available, and everything it does not name asks as it always did. Loading the skill again applies it again.
+- **`disallowed-tools` withholds.** The tools it names are not offered to the model for the same time. A call to one is answered as a call to any tool that is not there: `tool is not available`.
+
+Both fields hold from the moment the skill is loaded to the next message you send. The skill's instructions stay in the conversation after that, and its [hooks](hooks.md#a-skill-can-ship-hooks) stay for the session; only these two fields end. The model loading a skill with the `skill` tool applies them from its next request. A skill you load yourself, with `/skill` or by adding it to a session in the desktop application, is read with your next message, so the fields apply to the turn that message starts and end with the message after it. A message you send while a turn runs ends them too, when the model reads it (a steering message) or when its turn starts (a follow-up). Switching to another conversation (`/new`, `/resume`, `/fork`, `/clone`, `/import`) drops them.
+
+**What a pre-approval skips.** Only an ordinary approval card, as a [hook's allow](hooks.md#events) does. It does not skip a call that always asks (deleting files, `rm -rf`, a force push, a destructive MCP tool), a command Circle refuses (`sudo`, a credential file) or a rule that denies it, a hook that asked or denied, or [read-only mode](security.md#read-only-mode): a write the skill named is still refused there. Where nobody can answer a card, in print mode, a named tool runs, and a call to anything else that would ask is not run, as without the skill.
+
+**Names.** Circle's tool names work as they are, including MCP and extension tools. Claude Code's names work too, for the tools Circle has under other names:
+
+| Claude Code             | Circle                  |
+| ----------------------- | ----------------------- |
+| `Bash`                  | `execute`               |
+| `Read`                  | `read_file`             |
+| `Write`                 | `write_file`            |
+| `Edit`                  | `edit_file`             |
+| `Glob`, `Grep`          | `glob`, `grep`          |
+| `WebFetch`, `WebSearch` | `webfetch`, `websearch` |
+| `Task`, `Agent`         | `task`                  |
+| `Skill`                 | `skill`                 |
+| `TodoWrite`             | `write_todos`           |
+| `AskUserQuestion`       | `question`              |
+
+`Edit` does not cover `apply_patch`, which is a tool of its own: name it too. `compact_conversation` is always offered, so a skill cannot withhold it.
+
+**Patterns.** `Bash(git add *)`, or `execute(git add *)`, pre-approves only the commands the pattern covers. It matches as an [`allowed_commands`](security.md#command-patterns-in-settings) pattern does: `*` and `?`, and every part of a command joined with `&&`, `;` or a pipe has to match, so `git add . && git push` is not covered by `git add *`. Claude Code's older spelling `Bash(git add:*)` is read as `git add` and `git add *`. A pattern on another tool that can ask, such as `Write(src/**)`, is not applied. On a tool that only reads, such as `Read(./src/**)` or `WebFetch(domain:example.com)`, a pattern changes nothing, since that tool never asks. `disallowed-tools` withholds whole tools: `Bash(rm *)` there is not applied.
+
+**A name that is not a tool.** Names are checked against the tools the session has when the skill is loaded, so load the MCP server or the extension first. A name that is not a tool, an entry Circle cannot apply, and a pattern it does not support are not ignored. `/skill` lists them under `Not applied:`, as `/agents` lists a file it passed over, and loading the skill says so: in the notice for `/skill`, below the skill for the model, and on the desktop application's skills page. The skill still loads and the rest of its fields still apply, since a grant of fewer tools asks as it always did:
+
+```
+Not applied:
+  commit names tools that do not exist in allowed-tools: Wrench · not applied
+```
+
+**Subagents.** A subagent started with `task` while the fields hold is not offered what `disallowed-tools` withholds, for as long as it lives. It does not get the pre-approvals: it has not read the skill, and its calls ask as they do. A subagent that loads a skill itself gets that skill's fields for itself, until it ends.
+
+**Trust.** Fields of a project skill apply once the folder is trusted, as the rest of the skill does, and Circle does not ask again. A skill can pre-approve tools for itself, so read a repository's `allowed-tools` before you trust the folder. [Security](security.md#skills-that-pre-approve-tools) says what is covered.
+
 ## Local tools from an MCP server
 
 An MCP server can publish client tools for a pack under its `/local-tools` contract: a manifest whose SHA-256 is the pack digest, and every file with its size and SHA-256. Circle installs them with the `skill_install` tool and runs them with `skill_run`; the server only verifies and serves the original bytes.
@@ -168,4 +230,4 @@ A subagent that loads the skill itself gets the pack's tools from its next reque
 
 The tools belong to the session that loaded the skill, like its hooks: switching, importing or starting another session leaves them out until the skill is loaded there. Loading the skill again tells the model again which tools it has. Loading it adds tools to the list, so the next request does not reuse the prompt cache of the requests before.
 
-Installing and running a pack executes the publisher's Node code; a server-side scan is not a sandbox. Read the pack before installing it, and treat what runs locally as a preview: the serving side's recomputation is the evidence. Packs and skills are supported on macOS and Linux only.
+Installing and running a pack executes the publisher's Node code; a server-side scan is not a sandbox. Read the pack before installing it, and treat what runs locally as a preview: the serving side's recomputation is the evidence.
