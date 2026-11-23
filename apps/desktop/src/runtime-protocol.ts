@@ -74,6 +74,8 @@ export type RuntimeCommandName =
   | 'create-skill'
   | 'dismiss-whats-new'
   | 'link-opened'
+  | 'remote-bot-native-file'
+  | 'remote-bot'
   | 'hub-connect'
   | 'hub-disconnect';
 
@@ -198,6 +200,8 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'create-skill',
   'dismiss-whats-new',
   'link-opened',
+  'remote-bot-native-file',
+  'remote-bot',
   'hub-connect',
   'hub-disconnect',
 ]);

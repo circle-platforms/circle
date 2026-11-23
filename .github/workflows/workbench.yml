@@ -65,10 +65,12 @@ jobs:
             package-lock.json
             apps/workbench/package-lock.json
             apps/desktop/package-lock.json
+            apps/wecom/package-lock.json
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - uses: ./.github/actions/electron-cache
       - run: npm --prefix apps/desktop ci
+      - run: npm --prefix apps/wecom ci
       # The pinned developer tools (Node, gh) from an earlier run, so a build does
       # not download them again; each is used only while its receipt matches it
       - uses: actions/cache@v6
@@ -111,6 +113,8 @@ jobs:
           node apps/workbench/node_modules/playwright/cli.js install chromium
           npm --prefix apps/workbench run test:visual
       - run: npm --prefix apps/desktop test
+        timeout-minutes: 5
+      - run: npx --prefix apps/wecom tsc --noEmit && npm --prefix apps/wecom test
         timeout-minutes: 5
       - name: Verify native developer tool resources
         timeout-minutes: 5
@@ -242,10 +246,12 @@ jobs:
             package-lock.json
             apps/workbench/package-lock.json
             apps/desktop/package-lock.json
+            apps/wecom/package-lock.json
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - uses: ./.github/actions/electron-cache
       - run: npm --prefix apps/desktop ci
+      - run: npm --prefix apps/wecom ci
       # The browser download is cached between runs; its key follows the
       # workbench lockfile, which pins the Playwright version.
       - uses: actions/cache@v6
@@ -293,10 +299,12 @@ jobs:
             package-lock.json
             apps/workbench/package-lock.json
             apps/desktop/package-lock.json
+            apps/wecom/package-lock.json
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - uses: ./.github/actions/electron-cache
       - run: npm --prefix apps/desktop ci
+      - run: npm --prefix apps/wecom ci
       # The pinned developer tools (Node, gh) from an earlier run, so a build does
       # not download them again; each is used only while its receipt matches it
       - uses: actions/cache@v6
@@ -338,10 +346,12 @@ jobs:
             package-lock.json
             apps/workbench/package-lock.json
             apps/desktop/package-lock.json
+            apps/wecom/package-lock.json
       - run: npm ci
       - run: npm --prefix apps/workbench ci
       - uses: ./.github/actions/electron-cache
       - run: npm --prefix apps/desktop ci
+      - run: npm --prefix apps/wecom ci
       # The pinned developer tools (Node, gh) from an earlier run, so a build does
       # not download them again; each is used only while its receipt matches it
       - uses: actions/cache@v6

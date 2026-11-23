@@ -1,4 +1,15 @@
 export const hubConnection: Record<string, string> = {
+  send: '发送',
+  'answer the bot': '回答机器人',
+  'private chat acknowledged': '企微已确认接收',
+  'private chat delivery unknown': '企微送达未知',
+  'private chat delivery refused': '企微未送达',
+  'private chat not bound': '尚未绑定企微身份',
+  'waiting for private chat delivery': '等待企微送达',
+  'my bot': '我的机器人',
+  'remote bot disconnected': '机器人连接中断',
+  'new bot conversation': '新建机器人对话',
+  'message your bot': '给机器人发消息',
   'Hub plugin': 'Hub 插件',
   'Connect a Circle Hub by its IP address and sign in with your Hub account.':
     '填写 IP 地址连接 Circle Hub，用 Hub 账号登录。',
