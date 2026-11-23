@@ -76,7 +76,29 @@ export function safeAttachmentName(filename?: string): string {
   return cleaned;
 }
 
-export function privateInput(frame: Frame, bot: string) {
+export interface PrivateInput {
+  platformId: string;
+  sender: string;
+  text: string;
+  media: Media[];
+}
+
+export type PrivateInputRejectionReason =
+  'ignored' | 'text_too_long' | 'too_many_files' | 'insecure_media_url';
+
+export type PrivateInputResult =
+  | { ok: true; value: PrivateInput }
+  | {
+      ok: false;
+      reason: PrivateInputRejectionReason;
+      platformId?: string;
+      sender?: string;
+    };
+
+export function inspectPrivateInput(
+  frame: Frame,
+  bot: string,
+): PrivateInputResult {
   const b = frame.body;
   if (
     !b ||
@@ -87,7 +109,7 @@ export function privateInput(frame: Frame, bot: string) {
     typeof b.from?.userid !== 'string' ||
     !b.from.userid
   )
-    return null;
+    return { ok: false, reason: 'ignored' };
   const items = b.msgtype === 'mixed' ? (b.mixed?.msg_item ?? []) : [b];
   const text = items
     .map((i) =>
@@ -108,17 +130,44 @@ export function privateInput(frame: Frame, bot: string) {
           ? [i.video]
           : [],
   );
-  if (
-    (!text.trim() && !media.length) ||
-    text.length > 16000 ||
-    media.length > 8
-  )
-    return null;
+  if (!text.trim() && !media.length) {
+    return { ok: false, reason: 'ignored' };
+  }
+  if (text.length > 16000) {
+    return {
+      ok: false,
+      reason: 'text_too_long',
+      platformId: b.msgid,
+      sender: b.from.userid,
+    };
+  }
+  if (media.length > 8) {
+    return {
+      ok: false,
+      reason: 'too_many_files',
+      platformId: b.msgid,
+      sender: b.from.userid,
+    };
+  }
   if (
     media.some(
       (m) => !URL.canParse(m.url) || new URL(m.url).protocol !== 'https:',
     )
-  )
-    return null;
-  return { platformId: b.msgid, sender: b.from.userid, text, media };
+  ) {
+    return {
+      ok: false,
+      reason: 'insecure_media_url',
+      platformId: b.msgid,
+      sender: b.from.userid,
+    };
+  }
+  return {
+    ok: true,
+    value: { platformId: b.msgid, sender: b.from.userid, text, media },
+  };
+}
+
+export function privateInput(frame: Frame, bot: string) {
+  const inspected = inspectPrivateInput(frame, bot);
+  return inspected.ok ? inspected.value : null;
 }

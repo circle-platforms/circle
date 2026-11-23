@@ -844,10 +844,8 @@ try {
   );
   assert.equal(inputs.includes('revoked'), false);
   assert.equal(sent[9].chatid, 'a');
-  assert.match(
-    sent[9].markdown.content,
-    /未绑定 Hub 账号或机器人访问权限已停用/,
-  );
+  assert.match(sent[9].markdown.content, /尚未绑定机器人或访问权限已停用/);
+  assert.equal(sent[9].markdown.content.includes('Hub'), false);
   console.log(
     `Paired synthetic check passed (${hub.mode}): official SDK private frames, two members, group exclusion, deduplication, shared history, notice localization, inbound/outbound file transfer, scoped outbound receipts and disabled account.`,
   );

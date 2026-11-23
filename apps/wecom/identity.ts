@@ -31,6 +31,16 @@ export class WeComApiError extends Error {
   }
 }
 
+export class WeComHttpError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message = '企业应用读取失败') {
+    super(message);
+    this.name = 'WeComHttpError';
+    this.status = status;
+  }
+}
+
 export class WeComApplication {
   private token: string | null = null;
   private expires = 0;
@@ -62,7 +72,7 @@ export class WeComApplication {
     });
     if (!response.ok) {
       await response.body?.cancel();
-      throw new Error('企业应用读取失败');
+      throw new WeComHttpError(response.status, '企业应用读取失败');
     }
     const result = await response.json();
     if (result.errcode !== 0) {
@@ -95,6 +105,9 @@ export class WeComApplication {
         this.expires = 0;
         if (error instanceof WeComApiError) {
           throw new WeComApiError(error.errcode, '企业应用尚未通过认证');
+        }
+        if (error instanceof WeComHttpError) {
+          throw new WeComHttpError(error.status, '企业应用尚未通过认证');
         }
         throw new Error('企业应用尚未通过认证', { cause: error });
       })

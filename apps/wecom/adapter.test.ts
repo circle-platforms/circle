@@ -1,5 +1,6 @@
 import { createCipheriv, createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
+import { request as unixRequest } from 'node:http';
 import { test } from 'node:test';
 import { EventEmitter } from 'node:events';
 import {
@@ -19,8 +20,15 @@ import {
   formatChannelNotice,
   privateInput,
   sanitizeLogError,
+  serveChannel,
 } from './adapter.ts';
-import { loginUrl, WeComApiError, WeComApplication } from './identity.ts';
+import { transferHubFile } from './hub-client.ts';
+import {
+  loginUrl,
+  WeComApiError,
+  WeComApplication,
+  WeComHttpError,
+} from './identity.ts';
 
 function deferred() {
   let resolve!: () => void;
@@ -442,14 +450,14 @@ test('non-JSON upload failures and missing download content-length cancel respon
       if (init?.method === 'PUT') {
         const body = new ReadableStream<Uint8Array>({
           start(controller) {
-            controller.enqueue(Buffer.from('Bad Gateway'));
+            controller.enqueue(Buffer.from('Unprocessable Entity'));
             controller.close();
           },
           cancel() {
             cancelledUpload = true;
           },
         });
-        return new Response(body, { status: 502 });
+        return new Response(body, { status: 422 });
       }
       if (path.includes('/files/')) {
         const body = new ReadableStream<Uint8Array>({
@@ -815,16 +823,24 @@ test('failing sender batch backs off and quarantines across restarts without blo
       }>
     ).map((c) => c.name);
     assert.ok(migratedCols.includes('attempts'));
+    assert.ok(migratedCols.includes('transient_attempts'));
+    assert.ok(migratedCols.includes('sent_chunks'));
     assert.ok(migratedCols.includes('next_at'));
     assert.ok(migratedCols.includes('error'));
     const migratedRow = adapter.db
-      .prepare('SELECT attempts,next_at,error FROM batch WHERE request=?')
+      .prepare(
+        'SELECT attempts,transient_attempts,sent_chunks,next_at,error FROM batch WHERE request=?',
+      )
       .get('legacy-pending') as {
       attempts: number;
+      transient_attempts: number;
+      sent_chunks: number;
       next_at: number;
       error: string | null;
     };
     assert.equal(migratedRow.attempts, 0);
+    assert.equal(migratedRow.transient_attempts, 0);
+    assert.equal(migratedRow.sent_chunks, 0);
     assert.equal(migratedRow.next_at, 0);
     assert.equal(migratedRow.error, null);
     const fixedNullPart = adapter.db
@@ -1795,14 +1811,18 @@ test('R6: transient Hub outages retry past 15s and 5 attempts without quarantini
     for (let i = 1; i <= transientStatuses.length; i++) {
       await adapter.flush();
       const row = adapter.db
-        .prepare('SELECT state,attempts,next_at FROM batch WHERE request=?')
+        .prepare(
+          'SELECT state,attempts,transient_attempts,next_at FROM batch WHERE request=?',
+        )
         .get('outage-msg') as {
         state: string;
         attempts: number;
+        transient_attempts: number;
         next_at: number;
       };
       assert.equal(row.state, 'pending');
-      assert.equal(row.attempts, i);
+      assert.equal(row.attempts, 0);
+      assert.equal(row.transient_attempts, i);
       deltas.push(row.next_at - time);
       time = row.next_at;
     }
@@ -1880,7 +1900,7 @@ test('R6: transient Hub outages retry past 15s and 5 attempts without quarantini
 
     // 3. Permanent rejections (403, 413, 422, 400 without files) quarantine immediately, blank parts, log console.error, and notify sender with distinct reasons.
     for (const [msgid, pattern] of [
-      ['reject-403', /未绑定 Hub 账号或机器人访问权限已停用/],
+      ['reject-403', /尚未绑定机器人或访问权限已停用/],
       ['reject-413', /超出限制/],
       ['reject-422', /校验未通过/],
       ['reject-400', /校验未通过/],
@@ -1905,7 +1925,9 @@ test('R6: transient Hub outages retry past 15s and 5 attempts without quarantini
       assert.equal(b.state, 'failed');
       assert.equal(p.body, '');
       assert.equal(p.files, '[]');
-      assert.match(sentNotices.at(-1)?.content ?? '', pattern);
+      const noticeContent = sentNotices.at(-1)?.content ?? '';
+      assert.match(noticeContent, pattern);
+      assert.equal(noticeContent.includes('Hub'), false);
       assert.equal(sentNotices.at(-1)?.to, 'peer-a');
     }
     assert.equal(
@@ -2060,9 +2082,10 @@ test('S6: sanitizeLogError masks Bearer headers and runtime secrets including un
             access_token: 'tok',
             expires_in: 7200,
           });
+        const openId = JSON.parse(String(init?.body)).open_userid_list[0];
         return Response.json({
           errcode: 0,
-          userid_list: [{ open_userid: 'peer', userid: 'u-peer' }],
+          userid_list: [{ open_userid: openId, userid: 'u-' + openId }],
         });
       }
       // Trigger real undici Headers error on invalid header value containing `\nINJECTED-SECRET`.
@@ -2098,6 +2121,1323 @@ test('S6: sanitizeLogError masks Bearer headers and runtime secrets including un
     assert.ok(!logText.includes(badChannel.secret));
     assert.ok(!logText.includes(secretIdentity.secret));
     assert.match(logText, /Bearer \[REDACTED\]/);
+  } finally {
+    console.warn = origWarn;
+    await adapter.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('T3: TypeError fetch failures without .code stay pending past MAX_BATCH_ATTEMPTS and leave attempts at 0', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wecom-t3-'));
+  let time = 1000;
+  let inboundCalls = 0;
+  const origWarn = console.warn;
+  console.warn = () => {};
+  const emitter = new EventEmitter();
+  const sdk = Object.assign(emitter, {
+    connect() {
+      emitter.emit('authenticated');
+    },
+    disconnect() {},
+  });
+  const adapter = new ChannelSession(
+    dir,
+    () => sdk as unknown as WSClient,
+    async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'qyapi.weixin.qq.com') {
+        if (url.pathname.endsWith('/gettoken'))
+          return Response.json({
+            errcode: 0,
+            access_token: 'tok',
+            expires_in: 7200,
+          });
+        const openId = JSON.parse(String(init?.body)).open_userid_list[0];
+        return Response.json({
+          errcode: 0,
+          userid_list: [{ open_userid: openId, userid: 'u-' + openId }],
+        });
+      }
+      const op = JSON.parse(String(init?.body));
+      if (op.action === 'next') return Response.json({ delivery: null });
+      if (op.action === 'inbound') {
+        inboundCalls++;
+        if (inboundCalls <= 6) {
+          const err = new TypeError('fetch failed');
+          assert.equal('code' in err, false);
+          throw err;
+        }
+        return Response.json({ accepted: true });
+      }
+      return Response.json({});
+    },
+    () => time,
+  );
+  try {
+    adapter.configure(channel, identity);
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'peer' },
+        msgid: 't3-msg',
+        msgtype: 'text',
+        text: { content: 'retry network typeerror' },
+      },
+    });
+    for (let i = 1; i <= 6; i++) {
+      await adapter.flush();
+      const row = adapter.db
+        .prepare(
+          'SELECT state,attempts,transient_attempts,next_at FROM batch WHERE request=?',
+        )
+        .get('t3-msg') as {
+        state: string;
+        attempts: number;
+        transient_attempts: number;
+        next_at: number;
+      };
+      assert.equal(row.state, 'pending');
+      assert.equal(row.attempts, 0);
+      assert.equal(row.transient_attempts, i);
+      time = row.next_at;
+    }
+    await adapter.flush();
+    const accepted = adapter.db
+      .prepare(
+        'SELECT state,attempts,transient_attempts FROM batch WHERE request=?',
+      )
+      .get('t3-msg') as {
+      state: string;
+      attempts: number;
+      transient_attempts: number;
+    };
+    assert.equal(accepted.state, 'accepted');
+    assert.equal(accepted.attempts, 0);
+    assert.equal(accepted.transient_attempts, 6);
+  } finally {
+    console.warn = origWarn;
+    await adapter.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('F1: WeCom lookup HTTP 408/429/5xx and transient errcodes retry via transient_attempts without consuming MAX_BATCH_ATTEMPTS', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wecom-f1-'));
+  let time = 1000;
+  let wecomStep = 0;
+  let hubMixedStep = 0;
+  const origWarn = console.warn;
+  const origError = console.error;
+  console.warn = () => {};
+  console.error = () => {};
+  const emitter = new EventEmitter();
+  const sdk = Object.assign(emitter, {
+    connect() {
+      emitter.emit('authenticated');
+    },
+    disconnect() {},
+    async sendMessage() {
+      return { headers: { req_id: 'r' }, errcode: 0 };
+    },
+  });
+
+  // Verify WeComApplication directly throws WeComHttpError with status on HTTP 503.
+  const httpErrApp = new WeComApplication(
+    identity,
+    async () => new Response('bad gateway', { status: 503 }),
+  );
+  await assert.rejects(
+    httpErrApp.fromCode('c'),
+    (err: unknown) => err instanceof WeComHttpError && err.status === 503,
+  );
+
+  const adapter = new ChannelSession(
+    dir,
+    () => sdk as unknown as WSClient,
+    async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'qyapi.weixin.qq.com') {
+        if (url.pathname.endsWith('/gettoken')) {
+          if (wecomStep === 0 && init?.method === 'GET') {
+            wecomStep++;
+            return new Response('unavailable', { status: 503 });
+          }
+          return Response.json({
+            errcode: 0,
+            access_token: 'tok',
+            expires_in: 7200,
+          });
+        }
+        const openId = JSON.parse(String(init?.body)).open_userid_list[0];
+        if (openId === 'wecom-transient-peer') {
+          wecomStep++;
+          if (wecomStep === 2) return new Response('gateway', { status: 503 });
+          if (wecomStep === 3)
+            return new Response('rate limit', { status: 429 });
+          if (wecomStep === 4) return new Response('timeout', { status: 408 });
+          if (wecomStep === 5)
+            return Response.json({
+              errcode: 45009,
+              errmsg: 'freq out of limit',
+            });
+          if (wecomStep === 6)
+            return Response.json({ errcode: -1, errmsg: 'system busy' });
+          return Response.json({
+            errcode: 0,
+            userid_list: [{ open_userid: openId, userid: 'u-wecom-ok' }],
+          });
+        }
+        if (openId === 'mixed-peer') {
+          if (hubMixedStep >= 6) {
+            return Response.json({ errcode: 60011, errmsg: 'no privilege' });
+          }
+          return Response.json({
+            errcode: 0,
+            userid_list: [{ open_userid: openId, userid: 'u-mixed' }],
+          });
+        }
+      }
+      const op = JSON.parse(String(init?.body));
+      if (op.action === 'next') return Response.json({ delivery: null });
+      if (op.action === 'inbound' && op.subject === 'u-mixed') {
+        hubMixedStep++;
+        if (hubMixedStep <= 6) return Response.json({}, { status: 503 });
+      }
+      return Response.json({ accepted: true });
+    },
+    () => time,
+  );
+  try {
+    adapter.configure(channel, identity);
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'wecom-transient-peer' },
+        msgid: 'f1-wecom',
+        msgtype: 'text',
+        text: { content: 'survive wecom outages' },
+      },
+    });
+    const deltas: number[] = [];
+    for (let i = 1; i <= 6; i++) {
+      await adapter.flush();
+      const row = adapter.db
+        .prepare(
+          'SELECT state,attempts,transient_attempts,next_at FROM batch WHERE request=?',
+        )
+        .get('f1-wecom') as {
+        state: string;
+        attempts: number;
+        transient_attempts: number;
+        next_at: number;
+      };
+      assert.equal(row.state, 'pending');
+      assert.equal(row.attempts, 0);
+      assert.equal(row.transient_attempts, i);
+      deltas.push(row.next_at - time);
+      time = row.next_at;
+    }
+    assert.deepEqual(deltas, [1000, 2000, 4000, 8000, 16000, 32000]);
+    await adapter.flush();
+    assert.equal(
+      (
+        adapter.db
+          .prepare('SELECT state FROM batch WHERE request=?')
+          .get('f1-wecom') as { state: string }
+      ).state,
+      'accepted',
+    );
+
+    // 6 Hub 503s followed by a non-transient error must NOT quarantine on the 7th attempt.
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'mixed-peer' },
+        msgid: 'f1-mixed',
+        msgtype: 'text',
+        text: { content: '6 transient then non-transient' },
+      },
+    });
+    for (let i = 1; i <= 6; i++) {
+      await adapter.flush();
+      const row = adapter.db
+        .prepare(
+          'SELECT state,attempts,transient_attempts,next_at FROM batch WHERE request=?',
+        )
+        .get('f1-mixed') as {
+        state: string;
+        attempts: number;
+        transient_attempts: number;
+        next_at: number;
+      };
+      assert.equal(row.state, 'pending');
+      assert.equal(row.attempts, 0);
+      assert.equal(row.transient_attempts, i);
+      time = row.next_at;
+    }
+    await adapter.flush();
+    const afterFirstPerm = adapter.db
+      .prepare(
+        'SELECT state,attempts,transient_attempts,next_at FROM batch WHERE request=?',
+      )
+      .get('f1-mixed') as {
+      state: string;
+      attempts: number;
+      transient_attempts: number;
+      next_at: number;
+    };
+    assert.equal(afterFirstPerm.state, 'pending');
+    assert.equal(afterFirstPerm.attempts, 1);
+    assert.equal(afterFirstPerm.transient_attempts, 6);
+    time = afterFirstPerm.next_at;
+    for (let perm = 2; perm <= 5; perm++) {
+      await adapter.flush();
+      const row = adapter.db
+        .prepare(
+          'SELECT state,attempts,transient_attempts,next_at FROM batch WHERE request=?',
+        )
+        .get('f1-mixed') as {
+        state: string;
+        attempts: number;
+        transient_attempts: number;
+        next_at: number;
+      };
+      assert.equal(row.attempts, perm);
+      assert.equal(row.transient_attempts, 6);
+      assert.equal(row.state, perm < 5 ? 'pending' : 'failed');
+      time = row.next_at;
+    }
+  } finally {
+    console.warn = origWarn;
+    console.error = origError;
+    await adapter.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('F2: downloadMedia persists local staging before Hub authorize/PUT outages and delivers file + caption upon recovery', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wecom-f2-'));
+  let time = 1000;
+  let hubMode: 'auth-503' | 'put-503' | 'perm-403' | 'perm-413' | 'ok' =
+    'auth-503';
+  const hubStaged = new Map<string, Buffer>();
+  const acceptedInputs: Array<Record<string, unknown>> = [];
+  const origWarn = console.warn;
+  const origError = console.error;
+  console.warn = () => {};
+  console.error = () => {};
+  const emitter = new EventEmitter();
+  const sdk = Object.assign(emitter, {
+    connect() {
+      emitter.emit('authenticated');
+    },
+    disconnect() {},
+    async sendMessage() {
+      return { headers: { req_id: 'r' }, errcode: 0 };
+    },
+  });
+
+  const plainA = Buffer.from('f2-auth-outage-payload');
+  const shaA = createHash('sha256').update(plainA).digest('hex');
+  const encA = encryptWeComBytes(plainA, 0x11);
+  const plainB = Buffer.from('f2-put-outage-payload');
+  const shaB = createHash('sha256').update(plainB).digest('hex');
+  const encB = encryptWeComBytes(plainB, 0x22);
+  const plainPerm = Buffer.from('f2-perm-reject');
+  const shaPerm = createHash('sha256').update(plainPerm).digest('hex');
+  const encPerm = encryptWeComBytes(plainPerm, 0x33);
+
+  const adapter = new ChannelSession(
+    dir,
+    () => sdk as unknown as WSClient,
+    async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'qyapi.weixin.qq.com') {
+        if (url.pathname.endsWith('/gettoken'))
+          return Response.json({
+            errcode: 0,
+            access_token: 'tok',
+            expires_in: 7200,
+          });
+        const openId = JSON.parse(String(init?.body)).open_userid_list[0];
+        return Response.json({
+          errcode: 0,
+          userid_list: [{ open_userid: openId, userid: 'u-' + openId }],
+        });
+      }
+      if (url.hostname === 'wwcdn.weixin.qq.com') {
+        const name = url.pathname.slice(1);
+        const body =
+          name === 'a.txt'
+            ? encA.encrypted
+            : name === 'b.txt'
+              ? encB.encrypted
+              : encPerm.encrypted;
+        return new Response(body, {
+          status: 200,
+          headers: {
+            'content-length': String(body.length),
+            'content-disposition': `attachment; filename="${name}"`,
+          },
+        });
+      }
+      if (init?.method === 'PUT') {
+        if (hubMode === 'put-503') return new Response('busy', { status: 503 });
+        if (hubMode === 'perm-413')
+          return new Response('too large', { status: 413 });
+        const sha = url.pathname.split('/').at(-1)!;
+        const bytes = Buffer.from(await new Response(init.body).arrayBuffer());
+        hubStaged.set(sha, bytes);
+        return Response.json({ sha256: sha, size: bytes.length });
+      }
+      const op = JSON.parse(String(init?.body));
+      if (op.action === 'authorize') {
+        if (hubMode === 'auth-503')
+          return new Response('down', { status: 503 });
+        if (hubMode === 'perm-403') return Response.json({}, { status: 403 });
+        return Response.json({ bound: true });
+      }
+      if (op.action === 'next') return Response.json({ delivery: null });
+      if (op.action === 'inbound') {
+        if (hubMode !== 'ok') return new Response('down', { status: 503 });
+        for (const f of op.files ?? []) {
+          if (!hubStaged.has(f.sha256))
+            return Response.json({}, { status: 400 });
+        }
+        acceptedInputs.push(op);
+        return Response.json({ accepted: true });
+      }
+      return Response.json({});
+    },
+    () => time,
+  );
+  try {
+    adapter.configure(channel, identity);
+    // 1. authorize returns 503 during downloadMedia -> local staging + part.files preserved!
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'peer' },
+        msgid: 'f2-auth-file',
+        msgtype: 'file',
+        file: { url: 'https://wwcdn.weixin.qq.com/a.txt', aeskey: encA.aeskey },
+      },
+    });
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'peer' },
+        msgid: 'f2-auth-caption',
+        msgtype: 'text',
+        text: { content: 'caption during auth outage' },
+      },
+    });
+    await untilPartSettled(adapter, 'f2-auth-file');
+    const partA = adapter.db
+      .prepare('SELECT body,files FROM part WHERE platform_id=?')
+      .get('f2-auth-file') as { body: string; files: string };
+    assert.equal(partA.body, '');
+    assert.deepEqual(JSON.parse(partA.files), [
+      { name: 'a.txt', sha256: shaA, size: plainA.length },
+    ]);
+    assert.deepEqual(await readFile(join(dir, 'staging', shaA)), plainA);
+
+    time += 3500;
+    await adapter.flush();
+    assert.equal(
+      (
+        adapter.db
+          .prepare('SELECT state FROM batch WHERE request=?')
+          .get('f2-auth-file') as { state: string }
+      ).state,
+      'pending',
+    );
+
+    // Hub recovers -> flushInbound uploads missing file from local staging and sends text + file!
+    hubMode = 'ok';
+    time += 1000;
+    await adapter.flush();
+    assert.equal(acceptedInputs.length, 1);
+    assert.equal(acceptedInputs[0]!.text, 'caption during auth outage');
+    assert.deepEqual(acceptedInputs[0]!.files, [
+      { name: 'a.txt', sha256: shaA, size: plainA.length },
+    ]);
+    assert.deepEqual(hubStaged.get(shaA), plainA);
+    await assert.rejects(stat(join(dir, 'staging', shaA)));
+
+    // 2. PUT returns 503 during downloadMedia -> local staging + part.files preserved, delivers after recovery!
+    hubMode = 'put-503';
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'peer' },
+        msgid: 'f2-put-file',
+        msgtype: 'file',
+        file: { url: 'https://wwcdn.weixin.qq.com/b.txt', aeskey: encB.aeskey },
+      },
+    });
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'peer' },
+        msgid: 'f2-put-caption',
+        msgtype: 'text',
+        text: { content: 'caption during put outage' },
+      },
+    });
+    await untilPartSettled(adapter, 'f2-put-file');
+    const partB = adapter.db
+      .prepare('SELECT body,files FROM part WHERE platform_id=?')
+      .get('f2-put-file') as { body: string; files: string };
+    assert.deepEqual(JSON.parse(partB.files), [
+      { name: 'b.txt', sha256: shaB, size: plainB.length },
+    ]);
+    assert.deepEqual(await readFile(join(dir, 'staging', shaB)), plainB);
+    hubMode = 'ok';
+    time += 3500;
+    await adapter.flush();
+    assert.equal(acceptedInputs.length, 2);
+    assert.equal(acceptedInputs[1]!.text, 'caption during put outage');
+    assert.deepEqual(acceptedInputs[1]!.files, [
+      { name: 'b.txt', sha256: shaB, size: plainB.length },
+    ]);
+    assert.deepEqual(hubStaged.get(shaB), plainB);
+
+    // 3. Permanent rejections (authorize 403 / PUT 413) discard attachment and append missing notice.
+    hubMode = 'perm-403';
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'peer' },
+        msgid: 'f2-perm-403',
+        msgtype: 'file',
+        file: {
+          url: 'https://wwcdn.weixin.qq.com/perm.txt',
+          aeskey: encPerm.aeskey,
+        },
+      },
+    });
+    await untilPartSettled(adapter, 'f2-perm-403');
+    const p403 = adapter.db
+      .prepare('SELECT body,files FROM part WHERE platform_id=?')
+      .get('f2-perm-403') as { body: string; files: string };
+    assert.equal(p403.files, '[]');
+    assert.match(p403.body, /附件未接收/);
+    await assert.rejects(stat(join(dir, 'staging', shaPerm)));
+
+    hubMode = 'perm-413';
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'peer' },
+        msgid: 'f2-perm-413',
+        msgtype: 'file',
+        file: {
+          url: 'https://wwcdn.weixin.qq.com/perm.txt',
+          aeskey: encPerm.aeskey,
+        },
+      },
+    });
+    await untilPartSettled(adapter, 'f2-perm-413');
+    const p413 = adapter.db
+      .prepare('SELECT body,files FROM part WHERE platform_id=?')
+      .get('f2-perm-413') as { body: string; files: string };
+    assert.equal(p413.files, '[]');
+    assert.match(p413.body, /附件未接收/);
+  } finally {
+    console.warn = origWarn;
+    console.error = origError;
+    await adapter.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('F3: sweepStaging keeps in-flight .part files younger than 15m while sweeping completed orphans and stale .part files', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wecom-f3-'));
+  const stagingDir = join(dir, 'staging');
+  await mkdir(stagingDir, { recursive: true, mode: 0o700 });
+  let time = Date.now();
+  const partOpened = deferred();
+  const allowRename = deferred();
+  let activePartPath = '';
+  const plain = Buffer.from('f3-inflight-part-bytes');
+  const fileSha = createHash('sha256').update(plain).digest('hex');
+  const { aeskey, encrypted } = encryptWeComBytes(plain, 0x55);
+  const emitter = new EventEmitter();
+  const sdk = Object.assign(emitter, {
+    connect() {
+      emitter.emit('authenticated');
+    },
+    disconnect() {},
+  });
+  const adapter = new ChannelSession(
+    dir,
+    () => sdk as unknown as WSClient,
+    async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'qyapi.weixin.qq.com') {
+        if (url.pathname.endsWith('/gettoken'))
+          return Response.json({
+            errcode: 0,
+            access_token: 'tok',
+            expires_in: 7200,
+          });
+        const openId = JSON.parse(String(init?.body)).open_userid_list[0];
+        return Response.json({
+          errcode: 0,
+          userid_list: [{ open_userid: openId, userid: 'u-' + openId }],
+        });
+      }
+      if (url.hostname === 'wwcdn.weixin.qq.com') {
+        return new Response(encrypted, {
+          status: 200,
+          headers: {
+            'content-length': String(encrypted.length),
+            'content-disposition': 'attachment; filename="inflight.txt"',
+          },
+        });
+      }
+      if (init?.method === 'PUT') {
+        const buf = Buffer.from(await new Response(init.body).arrayBuffer());
+        return Response.json({
+          sha256: url.pathname.split('/').at(-1),
+          size: buf.length,
+        });
+      }
+      const op = JSON.parse(String(init?.body));
+      if (op.action === 'authorize') return Response.json({ bound: true });
+      if (op.action === 'next') return Response.json({ delivery: null });
+      return Response.json({ accepted: true });
+    },
+    () => time,
+    undefined,
+    undefined,
+    async (tempPath) => {
+      activePartPath = tempPath;
+      partOpened.resolve();
+      await allowRename.promise;
+    },
+  );
+  try {
+    adapter.configure(channel, identity);
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'peer' },
+        msgid: 'f3-file',
+        msgtype: 'file',
+        file: { url: 'https://wwcdn.weixin.qq.com/f3.bin', aeskey },
+      },
+    });
+    await Promise.race([
+      partOpened.promise,
+      untilPartSettled(adapter, 'f3-file').then(() => {
+        throw new Error('part settled before staging rename gate');
+      }),
+    ]);
+    assert.ok(activePartPath.endsWith('.part'));
+    assert.equal((await stat(activePartPath)).isFile(), true);
+
+    // Plant an unreferenced completed orphan file and flush another sender's batch so real sweepStaging() runs.
+    const orphanSha = 'c'.repeat(64);
+    await writeFile(join(stagingDir, orphanSha), 'orphan');
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'other-peer' },
+        msgid: 'f3-trigger-sweep',
+        msgtype: 'text',
+        text: { content: 'sweep now' },
+      },
+    });
+    await adapter.flush();
+    await assert.rejects(stat(join(stagingDir, orphanSha)));
+    assert.equal(
+      await stat(activePartPath).then(
+        (s) => s.isFile(),
+        () => false,
+      ),
+      true,
+    );
+
+    // Release rename gate -> temp .part renames cleanly and part settles with attachment intact!
+    allowRename.resolve();
+    await untilPartSettled(adapter, 'f3-file');
+    const settled = adapter.db
+      .prepare('SELECT body,files FROM part WHERE platform_id=?')
+      .get('f3-file') as { body: string; files: string };
+    assert.equal(settled.body, '');
+    assert.deepEqual(JSON.parse(settled.files), [
+      { name: 'inflight.txt', sha256: fileSha, size: plain.length },
+    ]);
+
+    // Plant a .part file and age mocked clock >= 15m -> sweepStaging deletes stale .part!
+    const stalePart = join(stagingDir, 'd'.repeat(64) + '.stale.part');
+    await writeFile(stalePart, 'stale');
+    time += 15 * 60_000 + 1000;
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'other-peer' },
+        msgid: 'f3-trigger-stale-sweep',
+        msgtype: 'text',
+        text: { content: 'sweep stale part' },
+      },
+    });
+    await adapter.flush();
+    await assert.rejects(stat(stalePart));
+  } finally {
+    allowRename.resolve();
+    await adapter.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('F4: serveChannel configures mediaHosts via options, CIRCLE_WECOM_MEDIA_HOSTS fallback, and configure socket frame', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wecom-f4-'));
+  const dirSocket = await mkdtemp(join(tmpdir(), 'wecom-f4-sock-'));
+  const dirEnv = await mkdtemp(join(tmpdir(), 'wecom-f4-env-'));
+  const fetchedUrls: string[] = [];
+  const postSocket = (socketDir: string, payload: unknown) =>
+    new Promise<{ status: number; body: unknown }>((ok, fail) => {
+      const bytes = Buffer.from(JSON.stringify(payload));
+      const req = unixRequest(
+        {
+          socketPath: join(socketDir, 'channel.sock'),
+          path: '/chat',
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'content-length': bytes.length,
+          },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () =>
+            ok({
+              status: res.statusCode ?? 500,
+              body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
+            }),
+          );
+        },
+      );
+      req.on('error', fail);
+      req.end(bytes);
+    });
+
+  const makeSdk = () => {
+    const emitter = new EventEmitter();
+    return Object.assign(emitter, {
+      connect() {
+        emitter.emit('authenticated');
+      },
+      disconnect() {},
+    });
+  };
+  const fetcher: typeof fetch = async (input, init) => {
+    const url = new URL(String(input));
+    fetchedUrls.push(url.href);
+    if (url.hostname === 'qyapi.weixin.qq.com') {
+      if (url.pathname.endsWith('/gettoken'))
+        return Response.json({
+          errcode: 0,
+          access_token: 'tok',
+          expires_in: 7200,
+        });
+      return Response.json({
+        errcode: 0,
+        userid_list: [{ open_userid: 'peer', userid: 'u-peer' }],
+      });
+    }
+    if (
+      url.hostname === 'custom.media.example' ||
+      url.hostname === 'socket.media.example' ||
+      url.hostname === 'env.media.example'
+    ) {
+      const bytes = Buffer.from('media-from-' + url.hostname);
+      return new Response(bytes, {
+        status: 200,
+        headers: { 'content-length': String(bytes.length) },
+      });
+    }
+    if (init?.method === 'PUT') {
+      const bytes = Buffer.from(await new Response(init.body).arrayBuffer());
+      return Response.json({
+        sha256: url.pathname.split('/').at(-1),
+        size: bytes.length,
+      });
+    }
+    const op = JSON.parse(String(init?.body));
+    return Response.json(
+      op.action === 'authorize' ? { bound: true } : { delivery: null },
+    );
+  };
+
+  const prevEnv = process.env.CIRCLE_WECOM_MEDIA_HOSTS;
+  let close1: (() => Promise<void>) | undefined;
+  let close2: (() => Promise<void>) | undefined;
+  let closeEnv: (() => Promise<void>) | undefined;
+  try {
+    const sdk1 = makeSdk();
+    close1 = await serveChannel(dir, {
+      mediaHosts: ['custom.media.example'],
+      create: () => sdk1 as unknown as WSClient,
+      fetcher,
+    });
+    const res1 = await postSocket(dir, {
+      action: 'configure',
+      channel,
+      identity,
+    });
+    assert.equal(res1.status, 200);
+    sdk1.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'peer' },
+        msgid: 'f4-custom',
+        msgtype: 'file',
+        file: { url: 'https://custom.media.example/a.bin' },
+      },
+    });
+    sdk1.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'peer' },
+        msgid: 'f4-evil',
+        msgtype: 'file',
+        file: { url: 'https://evil.example.invalid/b.bin' },
+      },
+    });
+    await close1();
+    close1 = undefined;
+    assert.equal(
+      fetchedUrls.includes('https://custom.media.example/a.bin'),
+      true,
+    );
+    assert.equal(
+      fetchedUrls.includes('https://evil.example.invalid/b.bin'),
+      false,
+    );
+
+    // Update mediaHosts dynamically via configure socket frame.
+    const sdk2 = makeSdk();
+    close2 = await serveChannel(dirSocket, {
+      create: () => sdk2 as unknown as WSClient,
+      fetcher,
+    });
+    const res2 = await postSocket(dirSocket, {
+      action: 'configure',
+      channel,
+      identity,
+      mediaHosts: ['socket.media.example'],
+    });
+    assert.equal(res2.status, 200);
+    sdk2.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'peer' },
+        msgid: 'f4-socket',
+        msgtype: 'file',
+        file: { url: 'https://socket.media.example/c.bin' },
+      },
+    });
+    await close2();
+    close2 = undefined;
+    assert.equal(
+      fetchedUrls.includes('https://socket.media.example/c.bin'),
+      true,
+    );
+
+    // Verify CIRCLE_WECOM_MEDIA_HOSTS fallback when options.mediaHosts is omitted.
+    process.env.CIRCLE_WECOM_MEDIA_HOSTS = 'env.media.example';
+    const envSdk = makeSdk();
+    closeEnv = await serveChannel(dirEnv, {
+      create: () => envSdk as unknown as WSClient,
+      fetcher,
+    });
+    const resEnv = await postSocket(dirEnv, {
+      action: 'configure',
+      channel,
+      identity,
+    });
+    assert.equal(resEnv.status, 200);
+    envSdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'peer' },
+        msgid: 'f4-env',
+        msgtype: 'file',
+        file: { url: 'https://env.media.example/d.bin' },
+      },
+    });
+    await closeEnv();
+    closeEnv = undefined;
+    assert.equal(fetchedUrls.includes('https://env.media.example/d.bin'), true);
+  } finally {
+    if (prevEnv === undefined) delete process.env.CIRCLE_WECOM_MEDIA_HOSTS;
+    else process.env.CIRCLE_WECOM_MEDIA_HOSTS = prevEnv;
+    await closeEnv?.();
+    await close2?.();
+    await close1?.();
+    await rm(dir, { recursive: true, force: true });
+    await rm(dirSocket, { recursive: true, force: true });
+    await rm(dirEnv, { recursive: true, force: true });
+  }
+});
+
+test('F5 & F7: rejection notices avoid "Hub", rate-limit per (sender, reasonKey) for 5m, and warn on send failures', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wecom-f5f7-'));
+  let time = 1000;
+  let sendMode: 'ok' | 'throw' | 'errcode' = 'ok';
+  const sentNotices: Array<{ to: string; content: string }> = [];
+  const origWarn = console.warn;
+  const origError = console.error;
+  const warnLogs: unknown[][] = [];
+  console.warn = (...args: unknown[]) => warnLogs.push(args);
+  console.error = () => {};
+  const emitter = new EventEmitter();
+  const sdk = Object.assign(emitter, {
+    connect() {
+      emitter.emit('authenticated');
+    },
+    disconnect() {},
+    async sendMessage(to: string, body: { markdown?: { content?: string } }) {
+      if (sendMode === 'throw') {
+        throw new Error('send failed ' + channel.token);
+      }
+      if (sendMode === 'errcode') {
+        return {
+          headers: { req_id: 'r-fail' },
+          errcode: 45009,
+          errmsg: 'freq limit',
+        };
+      }
+      sentNotices.push({ to, content: body.markdown?.content ?? '' });
+      return { headers: { req_id: 'r-ok' }, errcode: 0 };
+    },
+  });
+  let disconnectOn403 = false;
+  const adapter = new ChannelSession(
+    dir,
+    () => sdk as unknown as WSClient,
+    async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'qyapi.weixin.qq.com') {
+        if (url.pathname.endsWith('/gettoken'))
+          return Response.json({
+            errcode: 0,
+            access_token: 'tok',
+            expires_in: 7200,
+          });
+        const id = JSON.parse(String(init?.body)).open_userid_list[0];
+        return Response.json({
+          errcode: 0,
+          userid_list: [{ open_userid: id, userid: 'u-' + id }],
+        });
+      }
+      const op = JSON.parse(String(init?.body));
+      if (op.action === 'next') return Response.json({ delivery: null });
+      if (op.action === 'inbound') {
+        if (op.text.startsWith('413:'))
+          return Response.json({}, { status: 413 });
+        if (disconnectOn403) emitter.emit('disconnected');
+        return Response.json({}, { status: 403 });
+      }
+      return Response.json({});
+    },
+    () => time,
+  );
+  try {
+    adapter.configure(channel, identity);
+    const emitText = (sender: string, msgid: string, content: string) =>
+      sdk.emit('message', {
+        body: {
+          chattype: 'single',
+          aibotid: 'bot',
+          from: { userid: sender },
+          msgid,
+          msgtype: 'text',
+          text: { content },
+        },
+      });
+
+    // 20 unbound 403 rejections from same sender within 5m emit 1 notice (without "Hub").
+    for (let i = 1; i <= 20; i++) {
+      emitText('spammer', 's-' + i, 'hi ' + i);
+      await adapter.flush();
+    }
+    assert.equal(sentNotices.length, 1);
+    assert.match(sentNotices[0]!.content, /尚未绑定机器人或访问权限已停用/);
+    assert.equal(sentNotices[0]!.content.includes('Hub'), false);
+
+    // Different reasonKey (413) for the same sender sends immediately.
+    emitText('spammer', 's-413', '413:quota');
+    await adapter.flush();
+    assert.equal(sentNotices.length, 2);
+    assert.match(sentNotices[1]!.content, /超出限制/);
+
+    // After 5 minutes, 403 notice is allowed again.
+    time += 5 * 60_000;
+    emitText('spammer', 's-21', 'hi 21');
+    await adapter.flush();
+    assert.equal(sentNotices.length, 3);
+
+    // Verify all 3 warning paths on failure (!run.ready, thrown error, non-zero errcode).
+    warnLogs.length = 0;
+    disconnectOn403 = true;
+    emitText('fail-peer', 'fp-1', 'not ready');
+    await adapter.flush();
+    disconnectOn403 = false;
+    emitter.emit('authenticated');
+
+    sendMode = 'throw';
+    emitText('fail-peer', 'fp-2', 'throws');
+    await adapter.flush();
+
+    sendMode = 'errcode';
+    emitText('fail-peer', 'fp-3', 'nonzero');
+    await adapter.flush();
+
+    const noticeWarns = warnLogs.filter(
+      (args) => args[0] === '[wecom] rejection notice failed:',
+    );
+    assert.equal(noticeWarns.length, 3);
+    assert.equal(
+      (noticeWarns[0]![1] as { error: string }).error,
+      'channel not ready',
+    );
+    assert.equal(JSON.stringify(noticeWarns[1]).includes(channel.token), false);
+    assert.equal((noticeWarns[2]![1] as { errcode: number }).errcode, 45009);
+  } finally {
+    console.warn = origWarn;
+    console.error = origError;
+    await adapter.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('F6: transferHubFile 900s timeout, README alignment, >16k/>8 batch splitting, and single-chat frame rejections', async () => {
+  // 1. Verify transferHubFile uses 900_000ms timeout and README documents Round-3 details.
+  const origTimeout = AbortSignal.timeout;
+  const observedTimeouts: number[] = [];
+  AbortSignal.timeout = ((ms: number) => {
+    observedTimeouts.push(ms);
+    return origTimeout.call(AbortSignal, ms);
+  }) as typeof AbortSignal.timeout;
+  try {
+    const sha = createHash('sha256').update('x').digest('hex');
+    await transferHubFile(
+      async () => Response.json({ sha256: sha, size: 1 }),
+      channel,
+      'member',
+      sha,
+      Buffer.from('x'),
+    );
+  } finally {
+    AbortSignal.timeout = origTimeout;
+  }
+  assert.deepEqual(observedTimeouts, [900_000]);
+
+  const readme = await readFile(
+    new URL('./README.md', import.meta.url),
+    'utf8',
+  );
+  assert.match(readme, /900000/);
+  assert.match(readme, /16000/);
+  assert.match(readme, /transient_attempts/);
+  assert.match(readme, /CIRCLE_WECOM_MEDIA_HOSTS/);
+  assert.match(readme, /15 分钟/);
+
+  // 2. Verify merged batch splitting (>16k text & >8 files + F2 + T3 interaction) and non-silent frame rejections.
+  const dir = await mkdtemp(join(tmpdir(), 'wecom-f6-'));
+  let time = 1000;
+  let hubDown = true;
+  let chunk1NetworkFails = 6;
+  const hubStaged = new Set<string>();
+  const inboundPayloads: Array<{
+    platformId: string;
+    text: string;
+    files?: Array<{ name: string; sha256: string; size: number }>;
+  }> = [];
+  const sentNotices: Array<{ to: string; content: string }> = [];
+  const warnLogs: unknown[][] = [];
+  const origWarn = console.warn;
+  console.warn = (...args: unknown[]) => warnLogs.push(args);
+
+  const emitter = new EventEmitter();
+  const sdk = Object.assign(emitter, {
+    connect() {
+      emitter.emit('authenticated');
+    },
+    disconnect() {},
+    async sendMessage(to: string, body: { markdown?: { content?: string } }) {
+      sentNotices.push({ to, content: body.markdown?.content ?? '' });
+      return { headers: { req_id: 'r-f6' }, errcode: 0 };
+    },
+  });
+
+  const adapter = new ChannelSession(
+    dir,
+    () => sdk as unknown as WSClient,
+    async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'qyapi.weixin.qq.com') {
+        if (url.pathname.endsWith('/gettoken'))
+          return Response.json({
+            errcode: 0,
+            access_token: 'tok',
+            expires_in: 7200,
+          });
+        const id = JSON.parse(String(init?.body)).open_userid_list[0];
+        return Response.json({
+          errcode: 0,
+          userid_list: [{ open_userid: id, userid: 'u-' + id }],
+        });
+      }
+      if (url.hostname === 'wwcdn.weixin.qq.com') {
+        const bytes = Buffer.from('content-' + url.pathname);
+        return new Response(bytes, {
+          status: 200,
+          headers: {
+            'content-length': String(bytes.length),
+            'content-disposition': `attachment; filename="${url.pathname.slice(1)}.txt"`,
+          },
+        });
+      }
+      if (init?.method === 'PUT') {
+        if (hubDown) return new Response('down', { status: 503 });
+        const sha = url.pathname.split('/').at(-1)!;
+        const buf = Buffer.from(await new Response(init.body).arrayBuffer());
+        hubStaged.add(sha);
+        return Response.json({ sha256: sha, size: buf.length });
+      }
+      const op = JSON.parse(String(init?.body));
+      if (op.action === 'authorize') {
+        return hubDown
+          ? new Response('down', { status: 503 })
+          : Response.json({ bound: true });
+      }
+      if (op.action === 'next') return Response.json({ delivery: null });
+      if (op.action === 'inbound') {
+        if (hubDown) return new Response('down', { status: 503 });
+        if (op.platformId === 'ten-files-1:1' && chunk1NetworkFails > 0) {
+          chunk1NetworkFails--;
+          throw new TypeError('fetch failed');
+        }
+        for (const f of op.files ?? []) {
+          if (!hubStaged.has(f.sha256))
+            return Response.json({}, { status: 400 });
+        }
+        inboundPayloads.push(op);
+        return Response.json({ accepted: true });
+      }
+      return Response.json({});
+    },
+    () => time,
+  );
+  try {
+    adapter.configure(channel, identity);
+
+    // Single-chat frames rejected by privateInput must warn and notify sender, while group frames stay silent.
+    assert.equal(
+      privateInput(
+        {
+          body: {
+            chattype: 'single',
+            aibotid: 'bot',
+            from: { userid: 'oversize-user' },
+            msgid: 'too-long',
+            msgtype: 'text',
+            text: { content: 'x'.repeat(16001) },
+          },
+        },
+        'bot',
+      ),
+      null,
+    );
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'oversize-user' },
+        msgid: 'too-long-1',
+        msgtype: 'text',
+        text: { content: 'x'.repeat(16001) },
+      },
+    });
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'oversize-user' },
+        msgid: 'too-long-2',
+        msgtype: 'text',
+        text: { content: 'y'.repeat(16001) },
+      },
+    });
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'oversize-user' },
+        msgid: 'too-many-files',
+        msgtype: 'mixed',
+        mixed: {
+          msg_item: Array.from({ length: 9 }, (_, i) => ({
+            msgtype: 'file',
+            file: { url: `https://wwcdn.weixin.qq.com/f${i}` },
+          })),
+        },
+      },
+    });
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'oversize-user' },
+        msgid: 'http-media',
+        msgtype: 'file',
+        file: { url: 'http://wwcdn.weixin.qq.com/plain-http' },
+      },
+    });
+    sdk.emit('message', {
+      body: {
+        chattype: 'group',
+        aibotid: 'bot',
+        from: { userid: 'group-user' },
+        msgid: 'group-oversize',
+        msgtype: 'text',
+        text: { content: 'g'.repeat(16001) },
+      },
+    });
+    await new Promise<void>((ok) => setImmediate(ok));
+    assert.equal(sentNotices.length, 3);
+    assert.match(sentNotices[0]!.content, /16000/);
+    assert.match(sentNotices[1]!.content, /8 个上限/);
+    assert.match(sentNotices[2]!.content, /HTTPS/);
+    assert.equal(
+      sentNotices.some((n) => n.to === 'group-user'),
+      false,
+    );
+    assert.equal(
+      warnLogs.filter((l) => l[0] === '[wecom] inbound frame rejected:').length,
+      4,
+    );
+
+    // Merged text > 16000 (preserving surrogate pair across boundary!) splits sequentially.
+    hubDown = false;
+    const part1 = 'a'.repeat(15999) + '😀'; // 16001 chars, surrogate pair starts at index 15999!
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'text-splitter' },
+        msgid: 'split-text-1',
+        msgtype: 'text',
+        text: { content: part1.slice(0, 10000) },
+      },
+    });
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'text-splitter' },
+        msgid: 'split-text-2',
+        msgtype: 'text',
+        text: { content: part1.slice(10000) },
+      },
+    });
+    await adapter.flush();
+    assert.equal(inboundPayloads.length, 2);
+    assert.equal(inboundPayloads[0]!.platformId, 'split-text-1:0');
+    assert.equal(inboundPayloads[1]!.platformId, 'split-text-1:1');
+    assert.ok(inboundPayloads[0]!.text.length <= 16000);
+    assert.ok(inboundPayloads[1]!.text.length <= 16000);
+    assert.equal(
+      inboundPayloads[0]!.text + inboundPayloads[1]!.text,
+      part1.slice(0, 10000) + '\n' + part1.slice(10000),
+    );
+    assert.equal(inboundPayloads[1]!.text.startsWith('😀'), true);
+
+    // Merged >8 files (5 + 5 = 10) while Hub is down (F2) + chunk 1 hits 6 TypeErrors (T3) -> recovers without duplicating chunk 0!
+    hubDown = true;
+    const emit5Files = (msgid: string, prefix: string) =>
+      sdk.emit('message', {
+        body: {
+          chattype: 'single',
+          aibotid: 'bot',
+          from: { userid: 'file-splitter' },
+          msgid,
+          msgtype: 'mixed',
+          mixed: {
+            msg_item: Array.from({ length: 5 }, (_, i) => ({
+              msgtype: 'file',
+              file: { url: `https://wwcdn.weixin.qq.com/${prefix}-${i}` },
+            })),
+          },
+        },
+      });
+    emit5Files('ten-files-1', 'batchA');
+    emit5Files('ten-files-2', 'batchB');
+    await untilPartSettled(adapter, 'ten-files-1');
+    await untilPartSettled(adapter, 'ten-files-2');
+
+    hubDown = false;
+    time += 3500;
+    for (let i = 1; i <= 6; i++) {
+      await adapter.flush();
+      const row = adapter.db
+        .prepare(
+          'SELECT state,attempts,transient_attempts,sent_chunks,next_at FROM batch WHERE request=?',
+        )
+        .get('ten-files-1') as {
+        state: string;
+        attempts: number;
+        transient_attempts: number;
+        sent_chunks: number;
+        next_at: number;
+      };
+      assert.equal(row.state, 'pending');
+      assert.equal(row.attempts, 0);
+      assert.equal(row.transient_attempts, i);
+      assert.equal(row.sent_chunks, 1);
+      time = row.next_at;
+    }
+    await adapter.flush();
+    assert.equal(
+      (
+        adapter.db
+          .prepare('SELECT state FROM batch WHERE request=?')
+          .get('ten-files-1') as { state: string }
+      ).state,
+      'accepted',
+    );
+    const fileBatchCalls = inboundPayloads.filter((p) =>
+      p.platformId.startsWith('ten-files-1:'),
+    );
+    assert.equal(fileBatchCalls.length, 2);
+    assert.equal(fileBatchCalls[0]!.platformId, 'ten-files-1:0');
+    assert.equal(fileBatchCalls[0]!.files?.length, 8);
+    assert.equal(fileBatchCalls[1]!.platformId, 'ten-files-1:1');
+    assert.equal(fileBatchCalls[1]!.files?.length, 2);
   } finally {
     console.warn = origWarn;
     await adapter.close();
