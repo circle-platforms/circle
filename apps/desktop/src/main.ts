@@ -68,7 +68,7 @@ import {
   parseImageDataUrl,
   validSaveName,
 } from './policy';
-import { verifyAppWindowSender } from './window-sender';
+import { liveBroadcastTargets, verifyAppWindowSender } from './window-sender';
 import type {
   DesktopAction,
   DesktopInfo,
@@ -275,9 +275,7 @@ function appWindows(): BrowserWindow[] {
 }
 /** What the runtime, the browser and the terminals tell the window, told to every window. */
 function broadcast(channel: string, ...args: unknown[]) {
-  const targets = appWindows().filter(
-    (one) => !one.webContents.isDestroyed() && !one.webContents.isCrashed(),
-  );
+  const targets = liveBroadcastTargets(appWindows());
   windowDiagnostics.sent(
     channel,
     args,

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { verifyAppWindowSender } from '../src/window-sender';
+import {
+  liveBroadcastTargets,
+  verifyAppWindowSender,
+} from '../src/window-sender';
 
 function makeCandidate(overrides?: {
   destroyed?: boolean;
@@ -98,5 +101,17 @@ test('verifyAppWindowSender accepts only an alive un-crashed main frame at the t
         },
       }),
     /untrusted IPC sender/,
+  );
+});
+
+test('liveBroadcastTargets excludes destroyed and crashed windows while keeping live ones', () => {
+  const live = makeCandidate();
+  const crashed = makeCandidate({ crashed: true });
+  const destroyed = makeCandidate({ destroyed: true });
+  const livePopout = makeCandidate({ routingId: 11 });
+
+  assert.deepEqual(
+    liveBroadcastTargets([live, crashed, destroyed, livePopout]),
+    [live, livePopout],
   );
 });

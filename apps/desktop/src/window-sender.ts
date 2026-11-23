@@ -20,6 +20,17 @@ export interface SenderWindowCandidate {
 }
 
 /**
+ * Returns only live, un-crashed application windows safe to broadcast IPC events to.
+ */
+export function liveBroadcastTargets<T extends SenderWindowCandidate>(
+  windows: readonly T[],
+): T[] {
+  return windows.filter(
+    (one) => !one.webContents.isDestroyed() && !one.webContents.isCrashed(),
+  );
+}
+
+/**
  * Returns the owning application window only when an IPC event originates from
  * an alive, un-crashed main frame of one of our windows at a trusted app URL.
  */
