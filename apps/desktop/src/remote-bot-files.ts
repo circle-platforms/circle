@@ -1,4 +1,4 @@
-import { open, rename, unlink } from 'node:fs/promises';
+import { lstat, open, rename, unlink } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -14,11 +14,21 @@ export async function uploadSelected(
   path: string,
   fetcher = fetch,
 ) {
-  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const link = await lstat(path, { bigint: true });
+  if (link.isSymbolicLink())
+    throw new Error('symbolic links cannot be attached');
+  if (!link.isFile()) throw new Error('only a regular file can be attached');
+  const file = await open(
+    path,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+  );
   try {
-    const stat = await file.stat();
-    if (!stat.isFile() || stat.size > MAX_BOT_FILE_BYTES)
+    const stat = await file.stat({ bigint: true });
+    if (!stat.isFile() || stat.dev !== link.dev || stat.ino !== link.ino)
+      throw new Error('file identity changed');
+    if (stat.size > BigInt(MAX_BOT_FILE_BYTES))
       throw new Error('file exceeds the 100 MiB limit');
+    const size = Number(stat.size);
     const hash = createHash('sha256');
     for await (const chunk of file.createReadStream({
       start: 0,
@@ -35,7 +45,7 @@ export async function uploadSelected(
         redirect: 'error',
         headers: {
           authorization: 'Bearer ' + token,
-          'content-length': String(stat.size),
+          'content-length': String(size),
           'content-type': 'application/octet-stream',
         },
         body: Readable.toWeb(
@@ -54,9 +64,9 @@ export async function uploadSelected(
     } catch {
       throw new Error('file upload was not verified');
     }
-    if (info.sha256 !== sha256 || info.size !== stat.size)
+    if (info.sha256 !== sha256 || info.size !== size)
       throw new Error('file upload was not verified');
-    return { name: basename(path), sha256, size: stat.size };
+    return { name: basename(path), sha256, size };
   } finally {
     await file.close();
   }

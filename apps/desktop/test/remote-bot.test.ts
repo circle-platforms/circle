@@ -16,6 +16,7 @@ import type { McpBearerConnection } from '../../../src/mcp_loader.js';
 import { HUB_SERVER } from '../../../src/hub_connection.js';
 import { saveRemoteFile, uploadSelected } from '../src/remote-bot-files';
 import { remoteBotPort, remoteBotRequest } from '../src/remote-bot';
+import { fileSymlinkRefusal } from './helpers/symlink-support.mjs';
 
 function makePort(options?: {
   binding?: string;
@@ -274,18 +275,40 @@ test('uploadSelected retries on 401 with a fresh stream, checks errors before pa
         ),
       /file upload was not verified/,
     );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
-    const linkPath = join(dir, 'link.txt');
-    await symlink(filePath, linkPath);
+test('uploadSelected rejects directories and symbolic links before reading', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'circle-bot-symlink-'));
+  try {
+    const target = join(dir, 'sample.txt');
+    await writeFile(target, 'hello');
+    let fetched = false;
+    const failFetch = (async () => {
+      fetched = true;
+      return new Response();
+    }) as typeof fetch;
+    const { port } = makePort();
     await assert.rejects(
-      () =>
-        uploadSelected(
-          port,
-          linkPath,
-          (async () => new Response()) as typeof fetch,
-        ),
-      { code: 'ELOOP' },
+      () => uploadSelected(port, dir, failFetch),
+      /only a regular file can be attached/,
     );
+    const refusal = await fileSymlinkRefusal();
+    await t.test(
+      'rejects symbolic links without following them',
+      { skip: refusal },
+      async () => {
+        const linkPath = join(dir, 'link.txt');
+        await symlink(target, linkPath, 'file');
+        await assert.rejects(
+          () => uploadSelected(port, linkPath, failFetch),
+          /symbolic links cannot be attached/,
+        );
+      },
+    );
+    assert.equal(fetched, false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
