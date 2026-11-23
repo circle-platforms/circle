@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
+  mkdir,
   mkdtemp,
   readdir,
   readFile,
@@ -11,12 +12,25 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import test from 'node:test';
+import test, { type TestContext } from 'node:test';
 import type { McpBearerConnection } from '../../../src/mcp_loader.js';
 import { HUB_SERVER } from '../../../src/hub_connection.js';
+import {
+  defaultSettings,
+  saveSettings,
+  trustFolder,
+} from '../../../src/settings.js';
+import { ScriptedModel } from '../../../src/testing.js';
+import { VERSION } from '../../../src/version.js';
+import { RuntimeController } from '../src/runtime-controller.ts';
+import type {
+  RuntimeCommandName,
+  RuntimeReply,
+} from '../src/runtime-protocol.ts';
 import { saveRemoteFile, uploadSelected } from '../src/remote-bot-files';
 import { remoteBotPort, remoteBotRequest } from '../src/remote-bot';
 import { fileSymlinkRefusal } from './helpers/symlink-support.mjs';
+import { patience } from './helpers/patience.mjs';
 
 function makePort(options?: {
   binding?: string;
@@ -415,4 +429,454 @@ test('saveRemoteFile validates receipts, refreshes on 401, checks content-length
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('remoteBotRequest sends bot-client-version header and attaches structured error metadata', async () => {
+  const { port } = makePort({ tokens: ['tok-1', 'tok-2'] });
+  const capturedHeaders: Headers[] = [];
+  await remoteBotRequest(port, { action: 'discover' }, (async (
+    _input,
+    init,
+  ) => {
+    capturedHeaders.push(new Headers(init?.headers));
+    return new Response(JSON.stringify({ current: 'conv-1' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch);
+  assert.equal(capturedHeaders[0]?.get('bot-client-version'), VERSION);
+  assert.equal(capturedHeaders[0]?.get('circle-version'), null);
+
+  for (const scenario of [
+    {
+      status: 426,
+      body: { code: 'BOT_VERSION_MISMATCH', message: 'client too old' },
+      expectedCode: 'BOT_VERSION_MISMATCH',
+      expectedMessage: 'client too old',
+    },
+    {
+      status: 400,
+      body: { code: 'BOT_VERSION_INVALID' },
+      expectedCode: 'BOT_VERSION_INVALID',
+      expectedMessage: 'invalid bot client version',
+    },
+    {
+      status: 403,
+      body: { code: 'BOT_DISABLED', message: 'bot disabled by admin' },
+      expectedCode: 'BOT_DISABLED',
+      expectedMessage: 'bot disabled by admin',
+    },
+    {
+      status: 403,
+      body: {
+        code: 'BOT_CLIENT_FORBIDDEN',
+        message: 'oauth client token is not allowed',
+      },
+      expectedCode: 'BOT_CLIENT_FORBIDDEN',
+      expectedMessage: 'oauth client token is not allowed',
+    },
+    {
+      status: 401,
+      body: { message: 'token expired' },
+      expectedCode: undefined,
+      expectedMessage: 'token expired',
+    },
+    {
+      status: 503,
+      body: null,
+      expectedCode: undefined,
+      expectedMessage: 'remote bot unavailable',
+    },
+  ]) {
+    await assert.rejects(
+      () =>
+        remoteBotRequest(port, { action: 'discover' }, (async () =>
+          scenario.body
+            ? new Response(JSON.stringify(scenario.body), {
+                status: scenario.status,
+                headers: { 'content-type': 'application/json' },
+              })
+            : new Response('unavailable', {
+                status: scenario.status,
+                headers: { 'content-type': 'text/plain' },
+              })) as typeof fetch),
+      (error: unknown) => {
+        if (!(error instanceof Error)) return false;
+        const meta = error as Error & {
+          status?: number;
+          code?: string;
+          remoteMessage?: string;
+        };
+        assert.equal(meta.status, scenario.status);
+        assert.equal(meta.code, scenario.expectedCode);
+        assert.equal(error.message, scenario.expectedMessage);
+        return true;
+      },
+    );
+  }
+
+  const dir = await mkdtemp(join(tmpdir(), 'circle-bot-err-'));
+  try {
+    const filePath = join(dir, 'sample.txt');
+    await writeFile(filePath, 'hi');
+    await assert.rejects(
+      () =>
+        uploadSelected(
+          port,
+          filePath,
+          (async () =>
+            new Response(
+              JSON.stringify({
+                code: 'BOT_CLIENT_FORBIDDEN',
+                message: 'direct member token required',
+              }),
+              { status: 403, headers: { 'content-type': 'application/json' } },
+            )) as typeof fetch,
+        ),
+      (error: unknown) => {
+        const meta = error as Error & { status?: number; code?: string };
+        return (
+          error instanceof Error &&
+          meta.status === 403 &&
+          meta.code === 'BOT_CLIENT_FORBIDDEN' &&
+          /direct member token required/.test(error.message)
+        );
+      },
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('C6: remoteBotRequest, uploadSelected, and saveRemoteFile reject unsafe server URLs before sending tokens', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'circle-bot-url-'));
+  try {
+    const filePath = join(dir, 'note.txt');
+    const outPath = join(dir, 'out.txt');
+    await writeFile(filePath, 'content');
+    const payloadSha = createHash('sha256').update('content').digest('hex');
+
+    for (const unsafeServer of [
+      'http://192.168.1.10:7420/mcp',
+      'http://hub.example.test:7420/mcp',
+      'ftp://127.0.0.1:7420/mcp',
+    ]) {
+      let tokenCalls = 0;
+      let fetchCalls = 0;
+      const unsafePort: McpBearerConnection = {
+        server: unsafeServer,
+        binding: 'binding-unsafe',
+        assertActive() {},
+        async token() {
+          tokenCalls++;
+          return 'secret-bearer-token';
+        },
+      };
+      const failFetch = (async () => {
+        fetchCalls++;
+        return new Response('{}', { status: 200 });
+      }) as typeof fetch;
+
+      await assert.rejects(
+        () => remoteBotRequest(unsafePort, { action: 'discover' }, failFetch),
+        /https|loopback/i,
+      );
+      await assert.rejects(
+        () => uploadSelected(unsafePort, filePath, failFetch),
+        /https|loopback/i,
+      );
+      await assert.rejects(
+        () =>
+          saveRemoteFile(
+            unsafePort,
+            { name: 'note.txt', sha256: payloadSha, size: 7 },
+            outPath,
+            failFetch,
+          ),
+        /https|loopback/i,
+      );
+      assert.equal(tokenCalls, 0, `no token requested for ${unsafeServer}`);
+      assert.equal(fetchCalls, 0, `no fetch attempted for ${unsafeServer}`);
+    }
+
+    for (const safeServer of [
+      'https://hub.example.test/mcp',
+      'http://127.0.0.1:7420/mcp',
+      'http://localhost:7420/mcp',
+      'http://[::1]:7420/mcp',
+    ]) {
+      const safePort: McpBearerConnection = {
+        server: safeServer,
+        binding: 'binding-safe',
+        assertActive() {},
+        async token() {
+          return 'ok-token';
+        },
+      };
+      const res = await remoteBotRequest(
+        safePort,
+        { action: 'discover' },
+        (async () =>
+          new Response(JSON.stringify({ current: 'conv-1' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })) as typeof fetch,
+      );
+      assert.equal(res.binding, 'binding-safe');
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('C3: RuntimeController runs remote-bot and remote-bot-native-file outside the mutation queue', async (t: TestContext) => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-bot-c3-'));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(home, { recursive: true });
+  await mkdir(join(workspace, '.git'), { recursive: true });
+  await mkdir(join(home, 'extensions', 'hold'), { recursive: true });
+  await writeFile(
+    join(home, 'extensions', 'hold', 'extension.mjs'),
+    `export function register(api){api.registerCommand('hold','Hold queue',async(_args,ctx)=>{const v=await api.askSecret('secret');ctx.append(v===null?'cancelled':'entered')})}`,
+  );
+  const uploadPath = join(root, 'attach.txt');
+  const uploadPayload = Buffer.from('attachment payload');
+  await writeFile(uploadPath, uploadPayload);
+  const uploadSha = createHash('sha256').update(uploadPayload).digest('hex');
+
+  const settings = trustFolder(defaultSettings(), workspace);
+  settings.mcpServers[HUB_SERVER] = {
+    type: 'http',
+    url: 'http://127.0.0.1:7420/mcp',
+    headers: { Authorization: 'Bearer member-tok' },
+  };
+  saveSettings(settings, home);
+  const binding = remoteBotPort(home).binding;
+
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model: new ScriptedModel([]),
+    emit: () => {},
+  });
+  t.after(async () => {
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const call = (name: RuntimeCommandName, payload: Record<string, unknown>) =>
+    controller.dispatch({
+      id: randomUUID(),
+      name,
+      payload,
+      sessionId: controller.snapshot().activeSessionId,
+    });
+
+  let releaseBot!: () => void;
+  let releaseUpload!: () => void;
+  let botReached!: () => void;
+  let uploadReached!: () => void;
+  const botWaiting = new Promise<void>((r) => (botReached = r));
+  const uploadWaiting = new Promise<void>((r) => (uploadReached = r));
+  let mode: 'bot' | 'upload' | 'fast' = 'bot';
+
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url.endsWith('/api/bot/v1')) {
+      if (mode === 'bot') {
+        botReached();
+        await new Promise<void>((r) => {
+          releaseBot = r;
+        });
+      }
+      return new Response(JSON.stringify({ id: 'bot', current: 'c1' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (url.includes('/api/bot/v1/files/')) {
+      if (mode === 'upload') {
+        uploadReached();
+        await new Promise<void>((r) => {
+          releaseUpload = r;
+        });
+      }
+      return new Response(
+        JSON.stringify({ sha256: uploadSha, size: uploadPayload.length }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+
+  // 1. Slow remote-bot request must not stall queued set-effort mutation.
+  const order1: string[] = [];
+  const slowBot = call('remote-bot', { action: 'discover' }).then((reply) => {
+    order1.push('remote-bot');
+    return reply;
+  });
+  await botWaiting;
+  const effort1 = call('set-effort', { effort: 'high' }).then((reply) => {
+    order1.push('set-effort');
+    return reply;
+  });
+  for (let i = 0; i < 8 && order1.length === 0; i++) {
+    await new Promise((r) => setImmediate(r));
+  }
+  releaseBot();
+  assert.equal((await effort1).ok, true);
+  assert.equal((await slowBot).ok, true);
+  assert.deepEqual(order1, ['set-effort', 'remote-bot']);
+
+  // 2. Slow remote-bot-native-file upload must not stall queued set-effort mutation.
+  mode = 'upload';
+  const order2: string[] = [];
+  const slowUpload = call('remote-bot-native-file', {
+    action: 'upload',
+    binding,
+    path: uploadPath,
+  }).then((reply) => {
+    order2.push('remote-upload');
+    return reply;
+  });
+  await uploadWaiting;
+  const effort2 = call('set-effort', { effort: 'low' }).then((reply) => {
+    order2.push('set-effort');
+    return reply;
+  });
+  for (let i = 0; i < 8 && order2.length === 0; i++) {
+    await new Promise((r) => setImmediate(r));
+  }
+  releaseUpload();
+  assert.equal((await effort2).ok, true);
+  assert.equal((await slowUpload).ok, true);
+  assert.deepEqual(order2, ['set-effort', 'remote-upload']);
+
+  // 3. Held mutation queue (extension secret prompt) must not block remote-bot calls.
+  mode = 'fast';
+  const order3: string[] = [];
+  const heldMutation = call('custom-command', { name: 'hold', args: '' }).then(
+    (reply) => {
+      order3.push('held-mutation');
+      return reply;
+    },
+  );
+  const deadline = Date.now() + patience(8000);
+  while (
+    !controller
+      .snapshot()
+      .interactions.some(
+        (row) => row.kind === 'secret' && row.status === 'pending',
+      )
+  ) {
+    if (Date.now() > deadline) throw new Error('timed out waiting for secret');
+    await delay(10);
+  }
+  const fastBot = call('remote-bot', { action: 'discover' }).then((reply) => {
+    order3.push('fast-bot');
+    return reply;
+  });
+  assert.equal((await fastBot).ok, true);
+  const card = controller
+    .snapshot()
+    .interactions.find(
+      (row) => row.kind === 'secret' && row.status === 'pending',
+    )!;
+  await controller.dispatch({
+    id: randomUUID(),
+    name: 'answer',
+    sessionId: card.sessionId,
+    payload: { id: card.id, revision: card.revision, cancel: true },
+  });
+  await heldMutation;
+  assert.deepEqual(order3, ['fast-bot', 'held-mutation']);
+});
+
+test('C20: RuntimeController upload-batch pre-validates all files locally before any upload', async (t: TestContext) => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-bot-batch-'));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(home, { recursive: true });
+  await mkdir(workspace, { recursive: true });
+  const settings = defaultSettings();
+  settings.mcpServers[HUB_SERVER] = {
+    type: 'http',
+    url: 'http://127.0.0.1:7420/mcp',
+    headers: { Authorization: 'Bearer member-tok' },
+  };
+  saveSettings(settings, home);
+  const binding = remoteBotPort(home).binding;
+
+  const valid1 = join(root, 'a.txt');
+  const valid2 = join(root, 'b.txt');
+  const subDir = join(root, 'folder');
+  await writeFile(valid1, 'alpha');
+  await writeFile(valid2, 'beta');
+  await mkdir(subDir);
+
+  let uploadFetches = 0;
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    const url = String(input);
+    uploadFetches++;
+    const shaHex = url.split('/').pop() ?? '';
+    const size =
+      shaHex === createHash('sha256').update('alpha').digest('hex') ? 5 : 4;
+    return new Response(JSON.stringify({ sha256: shaHex, size }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model: new ScriptedModel([]),
+    emit: () => {},
+  });
+  t.after(async () => {
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const dispatchBatch = (paths: string[]): Promise<RuntimeReply> =>
+    controller.dispatch({
+      id: randomUUID(),
+      name: 'remote-bot-native-file',
+      payload: { action: 'upload-batch', binding, paths },
+      sessionId: controller.snapshot().activeSessionId,
+    });
+
+  const invalidBatch = await dispatchBatch([valid1, subDir]);
+  assert.equal(invalidBatch.ok, false);
+  assert.match(
+    String(invalidBatch.error),
+    /only a regular file can be attached/,
+  );
+  assert.equal(
+    uploadFetches,
+    0,
+    'valid1 must not be uploaded when batch fails',
+  );
+
+  const tooMany = await dispatchBatch(Array.from({ length: 9 }, () => valid1));
+  assert.equal(tooMany.ok, false);
+  assert.match(String(tooMany.error), /select up to eight files/);
+  assert.equal(uploadFetches, 0);
+
+  const validBatch = await dispatchBatch([valid1, valid2]);
+  assert.equal(validBatch.ok, true, validBatch.error);
+  assert.equal(uploadFetches, 2);
+  assert.deepEqual(
+    (validBatch.data as Array<{ name: string; size: number }>).map((f) => ({
+      name: f.name,
+      size: f.size,
+    })),
+    [
+      { name: 'a.txt', size: 5 },
+      { name: 'b.txt', size: 4 },
+    ],
+  );
 });

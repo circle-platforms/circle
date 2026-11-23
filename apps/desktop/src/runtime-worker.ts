@@ -88,6 +88,7 @@ async function run() {
       await terminal.releaseSession(sessionId);
     },
     userHome: home,
+    localSkillsRoot: join(home, '.agents', 'skills'),
     // A test profile keeps its ChatGPT host ID with its data, away from ~/.circle.
     // and its ChatGPT plan may point at a local stand-in for OpenAI.
     ...(process.env.CIRCLE_WORKBENCH_TEST_PROFILE

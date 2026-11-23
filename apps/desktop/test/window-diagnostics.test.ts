@@ -1,9 +1,18 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import v8 from 'node:v8';
+import vm from 'node:vm';
 import { appendDiagnosticLog } from '../src/diagnostic-log';
 import {
   WINDOW_SAMPLE_MS,
@@ -219,4 +228,182 @@ test('a log that cannot be written does not reach the caller', () => {
   assert.doesNotThrow(() =>
     appendDiagnosticLog(join(blocked, 'logs', 'runtime.log'), '1', 'lost'),
   );
+});
+
+test('C14: isolates samples per window and cleans up closed windows without leaking', async () => {
+  const entries: string[] = [];
+  const state = {
+    at: 2_000_000,
+    mainMb: 2500,
+    popoutMb: 120,
+    mainPid: 101,
+    popoutPid: 202,
+  };
+  const diagnostics = createWindowDiagnostics({
+    log: (text) => entries.push(text),
+    windowPids: () => [state.mainPid, state.popoutPid].filter((p) => p > 0),
+    metrics: () => [
+      { pid: 101, memory: { workingSetSize: state.mainMb * 1024 } },
+      { pid: 202, memory: { workingSetSize: state.popoutMb * 1024 } },
+    ],
+    now: () => state.at,
+    every: () => {},
+  });
+
+  const mainWin = Object.assign(new EventEmitter(), {
+    webContents: Object.assign(new EventEmitter(), {
+      id: 1,
+      getOSProcessId: () => state.mainPid,
+    }),
+  });
+  const popoutWin = Object.assign(new EventEmitter(), {
+    webContents: Object.assign(new EventEmitter(), {
+      id: 2,
+      getOSProcessId: () => state.popoutPid,
+    }),
+  });
+
+  diagnostics.watch('main', mainWin);
+  diagnostics.watch('popout', popoutWin);
+  diagnostics.sample();
+  state.at += 30_000;
+  diagnostics.sample();
+
+  popoutWin.webContents.emit('render-process-gone', undefined, {
+    reason: 'crashed',
+    exitCode: 9,
+  });
+  const popoutLog = entries.find((entry) =>
+    entry.startsWith('window popout renderer gone:'),
+  );
+  assert.ok(popoutLog, 'logged popout crash');
+  assert.match(popoutLog, /highest 120 MB/);
+  assert.doesNotMatch(popoutLog, /window 2500 MB/);
+
+  // Main window must keep its own trajectory after popout crashes.
+  state.at += 30_000;
+  mainWin.webContents.emit('render-process-gone', undefined, {
+    reason: 'oom',
+    exitCode: 133,
+  });
+  const mainLog = entries.find((entry) =>
+    entry.startsWith('window main renderer gone:'),
+  );
+  assert.ok(mainLog, 'logged main crash');
+  assert.match(mainLog, /highest 2500 MB/);
+  assert.match(mainLog, /window 2500 MB/);
+
+  // 200 closed popout windows must be GC-eligible after emitting closed.
+  const spawnClosed = (i: number) => {
+    const ephemeral = Object.assign(new EventEmitter(), {
+      webContents: Object.assign(new EventEmitter(), {
+        id: 1000 + i,
+        getOSProcessId: () => 5000 + i,
+      }),
+    });
+    const ref = new WeakRef(ephemeral);
+    diagnostics.watch(`popout-${i}`, ephemeral);
+    ephemeral.emit('closed');
+    assert.equal(ephemeral.listenerCount('unresponsive'), 0);
+    assert.equal(ephemeral.listenerCount('responsive'), 0);
+    assert.equal(ephemeral.webContents.listenerCount('render-process-gone'), 0);
+    return ref;
+  };
+  const refs = Array.from({ length: 200 }, (_, i) => spawnClosed(i));
+  await new Promise((resolve) => setImmediate(resolve));
+  v8.setFlagsFromString('--expose_gc');
+  const gc = vm.runInNewContext('gc') as () => void;
+  gc();
+  gc();
+  const alive = refs.filter((ref) => ref.deref() !== undefined).length;
+  assert.equal(alive, 0, `${alive} closed windows stayed strongly referenced`);
+});
+
+test('C21: caches live OS PID across crash, records metrics breakdown and renderer heap/Blink, and persists samples to disk', () => {
+  const folder = mkdtempSync(join(tmpdir(), 'circle-win-diag-c21-'));
+  try {
+    const snapshotFile = join(folder, 'logs', 'window-samples.json');
+    const entries: string[] = [];
+    let currentPid = 707;
+    const diagnostics = createWindowDiagnostics({
+      log: (text) => entries.push(text),
+      windowPids: () => (currentPid > 0 ? [currentPid] : []),
+      metrics: () => [
+        {
+          pid: 707,
+          memory: {
+            workingSetSize: 512 * 1024,
+            peakWorkingSetSize: 640 * 1024,
+            privateBytes: 400 * 1024,
+          },
+        },
+      ],
+      snapshotFile,
+      now: () => 3_000_000,
+      every: () => {},
+    });
+
+    const win = Object.assign(new EventEmitter(), {
+      webContents: Object.assign(new EventEmitter(), {
+        id: 77,
+        getOSProcessId: () => currentPid,
+      }),
+    });
+    diagnostics.watch('popout', win);
+    diagnostics.rendererMemory?.(77, {
+      jsHeapMb: 95,
+      jsHeapLimitMb: 2048,
+      blinkAllocatedMb: 42,
+    });
+    diagnostics.sample();
+
+    assert.equal(
+      existsSync(snapshotFile),
+      true,
+      'snapshot persisted on sample',
+    );
+    const persisted = JSON.parse(readFileSync(snapshotFile, 'utf8')) as {
+      windows: Record<
+        string,
+        {
+          name: string;
+          pid: number;
+          highestMb: number;
+          samples: Array<{
+            windowMb: number;
+            privateMb?: number;
+            peakMb?: number;
+            renderer?: {
+              jsHeapMb: number;
+              jsHeapLimitMb: number;
+              blinkAllocatedMb: number;
+            };
+          }>;
+        }
+      >;
+    };
+    const record = persisted.windows['77'];
+    assert.ok(record, 'window id stored in snapshot');
+    assert.equal(record.pid, 707);
+    assert.equal(record.highestMb, 512);
+    assert.equal(record.samples.at(-1)?.privateMb, 400);
+    assert.equal(record.samples.at(-1)?.peakMb, 640);
+    assert.equal(record.samples.at(-1)?.renderer?.jsHeapMb, 95);
+    assert.equal(record.samples.at(-1)?.renderer?.blinkAllocatedMb, 42);
+
+    // Electron returns 0 from getOSProcessId() once the renderer process dies.
+    currentPid = 0;
+    win.webContents.emit('render-process-gone', undefined, {
+      reason: 'oom',
+      exitCode: 133,
+    });
+    assert.equal(entries.length, 1);
+    assert.match(entries[0], /highest 512 MB/);
+    assert.match(entries[0], /private 400 MB/);
+    assert.match(entries[0], /peak 640 MB/);
+    assert.match(entries[0], /heap 95\/2048 MB/);
+    assert.match(entries[0], /blink 42 MB/);
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
+  }
 });

@@ -23,9 +23,13 @@ const raiseBrowserError = (error: unknown): never => {
 const bridge: DesktopBridge = {
   apiVersion: 1,
   attachBotFiles: (binding) =>
-    ipcRenderer.invoke('circle:attach-bot-files', binding),
+    ipcRenderer
+      .invoke('circle:attach-bot-files', binding)
+      .catch(raiseBrowserError),
   saveBotFile: (binding, file) =>
-    ipcRenderer.invoke('circle:save-bot-file', binding, file),
+    ipcRenderer
+      .invoke('circle:save-bot-file', binding, file)
+      .catch(raiseBrowserError),
   nativeAccessibility: () => ipcRenderer.invoke('circle:native-accessibility'),
   onNativeAccessibility: (listener) => {
     const handler = (_event: unknown, state: Parameters<typeof listener>[0]) =>
@@ -264,3 +268,41 @@ const bridge: DesktopBridge = {
   },
 };
 contextBridge.exposeInMainWorld('circleDesktop', Object.freeze(bridge));
+
+function reportRendererMemory(): void {
+  if (typeof process !== 'object' || process === null) return;
+  const stats = process as unknown as {
+    getHeapStatistics?: () => {
+      totalHeapSize?: number;
+      usedHeapSize?: number;
+      heapSizeLimit?: number;
+    };
+    getBlinkMemoryInfo?: () => { allocated?: number };
+  };
+  try {
+    const heap = stats.getHeapStatistics?.();
+    const blink = stats.getBlinkMemoryInfo?.();
+    if (!heap && !blink) return;
+    ipcRenderer.send('circle:renderer-memory', {
+      jsHeapMb: Math.round(
+        (heap?.usedHeapSize ?? heap?.totalHeapSize ?? 0) / 1024,
+      ),
+      jsHeapLimitMb: Math.round((heap?.heapSizeLimit ?? 0) / 1024),
+      blinkAllocatedMb: Math.round((blink?.allocated ?? 0) / 1024),
+    });
+  } catch {
+    // Renderer telemetry must never affect page startup or runtime behavior.
+  }
+}
+
+if (
+  typeof process === 'object' &&
+  process !== null &&
+  typeof setInterval === 'function'
+) {
+  const rawMs = Number(process.env?.CIRCLE_WORKBENCH_WINDOW_SAMPLE_MS);
+  const intervalMs =
+    Number.isFinite(rawMs) && rawMs >= 50 && rawMs <= 30_000 ? rawMs : 30_000;
+  reportRendererMemory();
+  setInterval(reportRendererMemory, intervalMs).unref?.();
+}

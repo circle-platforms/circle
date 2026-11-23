@@ -1,4 +1,8 @@
-import { uploadSelected, saveRemoteFile } from './remote-bot-files.js';
+import {
+  saveRemoteFile,
+  uploadSelected,
+  uploadSelectedBatch,
+} from './remote-bot-files.js';
 import { remoteBotPort, remoteBotRequest } from './remote-bot.js';
 import {
   activeChatGPTAccount,
@@ -2593,8 +2597,12 @@ export class RuntimeController {
         ...(this.options.workspaceTools?.runtimeExecutable
           ? { nodeExecutable: this.options.workspaceTools.runtimeExecutable }
           : {}),
-        ...(this.options.localSkillsRoot
-          ? { localSkillsRoot: this.options.localSkillsRoot }
+        ...(this.options.localSkillsRoot || this.options.userHome
+          ? {
+              localSkillsRoot:
+                this.options.localSkillsRoot ??
+                join(this.options.userHome!, '.agents', 'skills'),
+            }
           : {}),
         localContext: !!task || isFolderTrusted(settings, workspace),
         settings,
@@ -4809,6 +4817,7 @@ export class RuntimeController {
             'list-external-file-grants',
             'revoke-external-file-grant',
             'remote-bot',
+            'remote-bot-native-file',
           ].includes(command.name)
         )
           throw Error('session changed; retry from the current session');
@@ -4817,7 +4826,8 @@ export class RuntimeController {
         if (
           !this.closing &&
           command.name !== 'workspace-service' &&
-          command.name !== 'remote-bot'
+          command.name !== 'remote-bot' &&
+          command.name !== 'remote-bot-native-file'
         ) {
           const publication = this.publish();
           if (publication?.tokenStream)
@@ -4833,11 +4843,19 @@ export class RuntimeController {
           ...(appliedState ? { appliedState } : {}),
         };
       } catch (error) {
+        const meta =
+          error instanceof Error
+            ? (error as Error & { status?: unknown; code?: unknown })
+            : undefined;
         return {
           id: command.id,
           ok: false,
           error:
             error instanceof Error ? error.message : 'runtime command failed',
+          ...(typeof meta?.status === 'number'
+            ? { errorStatus: meta.status }
+            : {}),
+          ...(typeof meta?.code === 'string' ? { errorCode: meta.code } : {}),
         };
       }
     };
@@ -4855,6 +4873,8 @@ export class RuntimeController {
       'select-session',
       'list-external-file-grants',
       'revoke-external-file-grant',
+      'remote-bot',
+      'remote-bot-native-file',
       // A sign-in waits on the browser; pasting or cancelling must reach it meanwhile.
       'chatgpt-sign-in',
     ].includes(command.name);
@@ -5301,10 +5321,15 @@ export class RuntimeController {
       return {};
     }
     if (command.name === 'remote-bot-native-file') {
-      const { binding, path, action, file } = command.payload;
-      if (typeof binding !== 'string' || typeof path !== 'string')
-        throw Error('invalid remote file');
+      const { binding, path, paths, action, file } = command.payload;
+      if (typeof binding !== 'string') throw Error('invalid remote file');
       const port = remoteBotPort(this.home, binding);
+      if (action === 'upload-batch') {
+        if (!Array.isArray(paths) || paths.some((p) => typeof p !== 'string'))
+          throw Error('invalid remote file');
+        return uploadSelectedBatch(port, paths as string[]);
+      }
+      if (typeof path !== 'string') throw Error('invalid remote file');
       if (action === 'upload') return uploadSelected(port, path);
       if (action === 'save')
         return saveRemoteFile(

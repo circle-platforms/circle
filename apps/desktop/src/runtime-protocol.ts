@@ -89,6 +89,8 @@ export interface RuntimeReply {
   id: string;
   ok: boolean;
   error?: string;
+  errorStatus?: number;
+  errorCode?: string;
   data?: unknown;
   /** The exact authoritative full publication made after this command's effect. */
   appliedState?: { epoch: string; seq: number };

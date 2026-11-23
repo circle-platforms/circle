@@ -137,6 +137,13 @@ const dataPath = (() => {
 })();
 app.setPath('userData', dataPath);
 const circleVersion = circleAppVersion(app.isPackaged, app.getVersion());
+const rawSampleMs = process.env.CIRCLE_WORKBENCH_TEST_PROFILE
+  ? Number(process.env.CIRCLE_WORKBENCH_WINDOW_SAMPLE_MS)
+  : NaN;
+const windowSampleMs =
+  Number.isFinite(rawSampleMs) && rawSampleMs >= 50 && rawSampleMs <= 30_000
+    ? rawSampleMs
+    : undefined;
 const windowDiagnostics = createWindowDiagnostics({
   log: (text) =>
     appendDiagnosticLog(
@@ -146,6 +153,8 @@ const windowDiagnostics = createWindowDiagnostics({
     ),
   windowPids: () => appWindows().map((one) => one.webContents.getOSProcessId()),
   metrics: () => app.getAppMetrics(),
+  snapshotFile: join(dataPath, 'logs', 'window-samples.json'),
+  ...(windowSampleMs !== undefined ? { sampleMs: windowSampleMs } : {}),
 });
 const instanceIdentity: InstanceIdentity = {
   protocol: 'circle-instance/1',
@@ -260,9 +269,14 @@ function appWindows(): BrowserWindow[] {
 }
 /** What the runtime, the browser and the terminals tell the window, told to every window. */
 function broadcast(channel: string, ...args: unknown[]) {
-  windowDiagnostics.sent(channel, args);
-  for (const one of appWindows()) {
-    if (!one.webContents.isCrashed()) one.webContents.send(channel, ...args);
+  const targets = appWindows().filter((one) => !one.webContents.isDestroyed());
+  windowDiagnostics.sent(
+    channel,
+    args,
+    targets.map((one) => one.webContents.id),
+  );
+  for (const one of targets) {
+    one.webContents.send(channel, ...args);
   }
 }
 /** The application's window that sent a message, or a throw for anything else. */
@@ -385,7 +399,16 @@ function configureMenu() {
         {
           label: text('reload window'),
           accelerator: 'CmdOrCtrl+Shift+R',
-          click: () => window?.webContents.reload(),
+          click: (_item, currentWindow) => {
+            const candidate =
+              currentWindow ?? BrowserWindow.getFocusedWindow() ?? window;
+            const target =
+              (candidate &&
+                !candidate.isDestroyed() &&
+                appWindows().find((one) => one === candidate)) ||
+              window;
+            if (target && !target.isDestroyed()) target.webContents.reload();
+          },
         },
         {
           ...role('toggleDevTools', 'Toggle Developer Tools'),
@@ -945,6 +968,37 @@ app
       frontendOnly: previewMode,
       language: forcedLanguage,
     }));
+    ipcMain.on('circle:renderer-memory', (event, value) => {
+      try {
+        checkSender(event);
+      } catch {
+        return;
+      }
+      if (!value || typeof value !== 'object') return;
+      const stats = value as {
+        jsHeapMb?: unknown;
+        jsHeapLimitMb?: unknown;
+        blinkAllocatedMb?: unknown;
+      };
+      if (
+        typeof stats.jsHeapMb !== 'number' ||
+        !Number.isFinite(stats.jsHeapMb) ||
+        stats.jsHeapMb < 0 ||
+        typeof stats.jsHeapLimitMb !== 'number' ||
+        !Number.isFinite(stats.jsHeapLimitMb) ||
+        stats.jsHeapLimitMb < 0 ||
+        typeof stats.blinkAllocatedMb !== 'number' ||
+        !Number.isFinite(stats.blinkAllocatedMb) ||
+        stats.blinkAllocatedMb < 0
+      ) {
+        return;
+      }
+      windowDiagnostics.rendererMemory(event.sender.id, {
+        jsHeapMb: Math.round(stats.jsHeapMb),
+        jsHeapLimitMb: Math.round(stats.jsHeapLimitMb),
+        blinkAllocatedMb: Math.round(stats.blinkAllocatedMb),
+      });
+    });
     if (!previewMode) {
       runtime = new RuntimeSupervisor(
         join(dataPath, 'runtime-home'),
@@ -1173,21 +1227,23 @@ app
     handle('circle:attach-bot-files', async (binding) => {
       if (typeof binding !== 'string')
         throw Error('invalid remote bot connection');
-      const paths =
-        fixtureProfile?.files ??
-        (
-          await dialog.showOpenDialog(window!, {
-            title: text('choose files'),
-            properties: ['openFile', 'multiSelections'],
-          })
-        ).filePaths;
+      let paths: string[];
+      if (fixtureProfile?.files !== undefined) {
+        paths = fixtureProfile.files;
+      } else {
+        const picked = await dialog.showOpenDialog(window!, {
+          title: text('choose files'),
+          properties: ['openFile', 'multiSelections'],
+        });
+        if (picked.canceled || picked.filePaths.length === 0) return null;
+        paths = picked.filePaths;
+      }
       if (paths.length > 8) throw Error('select up to eight files');
-      const files = [];
-      for (const path of paths)
-        files.push(
-          await transferSelectedFile({ action: 'upload', binding, path }),
-        );
-      return files;
+      return await transferSelectedFile({
+        action: 'upload-batch',
+        binding,
+        paths,
+      });
     });
     handle('circle:save-bot-file', async (binding, file) => {
       if (typeof binding !== 'string' || !file || typeof file !== 'object')

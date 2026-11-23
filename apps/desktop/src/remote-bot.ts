@@ -8,6 +8,84 @@ import { HUB_SERVER } from '../../../src/hub_connection.js';
 import { VERSION } from '../../../src/version.js';
 import type { McpBearerConnection } from '../../../src/mcp_loader.js';
 
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
+const BOT_CODE_FALLBACKS: Readonly<Record<string, string>> = {
+  BOT_VERSION_MISMATCH: 'client version outdated',
+  BOT_VERSION_INVALID: 'invalid bot client version',
+  BOT_DISABLED: 'remote bot disabled',
+  BOT_CLIENT_FORBIDDEN: 'oauth client token rejected',
+};
+
+export class RemoteBotError extends Error {
+  readonly status?: number;
+  readonly code?: string;
+  readonly remoteMessage?: string;
+
+  constructor(
+    message: string,
+    options?: { status?: number; code?: string; remoteMessage?: string },
+  ) {
+    super(message);
+    this.name = 'RemoteBotError';
+    if (options?.status !== undefined) this.status = options.status;
+    if (options?.code !== undefined) this.code = options.code;
+    if (options?.remoteMessage !== undefined)
+      this.remoteMessage = options.remoteMessage;
+  }
+}
+
+/** Reject plain HTTP endpoints beyond loopback before sending Bearer tokens or files. */
+export function botServerUrl(server: string, path: string): URL {
+  let url: URL;
+  try {
+    url = new URL(path, server);
+  } catch {
+    throw new Error('invalid remote bot server');
+  }
+  const protocol = url.protocol.toLowerCase();
+  const hostname = url.hostname.toLowerCase();
+  const isLoopback = LOOPBACK_HOSTS.has(hostname);
+  if (protocol !== 'https:' && !(protocol === 'http:' && isLoopback)) {
+    throw new Error('remote bot requires https or loopback http');
+  }
+  return url;
+}
+
+export async function parseRemoteBotError(
+  response: Response,
+  fallbackMessage: string,
+): Promise<RemoteBotError> {
+  let code: string | undefined;
+  let remoteMessage: string | undefined;
+  const contentType = response.headers.get('content-type') ?? '';
+  if (/json/i.test(contentType)) {
+    try {
+      const text = await response.text();
+      const parsed = JSON.parse(text) as {
+        code?: unknown;
+        message?: unknown;
+      } | null;
+      if (typeof parsed?.code === 'string' && parsed.code) code = parsed.code;
+      if (typeof parsed?.message === 'string' && parsed.message)
+        remoteMessage = parsed.message;
+    } catch {
+      // Ignore malformed JSON payloads and fall back to status/generic message.
+    }
+  } else {
+    await response.body?.cancel();
+  }
+  const message =
+    remoteMessage ??
+    (code ? BOT_CODE_FALLBACKS[code] : undefined) ??
+    fallbackMessage;
+  return new RemoteBotError(message, {
+    status: response.status,
+    code,
+    remoteMessage,
+  });
+}
+
 export function remoteBotPort(home: string, binding?: string) {
   const connection = buildMcpConnections(
     loadSettings(home).mcpServers,
@@ -52,7 +130,7 @@ export async function remoteBotRequest(
     !['discover', 'history', 'send', 'stop', 'new'].includes(String(op.action))
   )
     throw new Error('unknown remote bot operation');
-  const url = new URL('/api/bot/v1', port.server);
+  const url = botServerUrl(port.server, '/api/bot/v1');
   const signal = AbortSignal.timeout(25000);
   const response = await fetchWithRefresh(port, signal, (token) =>
     fetcher(url, {
@@ -62,22 +140,13 @@ export async function remoteBotRequest(
       headers: {
         authorization: 'Bearer ' + token,
         'content-type': 'application/json',
-        'circle-version': VERSION,
+        'bot-client-version': VERSION,
       },
       body: JSON.stringify(op),
     }),
   );
   if (!response.ok) {
-    let message: unknown;
-    try {
-      const text = await response.text();
-      message = (JSON.parse(text) as { message?: unknown } | null)?.message;
-    } catch {
-      message = undefined;
-    }
-    throw new Error(
-      typeof message === 'string' ? message : 'remote bot unavailable',
-    );
+    throw await parseRemoteBotError(response, 'remote bot unavailable');
   }
   const result = await response.json();
   return { ...result, binding: port.binding };

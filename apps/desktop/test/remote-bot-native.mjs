@@ -1,6 +1,7 @@
 import { _electron as electron, request } from 'playwright';
 import { VERSION } from '../../../src/version.ts';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
@@ -10,106 +11,324 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
+import { AuthorizedServer } from '../../../tests/fixtures/knowledge-sync/authorized-server.ts';
+
 const desktop = fileURLToPath(new URL('..', import.meta.url));
-const hubModule = (path) =>
-  import(pathToFileURL(resolve(process.argv[2], path)).href);
-const { createTestServer, testConsoleCredentials } = await hubModule(
-  'hub/server/testing.ts',
-);
-const { callBot } = await hubModule('hub/server/personal-bot.ts');
-const { startPostgres } = await hubModule('hub/testing/postgres.ts');
-const { createCommandBridge } = await hubModule('hub/server/command-bridge.ts');
-const postgres = await startPostgres({ socket: true, passwordless: true });
-const hub = await createTestServer({
-  postgres,
-  bridge: (kit) =>
-    createCommandBridge({
-      cwd: kit.dataDir,
-      env: {
-        CIRCLE_HUB_DATA_DIR: kit.dataDir,
-        CIRCLE_HUB_PORT: '0',
-        CIRCLE_HUB_DATABASE_SOCKET_DIR: postgres.socketDir,
-        CIRCLE_HUB_DATABASE_PORT: String(kit.database.port),
-        CIRCLE_HUB_DATABASE_NAME: kit.database.database,
-        CIRCLE_HUB_DATABASE_USER: kit.database.user,
-      },
-      overrides: { keyProvider: () => kit.keyProvider },
-    }),
-});
-const scratch = await mkdtemp(join(tmpdir(), 'circle-bot-native-'));
-const member = await hub.createUser('合成首次登录成员');
-const issued = [];
-const key = 'synthetic-model-key-A';
-let acceptedKey = key;
-const held = Promise.withResolvers();
+const hubRepo =
+  process.argv[2] && process.argv[2] !== 'standalone' ? process.argv[2] : null;
+const standalone = !hubRepo;
 const afterExit = 'finish after desktop exits';
-const model = createServer(async (req, res) => {
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  const body = JSON.parse(Buffer.concat(chunks));
-  if (req.headers.authorization !== 'Bearer ' + acceptedKey) {
-    res.writeHead(401, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ error: { code: 'invalid_api_key' } }));
-    return;
-  }
-  if (body.model !== 'scripted-model') {
-    res.writeHead(404, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ error: { code: 'model_not_found' } }));
-    return;
-  }
-  issued.push(body);
-  if (body.messages.at(-1)?.content === afterExit) await held.promise;
-  const answer =
-    body.messages.at(-1)?.content === '回复 OK'
-      ? 'OK'
-      : body.messages.at(-1)?.content === afterExit
-        ? 'finished without desktop'
-        : 'synthetic remote reply';
-  res.writeHead(200, { 'content-type': 'text/event-stream' });
-  for (const [delta, finish_reason] of [
-    [{ role: 'assistant', content: answer }, null],
-    [{}, 'stop'],
-  ])
-    res.write(
-      'data: ' +
-        JSON.stringify({
-          id: 'scripted',
-          object: 'chat.completion.chunk',
-          model: body.model,
-          choices: [{ index: 0, delta, finish_reason }],
-        }) +
-        '\n\n',
-    );
-  res.end('data: [DONE]\n\n');
-});
-await new Promise((ok) => model.listen(0, '127.0.0.1', ok));
-const endpoint = 'http://127.0.0.1:' + model.address().port + '/v1';
-const config = {
-  name: 'Synthetic Member Bot',
-  protocol: 'openai',
-  model: 'scripted-model',
-  endpoint,
-  key,
-};
-const directory = join(hub.deps.config.dataDir, 'bot-runtime');
-const host = spawn(
-  process.execPath,
-  [join(desktop, '../../dist/cli.js'), 'remote-bot', directory],
-  { env: { PATH: process.env.PATH, HOME: scratch }, stdio: 'ignore' },
-);
-const exited = once(host, 'exit');
-let app, web, page;
-async function waitFor(check, label) {
-  const deadline = Date.now() + 30000;
-  while (Date.now() < deadline) {
-    const v = await check();
-    if (v) return v;
-    await delay(60);
-  }
-  throw new Error('waiting for ' + label);
+const held = Promise.withResolvers();
+const issued = [];
+const scratch = await mkdtemp(join(tmpdir(), 'circle-bot-native-'));
+
+async function startStandaloneBackend() {
+  const auth = new AuthorizedServer(join(scratch, 'peer'));
+  auth.device = true;
+  await auth.start();
+
+  const memberToken = 'synthetic-direct-member-token';
+  const storedFiles = new Map();
+  const seenBotHeaders = [];
+  let cursorSeq = 0;
+  let convSeq = 1;
+  let currentConv = 'conv-1';
+  const conversations = new Map([
+    [currentConv, { events: [], seenRequests: new Set(), active: null }],
+  ]);
+  let phase2Token = false;
+
+  const readBytes = async (req) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    return Buffer.concat(chunks);
+  };
+
+  const json = (res, status, body) => {
+    res.writeHead(status, {
+      'content-type': 'application/json',
+      'cache-control': 'no-store',
+    });
+    res.end(JSON.stringify(body));
+  };
+
+  const server = createServer(async (req, res) => {
+    const reqUrl = new URL(req.url ?? '/', 'http://127.0.0.1');
+    if (reqUrl.pathname === '/api/bot/v1') {
+      seenBotHeaders.push({ ...req.headers });
+      if (req.headers['bot-client-version'] !== VERSION) {
+        return json(res, 400, {
+          code: 'BOT_VERSION_INVALID',
+          message: 'invalid bot client version',
+        });
+      }
+      if (req.headers['circle-version'] !== undefined) {
+        return json(res, 400, {
+          code: 'BOT_VERSION_INVALID',
+          message: 'legacy circle-version header must not be sent',
+        });
+      }
+      const authHeader = req.headers.authorization ?? '';
+      if (authHeader === `Bearer ${auth.token}` && !phase2Token) {
+        return json(res, 403, {
+          code: 'BOT_CLIENT_FORBIDDEN',
+          message: 'oauth client token is not allowed',
+        });
+      }
+      if (authHeader !== `Bearer ${memberToken}`) {
+        return json(res, 401, { message: 'unauthorized' });
+      }
+      const op = JSON.parse((await readBytes(req)).toString('utf8'));
+      if (op.action === 'discover') {
+        return json(res, 200, {
+          id: 'synthetic-bot',
+          name: 'Synthetic Member Bot',
+          current: currentConv,
+        });
+      }
+      if (op.action === 'new') {
+        currentConv = `conv-${++convSeq}`;
+        conversations.set(currentConv, {
+          events: [],
+          seenRequests: new Set(),
+          active: null,
+        });
+        return json(res, 200, { current: currentConv });
+      }
+      const conv = conversations.get(String(op.conversation ?? currentConv));
+      if (!conv) return json(res, 404, { message: 'unknown conversation' });
+      if (op.action === 'history') {
+        const after = Number(op.after ?? 0);
+        return json(res, 200, {
+          events: conv.events.filter((e) => e.cursor > after),
+          queued: [],
+          deliveries: [],
+          fileDeliveries: [],
+          active: conv.active,
+          question: null,
+        });
+      }
+      if (op.action === 'stop') {
+        conv.active = null;
+        return json(res, 200, { stopped: true });
+      }
+      if (op.action === 'send') {
+        const reqId = String(op.request ?? '');
+        if (!conv.seenRequests.has(reqId)) {
+          conv.seenRequests.add(reqId);
+          const text = String(op.text ?? '');
+          const files = Array.isArray(op.files) ? op.files : [];
+          let fileText = '';
+          if (files.length > 0) {
+            const bytes = storedFiles.get(files[0].sha256);
+            fileText = bytes ? bytes.toString('utf8') : '';
+          }
+          issued.push({
+            messages: [
+              {
+                role: 'user',
+                content: fileText ? `${text}\n${fileText}` : text,
+              },
+            ],
+          });
+          conv.events.push({
+            id: `u-${reqId}`,
+            at: new Date().toISOString(),
+            role: 'user',
+            text,
+            ...(files.length ? { files } : {}),
+            cursor: ++cursorSeq,
+          });
+          if (text === afterExit) {
+            conv.active = { request: reqId, draft: '' };
+            void held.promise.then(() => {
+              conv.active = null;
+              conv.events.push({
+                id: `a-${reqId}`,
+                at: new Date().toISOString(),
+                role: 'assistant',
+                text: 'finished without desktop',
+                cursor: ++cursorSeq,
+              });
+            });
+          } else {
+            const reply = text === '回复 OK' ? 'OK' : 'synthetic remote reply';
+            conv.events.push({
+              id: `a-${reqId}`,
+              at: new Date().toISOString(),
+              role: 'assistant',
+              text: reply,
+              cursor: ++cursorSeq,
+            });
+          }
+        }
+        return json(res, 200, { accepted: true });
+      }
+      return json(res, 400, { message: 'unknown action' });
+    }
+
+    if (reqUrl.pathname.startsWith('/api/bot/v1/files/')) {
+      const authHeader = req.headers.authorization ?? '';
+      if (authHeader === `Bearer ${auth.token}` && !phase2Token) {
+        return json(res, 403, {
+          code: 'BOT_CLIENT_FORBIDDEN',
+          message: 'oauth client token is not allowed',
+        });
+      }
+      if (authHeader !== `Bearer ${memberToken}`) {
+        return json(res, 401, { message: 'unauthorized' });
+      }
+      const shaHex = reqUrl.pathname.slice('/api/bot/v1/files/'.length);
+      if (req.method === 'PUT') {
+        const bytes = await readBytes(req);
+        const actualSha = createHash('sha256').update(bytes).digest('hex');
+        if (actualSha !== shaHex) {
+          return json(res, 400, { message: 'sha mismatch' });
+        }
+        storedFiles.set(shaHex, bytes);
+        return json(res, 200, { sha256: shaHex, size: bytes.length });
+      }
+      if (req.method === 'GET') {
+        const bytes = storedFiles.get(shaHex);
+        if (!bytes) return json(res, 404, { message: 'not found' });
+        res.writeHead(200, {
+          'content-type': 'application/octet-stream',
+          'content-length': String(bytes.length),
+        });
+        res.end(bytes);
+        return;
+      }
+      return json(res, 405, { message: 'method not allowed' });
+    }
+
+    auth.server.emit('request', req, res);
+  });
+
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  auth.origin = origin;
+  auth.peer.origin = origin;
+
+  return {
+    url: origin,
+    memberToken,
+    logs: [],
+    seenBotHeaders,
+    async approveOAuth() {
+      auth.deviceApproved = true;
+    },
+    async enableDirectToken() {
+      phase2Token = true;
+      auth.token = memberToken;
+      auth.peer.token = memberToken;
+    },
+    async close() {
+      server.closeAllConnections();
+      await new Promise((ok) => server.close(ok));
+      await auth.close();
+    },
+  };
 }
-try {
-  await waitFor(
+
+async function startPairedBackend(repoRoot) {
+  const hubModule = (path) =>
+    import(pathToFileURL(resolve(repoRoot, path)).href);
+  const { createTestServer, testConsoleCredentials } = await hubModule(
+    'hub/server/testing.ts',
+  );
+  const { callBot } = await hubModule('hub/server/personal-bot.ts');
+  const { startPostgres } = await hubModule('hub/testing/postgres.ts');
+  const { createCommandBridge } = await hubModule(
+    'hub/server/command-bridge.ts',
+  );
+  const postgres = await startPostgres({ socket: true, passwordless: true });
+  const hub = await createTestServer({
+    postgres,
+    bridge: (kit) =>
+      createCommandBridge({
+        cwd: kit.dataDir,
+        env: {
+          CIRCLE_HUB_DATA_DIR: kit.dataDir,
+          CIRCLE_HUB_PORT: '0',
+          CIRCLE_HUB_DATABASE_SOCKET_DIR: postgres.socketDir,
+          CIRCLE_HUB_DATABASE_PORT: String(kit.database.port),
+          CIRCLE_HUB_DATABASE_NAME: kit.database.database,
+          CIRCLE_HUB_DATABASE_USER: kit.database.user,
+        },
+        overrides: { keyProvider: () => kit.keyProvider },
+      }),
+  });
+  const member = await hub.createUser('合成首次登录成员');
+  const key = 'synthetic-model-key-A';
+  let acceptedKey = key;
+  const model = createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks));
+    if (req.headers.authorization !== 'Bearer ' + acceptedKey) {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { code: 'invalid_api_key' } }));
+      return;
+    }
+    if (body.model !== 'scripted-model') {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { code: 'model_not_found' } }));
+      return;
+    }
+    issued.push(body);
+    if (body.messages.at(-1)?.content === afterExit) await held.promise;
+    const answer =
+      body.messages.at(-1)?.content === '回复 OK'
+        ? 'OK'
+        : body.messages.at(-1)?.content === afterExit
+          ? 'finished without desktop'
+          : 'synthetic remote reply';
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    for (const [delta, finish_reason] of [
+      [{ role: 'assistant', content: answer }, null],
+      [{}, 'stop'],
+    ])
+      res.write(
+        'data: ' +
+          JSON.stringify({
+            id: 'scripted',
+            object: 'chat.completion.chunk',
+            model: body.model,
+            choices: [{ index: 0, delta, finish_reason }],
+          }) +
+          '\n\n',
+      );
+    res.end('data: [DONE]\n\n');
+  });
+  await new Promise((ok) => model.listen(0, '127.0.0.1', ok));
+  const endpoint = 'http://127.0.0.1:' + model.address().port + '/v1';
+  const config = {
+    name: 'Synthetic Member Bot',
+    protocol: 'openai',
+    model: 'scripted-model',
+    endpoint,
+    key,
+  };
+  const directory = join(hub.deps.config.dataDir, 'bot-runtime');
+  const host = spawn(
+    process.execPath,
+    [join(desktop, '../../dist/cli.js'), 'remote-bot', directory],
+    { env: { PATH: process.env.PATH, HOME: scratch }, stdio: 'ignore' },
+  );
+  const exited = once(host, 'exit');
+
+  async function waitForHost(check, label) {
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+      const v = await check();
+      if (v) return v;
+      await delay(60);
+    }
+    throw new Error('waiting for ' + label);
+  }
+
+  await waitForHost(
     async () =>
       (
         await callBot(hub.deps.config.dataDir, {
@@ -119,6 +338,7 @@ try {
       ).status === 200,
     'host',
   );
+
   for (const [change, status, message] of [
     [{ key: 'synthetic-bad' }, 422, '模型端点拒绝凭据'],
     [{ model: 'absent-model' }, 422, '模型 ID 不可用'],
@@ -133,6 +353,7 @@ try {
     if (message) assert.equal(result.body.message, message);
     else assert.equal(result.body.tested, true);
   }
+
   const admin = await request.newContext({
     baseURL: hub.url,
     extraHTTPHeaders: { origin: hub.url },
@@ -165,20 +386,10 @@ try {
         },
       });
       const rendered = await result.text();
-      assert.ok(
-        rendered.includes('机器人模型配置已保存'),
-        JSON.stringify({
-          status: result.status(),
-          error: [...rendered.matchAll(/<pre[^>]*>([\s\S]*?)<\/pre>/g)].map(
-            (m) =>
-              m[1].replace(/<[^>]+>/g, '').replaceAll(acceptedKey, '[masked]'),
-          ),
-          logs: hub.logs.slice(-2),
-        }),
-      );
+      assert.ok(rendered.includes('机器人模型配置已保存'));
       assert.ok(!rendered.includes(acceptedKey));
     };
-    const test = async (phrase) => {
+    const testBot = async (phrase) => {
       const body = await (await admin.get('/console/settings?tab=bot')).text();
       const result = await admin.post('/console/admin/do/bot-test', {
         form: { csrf: token(body) },
@@ -191,31 +402,115 @@ try {
       assert.ok(!rendered.includes(acceptedKey));
     };
     await setup();
-    await test('机器人已用指定模型收到回复');
+    await testBot('机器人已用指定模型收到回复');
     acceptedKey = 'synthetic-model-key-B';
-    await test('模型端点拒绝凭据');
+    await testBot('模型端点拒绝凭据');
     await setup({ model: 'missing-model' });
-    await test('模型 ID 不可用');
+    await testBot('模型 ID 不可用');
     const closed = createServer();
     await new Promise((done) => closed.listen(0, '127.0.0.1', done));
     const closedPort = closed.address().port;
     await new Promise((done) => closed.close(done));
     await setup({ endpoint: 'http://127.0.0.1:' + closedPort });
-    await test('模型端点未能建立连接或响应超时');
+    await testBot('模型端点未能建立连接或响应超时');
     await setup();
-    await test('机器人已用指定模型收到回复');
+    await testBot('机器人已用指定模型收到回复');
   } finally {
     await admin.dispose();
   }
 
-  const inputFile = join(scratch, 'fixture.txt'),
-    outputFile = join(scratch, 'downloaded.txt');
+  let web;
+  return {
+    url: hub.url,
+    memberToken: member.token,
+    secretKey: key,
+    logs: hub.logs,
+    async approveOAuth(code) {
+      web = await request.newContext({
+        baseURL: hub.url,
+        extraHTTPHeaders: { origin: hub.url },
+      });
+      const csrf = (html) => /name="csrf" value="([^"]+)"/.exec(html)?.[1];
+      const post = (path, form) => web.post(path, { form, maxRedirects: 0 });
+      const login = await web.get('/console/login');
+      assert.equal(
+        (
+          await post('/console/login', {
+            csrf: csrf(await login.text()),
+            ...testConsoleCredentials(member.token),
+          })
+        ).status(),
+        303,
+      );
+      const device = await web.get('/console/device');
+      const typed = await post('/console/device', {
+        csrf: csrf(await device.text()),
+        user_code: code,
+      });
+      assert.equal(typed.status(), 303);
+      const location = typed.headers().location;
+      const confirmation = await (await web.get(location)).text();
+      const account = /name="account" value="([^"]+)"/.exec(confirmation)?.[1];
+      assert.equal(account, member.principal.id);
+      assert.equal(
+        (
+          await post(location, {
+            csrf: csrf(confirmation),
+            step: 'decide',
+            decision: 'approve',
+            account,
+          })
+        ).status(),
+        303,
+      );
+    },
+    async enableDirectToken() {},
+    async close() {
+      await web?.dispose();
+      host.kill('SIGTERM');
+      await exited;
+      await new Promise((ok) => model.close(ok));
+      await hub.close();
+      await postgres.stop();
+    },
+  };
+}
+
+const backend = standalone
+  ? await startStandaloneBackend()
+  : await startPairedBackend(hubRepo);
+
+let app, page;
+async function waitFor(check, label) {
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    const v = await check();
+    if (v) return v;
+    await delay(60);
+  }
+  throw new Error('waiting for ' + label);
+}
+
+try {
+  const inputFile = join(scratch, 'fixture.txt');
+  const outputFile = join(scratch, 'downloaded.txt');
   await writeFile(inputFile, 'synthetic private attachment');
   const data = join(scratch, 'desktop');
-  await mkdir(data);
+  await mkdir(data, { recursive: true });
   const require = createRequire(import.meta.url);
-  const packaged = process.argv[3] === 'packaged';
+  const packaged =
+    process.argv[3] === 'packaged' ||
+    Boolean(process.env.CIRCLE_DESKTOP_EXECUTABLE);
   const bundle = join(desktop, 'out/Circle-darwin-arm64/Circle.app');
+  const executablePath =
+    process.env.CIRCLE_DESKTOP_EXECUTABLE ??
+    (packaged ? join(bundle, 'Contents/MacOS/Circle') : require('electron'));
+  const launchArgs = process.env.CIRCLE_DESKTOP_EXECUTABLE
+    ? [resolve(process.env.CIRCLE_DESKTOP_APP_PATH ?? desktop)]
+    : process.argv[3] === 'packaged'
+      ? []
+      : [desktop];
+
   const env = {
     ...process.env,
     HOME: scratch,
@@ -223,6 +518,8 @@ try {
     CIRCLE_WORKBENCH_DATA_DIR: data,
     CIRCLE_WORKBENCH_MODE: 'live',
     CIRCLE_WORKBENCH_LANGUAGE: 'en-US',
+    CIRCLE_NO_UPDATE_CHECK: '1',
+    CIRCLE_NO_MODELS_REFRESH: '1',
     CIRCLE_WORKBENCH_TEST_PROFILE: JSON.stringify({
       files: [inputFile],
       exportPath: outputFile,
@@ -230,23 +527,29 @@ try {
     CIRCLE_WORKBENCH_BACKGROUND_TEST: '1',
   };
   delete env.ELECTRON_RUN_AS_NODE;
-  app = await electron.launch({
-    chromiumSandbox: true,
-    executablePath: packaged
-      ? join(bundle, 'Contents/MacOS/Circle')
-      : require('electron'),
-    args: packaged ? [] : [desktop],
-    cwd: desktop,
-    env,
-    timeout: 45000,
-  });
-  page = await app.firstWindow();
-  page.setDefaultTimeout(20000);
-  await page.waitForFunction(
-    () =>
-      location.hash.startsWith('#/session/') ||
-      location.hash.startsWith('#/home'),
-  );
+
+  const launchElectron = async () => {
+    const launched = await electron.launch({
+      chromiumSandbox: true,
+      executablePath,
+      args: launchArgs,
+      cwd: desktop,
+      env,
+      timeout: 45000,
+    });
+    const win = await launched.firstWindow();
+    win.setDefaultTimeout(20000);
+    await win.waitForFunction(
+      () =>
+        location.hash.startsWith('#/session/') ||
+        location.hash.startsWith('#/home'),
+    );
+    return { launched, win };
+  };
+
+  // Phase 1: OAuth device login connects MCP; Hub H5 rejects OAuth token with 403 BOT_CLIENT_FORBIDDEN.
+  ({ launched: app, win: page } = await launchElectron());
+  await page.keyboard.press('Escape');
   await page.evaluate(() => {
     location.hash = '/page/extensions?plugin=hub';
   });
@@ -254,7 +557,7 @@ try {
   await card.getByRole('checkbox', { name: 'enable Hub', exact: true }).check();
   await card
     .getByRole('textbox', { name: 'hub IP address', exact: true })
-    .fill(hub.url);
+    .fill(backend.url);
   await card.getByRole('button', { name: 'connect', exact: true }).click();
   const code = await waitFor(
     async () =>
@@ -266,43 +569,7 @@ try {
       ),
     'device code',
   );
-  web = await request.newContext({
-    baseURL: hub.url,
-    extraHTTPHeaders: { origin: hub.url },
-  });
-  const csrf = (html) => /name="csrf" value="([^"]+)"/.exec(html)?.[1];
-  const post = (path, form) => web.post(path, { form, maxRedirects: 0 });
-  const login = await web.get('/console/login');
-  assert.equal(
-    (
-      await post('/console/login', {
-        csrf: csrf(await login.text()),
-        ...testConsoleCredentials(member.token),
-      })
-    ).status(),
-    303,
-  );
-  const device = await web.get('/console/device');
-  const typed = await post('/console/device', {
-    csrf: csrf(await device.text()),
-    user_code: code,
-  });
-  assert.equal(typed.status(), 303);
-  const location = typed.headers().location;
-  const confirmation = await (await web.get(location)).text();
-  const account = /name="account" value="([^"]+)"/.exec(confirmation)?.[1];
-  assert.equal(account, member.principal.id);
-  assert.equal(
-    (
-      await post(location, {
-        csrf: csrf(confirmation),
-        step: 'decide',
-        decision: 'approve',
-        account,
-      })
-    ).status(),
-    303,
-  );
+  await backend.approveOAuth(code);
   await waitFor(
     async () =>
       page.evaluate(async () =>
@@ -310,7 +577,53 @@ try {
           (r) => r.name === 'Hub' && r.status === 'connected',
         ),
       ),
-    'Hub authorization',
+    'Hub OAuth authorization',
+  );
+  await page.keyboard.press('Escape');
+  await page
+    .getByRole('link', { name: 'my bot', exact: true })
+    .first()
+    .click({ timeout: 30000 });
+  await page
+    .locator('[data-bot-error-kind="oauth-forbidden"]')
+    .waitFor({ timeout: 20000 });
+  await page
+    .getByRole('heading', { name: 'direct member token required', exact: true })
+    .waitFor();
+  if (standalone) {
+    assert.ok(backend.seenBotHeaders.length >= 1);
+    assert.equal(backend.seenBotHeaders[0]['bot-client-version'], VERSION);
+    assert.equal(backend.seenBotHeaders[0]['circle-version'], undefined);
+  }
+
+  // Phase 2: Direct member Bearer token configured on Hub MCP entry completes full round trip.
+  await Promise.race([app.close().catch(() => {}), delay(4000)]);
+  try {
+    app.process()?.kill('SIGKILL');
+  } catch {}
+  app = undefined;
+  page = undefined;
+
+  const settingsPath = join(data, 'runtime-home', 'settings.json');
+  const settings = JSON.parse(await readFile(settingsPath, 'utf8'));
+  settings.mcpServers.Hub = {
+    ...settings.mcpServers.Hub,
+    type: 'http',
+    enabled: true,
+    headers: { Authorization: 'Bearer ' + backend.memberToken },
+  };
+  await writeFile(settingsPath, JSON.stringify(settings, null, 2));
+  await backend.enableDirectToken();
+
+  ({ launched: app, win: page } = await launchElectron());
+  await waitFor(
+    async () =>
+      page.evaluate(async () =>
+        (await window.circleDesktop.runtimeState()).snapshot.mcp.some(
+          (r) => r.name === 'Hub' && r.status === 'connected',
+        ),
+      ),
+    'Hub direct Bearer connection',
   );
   await page.keyboard.press('Escape');
   await page
@@ -355,17 +668,21 @@ try {
     () => issued.some((call) => call.messages.at(-1)?.content === afterExit),
     'host accepted turn',
   );
-  await app.close();
+  await Promise.race([app.close().catch(() => {}), delay(4000)]);
+  try {
+    app.process()?.kill('SIGKILL');
+  } catch {}
   app = undefined;
   page = undefined;
   held.resolve();
+
   const application = async (op) =>
     (
-      await fetch(hub.url + '/api/bot/v1', {
+      await fetch(backend.url + '/api/bot/v1', {
         method: 'POST',
         headers: {
-          authorization: 'Bearer ' + member.token,
-          'circle-version': VERSION,
+          authorization: 'Bearer ' + backend.memberToken,
+          'bot-client-version': VERSION,
           'content-type': 'application/json',
         },
         body: JSON.stringify(op),
@@ -383,16 +700,16 @@ try {
       ).events.some((e) => e.text === 'finished without desktop'),
     'host completed after Mac exit',
   );
-  assert.ok(!JSON.stringify(issued).includes(key));
-  assert.ok(!hub.logs.join('').includes(key));
-  assert.ok(
-    !(
-      await readFile(join(data, 'runtime-home', 'settings.json'), 'utf8')
-    ).includes(key),
-  );
+  if (!standalone && backend.secretKey) {
+    assert.ok(!JSON.stringify(issued).includes(backend.secretKey));
+    assert.ok(!backend.logs.join('').includes(backend.secretKey));
+    assert.ok(
+      !(await readFile(settingsPath, 'utf8')).includes(backend.secretKey),
+    );
+  }
   console.log(
     (packaged ? 'Packaged' : 'Development') +
-      ' Mac: first OAuth sign-in, private chat, scripted remote reply, reconnect, attachment round trip and completion after app exit passed.',
+      ` (${standalone ? 'standalone' : 'paired'}): OAuth H5 refusal, direct Bearer chat, scripted remote reply, reload, attachment round trip and completion after app exit passed.`,
   );
 } catch (error) {
   if (page)
@@ -429,12 +746,12 @@ try {
   throw error;
 } finally {
   held.resolve();
-  await web?.dispose();
-  await app?.close();
-  host.kill('SIGTERM');
-  await exited;
-  await new Promise((ok) => model.close(ok));
-  await hub.close();
-  await postgres.stop();
-  await rm(scratch, { recursive: true, force: true });
+  if (app) {
+    await Promise.race([app.close().catch(() => {}), delay(4000)]);
+    try {
+      app.process()?.kill('SIGKILL');
+    } catch {}
+  }
+  await Promise.race([backend.close().catch(() => {}), delay(3000)]);
+  await rm(scratch, { recursive: true, force: true }).catch(() => {});
 }

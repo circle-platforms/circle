@@ -1,4 +1,4 @@
-import { lstat, open, rename, unlink } from 'node:fs/promises';
+import { lstat, open, rename, unlink, type FileHandle } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -6,69 +6,131 @@ import { pipeline } from 'node:stream/promises';
 import { Transform, Readable } from 'node:stream';
 import type { McpBearerConnection } from '../../../src/mcp_loader.js';
 import type { ChatFile } from '../../../src/remote_bot_protocol.js';
-import { fetchWithRefresh } from './remote-bot';
+import {
+  botServerUrl,
+  fetchWithRefresh,
+  parseRemoteBotError,
+} from './remote-bot';
 
 const MAX_BOT_FILE_BYTES = 100 * 1024 * 1024;
-export async function uploadSelected(
-  port: McpBearerConnection,
+const MAX_BOT_BATCH_FILES = 8;
+
+interface PreparedSelectedFile {
+  handle: FileHandle;
+  name: string;
+  sha256: string;
+  size: number;
+}
+
+async function prepareSelectedFile(
   path: string,
-  fetcher = fetch,
-) {
+): Promise<PreparedSelectedFile> {
   const link = await lstat(path, { bigint: true });
   if (link.isSymbolicLink())
     throw new Error('symbolic links cannot be attached');
   if (!link.isFile()) throw new Error('only a regular file can be attached');
-  const file = await open(
+  const handle = await open(
     path,
     constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
   );
   try {
-    const stat = await file.stat({ bigint: true });
+    const stat = await handle.stat({ bigint: true });
     if (!stat.isFile() || stat.dev !== link.dev || stat.ino !== link.ino)
       throw new Error('file identity changed');
     if (stat.size > BigInt(MAX_BOT_FILE_BYTES))
       throw new Error('file exceeds the 100 MiB limit');
     const size = Number(stat.size);
     const hash = createHash('sha256');
-    for await (const chunk of file.createReadStream({
+    for await (const chunk of handle.createReadStream({
       start: 0,
       autoClose: false,
     }))
       hash.update(chunk);
-    const sha256 = hash.digest('hex');
-    const url = new URL('/api/bot/v1/files/' + sha256, port.server);
-    const signal = AbortSignal.timeout(120000);
-    const response = await fetchWithRefresh(port, signal, (token) =>
-      fetcher(url, {
-        method: 'PUT',
-        signal,
-        redirect: 'error',
-        headers: {
-          authorization: 'Bearer ' + token,
-          'content-length': String(size),
-          'content-type': 'application/octet-stream',
-        },
-        body: Readable.toWeb(
-          file.createReadStream({ start: 0, autoClose: false }),
-        ) as BodyInit,
-        duplex: 'half',
-      } as RequestInit),
-    );
-    if (!response.ok) {
-      await response.body?.cancel();
-      throw new Error('file upload was not verified');
-    }
-    let info: { sha256?: unknown; size?: unknown };
-    try {
-      info = (await response.json()) as { sha256?: unknown; size?: unknown };
-    } catch {
-      throw new Error('file upload was not verified');
-    }
-    if (info.sha256 !== sha256 || info.size !== size)
-      throw new Error('file upload was not verified');
-    return { name: basename(path), sha256, size };
+    return {
+      handle,
+      name: basename(path),
+      sha256: hash.digest('hex'),
+      size,
+    };
+  } catch (error) {
+    await handle.close().catch(() => {});
+    throw error;
+  }
+}
+
+async function putPreparedFile(
+  port: McpBearerConnection,
+  prepared: PreparedSelectedFile,
+  fetcher: typeof fetch,
+): Promise<ChatFile> {
+  const url = botServerUrl(port.server, '/api/bot/v1/files/' + prepared.sha256);
+  const signal = AbortSignal.timeout(120000);
+  const response = await fetchWithRefresh(port, signal, (token) =>
+    fetcher(url, {
+      method: 'PUT',
+      signal,
+      redirect: 'error',
+      headers: {
+        authorization: 'Bearer ' + token,
+        'content-length': String(prepared.size),
+        'content-type': 'application/octet-stream',
+      },
+      body: Readable.toWeb(
+        prepared.handle.createReadStream({ start: 0, autoClose: false }),
+      ) as BodyInit,
+      duplex: 'half',
+    } as RequestInit),
+  );
+  if (!response.ok) {
+    throw await parseRemoteBotError(response, 'file upload was not verified');
+  }
+  let info: { sha256?: unknown; size?: unknown };
+  try {
+    info = (await response.json()) as { sha256?: unknown; size?: unknown };
+  } catch {
+    throw new Error('file upload was not verified');
+  }
+  if (info.sha256 !== prepared.sha256 || info.size !== prepared.size)
+    throw new Error('file upload was not verified');
+  return { name: prepared.name, sha256: prepared.sha256, size: prepared.size };
+}
+
+export async function uploadSelected(
+  port: McpBearerConnection,
+  path: string,
+  fetcher = fetch,
+): Promise<ChatFile> {
+  botServerUrl(port.server, '/api/bot/v1');
+  const prepared = await prepareSelectedFile(path);
+  try {
+    return await putPreparedFile(port, prepared, fetcher);
   } finally {
-    await file.close();
+    await prepared.handle.close();
+  }
+}
+
+export async function uploadSelectedBatch(
+  port: McpBearerConnection,
+  paths: readonly string[],
+  fetcher = fetch,
+): Promise<ChatFile[]> {
+  if (paths.length > MAX_BOT_BATCH_FILES)
+    throw new Error('select up to eight files');
+  botServerUrl(port.server, '/api/bot/v1');
+  const prepared: PreparedSelectedFile[] = [];
+  try {
+    for (const path of paths) {
+      prepared.push(await prepareSelectedFile(path));
+    }
+    const receipts: ChatFile[] = [];
+    for (const item of prepared) {
+      receipts.push(await putPreparedFile(port, item, fetcher));
+    }
+    return receipts;
+  } finally {
+    await Promise.all(
+      prepared.map((item) => item.handle.close().catch(() => {})),
+    );
   }
 }
 
@@ -85,7 +147,10 @@ export async function saveRemoteFile(
     descriptor.size > MAX_BOT_FILE_BYTES
   )
     throw new Error('invalid file receipt');
-  const url = new URL('/api/bot/v1/files/' + descriptor.sha256, port.server);
+  const url = botServerUrl(
+    port.server,
+    '/api/bot/v1/files/' + descriptor.sha256,
+  );
   const signal = AbortSignal.timeout(120000);
   const response = await fetchWithRefresh(port, signal, (token) =>
     fetcher(url, {

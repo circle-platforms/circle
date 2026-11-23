@@ -85,7 +85,7 @@ export interface NativeAccessibilityState {
 export interface DesktopBridge {
   attachBotFiles?: (
     binding: string,
-  ) => Promise<import('../../../src/remote_bot_protocol.js').ChatFile[]>;
+  ) => Promise<import('../../../src/remote_bot_protocol.js').ChatFile[] | null>;
   saveBotFile?: (
     binding: string,
     file: import('../../../src/remote_bot_protocol.js').ChatFile,

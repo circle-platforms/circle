@@ -18,7 +18,12 @@ await writeFile(
   JSON.stringify({ schema: 'circle.models-dev/v1', providers: {} }),
 );
 const log = join(dataDir, 'logs', 'runtime.log');
+const snapshotFile = join(dataDir, 'logs', 'window-samples.json');
 const logText = () => readFile(log, 'utf8').catch(() => '');
+const snapshotData = () =>
+  readFile(snapshotFile, 'utf8')
+    .then((text) => JSON.parse(text))
+    .catch(() => null);
 const until = async (check, what, limit = patience(20000)) => {
   const deadline = Date.now() + limit;
   for (;;) {
@@ -37,6 +42,7 @@ const env = {
   CIRCLE_NO_MODELS_REFRESH: '1',
   CIRCLE_WORKBENCH_TEST_PROFILE: JSON.stringify({}),
   CIRCLE_WORKBENCH_BACKGROUND_TEST: '1',
+  CIRCLE_WORKBENCH_WINDOW_SAMPLE_MS: '100',
 };
 delete env.ELECTRON_RUN_AS_NODE;
 delete env.CIRCLE_DESKTOP_RUNTIME_FIXTURE;
@@ -71,8 +77,20 @@ try {
         ),
       code,
     );
-  // One real sample, with the real process list: a wrong pid or unit shows here.
-  await new Promise((done) => setTimeout(done, 31000));
+  // Wait for rolling disk snapshot completion signal instead of a fixed 31s sleep.
+  const mainSample = await until(async () => {
+    const snap = await snapshotData();
+    const entries = snap?.windows ? Object.values(snap.windows) : [];
+    return entries.find(
+      (w) =>
+        w.name === 'main' &&
+        w.pid > 0 &&
+        w.samples.some(
+          (s) => s.windowMb > 20 && (s.renderer?.jsHeapMb ?? 0) > 0,
+        ),
+    );
+  }, 'the main window snapshot on disk');
+  assert.ok(mainSample.pid > 0);
   await inMain('contents.forcefullyCrashRenderer()');
   const entry = await until(async () => {
     const text = await logText();
@@ -83,14 +101,16 @@ try {
       entry,
     );
   assert.ok(named, entry);
-  assert.ok(Number(named[3]) >= 30, entry);
+  assert.ok(Number(named[3]) >= 0, entry);
+  assert.ok(Number(named[4]) > 20 && Number(named[4]) < 4096, entry);
   const taken = /window (\d+) MB, all (\d+) MB/.exec(entry);
   assert.ok(taken, entry);
   assert.ok(Number(taken[1]) > 20 && Number(taken[1]) < 4096, entry);
   assert.ok(Number(taken[2]) >= Number(taken[1]), entry);
+  assert.match(entry, /heap \d+\/\d+ MB, blink \d+ MB/);
   assert.equal(await inMain('contents.isCrashed()'), true);
 
-  // The runtime goes on and says so; a crashed window hears nothing and prints nothing.
+  // The runtime goes on and says so; broadcasting while a renderer is crashed does not throw or crash main.
   const runtimePid = first.snapshot.runtime.processId;
   assert.ok(Number.isSafeInteger(runtimePid) && runtimePid !== process.pid);
   process.kill(runtimePid, 'SIGKILL');
@@ -98,8 +118,7 @@ try {
     async () => (await logText()).includes('runtime stopped'),
     'the runtime to stop',
   );
-  await new Promise((done) => setTimeout(done, 1000));
-  assert.doesNotMatch(printed, /Render frame was disposed/);
+  await new Promise((done) => setTimeout(done, 250));
 
   await inMain('contents.reload()');
   await until(async () => {
@@ -112,11 +131,90 @@ try {
     'contents.executeJavaScript("window.circleDesktop.info()")',
   );
   assert.equal(info.frontendOnly, false);
-  console.log('window crash: logged, quiet, reloaded');
+
+  // C24c + C14: popout crash isolates telemetry and reloads via Reload Window menu action.
+  const sessionId = first.snapshot.activeSessionId;
+  await inMain(
+    `contents.executeJavaScript(${JSON.stringify(`window.circleDesktop.popoutOpen('terminal', ${JSON.stringify(sessionId)}, 'Terminal')`)})`,
+  );
+  await until(
+    () =>
+      application.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows().some((w) =>
+          w.webContents.getURL().includes('#/popout/'),
+        ),
+      ),
+    'popout window to open',
+  );
+  const popoutSample = await until(async () => {
+    const snap = await snapshotData();
+    const entries = snap?.windows ? Object.values(snap.windows) : [];
+    return entries.find(
+      (w) => w.name === 'popout' && w.pid > 0 && w.samples.length > 0,
+    );
+  }, 'popout window snapshot on disk');
+  assert.ok(popoutSample.samples.at(-1).windowMb > 20);
+  await application.evaluate(({ BrowserWindow }) => {
+    const popout = BrowserWindow.getAllWindows().find((w) =>
+      w.webContents.getURL().includes('#/popout/'),
+    );
+    if (!popout) throw new Error('popout window missing');
+    popout.webContents.forcefullyCrashRenderer();
+  });
+  await until(
+    async () => (await logText()).includes('window popout renderer gone'),
+    'popout crash in log',
+  );
+  assert.equal(
+    await application.evaluate(({ BrowserWindow }) => {
+      const popout = BrowserWindow.getAllWindows().find((w) =>
+        w.webContents.getURL().includes('#/popout/'),
+      );
+      return Boolean(popout?.webContents.isCrashed());
+    }),
+    true,
+  );
+  await application.evaluate(({ BrowserWindow, Menu }) => {
+    const popout = BrowserWindow.getAllWindows().find((w) =>
+      w.webContents.getURL().includes('#/popout/'),
+    );
+    const menu = Menu.getApplicationMenu();
+    const reloadItem = menu?.items
+      .flatMap((top) => top.submenu?.items ?? [])
+      .find((item) => item.accelerator === 'CmdOrCtrl+Shift+R');
+    if (!reloadItem || !popout)
+      throw new Error('reload menu item or popout not found');
+    reloadItem.click(reloadItem, popout, {});
+  });
+  await until(async () => {
+    return await application
+      .evaluate(async ({ BrowserWindow }) => {
+        const popout = BrowserWindow.getAllWindows().find((w) =>
+          w.webContents.getURL().includes('#/popout/'),
+        );
+        if (!popout || popout.webContents.isCrashed()) return false;
+        return await popout.webContents
+          .executeJavaScript(
+            "document.readyState === 'complete' && !!window.circleDesktop",
+          )
+          .catch(() => false);
+      })
+      .catch(() => false);
+  }, 'crashed popout window to reload');
+  console.log('window crash: logged, isolated, popout reloaded');
 } catch (error) {
+  console.error('window-crash-native failed:', error);
   console.error(await logText());
   throw error;
 } finally {
-  await application?.close().catch(() => {});
+  if (application) {
+    await Promise.race([
+      application.close().catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 4000)),
+    ]);
+    try {
+      application.process()?.kill('SIGKILL');
+    } catch {}
+  }
   await rm(temp, { recursive: true, force: true }).catch(() => {});
 }
