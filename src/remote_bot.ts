@@ -59,6 +59,10 @@ function ownerHash(owner: string): string {
   return createHash('sha256').update(owner).digest('hex');
 }
 
+export function maskKey(text: string, key: string): string {
+  return key ? text.replaceAll(key, '[已遮盖]') : text;
+}
+
 function describeQuestion(call: ToolCall): PromptQuestion {
   const questions = call.args.questions;
   if (
@@ -107,6 +111,7 @@ export async function remoteCompletion(
   token: (text: string) => void,
   test = false,
 ) {
+  if (!config.key) throw new BotError(503, '机器人模型尚未启用');
   const settings = defaultSettings();
   settings.auth = {
     protocol: config.protocol,
@@ -139,7 +144,7 @@ export async function remoteCompletion(
       response.message.tool_calls[0]!.name === 'question'
     ) {
       const call = response.message.tool_calls[0]!;
-      if (JSON.stringify(call).includes(config.key))
+      if (config.key && JSON.stringify(call).includes(config.key))
         throw new BotError(502, '模型回复包含凭据');
       return describeQuestion(call);
     }
@@ -551,7 +556,7 @@ export class RemoteBot {
         throw new BotError(409, '这条消息编号已用于不同内容');
       return { request: op.request, queued: true };
     }
-    if (!config) throw new BotError(503, '机器人模型尚未启用');
+    if (!config || !config.key) throw new BotError(503, '机器人模型尚未启用');
     if (op.text.includes(config.key))
       throw new BotError(400, '消息包含机器人凭据');
     if (job) {
@@ -631,7 +636,7 @@ export class RemoteBot {
     ])
       .then(() =>
         this.complete(memberHome, config, messages, signal, (delta) => {
-          const accumulated = (tail + delta).replaceAll(config.key, '[已遮盖]');
+          const accumulated = maskKey(tail + delta, config.key);
           // Keep a possible split credential out of live updates as well as final history.
           let length = 0;
           for (
@@ -650,10 +655,7 @@ export class RemoteBot {
           conversation,
           op.request,
           'assistant',
-          (typeof reply === 'string' ? reply : reply.text).replaceAll(
-            config.key,
-            '[已遮盖]',
-          ),
+          maskKey(typeof reply === 'string' ? reply : reply.text, config.key),
           route,
           [],
           typeof reply === 'string' ? undefined : reply,

@@ -14,7 +14,7 @@ import {
 import { homedir, tmpdir } from 'node:os';
 import { StringDecoder } from 'node:string_decoder';
 import { delimiter, dirname, join, relative, sep } from 'node:path';
-import { isRecord, type CircleSettings } from './settings.js';
+import { type CircleSettings } from './settings.js';
 import { McpLoginRequired } from './mcp_auth.js';
 import { backgroundMcpConnection, buildMcpConnections } from './mcp_loader.js';
 import {
@@ -814,10 +814,6 @@ export async function prepareScriptCommand(
     },
   };
 }
-export async function scriptCommand(prepared: PreparedRun): Promise<string> {
-  return (await prepareScriptCommand(prepared)).command;
-}
-
 export async function runTool(
   options: RunToolOptions & {
     cwd?: string;

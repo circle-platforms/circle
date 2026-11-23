@@ -5,7 +5,13 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { RemoteBot, type RemoteModel } from '../src/remote_bot.js';
+import {
+  BotError,
+  maskKey,
+  RemoteBot,
+  remoteCompletion,
+  type RemoteModel,
+} from '../src/remote_bot.js';
 
 function deferred() {
   let resolve!: () => void;
@@ -376,6 +382,69 @@ test('inbound help, new conversation and stop commands stay idempotent without c
     assert.equal(calls, 1);
   } finally {
     block.resolve();
+    await host.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('empty model credential is rejected up front and empty-key masking is a no-op', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'remote-bot-empty-key-'));
+  let calls = 0;
+  const host = new RemoteBot(home, async () => {
+    calls++;
+    return 'unexpected';
+  });
+  const emptyKey: RemoteModel = { ...config, key: '' };
+  try {
+    const { current } = host.run('member', { action: 'discover' }) as {
+      current: string;
+    };
+    assert.throws(
+      () =>
+        host.run(
+          'member',
+          {
+            action: 'send',
+            conversation: current,
+            request: randomUUID(),
+            text: 'hello',
+          },
+          emptyKey,
+        ),
+      (error: unknown) =>
+        error instanceof BotError &&
+        error.status === 503 &&
+        error.message === '机器人模型尚未启用',
+    );
+    assert.throws(
+      () =>
+        host.inbound('member', randomUUID(), 'hello', emptyKey, {
+          source: 'channel',
+          issuer: 'test',
+          subject: 'member',
+        }),
+      (error: unknown) =>
+        error instanceof BotError &&
+        error.status === 503 &&
+        error.message === '机器人模型尚未启用',
+    );
+    await assert.rejects(
+      remoteCompletion(
+        home,
+        emptyKey,
+        [{ id: '1', role: 'user', content: 'hello' }],
+        new AbortController().signal,
+        () => {},
+      ),
+      (error: unknown) =>
+        error instanceof BotError &&
+        error.status === 503 &&
+        error.message === '机器人模型尚未启用',
+    );
+    assert.equal(calls, 0);
+    assert.equal(maskKey('plain text', ''), 'plain text');
+    assert.equal(maskKey('token=fixture-key', 'fixture-key'), 'token=[已遮盖]');
+  } finally {
     await host.close();
     await rm(home, { recursive: true, force: true });
   }
