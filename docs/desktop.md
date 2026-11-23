@@ -8,7 +8,7 @@ The desktop application is a window around the same Circle: the same model conne
 
 ## First start
 
-The first time, Circle opens the connection form by itself. Later, open it from `connect a model` under the message box until one is set (see [When the runtime stops](#when-the-runtime-stops) for `runtime stopped`), from settings or with `/login`. Once a model is connected, the button under the message box shows it with a green light. It asks what the terminal's setup asks, in two steps:
+The first time, Circle opens the connection form by itself unless **Hub** is already connected or you open `/page/remote-bot`; once **Hub** connects, that automatic prompt closes. Later, open it from `connect a model` under the message box until one is set (see [When the runtime stops](#when-the-runtime-stops) for `runtime stopped`), from settings or with `/login`. Once a model is connected, the button under the message box shows it with a green light. It asks what the terminal's setup asks, in two steps:
 
 1. The provider, editable API URL and key. Online providers request their model list; selecting a provider without a compatible list chooses its released presets before any request. Custom endpoints keep protocol discovery. Nothing is saved yet.
 2. The model. Preset providers show their ids marked `preset`, under a line with the date of the preset list; they remain unverified and can be edited. Providers that require deployment names ask you to type yours. When the endpoint listed its models, pick one from the list (arrow keys and `enter` work in its search box); type to search it, and `use “…”` takes an id it does not list. When it listed none, or could not be asked, type the model id your provider documents; it is not checked. If the endpoint could not be asked, choose whether the API is OpenAI-style, Anthropic-style or the Responses API too. Connect saves the URL that answered (the one you typed when none did), the kind of API, the model and the key, and lists that endpoint's models in place of the ones listed before.
@@ -62,7 +62,7 @@ Circle never asks for your Hub user name or password: the Hub's own page in the 
 
 The Hub is the extension's: the **hub** card in the list of extensions carries the Hub's mark, its state (connected, waiting for sign-in, reload required or not connected) and the Hub's tools among the extension's own, and the MCP servers page does not list the **Hub** entry. The extension's switch is the Hub's connection's: off, the entry is turned off and the conversation drops the Hub's tools; on, it connects again on the sign-in it kept. During a turn the change waits for the next reload, and the card says **reload required** until then; its **retry** reloads.
 
-Once connected, **my bot** in the sidebar opens your private remote conversation hosted by the Hub's `circle remote-bot` service using the same MCP sign-in, without requiring a local model connection.
+Once the **Hub** entry is connected, **my bot** in the sidebar opens the `/page/remote-bot` view for your private remote conversation hosted by the Hub's `circle remote-bot` service, without requiring a local model connection. Signing in through the **Hub** extension connects `/mcp` with an OAuth token, which the Hub's `/api/bot/v1` endpoints refuse (`403 BOT_CLIENT_FORBIDDEN`); private remote chat requires a direct member Bearer token configured on the `Hub` entry's `headers.Authorization` in `settings.json`.
 
 ## Organizing sessions
 

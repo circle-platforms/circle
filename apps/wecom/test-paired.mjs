@@ -14,21 +14,22 @@ import { WSClient } from '@wecom/aibot-node-sdk';
 import { ChannelSession } from './adapter.ts';
 
 async function loadRemoteBotService() {
-  const distPath = new URL('../../dist/remote_bot_service.js', import.meta.url);
-  if (existsSync(distPath)) {
+  const srcPath = new URL('../../src/remote_bot_service.ts', import.meta.url);
+  if (existsSync(srcPath)) {
+    const { tsImport } = await import(
+      new URL('../../node_modules/tsx/dist/esm/api/index.mjs', import.meta.url)
+        .href
+    );
     const [{ serveRemoteBot }, { VERSION }] = await Promise.all([
-      import(distPath.href),
-      import(new URL('../../dist/version.js', import.meta.url).href),
+      tsImport('../../src/remote_bot_service.ts', import.meta.url),
+      tsImport('../../src/version.ts', import.meta.url),
     ]);
     return { serveRemoteBot, VERSION };
   }
-  const { tsImport } = await import(
-    new URL('../../node_modules/tsx/dist/esm/api/index.mjs', import.meta.url)
-      .href
-  );
+  const distPath = new URL('../../dist/remote_bot_service.js', import.meta.url);
   const [{ serveRemoteBot }, { VERSION }] = await Promise.all([
-    tsImport('../../src/remote_bot_service.ts', import.meta.url),
-    tsImport('../../src/version.ts', import.meta.url),
+    import(distPath.href),
+    import(new URL('../../dist/version.js', import.meta.url).href),
   ]);
   return { serveRemoteBot, VERSION };
 }

@@ -218,6 +218,6 @@ Subagents' turns and tool results fire the same events. Handlers may be `async`.
 
 ### Private remote chat
 
-After signing in, **my bot** opens the member's server-side conversation. Desktop and web use the existing MCP sign-in to access the same origin's member chat API, and attachments use its sibling file endpoints. A local model connection is optional. Closing the window leaves accepted messages with the server. Opening the conversation again retrieves its history.
+Once the **Hub** MCP entry is connected, **my bot** in the desktop application opens the member's server-side conversation against the same origin's `/api/bot/v1` and `/api/bot/v1/files/*` endpoints. A local model connection is optional. Signing in through the **Hub** extension connects `/mcp` with an OAuth token, which the Hub's bot API refuses (`403 BOT_CLIENT_FORBIDDEN`); accessing **my bot** requires a direct member Bearer token configured on the `Hub` entry's `headers.Authorization`. Closing the window leaves accepted messages with the server. Opening the conversation again retrieves its history.
 
 The matching Circle distribution runs the host with `circle remote-bot <private service directory>`. Use the Hub data directory's `bot-runtime` subdirectory, owned by the service account with mode 0700, on Linux or macOS. The host listens on a Unix socket. It stores conversations there and reads the model connection from the authenticated Hub request. Start a single host for the directory. If it restarts during a model call the conversation records an unknown outcome.
