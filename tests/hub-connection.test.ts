@@ -204,6 +204,44 @@ test('the Hub entry is added under its name in mcpServers with the extension on,
   assert.equal(hubEndpoint(settings), undefined);
 });
 
+test('F14: addHub preserves headers on same-URL reconnect and drops them when connecting to a different Hub URL', () => {
+  const settings = defaultSettings();
+  settings.mcpServers = {
+    [HUB_SERVER]: {
+      type: 'http',
+      url: 'https://hub.example.test/mcp',
+      enabled: true,
+      placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
+      headers: { Authorization: 'Bearer ${HUB_TOKEN}', 'X-Custom': 'keep' },
+    },
+  };
+  addHub(settings, 'HTTPS://HUB.EXAMPLE.TEST:443/mcp');
+  assert.deepEqual(settings.mcpServers[HUB_SERVER], {
+    type: 'http',
+    url: 'HTTPS://HUB.EXAMPLE.TEST:443/mcp',
+    enabled: true,
+    placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
+    headers: { Authorization: 'Bearer ${HUB_TOKEN}', 'X-Custom': 'keep' },
+  });
+
+  addHub(settings, 'https://other.example.test/mcp');
+  assert.deepEqual(settings.mcpServers[HUB_SERVER], {
+    type: 'http',
+    url: 'https://other.example.test/mcp',
+    enabled: true,
+    placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
+  });
+  assert.equal('headers' in settings.mcpServers[HUB_SERVER]!, false);
+
+  settings.mcpServers[HUB_SERVER] = {
+    type: 'http',
+    url: 'https://other.example.test/mcp',
+    headers: ['not-an-object'],
+  };
+  addHub(settings, 'https://other.example.test/mcp');
+  assert.equal('headers' in settings.mcpServers[HUB_SERVER]!, false);
+});
+
 test('signing out revokes the tokens at the revocation endpoint and forgets them, also when revoking fails', async (t) => {
   const home = scratch(t);
   const server = 'https://hub.example.test/mcp';

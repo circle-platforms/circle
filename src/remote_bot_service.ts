@@ -125,6 +125,7 @@ export async function serveRemoteBot(directory: string) {
                 };
             route?: ChatRoute;
             config?: RemoteModel | null;
+            configVersion?: number;
             version?: string;
           };
           const ownerOptional =
@@ -162,6 +163,17 @@ export async function serveRemoteBot(directory: string) {
                 'client and host version mismatch',
               );
           }
+          if (
+            frame.configVersion !== undefined &&
+            (typeof frame.configVersion !== 'number' ||
+              !Number.isSafeInteger(frame.configVersion) ||
+              frame.configVersion < 0)
+          )
+            throw new BotError(
+              400,
+              'invalid_request',
+              'invalid config version',
+            );
           if (frame.op.action === 'configure') {
             if (frame.config === undefined)
               throw new BotError(
@@ -169,12 +181,12 @@ export async function serveRemoteBot(directory: string) {
                 'invalid_request',
                 'missing bot configuration',
               );
-            if (frame.config === null) host.disable();
-            else host.configure(frame.config);
+            if (frame.config === null) host.disable(frame.configVersion);
+            else host.configure(frame.config, frame.configVersion);
             return answer(response, 200, { configured: frame.config !== null });
           }
           if (frame.op.action === 'disable') {
-            host.disable();
+            host.disable(frame.configVersion);
             return answer(response, 200, { disabled: true });
           }
           if (frame.op.action === 'test') {
@@ -195,8 +207,8 @@ export async function serveRemoteBot(directory: string) {
             return answer(response, 200, { tested: true, version: VERSION });
           }
           if ('config' in frame && frame.config !== undefined) {
-            if (frame.config === null) host.disable();
-            else host.configure(frame.config);
+            if (frame.config === null) host.disable(frame.configVersion);
+            else host.configure(frame.config, frame.configVersion);
           }
           if (frame.op.action === 'claim')
             return answer(response, 200, {
@@ -229,6 +241,7 @@ export async function serveRemoteBot(directory: string) {
                 frame.config,
                 frame.route,
                 frame.op.files,
+                frame.configVersion,
               ),
             );
           }
@@ -240,6 +253,8 @@ export async function serveRemoteBot(directory: string) {
               frame.op,
               frame.config ?? undefined,
               frame.route,
+              false,
+              frame.configVersion,
             ),
           );
         } catch (error) {

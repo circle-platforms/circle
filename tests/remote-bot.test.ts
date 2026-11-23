@@ -10,8 +10,10 @@ import {
   BotError,
   maskKey,
   MAX_HISTORY_TEXT_BYTES,
+  MAX_REPLY_DELIVERY_CHARS,
   RemoteBot,
   remoteCompletion,
+  splitReplyText,
   type ChatRoute,
   type RemoteModel,
 } from '../src/remote_bot.js';
@@ -1706,6 +1708,7 @@ test(
 
     const seen: Array<{ auth: string; text: string }> = [];
     let holdNext = false;
+    let heldResponded = false;
     let gate = deferred();
     let reqStarted = deferred();
     let reqAborted = deferred();
@@ -1718,7 +1721,8 @@ test(
       };
       const text = String(body.messages.at(-1)?.content ?? '');
       seen.push({ auth: String(req.headers.authorization ?? ''), text });
-      if (holdNext) {
+      const held = holdNext;
+      if (held) {
         holdNext = false;
         reqStarted.resolve();
         res.once('close', () => {
@@ -1726,6 +1730,7 @@ test(
         });
         await gate.promise;
         if (res.destroyed || res.closed) return;
+        heldResponded = true;
       }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       res.write(
@@ -1867,9 +1872,10 @@ test(
         { auth: 'Bearer KEY-NEW', text: 'M2' },
       ]);
 
-      // (b) disable frame (owner omitted) aborts in-flight M1's AbortSignal and skips M2 with disabled_queued.
+      // (b) disable frame (owner omitted) aborts in-flight D1's AbortSignal and skips D2 with disabled_queued.
       seen.length = 0;
       holdNext = true;
+      heldResponded = false;
       gate = deferred();
       reqStarted = deferred();
       reqAborted = deferred();
@@ -1897,9 +1903,22 @@ test(
       const disRes = await call({ op: { action: 'disable' } });
       assert.equal(disRes.status, 200);
       assert.equal(disRes.body.disabled, true);
-      await reqAborted.promise;
+      let abortedWhileHeld = false;
+      let releaseFallback: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        reqAborted.promise.then(() => {
+          abortedWhileHeld = true;
+        }),
+        new Promise<void>((ok) => {
+          releaseFallback = setTimeout(ok, 500);
+        }),
+      ]);
+      if (releaseFallback !== undefined) clearTimeout(releaseFallback);
       gate.resolve();
       const afterDisable = await waitSocketIdle(current);
+      const m1SettledViaAbort = !heldResponded;
+      assert.equal(abortedWhileHeld, true);
+      assert.equal(m1SettledViaAbort, true);
       assert.deepEqual(seen, [{ auth: 'Bearer KEY-NEW', text: 'D1' }]);
       assert.deepEqual(
         afterDisable.events.slice(-3).map((e) => [e.role, e.code]),
@@ -2390,4 +2409,648 @@ test('S11: remote_bot.ts and remote_bot_service.ts keep all host strings CJK-fre
     );
   assert.notEqual(stripped, botSrc);
   assert.equal(cjk.test(stripped), false);
+});
+
+test(
+  'F8: serveRemoteBot enforces monotonic configVersion across configure, disable, discover, send, and inbound',
+  { skip: process.platform === 'win32', timeout: 15000 },
+  async () => {
+    const { createServer, request } = await import('node:http');
+    const { serveRemoteBot } = await import('../src/remote_bot_service.js');
+    const dir = await mkdtemp(join(tmpdir(), 'remote-bot-f8-'));
+
+    const seen: Array<{ auth: string; text: string }> = [];
+    const modelServer = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const c of req) chunks.push(c);
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+        messages: Array<{ content: string }>;
+      };
+      const text = String(body.messages.at(-1)?.content ?? '');
+      seen.push({ auth: String(req.headers.authorization ?? ''), text });
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(
+        'data: ' +
+          JSON.stringify({
+            id: 'x',
+            object: 'chat.completion.chunk',
+            model: 'm',
+            choices: [
+              {
+                index: 0,
+                delta: { role: 'assistant', content: 'ok ' + text },
+                finish_reason: null,
+              },
+            ],
+          }) +
+          '\n\n',
+      );
+      res.write(
+        'data: ' +
+          JSON.stringify({
+            id: 'x',
+            object: 'chat.completion.chunk',
+            model: 'm',
+            choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          }) +
+          '\n\n',
+      );
+      res.end('data: [DONE]\n\n');
+    });
+    await new Promise<void>((ok) => modelServer.listen(0, '127.0.0.1', ok));
+    const port = (modelServer.address() as { port: number }).port;
+    const cfg1: RemoteModel = {
+      ...config,
+      endpoint: `http://127.0.0.1:${port}/v1`,
+      key: 'KEY-V1',
+    };
+    const cfg2: RemoteModel = {
+      ...config,
+      endpoint: `http://127.0.0.1:${port}/v1`,
+      key: 'KEY-V2',
+    };
+
+    const stop = await serveRemoteBot(dir);
+    const call = (frame: unknown) =>
+      new Promise<{ status: number; body: Record<string, unknown> }>(
+        (ok, fail) => {
+          const payload = Buffer.from(JSON.stringify(frame));
+          const req = request(
+            {
+              socketPath: join(dir, 'host.sock'),
+              path: '/chat',
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                'content-length': payload.length,
+              },
+            },
+            (res) => {
+              const out: Buffer[] = [];
+              res.on('data', (c: Buffer) => out.push(c));
+              res.on('end', () =>
+                ok({
+                  status: res.statusCode ?? 500,
+                  body: JSON.parse(Buffer.concat(out).toString('utf8')),
+                }),
+              );
+            },
+          );
+          req.on('error', fail);
+          req.end(payload);
+        },
+      );
+    const waitSocketIdle = async (conversation: string) => {
+      const deadline = Date.now() + 5000;
+      while (true) {
+        const hist = (
+          await call({
+            owner: 'member',
+            op: { action: 'history', conversation, after: 0 },
+          })
+        ).body as { active: unknown; queued: unknown[] };
+        if (!hist.active && hist.queued.length === 0) return hist;
+        if (Date.now() > deadline)
+          throw new Error('socket queue did not drain');
+        await new Promise<void>((ok) => setImmediate(ok));
+      }
+    };
+    try {
+      const { current } = (
+        await call({ owner: 'member', op: { action: 'discover' } })
+      ).body as { current: string };
+
+      const badVer = await call({
+        op: { action: 'configure' },
+        config: cfg1,
+        configVersion: -1,
+      });
+      assert.equal(badVer.status, 400);
+      assert.equal(badVer.body.code, 'invalid_request');
+
+      const cfgRes1 = await call({
+        op: { action: 'configure' },
+        config: cfg1,
+        configVersion: 1,
+      });
+      assert.equal(cfgRes1.status, 200);
+      assert.equal(cfgRes1.body.configured, true);
+
+      // Stale discover(null, v=0) after configure(K1, v=1) must NOT disable K1.
+      const staleDiscover = await call({
+        owner: 'member',
+        op: { action: 'discover' },
+        config: null,
+        configVersion: 0,
+      });
+      assert.equal(staleDiscover.status, 200);
+
+      const sendAfterStaleDiscover = await call({
+        owner: 'member',
+        op: {
+          action: 'send',
+          conversation: current,
+          request: randomUUID(),
+          text: 'still-enabled',
+        },
+      });
+      assert.equal(sendAfterStaleDiscover.status, 200);
+      await waitSocketIdle(current);
+      assert.deepEqual(seen, [
+        { auth: 'Bearer KEY-V1', text: 'still-enabled' },
+      ]);
+
+      // disable(v=2) keeps configVersion=2; stale send/inbound carrying cfg1(v=1) must return 503 bot_not_enabled and never re-enable K1.
+      const disRes = await call({
+        op: { action: 'disable' },
+        configVersion: 2,
+      });
+      assert.equal(disRes.status, 200);
+      assert.equal(disRes.body.disabled, true);
+
+      const staleSend = await call({
+        owner: 'member',
+        op: {
+          action: 'send',
+          conversation: current,
+          request: randomUUID(),
+          text: 'stale-send',
+        },
+        config: cfg1,
+        configVersion: 1,
+      });
+      assert.equal(staleSend.status, 503);
+      assert.equal(staleSend.body.code, 'bot_not_enabled');
+      assert.equal(staleSend.body.message, 'bot model is not enabled');
+
+      const followUpSend = await call({
+        owner: 'member',
+        op: {
+          action: 'send',
+          conversation: current,
+          request: randomUUID(),
+          text: 'must-stay-disabled',
+        },
+      });
+      assert.equal(followUpSend.status, 503);
+      assert.equal(followUpSend.body.code, 'bot_not_enabled');
+
+      const staleInbound = await call({
+        owner: 'member',
+        op: { action: 'inbound', request: randomUUID(), text: 'help' },
+        config: cfg1,
+        configVersion: 1,
+        route: { source: 'channel', issuer: 'i1', subject: 's1' },
+      });
+      assert.equal(staleInbound.status, 503);
+      assert.equal(staleInbound.body.code, 'bot_not_enabled');
+
+      // Newer configure(cfg2, v=3) re-enables; unversioned disable must be ignored once versioned.
+      const cfgRes2 = await call({
+        op: { action: 'configure' },
+        config: cfg2,
+        configVersion: 3,
+      });
+      assert.equal(cfgRes2.status, 200);
+      const unversionedDisable = await call({ op: { action: 'disable' } });
+      assert.equal(unversionedDisable.status, 200);
+      const sendV3 = await call({
+        owner: 'member',
+        op: {
+          action: 'send',
+          conversation: current,
+          request: randomUUID(),
+          text: 're-enabled-v3',
+        },
+      });
+      assert.equal(sendV3.status, 200);
+      await waitSocketIdle(current);
+      assert.deepEqual(seen, [
+        { auth: 'Bearer KEY-V1', text: 'still-enabled' },
+        { auth: 'Bearer KEY-V2', text: 're-enabled-v3' },
+      ]);
+    } finally {
+      modelServer.closeAllConnections();
+      await new Promise<void>((ok) => modelServer.close(() => ok()));
+      await stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+test('F9: pre-model non-attachment errors emit reply_interrupted while missing current attachment emits attachment_unavailable', async () => {
+  const { createHash } = await import('node:crypto');
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const home = await mkdtemp(join(tmpdir(), 'remote-bot-f9-'));
+  let modelCalls = 0;
+  const host = new RemoteBot(home, async () => {
+    modelCalls++;
+    return 'unexpected';
+  });
+  const waitIdle = async (conversation: string) => {
+    const deadline = Date.now() + 5000;
+    while (
+      (
+        host.run('member', {
+          action: 'history',
+          conversation,
+          after: 0,
+        }) as { active: unknown }
+      ).active
+    ) {
+      if (Date.now() > deadline) throw new Error('timed out waiting for idle');
+      await new Promise<void>((ok) => setImmediate(ok));
+    }
+  };
+  try {
+    const { current } = host.run('member', { action: 'discover' }) as {
+      current: string;
+    };
+    // Make memberHome a regular file so mkdir(memberHome) fails before model start on a text-only turn.
+    const membersDir = join(home, 'members');
+    await mkdir(membersDir, { recursive: true, mode: 0o700 });
+    const memberHash = createHash('sha256').update('member').digest('hex');
+    await writeFile(join(membersDir, memberHash), 'not-a-directory');
+
+    host.run(
+      'member',
+      {
+        action: 'send',
+        conversation: current,
+        request: randomUUID(),
+        text: 'plain text message',
+      },
+      config,
+    );
+    await waitIdle(current);
+    assert.equal(modelCalls, 0);
+
+    const histAfterMkdirFail = host.run('member', {
+      action: 'history',
+      conversation: current,
+      after: 0,
+    }) as { events: Array<{ role: string; code?: string; text: string }> };
+    assert.deepEqual(histAfterMkdirFail.events.at(-1), {
+      ...histAfterMkdirFail.events.at(-1)!,
+      role: 'notice',
+      code: 'reply_interrupted',
+      text: 'model reply interrupted; outcome unknown',
+    });
+
+    // Missing current-turn attachment still emits attachment_unavailable.
+    const missingSha = createHash('sha256')
+      .update('missing-file')
+      .digest('hex');
+    host.run(
+      'member',
+      {
+        action: 'send',
+        conversation: current,
+        request: randomUUID(),
+        text: 'with missing file',
+        files: [{ name: 'missing.txt', size: 12, sha256: missingSha }],
+      },
+      config,
+    );
+    await waitIdle(current);
+    assert.equal(modelCalls, 0);
+
+    const histAfterMissingFile = host.run('member', {
+      action: 'history',
+      conversation: current,
+      after: 0,
+    }) as { events: Array<{ role: string; code?: string; text: string }> };
+    assert.deepEqual(histAfterMissingFile.events.at(-1), {
+      ...histAfterMissingFile.events.at(-1)!,
+      role: 'notice',
+      code: 'attachment_unavailable',
+      text: 'attachment could not be read',
+    });
+  } finally {
+    await host.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('F10: replies exceeding 64,000 chars split cleanly without breaking surrogate pairs and all chunks pass claim()', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'remote-bot-f10-'));
+  let nextReply = 'A'.repeat(70_000);
+  const host = new RemoteBot(home, async () => nextReply);
+  const route: ChatRoute = {
+    source: 'client',
+    issuer: 'issuer-f10',
+    subject: 'member-f10',
+  };
+  const waitIdle = async (conversation: string) => {
+    const deadline = Date.now() + 5000;
+    while (
+      (
+        host.run('member', {
+          action: 'history',
+          conversation,
+          after: 0,
+        }) as { active: unknown }
+      ).active
+    ) {
+      if (Date.now() > deadline) throw new Error('timed out waiting for idle');
+      await new Promise<void>((ok) => setImmediate(ok));
+    }
+  };
+  try {
+    const { current } = host.run('member', { action: 'discover' }) as {
+      current: string;
+    };
+
+    host.run(
+      'member',
+      {
+        action: 'send',
+        conversation: current,
+        request: randomUUID(),
+        text: 'long reply',
+      },
+      config,
+      route,
+    );
+    await waitIdle(current);
+
+    const hist1 = host.run('member', {
+      action: 'history',
+      conversation: current,
+      after: 0,
+    }) as { events: Array<{ role: string; text: string }> };
+    const assistantEvents = hist1.events.filter((e) => e.role === 'assistant');
+    assert.equal(assistantEvents.length, 2);
+    for (const [index, event] of assistantEvents.entries()) {
+      assert.ok(event.text.length <= MAX_REPLY_DELIVERY_CHARS);
+      assert.match(event.text, new RegExp(`\\n\\n\\(part ${index + 1}/2\\)$`));
+      assert.doesNotMatch(event.text, /[\u4e00-\u9fff]/);
+    }
+
+    const claimedUser = host.claim('issuer-f10');
+    assert.equal(claimedUser?.role, 'user');
+    host.delivered(claimedUser!.receipt, 'issued');
+    const claimedPart1 = host.claim('issuer-f10');
+    const claimedPart2 = host.claim('issuer-f10');
+    assert.equal(claimedPart1?.role, 'assistant');
+    assert.equal(claimedPart2?.role, 'assistant');
+    assert.ok(claimedPart1!.text.length <= MAX_REPLY_DELIVERY_CHARS);
+    assert.ok(claimedPart2!.text.length <= MAX_REPLY_DELIVERY_CHARS);
+    assert.equal(
+      claimedPart1!.text.replace(/\n\n\(part 1\/2\)$/, '') +
+        claimedPart2!.text.replace(/\n\n\(part 2\/2\)$/, ''),
+      nextReply,
+    );
+    host.delivered(claimedPart1!.receipt, 'issued');
+    host.delivered(claimedPart2!.receipt, 'issued');
+    assert.equal(host.claim('issuer-f10'), null);
+
+    // Surrogate pair crossing the 60,000-char chunk boundary stays intact and well-formed.
+    const surrogateReply = 'a'.repeat(59_999) + '😀' + 'b'.repeat(10_000);
+    const surrogateParts = splitReplyText(surrogateReply);
+    assert.equal(surrogateParts.length, 2);
+    for (const part of surrogateParts) {
+      assert.ok(part.length <= MAX_REPLY_DELIVERY_CHARS);
+      assert.doesNotMatch(
+        part,
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+      );
+    }
+    assert.equal(surrogateParts[1]!.startsWith('😀'), true);
+    assert.equal(
+      surrogateParts[0]!.replace(/\n\n\(part 1\/2\)$/, '') +
+        surrogateParts[1]!.replace(/\n\n\(part 2\/2\)$/, ''),
+      surrogateReply,
+    );
+
+    // Exactly 64,000 chars stays a single unsplit assistant event.
+    nextReply = 'x'.repeat(MAX_REPLY_DELIVERY_CHARS);
+    host.run(
+      'member',
+      {
+        action: 'send',
+        conversation: current,
+        request: randomUUID(),
+        text: 'exact boundary',
+      },
+      config,
+      route,
+    );
+    await waitIdle(current);
+    const boundaryClaim = host.claim('issuer-f10');
+    assert.equal(boundaryClaim?.role, 'user');
+    const exactAssistant = host.claim('issuer-f10');
+    assert.equal(exactAssistant?.role, 'assistant');
+    assert.equal(exactAssistant?.text.length, MAX_REPLY_DELIVERY_CHARS);
+    assert.doesNotMatch(exactAssistant!.text, /\(part 1\/1\)/);
+  } finally {
+    await host.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('F11: every host notice code matches Hub deliverySchema regex /^[a-z0-9_]{1,64}$/', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const codePattern = /^[a-z0-9_]{1,64}$/;
+  const root = join(import.meta.dirname, '..');
+  const botSrc = await readFile(join(root, 'src', 'remote_bot.ts'), 'utf8');
+  const svcSrc = await readFile(
+    join(root, 'src', 'remote_bot_service.ts'),
+    'utf8',
+  );
+
+  const literalCodes = new Set<string>();
+  for (const m of botSrc.matchAll(/'notice',\s*'([a-zA-Z0-9_-]+)'/g))
+    literalCodes.add(m[1]!);
+  for (const m of botSrc.matchAll(/\bcode:\s*'([^']+)'/g))
+    literalCodes.add(m[1]!);
+  for (const m of botSrc.matchAll(
+    /new BotError\(\s*\d+,\s*'([^']+)'(?:\s*,\s*[^,)]+(?:\s*,\s*'([^']+)')?)?/g,
+  )) {
+    literalCodes.add(m[1]!);
+    if (m[2]) literalCodes.add(m[2]);
+  }
+  for (const m of botSrc.matchAll(
+    /'(help|conversation_started|stop_requested|stop_idle|disabled_queued|credential_blocked)'/g,
+  ))
+    literalCodes.add(m[1]!);
+  for (const m of svcSrc.matchAll(
+    /new BotError\(\s*\d+,\s*'([^']+)'|\bcode:\s*'([^']+)'/g,
+  )) {
+    const found = m[1] ?? m[2];
+    if (found) literalCodes.add(found);
+  }
+  assert.ok(literalCodes.size >= 20);
+  for (const code of literalCodes) {
+    assert.match(code, codePattern, `invalid notice/error code: ${code}`);
+  }
+
+  // Also check runtime emitted notices across commands, disable, restart, and errors.
+  const home = await mkdtemp(join(tmpdir(), 'remote-bot-f11-'));
+  const host = new RemoteBot(home, async () => {
+    throw new Error('boom');
+  });
+  const route: ChatRoute = {
+    source: 'channel',
+    issuer: 'i-f11',
+    subject: 's-f11',
+  };
+  try {
+    const { current } = host.run('member', { action: 'discover' }) as {
+      current: string;
+    };
+    host.inbound('member', randomUUID(), 'help', config, route);
+    host.inbound('member', randomUUID(), '/stop', config, route);
+    host.inbound('member', randomUUID(), '/new', config, route);
+    const afterNew = host.run('member', { action: 'discover' }) as {
+      current: string;
+    };
+    host.run(
+      'member',
+      {
+        action: 'send',
+        conversation: afterNew.current,
+        request: randomUUID(),
+        text: 'fail',
+      },
+      config,
+      route,
+    );
+    const deadline = Date.now() + 5000;
+    while (
+      host.run('member', {
+        action: 'history',
+        conversation: afterNew.current,
+        after: 0,
+      }).active
+    ) {
+      if (Date.now() > deadline) throw new Error('timed out waiting for idle');
+      await new Promise<void>((ok) => setImmediate(ok));
+    }
+    const emitted: string[] = [];
+    for (let item = host.claim('i-f11'); item; item = host.claim('i-f11')) {
+      if (item.role === 'notice') {
+        assert.ok(item.code);
+        emitted.push(item.code);
+        assert.match(item.code, codePattern);
+      }
+      host.delivered(item.receipt, 'issued');
+    }
+    assert.ok(emitted.includes('help'));
+    assert.ok(emitted.includes('stop_idle'));
+    assert.ok(emitted.includes('conversation_started'));
+    assert.ok(emitted.includes('reply_interrupted'));
+    assert.ok(current);
+  } finally {
+    await host.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test('T5: multi-turn media replay enforces 20 MiB MAX_MEDIA_BYTES budget across turns', async () => {
+  const { createHash } = await import('node:crypto');
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const home = await mkdtemp(join(tmpdir(), 'remote-bot-t5-media-'));
+  const ownerDir = join(
+    home,
+    'files',
+    createHash('sha256').update('member').digest('hex'),
+  );
+  await mkdir(ownerDir, { recursive: true, mode: 0o700 });
+  const elevenMiB = 11 * 1024 * 1024;
+  const img1 = Buffer.alloc(elevenMiB, 0x41);
+  const img2 = Buffer.alloc(elevenMiB, 0x42);
+  const sha1 = createHash('sha256').update(img1).digest('hex');
+  const sha2 = createHash('sha256').update(img2).digest('hex');
+  await writeFile(join(ownerDir, sha1), img1);
+  await writeFile(join(ownerDir, sha2), img2);
+
+  const seenTurns: Array<
+    Array<{ role: string; content: string; attachments: number }>
+  > = [];
+  const host = new RemoteBot(home, async (_home, _cfg, messages) => {
+    seenTurns.push(
+      messages.map((m) => ({
+        role: m.role,
+        content: String(m.content),
+        attachments: m.attachments?.length ?? 0,
+      })),
+    );
+    return 'ok';
+  });
+  const waitIdle = async (conversation: string) => {
+    const deadline = Date.now() + 5000;
+    while (
+      (
+        host.run('member', {
+          action: 'history',
+          conversation,
+          after: 0,
+        }) as { active: unknown }
+      ).active
+    ) {
+      if (Date.now() > deadline) throw new Error('timed out waiting for idle');
+      await new Promise<void>((ok) => setImmediate(ok));
+    }
+  };
+  try {
+    const { current } = host.run('member', { action: 'discover' }) as {
+      current: string;
+    };
+    host.run(
+      'member',
+      {
+        action: 'send',
+        conversation: current,
+        request: randomUUID(),
+        text: 'turn-1-image',
+        files: [{ name: 'img1.png', size: img1.length, sha256: sha1 }],
+      },
+      config,
+    );
+    await waitIdle(current);
+
+    host.run(
+      'member',
+      {
+        action: 'send',
+        conversation: current,
+        request: randomUUID(),
+        text: 'turn-2-image',
+        files: [{ name: 'img2.png', size: img2.length, sha256: sha2 }],
+      },
+      config,
+    );
+    await waitIdle(current);
+
+    host.run(
+      'member',
+      {
+        action: 'send',
+        conversation: current,
+        request: randomUUID(),
+        text: 'turn-3-check-replay',
+      },
+      config,
+    );
+    await waitIdle(current);
+
+    assert.equal(seenTurns.length, 3);
+    // Turn 2: current img2.png (11 MiB) attached, leaving 9 MiB so replayed img1.png (11 MiB) falls back to reference-only.
+    const turn2Users = seenTurns[1]!.filter((m) => m.role === 'user');
+    assert.equal(turn2Users[0]!.attachments, 0);
+    assert.match(turn2Users[0]!.content, / \(file reference only\)/);
+    assert.equal(turn2Users[1]!.attachments, 1);
+    assert.doesNotMatch(turn2Users[1]!.content, / \(file reference only\)/);
+
+    // Turn 3: replay walks newest-first -> img2.png (11 MiB) fits in 20 MiB, leaving 9 MiB so img1.png gets reference-only.
+    const turn3Users = seenTurns[2]!.filter((m) => m.role === 'user');
+    assert.equal(turn3Users[0]!.attachments, 0);
+    assert.match(turn3Users[0]!.content, / \(file reference only\)/);
+    assert.equal(turn3Users[1]!.attachments, 1);
+    assert.doesNotMatch(turn3Users[1]!.content, / \(file reference only\)/);
+  } finally {
+    await host.close();
+    await rm(home, { recursive: true, force: true });
+  }
 });
