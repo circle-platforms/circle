@@ -6,9 +6,14 @@ import { pipeline } from 'node:stream/promises';
 import { Transform, Readable } from 'node:stream';
 import type { McpBearerConnection } from '../../../src/mcp_loader.js';
 import type { ChatFile } from '../../../src/remote_bot_protocol.js';
+import { fetchWithRefresh } from './remote-bot';
 
 const MAX_BOT_FILE_BYTES = 100 * 1024 * 1024;
-export async function uploadSelected(port: McpBearerConnection, path: string) {
+export async function uploadSelected(
+  port: McpBearerConnection,
+  path: string,
+  fetcher = fetch,
+) {
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const stat = await file.stat();
@@ -21,11 +26,10 @@ export async function uploadSelected(port: McpBearerConnection, path: string) {
     }))
       hash.update(chunk);
     const sha256 = hash.digest('hex');
+    const url = new URL('/api/bot/v1/files/' + sha256, port.server);
     const signal = AbortSignal.timeout(120000);
-    const token = await port.token(signal);
-    const response = await fetch(
-      new URL('/api/bot/v1/files/' + sha256, port.server),
-      {
+    const response = await fetchWithRefresh(port, signal, (token) =>
+      fetcher(url, {
         method: 'PUT',
         signal,
         redirect: 'error',
@@ -38,11 +42,19 @@ export async function uploadSelected(port: McpBearerConnection, path: string) {
           file.createReadStream({ start: 0, autoClose: false }),
         ) as BodyInit,
         duplex: 'half',
-      } as RequestInit,
+      } as RequestInit),
     );
-    port.assertActive();
-    const info = await response.json();
-    if (!response.ok || info.sha256 !== sha256 || info.size !== stat.size)
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error('file upload was not verified');
+    }
+    let info: { sha256?: unknown; size?: unknown };
+    try {
+      info = (await response.json()) as { sha256?: unknown; size?: unknown };
+    } catch {
+      throw new Error('file upload was not verified');
+    }
+    if (info.sha256 !== sha256 || info.size !== stat.size)
       throw new Error('file upload was not verified');
     return { name: basename(path), sha256, size: stat.size };
   } finally {
@@ -54,6 +66,7 @@ export async function saveRemoteFile(
   port: McpBearerConnection,
   descriptor: ChatFile,
   path: string,
+  fetcher = fetch,
 ) {
   if (
     !/^[a-f0-9]{64}$/.test(descriptor.sha256) ||
@@ -62,14 +75,14 @@ export async function saveRemoteFile(
     descriptor.size > MAX_BOT_FILE_BYTES
   )
     throw new Error('invalid file receipt');
+  const url = new URL('/api/bot/v1/files/' + descriptor.sha256, port.server);
   const signal = AbortSignal.timeout(120000);
-  const response = await fetch(
-    new URL('/api/bot/v1/files/' + descriptor.sha256, port.server),
-    {
+  const response = await fetchWithRefresh(port, signal, (token) =>
+    fetcher(url, {
       signal,
       redirect: 'error',
-      headers: { authorization: 'Bearer ' + (await port.token(signal)) },
-    },
+      headers: { authorization: 'Bearer ' + token },
+    }),
   );
   const contentLength = response.headers.get('content-length');
   if (

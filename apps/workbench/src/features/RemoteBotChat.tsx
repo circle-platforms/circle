@@ -18,6 +18,10 @@ import {
   type RemoteEvent,
 } from '../model/remote-bot';
 
+function errorMessage(reason: unknown, fallback: string) {
+  return reason instanceof Error && reason.message ? reason.message : fallback;
+}
+
 export function RemoteBotLink() {
   useLocale();
   const { snapshot } = useRuntime();
@@ -176,9 +180,7 @@ function Chat({
       }
       setEpoch((n) => n + 1);
     } catch (reason) {
-      setError(
-        reason instanceof Error ? reason.message : t('remote bot disconnected'),
-      );
+      setError(errorMessage(reason, t('remote bot disconnected')));
     } finally {
       setSending(false);
     }
@@ -222,7 +224,14 @@ function Chat({
                               if (bot)
                                 void desktopHost()
                                   ?.saveBotFile?.(bot.binding, file)
-                                  .catch((e) => setError(String(e)));
+                                  .catch((e) =>
+                                    setError(
+                                      errorMessage(
+                                        e,
+                                        t('remote bot disconnected'),
+                                      ),
+                                    ),
+                                  );
                             }}
                           >
                             {file.name} · {file.size} B
@@ -323,7 +332,7 @@ function Chat({
                       setFiles(selected);
                     }
                   } catch (e) {
-                    setError(String(e));
+                    setError(errorMessage(e, t('remote bot disconnected')));
                   }
                 }}
               >

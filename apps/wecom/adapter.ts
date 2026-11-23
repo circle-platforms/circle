@@ -180,6 +180,7 @@ export class ChannelSession {
         action: 'authorize',
         subject,
       });
+      await allowed.body?.cancel();
       if (!allowed.ok) throw new Error('unavailable');
       const files: FileRef[] = [];
       for (const media of input.media) {
@@ -193,12 +194,20 @@ export class ChannelSession {
         const sha256 = createHash('sha256').update(buffer).digest('hex');
         const name = safeAttachmentName(filename);
         const response = await this.transfer(runtime, subject, sha256, buffer);
-        const receipt = await response.json();
-        if (
-          !response.ok ||
-          receipt.sha256 !== sha256 ||
-          receipt.size !== buffer.length
-        )
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw new Error('file integrity');
+        }
+        let receipt: { sha256?: unknown; size?: unknown };
+        try {
+          receipt = (await response.json()) as {
+            sha256?: unknown;
+            size?: unknown;
+          };
+        } catch {
+          throw new Error('file integrity');
+        }
+        if (receipt.sha256 !== sha256 || receipt.size !== buffer.length)
           throw new Error('file integrity');
         files.push({ name, sha256, size: buffer.length });
       }
@@ -262,6 +271,7 @@ export class ChannelSession {
         .join('\n'),
       ...(files.length ? { files } : {}),
     });
+    await accepted.body?.cancel();
     if (accepted.ok || accepted.status === 403 || accepted.status === 400) {
       if (accepted.ok)
         this.db
@@ -282,7 +292,10 @@ export class ChannelSession {
 
   private async flushOutbound(run: NonNullable<typeof this.current>) {
     const next = await this.post(run, { action: 'next' });
-    if (!next.ok) return;
+    if (!next.ok) {
+      await next.body?.cancel();
+      return;
+    }
     const item = (await next.json()).delivery as DeliveryItem | null;
     if (!item || run !== this.current) return;
     const peer = this.db
@@ -304,8 +317,10 @@ export class ChannelSession {
           contentLength === null ||
           Number(contentLength) !== item.file.size ||
           item.file.size > MAX_ATTACHMENT_BYTES
-        )
+        ) {
+          await got.body?.cancel();
           throw new Error('file unavailable');
+        }
         const bytes = Buffer.from(await got.arrayBuffer());
         if (
           bytes.length !== item.size ||
@@ -358,7 +373,7 @@ export class ChannelSession {
     } catch {
       /* Keep the observed dispatch stage when no acknowledgment arrives. */
     }
-    await this.post(run, {
+    const ack = await this.post(run, {
       action: 'receipt',
       receipt: item.receipt,
       state,
@@ -366,6 +381,7 @@ export class ChannelSession {
         state === 'not_sent' ? false : state === 'unknown' ? null : true,
       ...(acknowledgment ? { acknowledgment } : {}),
     });
+    await ack.body?.cancel();
   }
 
   async flush() {
