@@ -2,7 +2,7 @@
 // MCP server entry named HUB_SERVER, and its sign-in is the MCP authorization of any server (mcp_loader.ts), by device
 // code where the Hub offers it. This only finds the Hub's MCP endpoint from what a person typed, and writes, or removes,
 // that entry. No address is built in: there is none until a person types one.
-import { isRecord, type CircleSettings } from './settings.js';
+import type { CircleSettings } from './settings.js';
 import { mcpServer } from './mcp_config.js';
 
 /** The name of the MCP server entry the Hub extension keeps. */
@@ -149,6 +149,10 @@ export function hubEndpoint(settings: CircleSettings): string | undefined {
  */
 export const HUB_PLACEHOLDERS = { url: 'HUB_URL', token: 'HUB_TOKEN' } as const;
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function sameEndpoint(existingUrl: unknown, nextEndpoint: string): boolean {
   if (typeof existingUrl !== 'string') return false;
   try {
@@ -182,7 +186,7 @@ export function addHub(settings: CircleSettings, endpoint: string): void {
   const headers =
     existing &&
     sameEndpoint(existing.url, endpoint) &&
-    isRecord(existing.headers)
+    isPlainObject(existing.headers)
       ? existing.headers
       : undefined;
   settings.mcpServers = {
