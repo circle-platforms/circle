@@ -145,7 +145,10 @@ export function findHubConnection(
 export function isHubConnected(
   snapshot: Pick<WorkbenchSnapshot, 'mcp'>,
 ): boolean {
-  return findHubConnection(snapshot)?.status === 'connected';
+  const row = findHubConnection(snapshot);
+  if (!row || row.enabled === false) return false;
+  if (typeof row.mcpConnected === 'boolean') return row.mcpConnected;
+  return row.status === 'connected';
 }
 
 export function shouldOpenInitialConnectionModal(params: {

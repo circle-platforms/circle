@@ -552,9 +552,75 @@ try {
         await page.evaluate(() => window.remoteBotUiFixture.reloadCalls()),
         1,
       );
-      await page.evaluate(() =>
-        window.remoteBotUiFixture.setHubStatus('connected'),
+      await page.evaluate(() => {
+        window.remoteBotUiFixture.setHubMcpConnected(false);
+        window.remoteBotUiFixture.setHubStatus(
+          're-authorization required',
+          're-authorization required',
+        );
+      });
+      await flushMicrotasks(page);
+      assert.equal(
+        await page
+          .getByRole('link', {
+            name: label('my bot', '我的机器人'),
+            exact: true,
+          })
+          .count(),
+        0,
+        'connect-time re-authorization required hides My Bot while /mcp is disconnected',
       );
+      await page.evaluate(() => {
+        window.remoteBotUiFixture.setHubMcpConnected(true);
+      });
+      await page
+        .getByRole('link', { name: label('my bot', '我的机器人'), exact: true })
+        .waitFor();
+      await page.locator('#remote-bot-input').waitFor();
+      await page.evaluate(() => {
+        window.remoteBotUiFixture.setHubSignIn({
+          url: 'http://127.0.0.1:7420/console/device',
+          code: 'LIVE-REAUTH',
+        });
+        window.remoteBotUiFixture.setHubStatus(
+          'error',
+          'enter the code LIVE-REAUTH',
+        );
+      });
+      await flushMicrotasks(page);
+      assert.equal(
+        await page
+          .getByRole('link', {
+            name: label('my bot', '我的机器人'),
+            exact: true,
+          })
+          .count(),
+        1,
+        'active re-sign-in keeps My Bot visible while /mcp is live',
+      );
+      await page.evaluate(() => {
+        window.remoteBotUiFixture.setHubSignIn(undefined);
+        window.remoteBotUiFixture.setHubStatus(
+          'error',
+          'sign-in failed: the sign-in was refused',
+        );
+      });
+      await flushMicrotasks(page);
+      assert.equal(
+        await page
+          .getByRole('link', {
+            name: label('my bot', '我的机器人'),
+            exact: true,
+          })
+          .count(),
+        1,
+        'failed re-sign-in keeps My Bot visible while /mcp is live',
+      );
+      await page.locator('#remote-bot-input').waitFor();
+      await page.evaluate(() => {
+        window.remoteBotUiFixture.setHubMcpConnected(undefined);
+        window.remoteBotUiFixture.setHubStatus('connected');
+      });
       await page.locator('#remote-bot-input').waitFor();
       await page.screenshot({ path: join(output, `${name}.png`) });
       assert.deepEqual(errors, []);

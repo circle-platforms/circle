@@ -19,15 +19,19 @@ export function connectionChip(row: McpServer | undefined): {
 } {
   return !row
     ? { tone: 'neutral', text: t('not connected') }
-    : row.status === 'connected'
-      ? { tone: 'green', text: t('connected') }
-      : row.signIn
-        ? { tone: 'blue', text: t('waiting for sign-in') }
-        : row.status === 'reload required'
-          ? { tone: 'amber', text: t('reload required') }
-          : row.status === 'error'
-            ? { tone: 'amber', text: t('not connected') }
-            : { tone: 'neutral', text: t('not connected') };
+    : row.signIn
+      ? { tone: 'blue', text: t('waiting for sign-in') }
+      : row.status === 're-authorization required'
+        ? { tone: 'amber', text: t('re-authorization required') }
+        : row.status === 'connected'
+          ? { tone: 'green', text: t('connected') }
+          : row.status === 'reload required'
+            ? { tone: 'amber', text: t('reload required') }
+            : row.status === 'error'
+              ? row.mcpConnected
+                ? { tone: 'green', text: t('connected') }
+                : { tone: 'amber', text: t('not connected') }
+              : { tone: 'neutral', text: t('not connected') };
 }
 
 /** What finding a Hub at a typed address says (src/hub_connection.ts), in the window's language; anything else as it is. */
@@ -188,7 +192,7 @@ export function HubConnectionCard({
         {row && (
           <p className="hub-status">
             {t('Hub at {address}', { address: hubAddress(row.url) })}
-            {row.status === 'connected' &&
+            {(row.status === 'connected' || row.mcpConnected) &&
               ' · ' +
                 tn(
                   row.tools.length,
@@ -202,7 +206,7 @@ export function HubConnectionCard({
         )}
         {available && row?.status === 'error' && !signIn && row.error && (
           <div className="hub-alert" role="alert">
-            <p>{t('The Hub could not be connected.')}</p>
+            {!row.mcpConnected && <p>{t('The Hub could not be connected.')}</p>}
             <pre tabIndex={0}>{row.error}</pre>
           </div>
         )}
@@ -216,9 +220,23 @@ export function HubConnectionCard({
             {signIn && (
               <HubSignInButtons signIn={signIn} onOpenError={setError} />
             )}
-            {(row.status === 'error' || row.status === 'reload required') &&
+            {(row.status === 'error' ||
+              row.status === 'reload required' ||
+              row.status === 're-authorization required') &&
               !signIn && (
-                <Button disabled={busy} onClick={() => void run('reload')}>
+                <Button
+                  disabled={busy}
+                  onClick={() =>
+                    void run(
+                      row.status === 're-authorization required'
+                        ? 'mcp.reload-server'
+                        : 'reload',
+                      row.status === 're-authorization required'
+                        ? { name: HUB_SERVER }
+                        : {},
+                    )
+                  }
+                >
                   {t('retry')}
                 </Button>
               )}

@@ -45,6 +45,7 @@ export const components: Record<string, string> = {
   'not trusted': '未信任',
   'not connected': '未连接',
   'reload required': '需要重新加载',
+  're-authorization required': '需要重新授权',
   'native browser': '已打开',
   'not opened': '未打开',
   'signed in': '已登录',

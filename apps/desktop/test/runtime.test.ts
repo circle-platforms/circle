@@ -3661,7 +3661,7 @@ test('an MCP server that signs in after the start reaches the window without ano
   assert.ok(row(updates.at(-1)!)!.tools.length > 0);
 });
 
-test('mcp-reauthorize-server forwards scope to device auth when cached discovery lacks scopes_supported, and REAUTHORIZATION_REQUIRED keeps status connected', async (t) => {
+test('mcp-reauthorize-server forwards scope to device auth when cached discovery lacks scopes_supported, and REAUTHORIZATION_REQUIRED uses distinct status while keeping live /mcp usable', async (t) => {
   const { createServer } = await import('node:http');
   const { McpAuthProvider, redirectPort } =
     await import('../../../src/mcp_auth.js');
@@ -3673,6 +3673,8 @@ test('mcp-reauthorize-server forwards scope to device auth when cached discovery
   let tokenSeq = 0;
   const validTokens = new Set(['tok-controller-before']);
   let rejectToolWithScope = false;
+  let rejectConnectWithScope = false;
+  let rejectDeviceWithRefusal = false;
 
   const srv = createServer((req, res) => {
     const url = new URL(req.url ?? '/', base());
@@ -3713,6 +3715,17 @@ test('mcp-reauthorize-server forwards scope to device auth when cached discovery
         return;
       }
       if (url.pathname === '/token') {
+        const bodyForm = new URLSearchParams(body);
+        if (
+          rejectDeviceWithRefusal &&
+          bodyForm.get('grant_type') ===
+            'urn:ietf:params:oauth:grant-type:device_code'
+        ) {
+          res
+            .writeHead(400, { 'content-type': 'application/json' })
+            .end(JSON.stringify({ error: 'access_denied' }));
+          return;
+        }
         const tok = `tok-ctrl-${++tokenSeq}`;
         validTokens.add(tok);
         res.writeHead(200, { 'content-type': 'application/json' }).end(
@@ -3734,7 +3747,10 @@ test('mcp-reauthorize-server forwards scope to device auth when cached discovery
           return;
         }
         const rpc = JSON.parse(body) as { id?: unknown; method?: string };
-        if (rpc.method === 'tools/call' && rejectToolWithScope) {
+        if (
+          (rpc.method === 'initialize' && rejectConnectWithScope) ||
+          (rpc.method === 'tools/call' && rejectToolWithScope)
+        ) {
           res
             .writeHead(403, {
               'www-authenticate':
@@ -3835,7 +3851,7 @@ test('mcp-reauthorize-server forwards scope to device auth when cached discovery
     'initial connected MCP server',
   );
 
-  // REAUTHORIZATION_REQUIRED keeps status connected and keeps tools intact.
+  // REAUTHORIZATION_REQUIRED has its own distinct status while keeping live MCP connection & tools intact.
   rejectToolWithScope = true;
   const activeRuntime = (
     controller as unknown as { runtime(ws: string): AgentRuntime }
@@ -3852,14 +3868,40 @@ test('mcp-reauthorize-server forwards scope to device auth when cached discovery
     () => row()?.error === REAUTHORIZATION_REQUIRED,
     're-authorization required note on connected server',
   );
-  assert.equal(row()?.status, 'connected');
+  assert.equal(row()?.status, 're-authorization required');
+  assert.equal(row()?.mcpConnected, true);
   assert.equal(row()?.tools.length, 1);
   assert.equal(
     keptFor(home, serverKey).tokens?.access_token,
     'tok-controller-before',
   );
 
+  // Refused / abandoned re-sign-in writes sign-in failed while keeping the open /mcp connection usable.
   rejectToolWithScope = false;
+  rejectDeviceWithRefusal = true;
+  const failedReply = await controller.dispatch({
+    id: randomUUID(),
+    name: 'mcp-reauthorize-server',
+    sessionId: controller.snapshot().activeSessionId,
+    payload: { name: 'remote', scope: 'extra-bot' },
+  });
+  assert.equal(failedReply.ok, true, failedReply.error);
+  await wait(
+    () => Boolean(row()?.signIn?.code),
+    'in-progress device sign-in keeps live connection',
+  );
+  assert.equal(row()?.status, 'error');
+  assert.equal(row()?.mcpConnected, true);
+  await wait(
+    () => (row()?.error ?? '').startsWith('sign-in failed:'),
+    'refused re-sign-in records sign-in failed while /mcp remains usable',
+  );
+  assert.equal(row()?.status, 'error');
+  assert.equal(row()?.mcpConnected, true);
+  assert.equal(row()?.tools.length, 1);
+  assert.equal(keptFor(home, serverKey).required_scope, undefined);
+
+  rejectDeviceWithRefusal = false;
   const reply = await controller.dispatch({
     id: randomUUID(),
     name: 'mcp-reauthorize-server',
@@ -3875,8 +3917,25 @@ test('mcp-reauthorize-server forwards scope to device auth when cached discovery
     () => row()?.status === 'connected' && !row()?.error,
     'reconnected without error after reauthorization',
   );
-  assert.deepEqual(seenDeviceScopes, ['custom-bot extra-bot']);
+  assert.equal(row()?.mcpConnected, true);
+  assert.deepEqual(seenDeviceScopes, ['custom-bot extra-bot', 'extra-bot']);
   assert.equal(keptFor(home, serverKey).required_scope, undefined);
+
+  // Connect-time 403 insufficient_scope sets distinct 're-authorization required' (never 'connected' or 'error') and mcpConnected: false.
+  rejectConnectWithScope = true;
+  await controller.dispatch({
+    id: randomUUID(),
+    name: 'reload',
+    sessionId: controller.snapshot().activeSessionId,
+    payload: {},
+  });
+  await wait(
+    () =>
+      row()?.status === 're-authorization required' &&
+      row()?.mcpConnected === false,
+    'connect-time re-authorization required status with mcpConnected false',
+  );
+  assert.equal(row()?.tools.length, 0);
 });
 
 const activeSession = (f: { controller: RuntimeController }) => {

@@ -39,6 +39,10 @@ import {
   uploadSelectedBatch,
 } from '../src/remote-bot-files';
 import {
+  runBotTransferEnvelope,
+  unwrapBotTransferReply,
+} from '../src/bot-transfer-envelope';
+import {
   RemoteBotError,
   remoteBotPort,
   remoteBotRequest,
@@ -1260,8 +1264,16 @@ test('F11/F15: docs/extensions.md and CHANGELOG.md document remote-bot contracts
   const mcpDoc = await readFile(join(repoRoot, 'docs', 'mcp.md'), 'utf8');
   assert.match(mcpDoc, /insufficient_scope/);
   assert.match(mcpDoc, /re-authorization required/);
-  assert.match(mcpDoc, /required_scope/);
-  assert.match(mcpDoc, /keeping the stored tokens and live connection/);
+  assert.doesNotMatch(mcpDoc, /required_scope/);
+  assert.match(
+    mcpDoc,
+    /Running `\/mcp reconnect <name>`.*starts one sign-in asking for the additional scope/,
+  );
+  assert.match(
+    mcpDoc,
+    /for a server marked `re-authorization required`, start one sign-in/,
+  );
+  assert.match(mcpDoc, /keeping the stored tokens and any live connection/);
 
   const changelog = await readFile(join(repoRoot, 'CHANGELOG.md'), 'utf8');
   assert.match(
@@ -1282,4 +1294,82 @@ test('F11/F15: docs/extensions.md and CHANGELOG.md document remote-bot contracts
     changelog,
     /The narrow settings dialog stays on whole pixels\..*\n\n## 1\.14\.0/m,
   );
+});
+
+test('C3-S2: RuntimeController and main bot transfer helpers propagate errorScope across 403 insufficient_scope replies', async (t: TestContext) => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-bot-c3s2-'));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(home, { recursive: true });
+  await mkdir(workspace, { recursive: true });
+  const settings = defaultSettings();
+  settings.mcpServers[HUB_SERVER] = {
+    type: 'http',
+    url: 'http://127.0.0.1:7420/mcp',
+    headers: { Authorization: 'Bearer member-tok' },
+  };
+  saveSettings(settings, home);
+  const binding = remoteBotPort(home).binding;
+  const sampleFile = join(root, 'sample.txt');
+  await writeFile(sampleFile, 'hello');
+
+  t.mock.method(globalThis, 'fetch', async () => {
+    return new Response(
+      JSON.stringify({
+        code: 'BOT_CLIENT_FORBIDDEN',
+        message: 'oauth client token rejected',
+      }),
+      {
+        status: 403,
+        headers: {
+          'content-type': 'application/json',
+          'www-authenticate':
+            'Bearer error="insufficient_scope", scope="custom-scope"',
+        },
+      },
+    );
+  });
+
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model: new ScriptedModel([]),
+    emit: () => {},
+  });
+  t.after(async () => {
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const botReply = await controller.dispatch({
+    id: randomUUID(),
+    name: 'remote-bot',
+    payload: { action: 'discover' },
+    sessionId: controller.snapshot().activeSessionId,
+  });
+  assert.equal(botReply.ok, false);
+  assert.equal(botReply.errorStatus, 403);
+  assert.equal(botReply.errorCode, 'BOT_CLIENT_FORBIDDEN');
+  assert.equal(botReply.errorScope, 'custom-scope');
+
+  const envelope = await runBotTransferEnvelope(async () => {
+    const fileReply = await controller.dispatch({
+      id: randomUUID(),
+      name: 'remote-bot-native-file',
+      payload: {
+        action: 'upload-batch',
+        binding,
+        paths: [sampleFile],
+      },
+      sessionId: controller.snapshot().activeSessionId,
+    });
+    return unwrapBotTransferReply(fileReply);
+  });
+  assert.equal(envelope.ok, false);
+  if (!envelope.ok) {
+    assert.equal(envelope.errorStatus, 403);
+    assert.equal(envelope.errorCode, 'BOT_CLIENT_FORBIDDEN');
+    assert.equal(envelope.errorScope, 'custom-scope');
+  }
 });

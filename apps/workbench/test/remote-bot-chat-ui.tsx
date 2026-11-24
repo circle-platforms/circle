@@ -242,6 +242,10 @@ Object.assign(window, {
       hub.error = error;
       emitSnapshot();
     },
+    setHubMcpConnected: (mcpConnected?: boolean) => {
+      hub.mcpConnected = mcpConnected;
+      emitSnapshot();
+    },
     setHubSignIn: (signIn?: McpServer['signIn']) => {
       hub.signIn = signIn;
       emitSnapshot();

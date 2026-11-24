@@ -3830,17 +3830,18 @@ export class RuntimeController {
           enabled: spec.enabled !== false,
           hasAuthorizationHeader,
           settingsPath: join(this.home, 'settings.json'),
+          mcpConnected: runtime.mcp.isConnected(name),
           status: pendingReload
             ? 'reload required'
             : spec.enabled === false
               ? 'not connected'
               : status
-                ? // Tools that may be out of date are still the server's: the note says why, and it is connected
-                  status.error &&
-                  status.error !== TOOLS_NOT_LISTED_AGAIN &&
-                  status.error !== REAUTHORIZATION_REQUIRED
-                  ? 'error'
-                  : 'connected'
+                ? status.error === REAUTHORIZATION_REQUIRED
+                  ? 're-authorization required'
+                  : // Tools that may be out of date are still the server's: the note says why, and it is connected
+                    status.error && status.error !== TOOLS_NOT_LISTED_AGAIN
+                    ? 'error'
+                    : 'connected'
                 : 'not connected',
           error: status?.error === 'disabled' ? undefined : status?.error,
           // A sign-in under way: its page, and the code to type there when it is a device sign-in

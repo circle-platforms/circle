@@ -60,6 +60,52 @@ test('isHubConnected matches only a connected Hub entry', () => {
     }),
     true,
   );
+  // C3-S4: live /mcp stays visible during re-authorization or failed re-sign-in, while connect-time re-auth (mcpConnected: false) stays hidden.
+  assert.equal(
+    isHubConnected({
+      mcp: [
+        {
+          id: 'hub',
+          name: 'Hub',
+          url: 'https://127.0.0.1:7420/mcp',
+          transport: 'streamable_http',
+          command: '',
+          args: '',
+          enabled: true,
+          mcpConnected: false,
+          status: 're-authorization required',
+          tools: [],
+        },
+      ],
+    }),
+    false,
+  );
+  for (const status of [
+    're-authorization required',
+    'error',
+    'connected',
+  ] as const) {
+    assert.equal(
+      isHubConnected({
+        mcp: [
+          {
+            id: 'hub',
+            name: 'Hub',
+            url: 'https://127.0.0.1:7420/mcp',
+            transport: 'streamable_http',
+            command: '',
+            args: '',
+            enabled: true,
+            mcpConnected: true,
+            status,
+            error: status === 'error' ? 'sign-in failed: denied' : undefined,
+            tools: [],
+          },
+        ],
+      }),
+      true,
+    );
+  }
 });
 
 test('mergeDeliveryStates combines message and attachment delivery states', () => {

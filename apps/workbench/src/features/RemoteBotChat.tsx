@@ -98,7 +98,7 @@ export function RemoteBotChat() {
   return connection ? (
     <Chat
       key={connection.url}
-      connected={connection.status === 'connected'}
+      connected={isHubConnected(snapshot) && !connection.signIn}
       connectionStatus={connection.status}
       connectionError={connection.error}
       signIn={connection.signIn}

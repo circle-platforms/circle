@@ -1207,7 +1207,17 @@ test('403 insufficient_scope on StreamableHTTP and SSE preserves tokens and live
     assert.equal(revoked.length, 0);
 
     allowApprove = true;
-    await manager.reauthorizeServer('remote', entry);
+    const pendingAuthUrl = new URL(manager.status[0]!.authorize!);
+    const pendingRedirect = new URL(
+      pendingAuthUrl.searchParams.get('redirect_uri')!,
+    );
+    pendingRedirect.searchParams.set('code', `code-${codeSeq + 1}`);
+    pendingRedirect.searchParams.set(
+      'state',
+      pendingAuthUrl.searchParams.get('state')!,
+    );
+    pendingRedirect.searchParams.set('iss', base());
+    await fetch(pendingRedirect);
     while (manager.status[0]!.error) await change.next();
     assert.equal(manager.status[0]!.error, '');
     assert.equal(keptFor(home, serverKey).client?.client_id, 'cli-seed');
@@ -1465,4 +1475,332 @@ test('a device sign-in refused on the page says so and leaves no code shown', as
   assert.equal(manager.status[0]!.code, undefined);
   assert.equal(manager.status[0]!.authorize, undefined);
   assert.deepEqual(manager.status[0]!.tools, []);
+});
+
+test('C3-S1/C3-S2/C3-S4: required_scope is one-shot across invalid_scope, abandoned sign-in, and restarts; reloadServer delegates while REAUTHORIZATION_REQUIRED is pending', async (t) => {
+  let port = 0;
+  const base = () => `http://127.0.0.1:${port}`;
+  const validTokens = new Set(['tok-1']);
+  const authRequests: URL[] = [];
+  let tokenSeq = 1;
+  let mode: 'ok' | 'scope_x' | 'unauthorized' = 'ok';
+  let callbackMode: 'hold' | 'invalid_scope' | 'approve' = 'approve';
+
+  const srv = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', base());
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf8');
+      if (url.pathname === '/.well-known/oauth-authorization-server') {
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            issuer: base(),
+            authorization_endpoint: `${base()}/authorize`,
+            token_endpoint: `${base()}/token`,
+            registration_endpoint: `${base()}/register`,
+            response_types_supported: ['code'],
+            code_challenge_methods_supported: ['S256'],
+            grant_types_supported: ['authorization_code'],
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/token') {
+        const tok = `tok-${++tokenSeq}`;
+        validTokens.add(tok);
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            access_token: tok,
+            token_type: 'Bearer',
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/mcp') {
+        const bearer = (req.headers.authorization ?? '').replace(
+          /^Bearer /i,
+          '',
+        );
+        if (mode === 'unauthorized' || !validTokens.has(bearer)) {
+          res.writeHead(401).end();
+          return;
+        }
+        const rpc = JSON.parse(body) as { id?: unknown; method?: string };
+        if (rpc.method === 'tools/call' && mode === 'scope_x') {
+          res
+            .writeHead(403, {
+              'www-authenticate':
+                'Bearer error="insufficient_scope", scope="x"',
+            })
+            .end();
+          return;
+        }
+        const result =
+          rpc.method === 'initialize'
+            ? {
+                protocolVersion: '2025-03-26',
+                capabilities: { tools: {} },
+                serverInfo: { name: 'remote', version: '1.0.0' },
+              }
+            : rpc.method === 'tools/list'
+              ? {
+                  tools: [
+                    {
+                      name: 'ping',
+                      description: 'ping',
+                      inputSchema: { type: 'object', properties: {} },
+                    },
+                  ],
+                }
+              : { content: [{ type: 'text', text: 'pong' }] };
+        res
+          .writeHead(200, { 'content-type': 'application/json' })
+          .end(
+            rpc.id === undefined
+              ? ''
+              : JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }),
+          );
+        return;
+      }
+      res.writeHead(404).end();
+    });
+  });
+  await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  port = (srv.address() as { port: number }).port;
+  cleanupServer(t, srv);
+
+  const home = scratch(t);
+  const serverKey = `${base()}/mcp`;
+  const portUsed = await redirectPort(home, serverKey);
+  const seed = new McpAuthProvider(home, serverKey, portUsed);
+  seed.saveClientInformation({
+    client_id: 'cli-s1',
+    redirect_uris: [seed.redirectUrl],
+  });
+  seed.saveTokens({ access_token: 'tok-1', token_type: 'Bearer' });
+
+  const change = changes();
+  const manager = new McpManager(scratch(t), 5000, undefined, {
+    home,
+    onChange: change.onChange,
+    openUrl: async (target) => {
+      const parsed = new URL(target);
+      authRequests.push(parsed);
+      if (callbackMode === 'hold') return;
+      const redirect = new URL(parsed.searchParams.get('redirect_uri')!);
+      redirect.searchParams.set('state', parsed.searchParams.get('state')!);
+      if (callbackMode === 'invalid_scope') {
+        redirect.searchParams.set('error', 'invalid_scope');
+      } else {
+        redirect.searchParams.set('code', `code-${authRequests.length}`);
+        redirect.searchParams.set('iss', base());
+      }
+      await fetch(redirect);
+    },
+  });
+  cleanup(t, () => manager.close());
+
+  const entry = { remote: { type: 'http' as const, url: serverKey } };
+  await manager.load(entry);
+  assert.equal(manager.isConnected('remote'), true);
+
+  const context = {
+    sessionId: 's-1',
+    signal: new AbortController().signal,
+    approve: async () => 'once' as const,
+    log: () => {},
+  } as never;
+
+  // 1) 403 insufficient_scope records scope="x"; reloadServer delegates to reauthorizeServer (C3-S2).
+  //    When AS rejects with invalid_scope, required_scope is cleared and the next ordinary sign-in has no "x" (C3-S1).
+  mode = 'scope_x';
+  await assert.rejects(() => manager.tools[0]!.run({}, context));
+  assert.equal(manager.status[0]!.error, REAUTHORIZATION_REQUIRED);
+  assert.equal(manager.isConnected('remote'), true);
+  assert.equal(keptFor(home, serverKey).required_scope, 'x');
+
+  callbackMode = 'invalid_scope';
+  await manager.reloadServer('remote', entry);
+  await until(() => authRequests.length === 1);
+  assert.equal(authRequests[0]!.searchParams.get('scope'), 'x');
+  await until(() => manager.status[0]!.error.startsWith('sign-in failed:'));
+  assert.match(manager.status[0]!.error, /invalid_scope/);
+  assert.equal(manager.status[0]!.authorize, undefined);
+  assert.equal(manager.isConnected('remote'), true);
+  assert.equal(keptFor(home, serverKey).required_scope, undefined);
+
+  validTokens.clear();
+  mode = 'ok';
+  callbackMode = 'approve';
+  await manager.reloadServer('remote', entry);
+  await until(() => manager.status[0]!.error === '');
+  assert.equal(authRequests.length, 2);
+  assert.equal(authRequests[1]!.searchParams.get('scope'), null);
+  assert.equal(manager.isConnected('remote'), true);
+
+  // 2) Abandoned sign-in (started with no response) is treated as failed on next reconnect: clears required_scope and reconnects normally.
+  mode = 'scope_x';
+  await assert.rejects(() => manager.tools[0]!.run({}, context));
+  assert.equal(keptFor(home, serverKey).required_scope, 'x');
+  mode = 'ok';
+  callbackMode = 'hold';
+  await manager.reloadServer('remote', entry);
+  await until(() => authRequests.length === 3);
+  assert.equal(authRequests[2]!.searchParams.get('scope'), 'x');
+  assert.equal(manager.status[0]!.error, SIGN_IN_WAITING);
+  assert.ok(manager.status[0]!.authorize);
+
+  await manager.reloadServer('remote', entry);
+  assert.equal(
+    authRequests.length,
+    3,
+    'abandoned sign-in cancel + reconnect opens no second sign-in',
+  );
+  assert.equal(manager.status[0]!.authorize, undefined);
+  assert.equal(manager.status[0]!.error, '');
+  assert.equal(manager.isConnected('remote'), true);
+  assert.equal(keptFor(home, serverKey).required_scope, undefined);
+
+  // 3) Restart clears persisted required_scope so /mcp reconnect after restart is an ordinary reconnect.
+  mode = 'scope_x';
+  await assert.rejects(() => manager.tools[0]!.run({}, context));
+  assert.equal(keptFor(home, serverKey).required_scope, 'x');
+  await manager.close();
+  assert.equal(keptFor(home, serverKey).required_scope, 'x');
+
+  mode = 'ok';
+  const authAfterRestart: URL[] = [];
+  const manager2 = new McpManager(scratch(t), 5000, undefined, {
+    home,
+    openUrl: async (target) => {
+      authAfterRestart.push(new URL(target));
+    },
+  });
+  cleanup(t, () => manager2.close());
+  await manager2.load(entry);
+  assert.equal(keptFor(home, serverKey).required_scope, undefined);
+  await manager2.reloadServer('remote', entry);
+  assert.equal(authAfterRestart.length, 0);
+  assert.equal(manager2.status[0]!.error, '');
+  assert.equal(manager2.isConnected('remote'), true);
+});
+
+test('C3-S4 Hypothesis 3: abandoned device sign-in that expires overwrites mark with sign-in failed while preserving live MCP connection', async (t) => {
+  let port = 0;
+  const base = () => `http://127.0.0.1:${port}`;
+  const validTokens = new Set(['tok-live']);
+  const srv = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', base());
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf8');
+      if (url.pathname === '/.well-known/oauth-authorization-server') {
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            issuer: base(),
+            authorization_endpoint: `${base()}/authorize`,
+            token_endpoint: `${base()}/token`,
+            registration_endpoint: `${base()}/register`,
+            response_types_supported: ['code'],
+            code_challenge_methods_supported: ['S256'],
+            grant_types_supported: [
+              'authorization_code',
+              'urn:ietf:params:oauth:grant-type:device_code',
+            ],
+            device_authorization_endpoint: `${base()}/device`,
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/device') {
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            device_code: 'dc-expire',
+            user_code: 'EXPD-1234',
+            verification_uri: `${base()}/verify`,
+            expires_in: 1,
+            interval: 1,
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/token') {
+        res
+          .writeHead(400, { 'content-type': 'application/json' })
+          .end(JSON.stringify({ error: 'expired_token' }));
+        return;
+      }
+      if (url.pathname === '/mcp') {
+        const bearer = (req.headers.authorization ?? '').replace(
+          /^Bearer /i,
+          '',
+        );
+        if (!validTokens.has(bearer)) {
+          res.writeHead(401).end();
+          return;
+        }
+        const rpc = JSON.parse(body) as { id?: unknown; method?: string };
+        const result =
+          rpc.method === 'initialize'
+            ? {
+                protocolVersion: '2025-03-26',
+                capabilities: { tools: {} },
+                serverInfo: { name: 'remote', version: '1.0.0' },
+              }
+            : rpc.method === 'tools/list'
+              ? {
+                  tools: [
+                    {
+                      name: 'ping',
+                      description: 'ping',
+                      inputSchema: { type: 'object', properties: {} },
+                    },
+                  ],
+                }
+              : { content: [{ type: 'text', text: 'pong' }] };
+        res
+          .writeHead(200, { 'content-type': 'application/json' })
+          .end(
+            rpc.id === undefined
+              ? ''
+              : JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }),
+          );
+        return;
+      }
+      res.writeHead(404).end();
+    });
+  });
+  await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  port = (srv.address() as { port: number }).port;
+  cleanupServer(t, srv);
+
+  const home = scratch(t);
+  const serverKey = `${base()}/mcp`;
+  const portUsed = await redirectPort(home, serverKey);
+  const seed = new McpAuthProvider(home, serverKey, portUsed);
+  seed.saveClientInformation({
+    client_id: 'cli-exp',
+    redirect_uris: [seed.redirectUrl],
+  });
+  seed.saveTokens({ access_token: 'tok-live', token_type: 'Bearer' });
+
+  const manager = new McpManager(scratch(t), 5000, undefined, {
+    home,
+    openUrl: async () => {},
+  });
+  cleanup(t, () => manager.close());
+  const entry = { remote: { type: 'http' as const, url: serverKey } };
+  await manager.load(entry);
+  assert.equal(manager.isConnected('remote'), true);
+
+  await manager.reauthorizeServer('remote', entry, { scope: 'x' });
+  await until(() =>
+    (manager.status[0]?.error ?? '').startsWith('sign-in failed:'),
+  );
+  assert.match(manager.status[0]!.error, /expired/);
+  assert.equal(manager.isConnected('remote'), true);
+  assert.equal(manager.tools.length, 1);
+  assert.equal(keptFor(home, serverKey).required_scope, undefined);
 });

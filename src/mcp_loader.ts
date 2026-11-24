@@ -63,6 +63,7 @@ import {
 } from './mcp_elicitation.js';
 import {
   McpAuthProvider,
+  clearRequiredScope,
   redirectPort,
   reauthorizeServer,
   startRedirect,
@@ -2096,6 +2097,7 @@ export class McpManager {
       });
       status.push(...skipped, ...(options.waiting ?? []));
       this.reserved = reserved;
+      if (this.services.home) clearRequiredScope(this.services.home);
       signal?.throwIfAborted();
       const outcomes = await Promise.allSettled(
         connections.map((connection) =>
@@ -2521,6 +2523,7 @@ export class McpManager {
         this.services.onChange?.();
       })
       .finally(() => {
+        clearRequiredScope(provider.home, provider.server);
         if (this.signingIn.get(provider.server) === shown) {
           this.signingIn.delete(provider.server);
         }
@@ -3364,18 +3367,32 @@ export class McpManager {
         home &&
         (connection.transport === 'http' || connection.transport === 'sse')
       ) {
-        const resolved = resolveConnection(
-          connection,
-          process.env,
-          this.services.secrets?.() ?? {},
-        );
-        if (
-          resolved.url &&
-          !Object.keys(resolved.headers).some(credentialHeader) &&
-          keptFor(home, new URL(resolved.url).href).required_scope
-        ) {
-          await this.reauthorizeServer(name, entries, options);
-          return;
+        let server: string | undefined;
+        let hasCredentialHeader = false;
+        try {
+          const resolved = resolveConnection(
+            connection,
+            process.env,
+            this.services.secrets?.() ?? {},
+          );
+          hasCredentialHeader = Object.keys(resolved.headers).some(
+            credentialHeader,
+          );
+          if (resolved.url && !hasCredentialHeader) {
+            server = new URL(resolved.url).href;
+          }
+        } catch {
+          // Defer resolution or URL validation errors to connectServer so the status row records them.
+        }
+        if (server && !hasCredentialHeader) {
+          const pending = this.signingIn.get(server);
+          if (pending) {
+            pending.cancel?.();
+            await pending.done?.catch(() => {});
+          } else if (keptFor(home, server).required_scope) {
+            await this.reauthorizeServer(name, entries, options);
+            return;
+          }
         }
       }
       await this.connectAgain(connection, this.lifetime.signal);
@@ -3420,20 +3437,31 @@ export class McpManager {
       home &&
       (connection.transport === 'http' || connection.transport === 'sse')
     ) {
-      const resolved = resolveConnection(
-        connection,
-        process.env,
-        this.services.secrets?.() ?? {},
-      );
-      if (
-        resolved.url &&
-        !Object.keys(resolved.headers).some(credentialHeader)
-      ) {
-        const server = new URL(resolved.url).href;
+      let resolved: Resolved | undefined;
+      let server: string | undefined;
+      let hasCredentialHeader = false;
+      try {
+        resolved = resolveConnection(
+          connection,
+          process.env,
+          this.services.secrets?.() ?? {},
+        );
+        hasCredentialHeader = Object.keys(resolved.headers).some(
+          credentialHeader,
+        );
+        if (resolved.url && !hasCredentialHeader) {
+          server = new URL(resolved.url).href;
+        }
+      } catch {
+        await this.connectAgain(connection, this.lifetime.signal);
+        return;
+      }
+      if (resolved && server && !hasCredentialHeader) {
         const pending = this.signingIn.get(server);
         if (pending) {
           pending.cancel?.();
           await pending.done?.catch(() => {});
+          clearRequiredScope(home, server);
         }
         reauthorizeServer(home, server, options.scope);
         const provider = await this.authProvider(connection, resolved);
@@ -3442,7 +3470,7 @@ export class McpManager {
           if (!state) {
             state = {
               name,
-              connection: connection.url ?? resolved.url,
+              connection: connection.url ?? resolved.url!,
               tools: [],
               error: '',
               scope: connection.scope,
@@ -3461,6 +3489,7 @@ export class McpManager {
             });
           } catch (error) {
             if (!provider.authorizationUrl) {
+              clearRequiredScope(home, server);
               state.error = hideFilled(resolved.filled)(failureText(error));
               this.services.onChange?.();
               return;
@@ -3471,6 +3500,7 @@ export class McpManager {
             return;
           }
         }
+        clearRequiredScope(home, server);
         await this.connectAgain(connection, this.lifetime.signal);
         return;
       }
@@ -3610,6 +3640,9 @@ export class McpManager {
     return this.servers
       .filter((server) => server.open && server.instructions)
       .map((server) => ({ server: server.name, text: server.instructions! }));
+  }
+  isConnected(name: string): boolean {
+    return this.servers.some((server) => server.name === name && server.open);
   }
   /** What moving the configuration into the current format did, said in /mcp until the next start. */
   notes: string[] = [];

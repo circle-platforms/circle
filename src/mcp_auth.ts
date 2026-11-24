@@ -316,6 +316,34 @@ export function reauthorizeServer(
   }));
 }
 
+export function clearRequiredScope(home: string, server?: string): void {
+  if (server !== undefined) {
+    if (keptFor(home, server).required_scope === undefined) return;
+    change(home, server, (current) => ({
+      ...current,
+      required_scope: undefined,
+    }));
+    return;
+  }
+  const current = loadAll(home);
+  if (
+    !Object.values(current).some((entry) => entry.required_scope !== undefined)
+  )
+    return;
+  ensureHome(home);
+  withPrivateJsonLock(mcpAuthPath(home), () => {
+    const all = loadAll(home);
+    for (const [key, value] of Object.entries(all)) {
+      if (value.required_scope === undefined) continue;
+      const next: Kept = { ...value, required_scope: undefined };
+      if (Object.values(next).every((part) => part === undefined))
+        delete all[key];
+      else all[key] = next;
+    }
+    writePrivateJson(mcpAuthPath(home), { servers: all });
+  });
+}
+
 function listenable(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const probe = createServer();
@@ -367,17 +395,24 @@ export class McpAuthProvider implements OAuthClientProvider {
   #refreshFailed = false;
   #challengeScope?: string;
   #insufficientScope?: BearerChallenge;
+  #pendingScope?: string;
   constructor(
     readonly home: string,
     readonly server: string,
     readonly port: number,
   ) {}
+  #takeRequiredScope(): string | undefined {
+    if (this.#pendingScope === undefined) {
+      this.#pendingScope = keptFor(this.home, this.server).required_scope;
+    }
+    return this.#pendingScope;
+  }
   authorizationScope(): string | undefined {
     return (
       selectAuthorizationScope({
         challengeScope: this.#challengeScope,
         discovery: this.discoveryState(),
-        requiredScope: keptFor(this.home, this.server).required_scope,
+        requiredScope: this.#takeRequiredScope(),
       }) ??
       (this.authorizationUrl?.searchParams.get('scope') || undefined)
     );
@@ -441,6 +476,7 @@ export class McpAuthProvider implements OAuthClientProvider {
       this.authorizationUrl = undefined;
       this.#challengeScope = undefined;
       this.#insufficientScope = undefined;
+      this.#pendingScope = undefined;
     }
     change(this.home, this.server, (kept) => ({
       ...kept,
@@ -466,7 +502,7 @@ export class McpAuthProvider implements OAuthClientProvider {
           challengeScope: this.#challengeScope,
           discovery: kept.discovery,
         }),
-      kept.required_scope,
+      this.#takeRequiredScope(),
     );
     if (selected) url.searchParams.set('scope', selected);
     this.authorizationUrl = url;
@@ -488,6 +524,7 @@ export class McpAuthProvider implements OAuthClientProvider {
     if (scope === 'all') {
       this.#challengeScope = undefined;
       this.#insufficientScope = undefined;
+      this.#pendingScope = undefined;
     }
     change(this.home, this.server, (kept) => ({
       ...kept,

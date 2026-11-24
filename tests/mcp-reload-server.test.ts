@@ -292,3 +292,95 @@ test('AgentRuntime.reauthorizeMcpServer forwards dynamic scope while keeping sto
   assert.deepEqual(seenDeviceScopes, ['custom-bot']);
   assert.equal(keptFor(home, serverKey).required_scope, undefined);
 });
+
+test('C3-M1: invalid header config records error on row without throwing across reloadMcpServer, reconnectMcpServers, and saveMcpServer', async (t) => {
+  const { createServer } = await import('node:http');
+  let allowRecover = false;
+  let port = 0;
+  const base = () => `http://127.0.0.1:${port}/mcp`;
+  const srv = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      if (!allowRecover) {
+        res.writeHead(500).end('unavailable');
+        return;
+      }
+      const rpc = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+        id?: unknown;
+        method?: string;
+      };
+      const result =
+        rpc.method === 'initialize'
+          ? {
+              protocolVersion: '2025-03-26',
+              capabilities: { tools: {} },
+              serverInfo: { name: 'recoverable', version: '1.0.0' },
+            }
+          : rpc.method === 'tools/list'
+            ? {
+                tools: [
+                  {
+                    name: 'pong',
+                    description: 'pong',
+                    inputSchema: { type: 'object', properties: {} },
+                  },
+                ],
+              }
+            : {};
+      res
+        .writeHead(200, { 'content-type': 'application/json' })
+        .end(
+          rpc.id === undefined
+            ? ''
+            : JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }),
+        );
+    });
+  });
+  await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  port = (srv.address() as { port: number }).port;
+  t.after(() => {
+    srv.closeAllConnections?.();
+    return new Promise<void>((resolve) => srv.close(() => resolve()));
+  });
+
+  const { runtime } = await runtimeWith(t, {
+    bad: {
+      type: 'http',
+      url: 'https://mcp.example.test/mcp',
+      headers: { 'Bad Name': 'v' },
+    },
+    recoverable: {
+      type: 'http',
+      url: base(),
+    },
+  });
+
+  const badBefore = runtime.mcp.status.find((s) => s.name === 'bad');
+  assert.match(badBefore?.error ?? '', /invalid header name 'Bad Name'/);
+
+  await assert.doesNotReject(() => runtime.reloadMcpServer('bad'));
+  const badAfterReload = runtime.mcp.status.find((s) => s.name === 'bad');
+  assert.match(badAfterReload?.error ?? '', /invalid header name 'Bad Name'/);
+  assert.deepEqual(badAfterReload?.tools, []);
+
+  allowRecover = true;
+  const retried = await runtime.reconnectMcpServers();
+  assert.deepEqual(retried, ['bad', 'recoverable']);
+  assert.match(
+    runtime.mcp.status.find((s) => s.name === 'bad')?.error ?? '',
+    /invalid header name 'Bad Name'/,
+  );
+  const recovered = runtime.mcp.status.find((s) => s.name === 'recoverable');
+  assert.equal(recovered?.error, '');
+  assert.deepEqual(recovered?.tools, ['mcp__recoverable__pong']);
+
+  const saved = await runtime.saveMcpServer('bad-saved', {
+    type: 'http',
+    url: 'https://mcp.example.test/mcp',
+    headers: { 'Bad Name': 'v' },
+  });
+  assert.equal(saved.state, 'failed');
+  assert.match(saved.error ?? '', /invalid header name 'Bad Name'/);
+  assert.equal(saved.tools, 0);
+});

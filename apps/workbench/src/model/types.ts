@@ -422,8 +422,14 @@ export interface McpServer {
   enabled: boolean;
   hasAuthorizationHeader?: boolean;
   settingsPath?: string;
+  mcpConnected?: boolean;
   status:
-    'sample' | 'not connected' | 'connected' | 'error' | 'reload required';
+    | 'sample'
+    | 'not connected'
+    | 'connected'
+    | 'error'
+    | 'reload required'
+    | 're-authorization required';
   tools: { name: string; description: string; schema: unknown }[];
   error?: string;
   /** A sign-in under way: its page, and the code to type there when it is a device sign-in. */
