@@ -12,6 +12,7 @@ import {
   keptFor,
   mcpAuthPath,
   redirectPort,
+  selectAuthorizationScope,
   startRedirect,
 } from '../src/mcp_auth.js';
 import { McpManager, SIGN_IN_WAITING } from '../src/mcp_loader.js';
@@ -441,6 +442,496 @@ test('the redirect port is kept per server, and a new port drops the registratio
     undefined,
     'servers are kept apart',
   );
+});
+
+test('authorization selects 401 WWW-Authenticate scope over scopes_supported and falls back to scopes_supported on browser and device flows', async (t) => {
+  assert.equal(
+    selectAuthorizationScope({
+      challengeScope: 'alpha beta',
+      discovery: {
+        authorizationServerUrl: 'https://as.example.test',
+        resourceMetadata: {
+          resource: 'https://rs.example.test/mcp',
+          scopes_supported: ['gamma', 'delta'],
+        },
+      },
+    }),
+    'alpha beta',
+  );
+  assert.equal(
+    selectAuthorizationScope({
+      discovery: {
+        authorizationServerUrl: 'https://as.example.test',
+        resourceMetadata: {
+          resource: 'https://rs.example.test/mcp',
+          scopes_supported: ['gamma', 'delta'],
+        },
+      },
+      requiredScope: 'bot',
+    }),
+    'gamma delta bot',
+  );
+  for (const flow of ['browser', 'device'] as const) {
+    for (const mode of ['challenge', 'metadata'] as const) {
+      let port = 0;
+      const seenAuthScopes: string[] = [];
+      const seenDeviceScopes: string[] = [];
+      let tokenCount = 0;
+      const issuedTokens = new Set<string>();
+      const base = () => `http://127.0.0.1:${port}`;
+      const srv = createServer((req, res) => {
+        const url = new URL(req.url ?? '/', base());
+        const chunks: Buffer[] = [];
+        req.on('data', (c: Buffer) => chunks.push(c));
+        req.on('end', () => {
+          const body = Buffer.concat(chunks).toString('utf8');
+          if (url.pathname === '/.well-known/oauth-protected-resource/mcp') {
+            res.writeHead(200, { 'content-type': 'application/json' }).end(
+              JSON.stringify({
+                resource: `${base()}/mcp`,
+                authorization_servers: [base()],
+                scopes_supported: ['gamma', 'delta'],
+              }),
+            );
+            return;
+          }
+          if (url.pathname === '/.well-known/oauth-authorization-server') {
+            res.writeHead(200, { 'content-type': 'application/json' }).end(
+              JSON.stringify({
+                issuer: base(),
+                authorization_endpoint: `${base()}/authorize`,
+                token_endpoint: `${base()}/token`,
+                registration_endpoint: `${base()}/register`,
+                response_types_supported: ['code'],
+                code_challenge_methods_supported: ['S256'],
+                grant_types_supported:
+                  flow === 'device'
+                    ? [
+                        'authorization_code',
+                        'urn:ietf:params:oauth:grant-type:device_code',
+                      ]
+                    : ['authorization_code'],
+                ...(flow === 'device'
+                  ? {
+                      device_authorization_endpoint: `${base()}/device_authorization`,
+                    }
+                  : {}),
+              }),
+            );
+            return;
+          }
+          if (url.pathname === '/register') {
+            const parsed = JSON.parse(body) as { redirect_uris?: string[] };
+            res.writeHead(201, { 'content-type': 'application/json' }).end(
+              JSON.stringify({
+                client_id: 'cli-1',
+                redirect_uris: parsed.redirect_uris ?? [],
+                token_endpoint_auth_method: 'none',
+              }),
+            );
+            return;
+          }
+          if (url.pathname === '/device_authorization') {
+            const form = new URLSearchParams(body);
+            seenDeviceScopes.push(form.get('scope') ?? '');
+            res.writeHead(200, { 'content-type': 'application/json' }).end(
+              JSON.stringify({
+                device_code: 'dc-1',
+                user_code: 'BCDF-GHJK',
+                verification_uri: `${base()}/verify`,
+                verification_uri_complete: `${base()}/verify?user_code=BCDF-GHJK`,
+                expires_in: 600,
+                interval: 1,
+              }),
+            );
+            return;
+          }
+          if (url.pathname === '/token') {
+            const tok = `tok-${++tokenCount}`;
+            issuedTokens.add(tok);
+            res
+              .writeHead(200, { 'content-type': 'application/json' })
+              .end(JSON.stringify({ access_token: tok, token_type: 'Bearer' }));
+            return;
+          }
+          if (url.pathname === '/mcp') {
+            const authHeader = req.headers.authorization ?? '';
+            const bearer = authHeader.replace(/^Bearer /i, '');
+            if (!issuedTokens.has(bearer)) {
+              const challenge =
+                mode === 'challenge'
+                  ? `Bearer resource_metadata="${base()}/.well-known/oauth-protected-resource/mcp", scope="alpha beta"`
+                  : `Bearer resource_metadata="${base()}/.well-known/oauth-protected-resource/mcp"`;
+              res.writeHead(401, { 'www-authenticate': challenge }).end();
+              return;
+            }
+            const rpc = JSON.parse(body) as { id?: unknown; method?: string };
+            const result =
+              rpc.method === 'initialize'
+                ? {
+                    protocolVersion: '2025-03-26',
+                    capabilities: { tools: {} },
+                    serverInfo: { name: 'srv', version: '1.0.0' },
+                  }
+                : rpc.method === 'tools/list'
+                  ? { tools: [] }
+                  : {};
+            res
+              .writeHead(200, { 'content-type': 'application/json' })
+              .end(
+                rpc.id === undefined
+                  ? ''
+                  : JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }),
+              );
+            return;
+          }
+          res.writeHead(404).end();
+        });
+      });
+      await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
+      port = (srv.address() as { port: number }).port;
+      cleanup(t, () => {
+        srv.closeAllConnections?.();
+        return new Promise<void>((resolve) => srv.close(() => resolve()));
+      });
+
+      const home = scratch(t);
+      const change = changes();
+      const opened: string[] = [];
+      const manager = new McpManager(scratch(t), 5000, undefined, {
+        home,
+        onChange: change.onChange,
+        openUrl: async (target) => {
+          opened.push(target);
+          if (flow === 'browser') {
+            const parsed = new URL(target);
+            seenAuthScopes.push(parsed.searchParams.get('scope') ?? '');
+            const redirect = new URL(parsed.searchParams.get('redirect_uri')!);
+            redirect.searchParams.set('code', 'code-1');
+            redirect.searchParams.set(
+              'state',
+              parsed.searchParams.get('state')!,
+            );
+            redirect.searchParams.set('iss', base());
+            await fetch(redirect);
+          }
+        },
+      });
+      cleanup(t, () => manager.close());
+
+      const connected = change.next();
+      await manager.load({ remote: { url: `${base()}/mcp`, type: 'http' } });
+      await connected;
+      while (manager.status[0]!.error) {
+        await change.next();
+      }
+      if (flow === 'browser') {
+        assert.deepEqual(seenAuthScopes, [
+          mode === 'challenge' ? 'alpha beta' : 'gamma delta',
+        ]);
+      } else {
+        assert.deepEqual(seenDeviceScopes, [
+          mode === 'challenge' ? 'alpha beta' : 'gamma delta',
+        ]);
+      }
+      assert.equal(manager.status[0]!.error, '');
+    }
+  }
+});
+
+test('403 insufficient_scope on StreamableHTTP and SSE marks server for re-authorization and keeps client_id; reauthorizeServer clears tokens only', async (t) => {
+  for (const transport of ['http', 'sse'] as const) {
+    let port = 0;
+    const base = () => `http://127.0.0.1:${port}`;
+    const validInitial = new Set<string>(['tok-initial']);
+    const validUpgraded = new Set<string>();
+    const revoked: string[] = [];
+    let clientSeq = 0;
+    let codeSeq = 0;
+    const registeredIds: string[] = [];
+    const authRequests: URL[] = [];
+    const sseStreams = new Set<import('node:http').ServerResponse>();
+    let allowApprove = true;
+    let rejectConnectUntilUpgraded = false;
+
+    const srv = createServer((req, res) => {
+      const url = new URL(req.url ?? '/', base());
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8');
+        if (url.pathname.startsWith('/.well-known/oauth-protected-resource')) {
+          res.writeHead(200, { 'content-type': 'application/json' }).end(
+            JSON.stringify({
+              resource: `${base()}/${transport === 'http' ? 'mcp' : 'sse'}`,
+              authorization_servers: [base()],
+              scopes_supported: ['bot'],
+            }),
+          );
+          return;
+        }
+        if (url.pathname === '/.well-known/oauth-authorization-server') {
+          res.writeHead(200, { 'content-type': 'application/json' }).end(
+            JSON.stringify({
+              issuer: base(),
+              authorization_endpoint: `${base()}/authorize`,
+              token_endpoint: `${base()}/token`,
+              registration_endpoint: `${base()}/register`,
+              revocation_endpoint: `${base()}/revoke`,
+              response_types_supported: ['code'],
+              code_challenge_methods_supported: ['S256'],
+              grant_types_supported: ['authorization_code'],
+            }),
+          );
+          return;
+        }
+        if (url.pathname === '/register') {
+          const parsed = JSON.parse(body) as { redirect_uris?: string[] };
+          const id = `cli-${++clientSeq}`;
+          registeredIds.push(id);
+          res.writeHead(201, { 'content-type': 'application/json' }).end(
+            JSON.stringify({
+              client_id: id,
+              redirect_uris: parsed.redirect_uris ?? [],
+              token_endpoint_auth_method: 'none',
+            }),
+          );
+          return;
+        }
+        if (url.pathname === '/revoke') {
+          const params = new URLSearchParams(body);
+          const tok = params.get('token') ?? '';
+          revoked.push(tok);
+          validInitial.delete(tok);
+          validUpgraded.delete(tok);
+          res.writeHead(200).end();
+          return;
+        }
+        if (url.pathname === '/token') {
+          const tok = `tok-upgraded-${++codeSeq}`;
+          validUpgraded.add(tok);
+          res.writeHead(200, { 'content-type': 'application/json' }).end(
+            JSON.stringify({
+              access_token: tok,
+              token_type: 'Bearer',
+              scope: 'bot',
+            }),
+          );
+          return;
+        }
+
+        const bearer = (req.headers.authorization ?? '').replace(
+          /^Bearer /i,
+          '',
+        );
+        if (!validInitial.has(bearer) && !validUpgraded.has(bearer)) {
+          res
+            .writeHead(401, {
+              'www-authenticate': `Bearer resource_metadata="${base()}/.well-known/oauth-protected-resource"`,
+            })
+            .end();
+          return;
+        }
+
+        const sendRpcAnswer = (rpc: { id?: unknown; method?: string }) => {
+          if (rpc.method === 'initialize') {
+            return {
+              protocolVersion: '2025-03-26',
+              capabilities: { tools: {} },
+              serverInfo: { name: 'srv', version: '1.0.0' },
+            };
+          }
+          if (rpc.method === 'tools/list') {
+            return {
+              tools: [
+                {
+                  name: 'ping',
+                  description: 'ping',
+                  inputSchema: { type: 'object', properties: {} },
+                },
+              ],
+            };
+          }
+          if (rpc.method === 'tools/call') {
+            return { content: [{ type: 'text', text: 'pong' }] };
+          }
+          return {};
+        };
+
+        if (
+          transport === 'sse' &&
+          url.pathname === '/sse' &&
+          req.method === 'GET'
+        ) {
+          if (rejectConnectUntilUpgraded && !validUpgraded.has(bearer)) {
+            res
+              .writeHead(403, {
+                'www-authenticate':
+                  'Bearer error="insufficient_scope", scope="bot"',
+                'content-type': 'application/json',
+              })
+              .end(JSON.stringify({ error: 'insufficient_scope' }));
+            return;
+          }
+          res.writeHead(200, {
+            'content-type': 'text/event-stream',
+            'cache-control': 'no-cache',
+          });
+          res.write('event: endpoint\ndata: /messages\n\n');
+          sseStreams.add(res);
+          res.on('close', () => sseStreams.delete(res));
+          return;
+        }
+
+        if (
+          (transport === 'http' && url.pathname === '/mcp') ||
+          (transport === 'sse' && url.pathname === '/messages')
+        ) {
+          const rpc = JSON.parse(body) as { id?: unknown; method?: string };
+          if (
+            (rpc.method === 'tools/call' ||
+              (rejectConnectUntilUpgraded && rpc.method === 'initialize')) &&
+            !validUpgraded.has(bearer)
+          ) {
+            res
+              .writeHead(403, {
+                'www-authenticate':
+                  'Bearer error="insufficient_scope", scope="bot"',
+                'content-type': 'application/json',
+              })
+              .end(JSON.stringify({ error: 'insufficient_scope' }));
+            return;
+          }
+          const result = sendRpcAnswer(rpc);
+          if (transport === 'sse') {
+            if (rpc.id !== undefined) {
+              for (const stream of sseStreams) {
+                stream.write(
+                  `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result })}\n\n`,
+                );
+              }
+            }
+            res.writeHead(202).end();
+          } else {
+            res
+              .writeHead(200, { 'content-type': 'application/json' })
+              .end(
+                rpc.id === undefined
+                  ? ''
+                  : JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }),
+              );
+          }
+          return;
+        }
+        res.writeHead(404).end();
+      });
+    });
+    await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
+    port = (srv.address() as { port: number }).port;
+    cleanup(t, () => {
+      for (const s of sseStreams) s.end();
+      srv.closeAllConnections?.();
+      return new Promise<void>((resolve) => srv.close(() => resolve()));
+    });
+
+    const home = scratch(t);
+    const serverKey = `${base()}/${transport === 'http' ? 'mcp' : 'sse'}`;
+    const portUsed = await redirectPort(home, serverKey);
+    const seedProvider = new McpAuthProvider(home, serverKey, portUsed);
+    seedProvider.saveClientInformation({
+      client_id: 'cli-seed',
+      redirect_uris: [seedProvider.redirectUrl],
+    });
+    seedProvider.saveTokens({
+      access_token: 'tok-initial',
+      token_type: 'Bearer',
+    });
+
+    const change = changes();
+    const manager = new McpManager(scratch(t), 5000, undefined, {
+      home,
+      onChange: change.onChange,
+      openUrl: async (target) => {
+        const parsed = new URL(target);
+        authRequests.push(parsed);
+        if (!allowApprove) return;
+        const redirect = new URL(parsed.searchParams.get('redirect_uri')!);
+        redirect.searchParams.set('code', `code-${codeSeq + 1}`);
+        redirect.searchParams.set('state', parsed.searchParams.get('state')!);
+        redirect.searchParams.set('iss', base());
+        await fetch(redirect);
+      },
+    });
+    cleanup(t, () => manager.close());
+
+    const entry = { remote: { url: serverKey, type: transport } };
+    await manager.load(entry);
+    assert.equal(manager.status[0]!.error, '');
+
+    allowApprove = false;
+    await assert.rejects(() => manager.tools[0]!.run({}, context));
+    assert.equal(manager.status[0]!.error, SIGN_IN_WAITING);
+    assert.ok(
+      manager.status[0]!.authorize,
+      'authorize URL must be set after 403 insufficient_scope',
+    );
+    assert.equal(keptFor(home, serverKey).tokens, undefined);
+    assert.equal(keptFor(home, serverKey).required_scope, 'bot');
+    assert.equal(keptFor(home, serverKey).client?.client_id, 'cli-seed');
+
+    allowApprove = true;
+    await manager.reauthorizeServer('remote', entry);
+    while (manager.status[0]!.error) await change.next();
+    assert.equal(manager.status[0]!.error, '');
+    assert.equal(keptFor(home, serverKey).client?.client_id, 'cli-seed');
+    assert.equal(
+      keptFor(home, serverKey).tokens?.access_token,
+      'tok-upgraded-1',
+    );
+    assert.equal(registeredIds.length, 0);
+    assert.equal(authRequests.at(-1)?.searchParams.get('scope'), 'bot');
+    assert.equal(await manager.tools[0]!.run({}, context), 'pong');
+
+    // Calling reauthorizeServer on a connected token revokes it while keeping client_id.
+    await manager.reauthorizeServer('remote', entry);
+    while (manager.status[0]!.error) await change.next();
+    assert.ok(revoked.includes('tok-upgraded-1'));
+    assert.equal(keptFor(home, serverKey).client?.client_id, 'cli-seed');
+    assert.equal(
+      keptFor(home, serverKey).tokens?.access_token,
+      'tok-upgraded-2',
+    );
+    assert.equal(registeredIds.length, 0);
+    assert.equal(await manager.tools[0]!.run({}, context), 'pong');
+
+    // Connect-time 403 insufficient_scope (on initialize / GET /sse) also marks re-authorization.
+    const home2 = scratch(t);
+    const port2 = await redirectPort(home2, serverKey);
+    const seed2 = new McpAuthProvider(home2, serverKey, port2);
+    seed2.saveClientInformation({
+      client_id: 'cli-connect-seed',
+      redirect_uris: [seed2.redirectUrl],
+    });
+    seed2.saveTokens({ access_token: 'tok-initial', token_type: 'Bearer' });
+    const change2 = changes();
+    const manager2 = new McpManager(scratch(t), 5000, undefined, {
+      home: home2,
+      onChange: change2.onChange,
+      openUrl: async () => {},
+    });
+    cleanup(t, () => manager2.close());
+    rejectConnectUntilUpgraded = true;
+    allowApprove = false;
+    await manager2.load(entry);
+    assert.equal(manager2.status[0]!.error, SIGN_IN_WAITING);
+    assert.ok(manager2.status[0]!.authorize);
+    assert.equal(keptFor(home2, serverKey).tokens, undefined);
+    assert.equal(keptFor(home2, serverKey).required_scope, 'bot');
+    assert.equal(
+      keptFor(home2, serverKey).client?.client_id,
+      'cli-connect-seed',
+    );
+  }
 });
 
 test('the redirect listener takes only its own state and answers anything else with a page', async (t) => {

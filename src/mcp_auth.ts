@@ -44,8 +44,68 @@ interface Kept {
   /** Opaque authorization identity: refresh preserves it; a new sign-in replaces it. */
   grant_id?: string;
   expires_at?: number;
+  required_scope?: string;
   direct_fingerprint?: string;
   direct_id?: string;
+}
+
+export interface BearerChallenge {
+  scheme?: string;
+  error?: string;
+  errorDescription?: string;
+  scope?: string;
+  resourceMetadataUrl?: string;
+}
+
+export function parseBearerChallenge(header: string | null): BearerChallenge {
+  if (!header) return {};
+  const match = /^\s*(Bearer|DPoP)\s+(.+)$/i.exec(header);
+  if (!match) return {};
+  const params = match[2]!;
+  const field = (name: string): string | undefined => {
+    const found = new RegExp(
+      `(?:^|[,\\s])${name}=(?:"([^"]*)"|([^,\\s]*))`,
+      'i',
+    ).exec(params);
+    const raw = found?.[1] ?? found?.[2];
+    return raw || undefined;
+  };
+  return {
+    scheme: match[1]!.toLowerCase(),
+    error: field('error'),
+    errorDescription: field('error_description'),
+    scope: field('scope'),
+    resourceMetadataUrl: field('resource_metadata'),
+  };
+}
+
+export function mergeScopes(
+  ...parts: Array<string | readonly string[] | undefined>
+): string | undefined {
+  const unique = new Set<string>();
+  for (const part of parts) {
+    if (!part) continue;
+    const items = typeof part === 'string' ? part.trim().split(/\s+/) : part;
+    for (const item of items) {
+      const trimmed = item.trim();
+      if (trimmed) unique.add(trimmed);
+    }
+  }
+  return unique.size > 0 ? [...unique].join(' ') : undefined;
+}
+
+export function selectAuthorizationScope(options: {
+  challengeScope?: string;
+  discovery?: OAuthDiscoveryState;
+  requiredScope?: string;
+}): string | undefined {
+  const supported = options.discovery?.resourceMetadata?.scopes_supported;
+  const base =
+    options.challengeScope?.trim() ||
+    (Array.isArray(supported) && supported.length > 0
+      ? supported.join(' ')
+      : undefined);
+  return mergeScopes(base, options.requiredScope);
 }
 
 export const mcpAuthPath = (home: string): string => join(home, MCP_AUTH_FILE);
@@ -87,17 +147,10 @@ export function forgetAuthorization(home: string, server: string): void {
   change(home, server, () => ({}));
 }
 
-/**
- * Signs out of a server: its tokens are revoked at the revocation endpoint its metadata names (RFC 7009), then its
- * authorization is forgotten. A revocation that fails or that the server does not offer still forgets it here; the
- * answer says whether the server took every revocation.
- */
-export async function revokeAuthorization(
-  home: string,
-  server: string,
-  fetcher: FetchLike = fetch,
+async function revokeStoredTokens(
+  kept: Kept,
+  fetcher: FetchLike,
 ): Promise<boolean> {
-  const kept = keptFor(home, server);
   const endpoint = (
     kept.discovery?.authorizationServerMetadata as
       Record<string, unknown> | undefined
@@ -128,8 +181,44 @@ export async function revokeAuthorization(
       }).catch(() => undefined);
       if (!response?.ok) revoked = false;
     }
+  return revoked;
+}
+
+/**
+ * Signs out of a server: its tokens are revoked at the revocation endpoint its metadata names (RFC 7009), then its
+ * authorization is forgotten. A revocation that fails or that the server does not offer still forgets it here; the
+ * answer says whether the server took every revocation.
+ */
+export async function revokeAuthorization(
+  home: string,
+  server: string,
+  fetcher: FetchLike = fetch,
+): Promise<boolean> {
+  const kept = keptFor(home, server);
+  const revoked = await revokeStoredTokens(kept, fetcher);
   forgetAuthorization(home, server);
   return revoked;
+}
+
+/**
+ * Drops stored tokens and records optional additional scopes while keeping client registration, loopback port and
+ * discovery metadata so the next sign-in reuses the registered client.
+ */
+export async function reauthorizeServer(
+  home: string,
+  server: string,
+  requiredScope?: string,
+  fetcher: FetchLike = fetch,
+): Promise<void> {
+  const kept = keptFor(home, server);
+  await revokeStoredTokens(kept, fetcher);
+  change(home, server, (current) => ({
+    ...current,
+    tokens: undefined,
+    grant_id: undefined,
+    expires_at: undefined,
+    required_scope: mergeScopes(current.required_scope, requiredScope),
+  }));
 }
 
 function listenable(port: number): Promise<boolean> {
@@ -181,11 +270,28 @@ export class McpAuthProvider implements OAuthClientProvider {
   #observedAccess?: string;
   #refreshGrant?: string;
   #refreshFailed = false;
+  #challengeScope?: string;
+  #insufficientScope?: BearerChallenge;
   constructor(
     readonly home: string,
     readonly server: string,
     readonly port: number,
   ) {}
+  authorizationScope(): string | undefined {
+    return (
+      selectAuthorizationScope({
+        challengeScope: this.#challengeScope,
+        discovery: this.discoveryState(),
+        requiredScope: keptFor(this.home, this.server).required_scope,
+      }) ??
+      (this.authorizationUrl?.searchParams.get('scope') || undefined)
+    );
+  }
+  takeInsufficientScope(): BearerChallenge | undefined {
+    const challenge = this.#insufficientScope;
+    this.#insufficientScope = undefined;
+    return challenge;
+  }
   get redirectUrl(): string {
     return `http://127.0.0.1:${this.port}/callback`;
   }
@@ -237,9 +343,12 @@ export class McpAuthProvider implements OAuthClientProvider {
     }
     const interactive = !!this.authorizationUrl;
     this.authorizationUrl = undefined;
+    this.#challengeScope = undefined;
+    this.#insufficientScope = undefined;
     change(this.home, this.server, (kept) => ({
       ...kept,
       tokens,
+      required_scope: undefined,
       grant_id:
         !interactive && kept.tokens?.access_token === tokens.access_token
           ? (kept.grant_id ?? randomUUID())
@@ -253,6 +362,25 @@ export class McpAuthProvider implements OAuthClientProvider {
   redirectToAuthorization(url: URL): void {
     if (this.#refreshFailed) throw new McpLoginRequired();
     this.#refreshGrant = undefined;
+    this.#insufficientScope = undefined;
+    const kept = keptFor(this.home, this.server);
+    const selected = mergeScopes(
+      url.searchParams.get('scope') ||
+        selectAuthorizationScope({
+          challengeScope: this.#challengeScope,
+          discovery: kept.discovery,
+        }),
+      kept.required_scope,
+    );
+    if (selected) url.searchParams.set('scope', selected);
+    if (kept.tokens || kept.grant_id || kept.expires_at) {
+      change(this.home, this.server, (current) => ({
+        ...current,
+        tokens: undefined,
+        grant_id: undefined,
+        expires_at: undefined,
+      }));
+    }
     this.authorizationUrl = url;
   }
   saveCodeVerifier(verifier: string): void {
@@ -269,12 +397,17 @@ export class McpAuthProvider implements OAuthClientProvider {
       this.#verifier = '';
       return;
     }
+    if (scope === 'all') {
+      this.#challengeScope = undefined;
+      this.#insufficientScope = undefined;
+    }
     change(this.home, this.server, (kept) => ({
       ...kept,
       ...(scope === 'all' || scope === 'client' ? { client: undefined } : {}),
       ...(scope === 'all' || scope === 'tokens'
         ? { tokens: undefined, grant_id: undefined, expires_at: undefined }
         : {}),
+      ...(scope === 'all' ? { required_scope: undefined } : {}),
       ...(scope === 'all' || scope === 'discovery'
         ? { discovery: undefined }
         : {}),
@@ -343,8 +476,39 @@ export class McpAuthProvider implements OAuthClientProvider {
       if (
         init?.method?.toUpperCase() !== 'POST' ||
         form?.get('grant_type') !== 'refresh_token'
-      )
-        return fetcher(url, init);
+      ) {
+        const isCodeExchange =
+          init?.method?.toUpperCase() === 'POST' &&
+          form?.get('grant_type') === 'authorization_code';
+        const response = await fetcher(url, init);
+        if (!isCodeExchange) {
+          if (response.status === 401) {
+            const challenge = parseBearerChallenge(
+              response.headers.get('www-authenticate'),
+            );
+            if (challenge.scope) this.#challengeScope = challenge.scope;
+          } else if (response.status === 403) {
+            const challenge = parseBearerChallenge(
+              response.headers.get('www-authenticate'),
+            );
+            if (challenge.error === 'insufficient_scope') {
+              this.#insufficientScope = challenge;
+              change(this.home, this.server, (kept) => ({
+                ...kept,
+                tokens: undefined,
+                grant_id: undefined,
+                expires_at: undefined,
+                required_scope: mergeScopes(
+                  kept.required_scope,
+                  kept.tokens?.scope,
+                  challenge.scope,
+                ),
+              }));
+            }
+          }
+        }
+        return response;
+      }
       const state = keptFor(this.home, this.server),
         endpoint =
           state.discovery?.authorizationServerMetadata?.token_endpoint ??

@@ -6623,6 +6623,20 @@ export class RuntimeController {
         await runtime.reloadMcpServer(text(p.name, 'server', 200));
         return {};
       }
+      case 'mcp-reauthorize-server': {
+        if (
+          !isFolderTrusted(loadSettings(this.home), runtime.options.workspace)
+        )
+          throw Error('trust the workspace first');
+        await runtime.reauthorizeMcpServer(
+          text(p.name, 'server', 200),
+          typeof p.scope === 'string' && p.scope.trim()
+            ? text(p.scope, 'scope', 200)
+            : undefined,
+        );
+        await this.reloadOtherRuntimes(runtime);
+        return {};
+      }
       case 'reload': {
         if (
           !isFolderTrusted(loadSettings(this.home), runtime.options.workspace)

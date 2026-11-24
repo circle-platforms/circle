@@ -1170,6 +1170,7 @@ export class LiveRuntime implements RuntimePort {
         'export-session': 'export',
         'mcp.reload': 'reload',
         'mcp.reload-server': 'mcp-reload-server',
+        'mcp.reauthorize-server': 'mcp-reauthorize-server',
         'extensions.reload': 'reload',
         'set-model': 'set-model',
         'set-plan-mode': 'set-plan-mode',

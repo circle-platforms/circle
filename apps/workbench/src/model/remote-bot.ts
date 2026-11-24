@@ -25,6 +25,7 @@ export interface RemoteBotFailureContext {
 export interface RemoteBotFailure {
   kind: RemoteBotFailureKind;
   retryable: boolean;
+  canReauthorize?: boolean;
   title: string;
   cause: string;
   action: string;
@@ -384,6 +385,21 @@ export function classifyRemoteBotFailure(
           'Check the Hub address in Settings -> Extensions or allowed hosts on Hub, then retry.',
         ),
         ...(detail || message ? { detail: detail ?? message } : {}),
+      };
+    }
+    if (!ctx?.hasAuthorizationHeader) {
+      return {
+        kind: 'oauth-forbidden',
+        retryable: false,
+        canReauthorize: true,
+        title: t('bot access not granted'),
+        cause: t(
+          'Sign in again, and check “Allow this client to use my bot” on the Hub confirmation page.',
+        ),
+        action: t(
+          'Or configure a direct member Bearer token (format: Bearer <token>) for Hub headers.Authorization in {path}, then retry. Disconnecting removes manual headers; add them again after reconnecting.',
+          { path: settingsPath },
+        ),
       };
     }
     return {

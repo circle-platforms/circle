@@ -1197,6 +1197,9 @@ test('F11/F15: docs/extensions.md and CHANGELOG.md document remote-bot contracts
     join(repoRoot, 'docs', 'extensions.md'),
     'utf8',
   );
+  assert.match(extensionsDoc, /Allow this client to use my bot/);
+  assert.match(extensionsDoc, /BOT_CLIENT_FORBIDDEN.*insufficient_scope/);
+  assert.match(extensionsDoc, /sign in again/);
   assert.match(extensionsDoc, /configVersion/);
   assert.match(extensionsDoc, /disable.*bot_disabled_aborted/);
   assert.match(extensionsDoc, /16,000/);

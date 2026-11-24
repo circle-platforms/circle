@@ -4103,6 +4103,15 @@ export class AgentRuntime {
     return failed;
   }
   async reloadMcpServer(name: string): Promise<void> {
+    await this.applyMcpServerReload(name);
+  }
+  async reauthorizeMcpServer(name: string, scope?: string): Promise<void> {
+    await this.applyMcpServerReload(name, { scope });
+  }
+  private async applyMcpServerReload(
+    name: string,
+    reauthorize?: { scope?: string },
+  ): Promise<void> {
     if (this.ownershipError) throw this.ownershipError;
     if (this.closing || this.deleting) throw new Error('session is closing');
     if (this.busy) throw new Error('reload after the current turn');
@@ -4129,10 +4138,16 @@ export class AgentRuntime {
         return;
       }
     }
-    await this.mcp.reloadServer(name, servers.entries, {
+    const reloadOptions = {
       waiting: servers.waiting,
       trusted: servers.trusted,
-    });
+    };
+    if (reauthorize)
+      await this.mcp.reauthorizeServer(name, servers.entries, {
+        ...reloadOptions,
+        ...(reauthorize.scope ? { scope: reauthorize.scope } : {}),
+      });
+    else await this.mcp.reloadServer(name, servers.entries, reloadOptions);
     this.options.settings.mcpServers = settings.mcpServers;
     this.options.settings.projects = settings.projects;
     this.harness.tools = this.withIntegrationTools(

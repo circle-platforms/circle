@@ -236,3 +236,39 @@ test('a sign-in that is stopped stops polling', async () => {
     { name: 'AbortError' },
   );
 });
+
+test('startDeviceAuthorization includes requested scope when supplied and omits it otherwise', async () => {
+  const { sent, fetcher } = scripted([
+    json(200, {
+      device_code: 'dc-1',
+      user_code: 'BCDF-GHJK',
+      verification_uri: 'https://as.example.test/device',
+      expires_in: 600,
+    }),
+    json(200, {
+      device_code: 'dc-2',
+      user_code: 'JKLM-NPQR',
+      verification_uri: 'https://as.example.test/device',
+      expires_in: 600,
+    }),
+  ]);
+  await startDeviceAuthorization(
+    'https://as.example.test/device',
+    'client-1',
+    'https://as.example.test/mcp',
+    fetcher,
+    undefined,
+    () => 0,
+  );
+  await startDeviceAuthorization(
+    'https://as.example.test/device',
+    'client-1',
+    'https://as.example.test/mcp',
+    fetcher,
+    undefined,
+    () => 0,
+    'alpha beta',
+  );
+  assert.equal(sent[0]!.body.has('scope'), false);
+  assert.equal(sent[1]!.body.get('scope'), 'alpha beta');
+});

@@ -37,6 +37,7 @@ snapshot.mcp = [hub];
 
 let discoverCalls = 0;
 let reloadCalls = 0;
+let reauthorizeCalls = 0;
 let currentEvents: Array<{
   id: string;
   at: string;
@@ -138,6 +139,10 @@ const host = {
       reloadCalls += 1;
       return { id: command.id, ok: true };
     }
+    if (command.name === 'mcp-reauthorize-server') {
+      reauthorizeCalls += 1;
+      return { id: command.id, ok: true };
+    }
     if (command.name === 'remote-bot') {
       const action = String(command.payload.action ?? '');
       if (action === 'discover') {
@@ -211,15 +216,23 @@ Object.assign(window, {
   remoteBotUiFixture: {
     discoverCalls: () => discoverCalls,
     reloadCalls: () => reloadCalls,
+    reauthorizeCalls: () => reauthorizeCalls,
     resetDiscoverCalls: () => {
       discoverCalls = 0;
     },
     resetReloadCalls: () => {
       reloadCalls = 0;
     },
+    resetReauthorizeCalls: () => {
+      reauthorizeCalls = 0;
+    },
     setHubStatus: (status: McpServer['status'], error?: string) => {
       hub.status = status;
       hub.error = error;
+      emitSnapshot();
+    },
+    setHubSignIn: (signIn?: McpServer['signIn']) => {
+      hub.signIn = signIn;
       emitSnapshot();
     },
     setHubConfig: (config: {

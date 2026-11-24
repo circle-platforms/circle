@@ -41,6 +41,7 @@ export type RuntimeCommandName =
   | 'save-settings'
   | 'reload'
   | 'mcp-reload-server'
+  | 'mcp-reauthorize-server'
   | 'answer'
   | 'terminal-tab-run'
   | 'compact'
@@ -174,6 +175,7 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'save-settings',
   'reload',
   'mcp-reload-server',
+  'mcp-reauthorize-server',
   'answer',
   'terminal-tab-run',
   'compact',

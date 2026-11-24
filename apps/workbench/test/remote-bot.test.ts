@@ -204,10 +204,11 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
     assert.equal(authWithForbiddenCode.kind, 'auth');
     assert.equal(authWithForbiddenCode.retryable, false);
 
-    // 403 BOT_CLIENT_FORBIDDEN action honestly instructs adding Bearer token in settings.json with settingsPath and format.
+    // 403 BOT_CLIENT_FORBIDDEN without manual Authorization header prompts re-login with bot consent, keeping manual fallback.
     const forbidden = classifyRemoteBotFailure(
       makeErr(403, 'BOT_CLIENT_FORBIDDEN', 'oauth client token rejected'),
     );
+    assert.equal(forbidden.canReauthorize, true);
     assert.match(forbidden.action, /settings\.json/);
     assert.match(forbidden.action, /Bearer/);
 
@@ -216,11 +217,33 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
       makeErr(403, 'BOT_CLIENT_FORBIDDEN', 'oauth client token rejected'),
       { settingsPath: customSettingsPath },
     );
+    assert.equal(forbiddenWithPath.canReauthorize, true);
     assert.ok(forbiddenWithPath.action.includes(customSettingsPath));
+
+    const forbiddenWithHeader = classifyRemoteBotFailure(
+      makeErr(403, 'BOT_CLIENT_FORBIDDEN', 'oauth client token rejected'),
+      { hasAuthorizationHeader: true, settingsPath: customSettingsPath },
+    );
+    assert.equal(forbiddenWithHeader.canReauthorize, undefined);
+    assert.ok(forbiddenWithHeader.action.includes(customSettingsPath));
     if (lang === 'en') {
+      assert.equal(forbiddenWithPath.title, 'bot access not granted');
+      assert.equal(
+        forbiddenWithPath.cause,
+        'Sign in again, and check “Allow this client to use my bot” on the Hub confirmation page.',
+      );
       assert.match(
         forbiddenWithPath.action,
         /Disconnecting removes manual headers; add them again after reconnecting\./,
+      );
+      assert.equal(forbiddenWithHeader.title, 'direct member token required');
+      assert.equal(
+        forbiddenWithHeader.cause,
+        'Hub refused the OAuth sign-in token for my bot API.',
+      );
+      assert.match(
+        forbiddenWithHeader.action,
+        /Add a direct member Bearer Authorization header/,
       );
       const forbiddenConsoleEn = classifyRemoteBotFailure(
         makeErr(403, 'BOT_CLIENT_FORBIDDEN', 'console credential rejected'),
@@ -309,17 +332,31 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
         `请更新 ${customSettingsPath} 中 Hub 的直接成员 Bearer 令牌（格式：Bearer <令牌>），然后再重试。`,
       );
 
+      assert.equal(forbidden.title, '未授予机器人访问权限');
+      assert.equal(
+        forbidden.cause,
+        '重新登录，并在 Hub 的确认页勾选「允许这个客户端使用我的机器人」。',
+      );
       assert.equal(
         forbidden.action,
-        '请先在 <应用数据文件夹>/runtime-home/settings.json 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌（格式：Bearer <令牌>），然后再重试。断开连接会移除手工添加的请求头，重新连接后需要再次添加。',
+        '也可以在 <应用数据文件夹>/runtime-home/settings.json 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌（格式：Bearer <令牌>），然后再重试。断开连接会移除手工添加的请求头，重新连接后需要再次添加。',
       );
-      assert.equal(forbiddenWithPath.title, '需要使用直接成员令牌');
+      assert.equal(forbiddenWithPath.title, '未授予机器人访问权限');
       assert.equal(
         forbiddenWithPath.cause,
-        'Hub 拒绝了 OAuth 登录令牌对机器人接口的访问。',
+        '重新登录，并在 Hub 的确认页勾选「允许这个客户端使用我的机器人」。',
       );
       assert.equal(
         forbiddenWithPath.action,
+        `也可以在 ${customSettingsPath} 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌（格式：Bearer <令牌>），然后再重试。断开连接会移除手工添加的请求头，重新连接后需要再次添加。`,
+      );
+      assert.equal(forbiddenWithHeader.title, '需要使用直接成员令牌');
+      assert.equal(
+        forbiddenWithHeader.cause,
+        'Hub 拒绝了 OAuth 登录令牌对机器人接口的访问。',
+      );
+      assert.equal(
+        forbiddenWithHeader.action,
         `请先在 ${customSettingsPath} 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌（格式：Bearer <令牌>），然后再重试。断开连接会移除手工添加的请求头，重新连接后需要再次添加。`,
       );
 
@@ -631,7 +668,7 @@ test('S11/S12: translateBotTransferError localizes transfer errors, HTTP metadat
       }),
       'fallback',
     ),
-    'Hub 拒绝了 OAuth 登录令牌，请先在 settings.json 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌后再重试',
+    '重新登录并在 Hub 的确认页勾选「允许这个客户端使用我的机器人」，或在 settings.json 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌后再重试',
   );
   assert.equal(
     translateBotTransferError(

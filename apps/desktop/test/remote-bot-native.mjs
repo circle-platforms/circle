@@ -485,12 +485,14 @@ async function startPairedBackend(repoRoot) {
   }
 
   let web;
+  let checkedConsoleSession = false;
   return {
     url: hub.url,
     memberToken: member.token,
     secretKey: key,
     logs: hub.logs,
-    async approveOAuth(code) {
+    async approveOAuth(code, options = {}) {
+      await web?.dispose();
       web = await request.newContext({
         baseURL: hub.url,
         extraHTTPHeaders: { origin: hub.url },
@@ -507,6 +509,36 @@ async function startPairedBackend(repoRoot) {
         ).status(),
         303,
       );
+      if (!checkedConsoleSession) {
+        checkedConsoleSession = true;
+        const cookieBotRes = await web.post('/api/bot/v1', {
+          headers: { 'bot-client-version': VERSION },
+          data: { action: 'discover' },
+        });
+        assert.equal(cookieBotRes.status(), 401);
+        assert.equal((await cookieBotRes.json()).code, 'BOT_UNAUTHENTICATED');
+
+        const pwState = await hub.records.principals.passwordState(
+          member.principal.id,
+        );
+        const consoleSession = await hub.records.principals.openConsoleSession(
+          member.principal.id,
+          pwState.revision,
+        );
+        assert.ok(consoleSession?.token);
+        const sessionBotRes = await fetch(hub.url + '/api/bot/v1', {
+          method: 'POST',
+          headers: {
+            authorization: 'Bearer ' + consoleSession.token,
+            'bot-client-version': VERSION,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ action: 'discover' }),
+        });
+        assert.equal(sessionBotRes.status, 403);
+        assert.equal(sessionBotRes.headers.get('www-authenticate'), null);
+        assert.equal((await sessionBotRes.json()).code, 'BOT_CLIENT_FORBIDDEN');
+      }
       const device = await web.get('/console/device');
       const typed = await post('/console/device', {
         csrf: csrf(await device.text()),
@@ -515,6 +547,14 @@ async function startPairedBackend(repoRoot) {
       assert.equal(typed.status(), 303);
       const location = typed.headers().location;
       const confirmation = await (await web.get(location)).text();
+      assert.ok(confirmation.includes('name="scope_bot"'));
+      assert.ok(confirmation.includes('允许这个客户端使用我的机器人'));
+      assert.ok(
+        confirmation.includes(
+          '同意之后这个客户端可以读写当前账号和机器人的私聊与附件。',
+        ),
+      );
+      assert.ok(!/name="scope_bot"[^>]*checked/i.test(confirmation));
       const account = /name="account" value="([^"]+)"/.exec(confirmation)?.[1];
       assert.equal(account, member.principal.id);
       assert.equal(
@@ -524,10 +564,19 @@ async function startPairedBackend(repoRoot) {
             step: 'decide',
             decision: 'approve',
             account,
+            ...(options.consentBot ? { scope_bot: '1' } : {}),
           })
         ).status(),
         303,
       );
+    },
+    async revokeOAuthToken(accessToken) {
+      const response = await fetch(hub.url + '/oauth/revoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ token: accessToken }),
+      });
+      assert.equal(response.status, 200);
     },
     async enableDirectToken() {},
     async close() {
@@ -654,12 +703,22 @@ try {
     .locator('[data-bot-error-kind="oauth-forbidden"]')
     .waitFor({ timeout: 20000 });
   await page
-    .getByRole('heading', { name: 'direct member token required', exact: true })
+    .getByRole('heading', { name: 'bot access not granted', exact: true })
+    .waitFor();
+  await page
+    .locator('[data-bot-error-kind="oauth-forbidden"]')
+    .getByRole('button', { name: 'sign in again', exact: true })
     .waitFor();
   const enForbiddenText =
     (await page
       .locator('[data-bot-error-kind="oauth-forbidden"]')
       .textContent()) ?? '';
+  assert.ok(
+    enForbiddenText.includes(
+      'Sign in again, and check “Allow this client to use my bot” on the Hub confirmation page.',
+    ),
+    enForbiddenText,
+  );
   assert.ok(enForbiddenText.includes(settingsPath), enForbiddenText);
   assert.ok(enForbiddenText.includes('Bearer <token>'), enForbiddenText);
   if (standalone) {
@@ -684,10 +743,166 @@ try {
   const zhForbidden = page.locator('[data-bot-error-kind="oauth-forbidden"]');
   await zhForbidden.waitFor({ timeout: 20000 });
   const zhForbiddenText = (await zhForbidden.textContent()) ?? '';
-  assert.match(zhForbiddenText, /需要使用直接成员令牌/);
+  assert.match(zhForbiddenText, /未授予机器人访问权限/);
+  assert.ok(
+    zhForbiddenText.includes(
+      '重新登录，并在 Hub 的确认页勾选「允许这个客户端使用我的机器人」。',
+    ),
+    zhForbiddenText,
+  );
+  await zhForbidden
+    .getByRole('button', { name: '重新登录', exact: true })
+    .waitFor();
   assert.ok(zhForbiddenText.includes(settingsPath), zhForbiddenText);
   assert.ok(zhForbiddenText.includes('Bearer <令牌>'), zhForbiddenText);
   assert.match(zhForbiddenText, /headers\.Authorization/);
+  if (!standalone) {
+    // Phase 1B (paired): click "重新登录" on My Bot, reuse same client_id with bot consent, verify chat/files/mcp, then revoke.
+    const runtimeHome = join(data, 'runtime-home');
+    const mcpAuthPath = join(runtimeHome, 'mcp-auth.json');
+    const initialSettings = JSON.parse(await readFile(settingsPath, 'utf8'));
+    const hubServerKey = new URL(initialSettings.mcpServers.Hub.url).href;
+    const initialAuth = JSON.parse(await readFile(mcpAuthPath, 'utf8'));
+    const initialClientId =
+      initialAuth.servers?.[hubServerKey]?.client?.client_id;
+    assert.ok(initialClientId, 'initial OAuth client_id must be stored');
+
+    await zhForbidden
+      .getByRole('button', { name: '重新登录', exact: true })
+      .click();
+    const consentedCode = await waitFor(
+      async () =>
+        page.evaluate(async (prev) => {
+          const codeNow = (
+            await window.circleDesktop.runtimeState()
+          ).snapshot.mcp.find((r) => r.name === 'Hub')?.signIn?.code;
+          return codeNow && codeNow !== prev ? codeNow : undefined;
+        }, code),
+      're-login device code',
+    );
+    const activeSessionId = await page.evaluate(
+      async () =>
+        (await window.circleDesktop.runtimeState()).snapshot.activeSessionId,
+    );
+    await waitFor(
+      async () =>
+        page.evaluate(
+          async ({ sid, prefix }) => {
+            const browser = await window.circleDesktop.browserState(sid);
+            return String(browser.url ?? '').startsWith(prefix);
+          },
+          { sid: activeSessionId, prefix: backend.url + '/console/device' },
+        ),
+      'Hub device page opened in browser panel',
+    );
+    await page.evaluate(() => {
+      location.hash = '/page/remote-bot';
+    });
+    await page
+      .locator('[data-bot-error-kind="disconnected"]')
+      .getByText(consentedCode, { exact: true })
+      .waitFor({ timeout: 20000 });
+    const pendingAuth = JSON.parse(await readFile(mcpAuthPath, 'utf8'));
+    assert.equal(
+      pendingAuth.servers?.[hubServerKey]?.client?.client_id,
+      initialClientId,
+    );
+
+    await backend.approveOAuth(consentedCode, { consentBot: true });
+    await waitFor(
+      async () =>
+        page.evaluate(async () => {
+          const hubRow = (
+            await window.circleDesktop.runtimeState()
+          ).snapshot.mcp.find((r) => r.name === 'Hub');
+          return hubRow?.status === 'connected' && hubRow.tools.length > 0;
+        }),
+      'Hub consented OAuth connection with MCP tools',
+    );
+    const zhInput = page.locator('#remote-bot-input');
+    await zhInput.waitFor({ timeout: 20000 });
+
+    const issuedBeforeConsent = issued.length;
+    await zhInput.fill('synthetic consented oauth message');
+    await page.getByRole('button', { name: '发送', exact: true }).click();
+    await page.getByText('synthetic remote reply', { exact: true }).waitFor();
+
+    await page.getByRole('button', { name: '附加文件…', exact: true }).click();
+    await page.getByText('fixture.txt', { exact: true }).waitFor();
+    await zhInput.fill('read consented attachment');
+    await page.getByRole('button', { name: '发送', exact: true }).click();
+    await waitFor(
+      () =>
+        issued
+          .slice(issuedBeforeConsent)
+          .some((call) =>
+            String(call.messages.at(-1)?.content).includes(
+              'synthetic private attachment',
+            ),
+          ),
+      'verified attachment via consented OAuth token',
+    );
+    await page
+      .getByRole('button', { name: /fixture\.txt ·/ })
+      .first()
+      .click();
+    await waitFor(
+      async () =>
+        (await readFile(outputFile, 'utf8').catch(() => null)) ===
+        'synthetic private attachment',
+      'verified download via consented OAuth token',
+    );
+    await rm(outputFile, { force: true });
+
+    const consentedAuth = JSON.parse(await readFile(mcpAuthPath, 'utf8'));
+    assert.equal(
+      consentedAuth.servers?.[hubServerKey]?.client?.client_id,
+      initialClientId,
+    );
+    const consentedAccessToken =
+      consentedAuth.servers?.[hubServerKey]?.tokens?.access_token;
+    assert.ok(consentedAccessToken, 'consented access token must be stored');
+    assert.ok(
+      !(await page.locator('body').innerText()).includes(consentedAccessToken),
+    );
+
+    await backend.revokeOAuthToken(consentedAccessToken);
+    const afterRevoke = await fetch(backend.url + '/api/bot/v1', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer ' + consentedAccessToken,
+        'bot-client-version': VERSION,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ action: 'discover' }),
+    });
+    assert.equal(afterRevoke.status, 401);
+    const mcpAfterRevoke = await fetch(backend.url + '/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer ' + consentedAccessToken,
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-03-26',
+          capabilities: {},
+          clientInfo: { name: 'probe', version: VERSION },
+        },
+      }),
+    });
+    assert.equal(mcpAfterRevoke.status, 401);
+    await page.reload();
+    const afterRevokePanel = page.locator(
+      '[data-bot-error-kind="local-credential"]',
+    );
+    await afterRevokePanel.waitFor({ timeout: 20000 });
+    assert.match((await afterRevokePanel.textContent()) ?? '', /需要登录 Hub/);
+  }
   if (standalone) {
     backend.setForceUnauthenticated(true);
     await zhForbidden
@@ -745,6 +960,19 @@ try {
     .first()
     .click({ timeout: 30000 });
   const input = page.getByRole('textbox', { name: 'message your bot' });
+  await input.waitFor({ timeout: 20000 });
+  if (!standalone) {
+    await page
+      .getByRole('button', { name: 'new bot conversation', exact: true })
+      .click();
+    await waitFor(
+      async () =>
+        (await page
+          .getByText('synthetic remote reply', { exact: true })
+          .count()) === 0,
+      'fresh conversation for Phase 2',
+    );
+  }
   await input.fill('synthetic first message');
   await page.getByRole('button', { name: 'send', exact: true }).click();
   await page.getByText('synthetic remote reply', { exact: true }).waitFor();
@@ -902,8 +1130,8 @@ try {
   console.log(
     (packaged ? 'Packaged' : 'Development') +
       (standalone
-        ? ' (standalone): OAuth H5 refusal, direct Bearer chat, scripted remote reply, reload, attachment round trip, member token redaction and completion after app exit passed (model secret redaction not checked in standalone mode).'
-        : ' (paired): OAuth H5 refusal, direct Bearer chat, scripted remote reply, reload, attachment round trip and completion after app exit passed.'),
+        ? ' (standalone): OAuth unconsented refusal, direct Bearer chat, scripted remote reply, reload, attachment round trip, member token redaction and completion after app exit passed (model secret redaction not checked in standalone mode).'
+        : ' (paired): OAuth unconsented refusal, consented OAuth re-login round trip, token revocation, direct Bearer chat, scripted remote reply, reload, attachment round trip and completion after app exit passed.'),
   );
 } catch (error) {
   if (page)
