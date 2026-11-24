@@ -11,6 +11,7 @@ import type {
   ToolCall,
   Usage,
   MediaAttachment,
+  CommandResult,
   ToolContext,
   ToolModelCall,
 } from './types.js';
@@ -20,6 +21,7 @@ import { ApprovalPolicy, wildcard, type ApprovalMode } from './approvals.js';
 import { CheckpointStore, type Session } from './checkpoint_store.js';
 import { attachPrompt } from './mentions.js';
 import { prepareToolCall, RecoverableToolError } from './tool_call_compat.js';
+import { CommandFailure } from './jobs.js';
 import { redact } from './redact.js';
 import type { CallIdentity } from './sandbox.js';
 import { isRecord } from './settings.js';
@@ -83,6 +85,7 @@ import type {
   ResolveInputsRequest,
   ResolveInputsResult,
 } from './input_outbox.js';
+import type { SkillScopes } from './skill_tools.js';
 type InputPresentation = Omit<InputPayload, 'text'>;
 const inputPresentation = ({
   text: _text,
@@ -242,10 +245,9 @@ export interface HarnessOptions {
   ) => Promise<Buffer | undefined>;
   /** False for a subagent: tool hooks still run, session start and stop do not. */
   sessionHooks?: boolean;
-  /** How this session started, for SessionStart hooks; a session with history is resumed. */
   sessionSource?: 'startup' | 'resume' | 'clear';
-  /** The background work still running, for Stop hooks. */
   backgroundTasks?: () => Record<string, unknown>[];
+  skills?: Pick<SkillScopes, 'message' | 'withheld' | 'allows'>;
 }
 /** A message that waits for the model, as the input box showed it. */
 export interface QueuedMessage {
@@ -330,6 +332,10 @@ function escapeReminder(text: string): string {
   return text.replace(/<(\/?system-reminder)/gi, '&lt;$1');
 }
 
+function turnsLeftToRemind(maxTurns: number): number {
+  return maxTurns < 10 ? 0 : Math.min(20, Math.floor(maxTurns / 5));
+}
+
 export class Harness {
   private hooksAnnounced = false;
   /** Whether this conversation's hooks have started: its SessionStart ran, or would have. */
@@ -397,6 +403,12 @@ export class Harness {
   get busy(): boolean {
     return Boolean(this.active);
   }
+  private offered(): Tool[] {
+    const withheld = this.options.skills?.withheld(this.sessionId);
+    return withheld
+      ? this.tools.filter((tool) => !withheld.has(tool.name))
+      : this.tools;
+  }
   get pendingMessageCount(): number {
     return this.steering.length + this.followUps.length;
   }
@@ -426,6 +438,7 @@ export class Harness {
   /** Model requests made so far, counted against `maxTurns`. */
   private turnsTaken = 0;
   private turnLimitHit = false;
+  private turnLimitSaid = false;
   /** The last run ended because `maxTurns` was spent, not with an answer of the model's own. */
   get stoppedAtTurnLimit(): boolean {
     return this.turnLimitHit;
@@ -1141,7 +1154,7 @@ export class Harness {
       parts.push(message.content);
       if (message.thinking) parts.push(message.thinking);
     }
-    for (const tool of this.tools)
+    for (const tool of this.offered())
       parts.push(tool.name, tool.description, JSON.stringify(tool.parameters));
     return Math.max(1, tokenLen(parts.join('\n')));
   }
@@ -1222,6 +1235,7 @@ export class Harness {
       }
       if (queued) this.consumeInput(queued, content);
       else this.save({ id: randomUUID(), role: 'user', ...content, ...shown });
+      this.options.skills?.message(this.sessionId);
       if (verdict) this.hookContext(verdict, 'UserPromptSubmit');
     }
     const session = this.options.store.get(this.sessionId)!;
@@ -1269,6 +1283,21 @@ export class Harness {
           this.flushTitle();
           return { answer, usage };
         }
+        if (this.options.maxTurns !== undefined && !this.turnLimitSaid) {
+          const left = this.options.maxTurns - this.turnsTaken;
+          if (left <= turnsLeftToRemind(this.options.maxTurns)) {
+            this.turnLimitSaid = true;
+            this.save({
+              id: randomUUID(),
+              role: 'user',
+              internal: 'turn_limit',
+              content:
+                '<system-reminder data-source="turn-limit">\n' +
+                `This session can make ${left} more model ${left === 1 ? 'request' : 'requests'} of its ${this.options.maxTurns}. When they are spent it ends with what it has written to files and said by then, and anything learned and not written down is lost. Write the result the task asks for now; use the requests that remain to check and correct it.\n` +
+                '</system-reminder>',
+            });
+          }
+        }
         // The step starts here: a steerNow while the messages before are read stops it
         const stepControl = new AbortController();
         this.step = stepControl;
@@ -1298,6 +1327,7 @@ export class Harness {
             continue;
           }
           this.consumeInput(input, content);
+          this.options.skills?.message(this.sessionId);
           this.bus.emit('steer', { payload: { message } });
           if (verdict) this.hookContext(verdict, 'UserPromptSubmit');
         }
@@ -1327,7 +1357,7 @@ export class Harness {
                 ? await this.options.prepareMessages(signal)
                 : this.options.store.projectedMessages(this.sessionId),
             ),
-            tools: this.tools,
+            tools: this.offered(),
             ...(this.options.effort ? { effort: this.options.effort } : {}),
             signal: stepSignal,
             notice: (event) =>
@@ -1967,21 +1997,37 @@ export class Harness {
   // that says its calls may, as an MCP tool its server marks read-only.
   private parallel(call: ToolCall): boolean {
     try {
-      const tool = prepareToolCall(call, this.tools).tool;
+      const tool = prepareToolCall(call, this.offered()).tool;
       return tool.name === 'task' || tool.parallel === true;
     } catch {
       return false;
     }
+  }
+  async runCommandCall(
+    call: ToolCall,
+    signal: AbortSignal,
+  ): Promise<{ message: Message; command: CommandResult | undefined }> {
+    let command: CommandResult | undefined;
+    const message = await this.runCall(call, signal, true, (result) => {
+      command = result;
+    });
+    return { message, command };
   }
   // One call: checked, approved when it must be, and run. The result comes back to be stored
   // by the caller, which keeps the results in the order of the calls.
   private async runCall(
     original: ToolCall,
     signal: AbortSignal,
+    quiet = false,
+    onCommandResult?: (result: CommandResult) => void,
   ): Promise<Message> {
     const callModel = this.model;
     let call = original;
     let secrets: Record<string, string> = {};
+    // A command or a page may show a secret back: the model and a workflow script read its name instead, for the
+    // values the call used and the ones saved now, unless the person or the model wrote it
+    const shown = (text: string): string =>
+      this.redact(text, secrets, () => written(this.messages));
     let content = '';
     // Set when a before_tool hook rewrote the call: the tool result starts with it, whatever happens next
     let changedLine = '';
@@ -2005,7 +2051,7 @@ export class Harness {
       /* Optional metadata cannot own tool execution. */
     }
     const modelCalls: ToolModelCall[] = [];
-    this.bus.emit('tool_call', { payload: { ...call } });
+    if (!quiet) this.bus.emit('tool_call', { payload: { ...call } });
     try {
       signal.throwIfAborted();
       // The values go in once, before anything is decided: what is checked and approved is
@@ -2025,7 +2071,7 @@ export class Harness {
                 ),
               }
             : next,
-          this.tools,
+          this.offered(),
         );
         let call = prepared.call;
         const tool = prepared.tool;
@@ -2186,6 +2232,10 @@ export class Harness {
         readOnlyWorkflow;
       const hookAsk = before?.decision === 'ask';
       const hookAllow = before?.decision === 'allow' && !alwaysAsk;
+      const skillAllowed =
+        !alwaysAsk &&
+        this.options.skills?.allows(this.sessionId, tool.name, resolved) ===
+          true;
       const preparedRun = tool.prepare
         ? await tool.prepare(resolved, {
             signal,
@@ -2208,6 +2258,7 @@ export class Harness {
         // An ask rule, a critical delete: asked in every mode, whatever allows the call otherwise
         found.always ||
         (!settingsAllowed &&
+          !skillAllowed &&
           !this.options.planFileMutation?.(call) &&
           effect !== 'read' &&
           tool.approval !== false &&
@@ -2294,20 +2345,31 @@ export class Harness {
       signal.throwIfAborted();
       if (this.readOnlyRefuses(call, effect) && !tool.planAsks)
         throw new Error('read-only mode: this tool cannot run');
-      this.bus.emit('tool_start', { payload: { ...call } });
+      if (!quiet) this.bus.emit('tool_start', { payload: { ...call } });
       const args = resolved;
       const readOnlyCommand =
         this.approvalMode() === 'accept-edits'
           ? this.options.policy.readOnlyCommand(call.name, resolved)?.command
           : undefined;
       const context: ToolContext = {
+        ...(onCommandResult
+          ? {
+              onCommandResult: (result) =>
+                onCommandResult({
+                  code: result.code,
+                  output: shown(result.output).trimEnd(),
+                }),
+            }
+          : {}),
         signal,
         ...(readOnlyCommand ? { readOnlyCommand } : {}),
         sessionId: this.sessionId,
         identity: this.identity(),
         callId: call.id,
-        progress: (text) =>
-          this.bus.emit('tool_progress', { payload: { id: call.id, text } }),
+        progress: (text) => {
+          if (!quiet)
+            this.bus.emit('tool_progress', { payload: { id: call.id, text } });
+        },
         ...(used.size ? { rawArgs: structuredClone(raw) } : {}),
         ...(usedSecrets.length ? { secretNames: usedSecrets } : {}),
         imageInput: callModel.imageInput,
@@ -2391,7 +2453,10 @@ export class Harness {
       status = 'error';
       recoverable = error instanceof RecoverableToolError;
       attachments = [];
-      content = redact(error instanceof Error ? error.message : String(error));
+      content =
+        error instanceof CommandFailure
+          ? error.message
+          : redact(error instanceof Error ? error.message : String(error));
       // The tool itself failed, not a check before it, and nobody stopped it: PostToolUseFailure hooks hear of it
       if (
         ranAt !== undefined &&
@@ -2429,9 +2494,7 @@ export class Harness {
       content = `${content}\n\n${HOOK_OUTPUT_LINE} (${[...new Set(names)].join(', ') || 'hook'}):\n${preHook.context}`;
     }
     if (changedLine) content = `${changedLine}\n\n${content}`;
-    // A command or a page may show a secret back: the model reads its name instead, for the
-    // values the call used and the ones saved now, unless the person or the model wrote it
-    content = this.redact(content, secrets, () => written(this.messages));
+    content = shown(content);
     let commandExecutions: Message['commandExecutions'];
     try {
       const binding = this.options.commandExecution;

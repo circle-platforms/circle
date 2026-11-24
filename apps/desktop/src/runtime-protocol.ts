@@ -74,6 +74,8 @@ export type RuntimeCommandName =
   | 'create-skill'
   | 'dismiss-whats-new'
   | 'link-opened'
+  | 'remote-bot-native-file'
+  | 'remote-bot'
   | 'hub-connect'
   | 'hub-disconnect';
 
@@ -87,6 +89,13 @@ export interface RuntimeReply {
   id: string;
   ok: boolean;
   error?: string;
+  errorStatus?: number;
+  errorCode?: string;
+  errorDetail?: string;
+  errorUploaded?: number;
+  errorTotal?: number;
+  errorFileName?: string;
+  errorReason?: string;
   data?: unknown;
   /** The exact authoritative full publication made after this command's effect. */
   appliedState?: { epoch: string; seq: number };
@@ -198,6 +207,8 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'create-skill',
   'dismiss-whats-new',
   'link-opened',
+  'remote-bot-native-file',
+  'remote-bot',
   'hub-connect',
   'hub-disconnect',
 ]);

@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { ChatFile } from '../../../src/remote_bot_protocol.js';
 import type { DesktopAction, DesktopBridge } from './contracts';
 const actions = new Set<DesktopAction>([
   'new',
@@ -20,8 +21,66 @@ const raiseBrowserError = (error: unknown): never => {
     );
   throw Error(inner?.[1] ? inner[1] : message);
 };
+const unwrapBotTransfer = <T>(reply: unknown): T => {
+  if (
+    reply &&
+    typeof reply === 'object' &&
+    'ok' in reply &&
+    typeof (reply as { ok?: unknown }).ok === 'boolean'
+  ) {
+    const envelope = reply as {
+      ok: boolean;
+      data?: T;
+      error?: string;
+      errorStatus?: number;
+      errorCode?: string;
+      errorDetail?: string;
+      errorUploaded?: number;
+      errorTotal?: number;
+      errorFileName?: string;
+      errorReason?: string;
+    };
+    if (envelope.ok) return envelope.data as T;
+    // Electron's contextBridge strips custom own properties (including cause)
+    // when cloning Error rejections across worlds, so reject with a plain object.
+    throw {
+      name: 'Error',
+      message: envelope.error ?? 'file transfer failed',
+      ...(envelope.errorStatus !== undefined
+        ? { status: envelope.errorStatus }
+        : {}),
+      ...(envelope.errorCode !== undefined ? { code: envelope.errorCode } : {}),
+      ...(envelope.errorDetail !== undefined
+        ? { detail: envelope.errorDetail }
+        : {}),
+      ...(envelope.errorUploaded !== undefined
+        ? { errorUploaded: envelope.errorUploaded }
+        : {}),
+      ...(envelope.errorTotal !== undefined
+        ? { errorTotal: envelope.errorTotal }
+        : {}),
+      ...(envelope.errorFileName !== undefined
+        ? { errorFileName: envelope.errorFileName }
+        : {}),
+      ...(envelope.errorReason !== undefined
+        ? { errorReason: envelope.errorReason }
+        : {}),
+    };
+  }
+  return reply as T;
+};
 const bridge: DesktopBridge = {
   apiVersion: 1,
+  attachBotFiles: (binding) =>
+    ipcRenderer
+      .invoke('circle:attach-bot-files', binding)
+      .catch(raiseBrowserError)
+      .then((reply) => unwrapBotTransfer<ChatFile[] | null>(reply)),
+  saveBotFile: (binding, file) =>
+    ipcRenderer
+      .invoke('circle:save-bot-file', binding, file)
+      .catch(raiseBrowserError)
+      .then((reply) => unwrapBotTransfer<boolean>(reply)),
   nativeAccessibility: () => ipcRenderer.invoke('circle:native-accessibility'),
   onNativeAccessibility: (listener) => {
     const handler = (_event: unknown, state: Parameters<typeof listener>[0]) =>
@@ -260,3 +319,41 @@ const bridge: DesktopBridge = {
   },
 };
 contextBridge.exposeInMainWorld('circleDesktop', Object.freeze(bridge));
+
+function reportRendererMemory(): void {
+  if (typeof process !== 'object' || process === null) return;
+  const stats = process as unknown as {
+    getHeapStatistics?: () => {
+      totalHeapSize?: number;
+      usedHeapSize?: number;
+      heapSizeLimit?: number;
+    };
+    getBlinkMemoryInfo?: () => { allocated?: number };
+  };
+  try {
+    const heap = stats.getHeapStatistics?.();
+    const blink = stats.getBlinkMemoryInfo?.();
+    if (!heap && !blink) return;
+    ipcRenderer.send('circle:renderer-memory', {
+      jsHeapMb: Math.round(
+        (heap?.usedHeapSize ?? heap?.totalHeapSize ?? 0) / 1024,
+      ),
+      jsHeapLimitMb: Math.round((heap?.heapSizeLimit ?? 0) / 1024),
+      blinkAllocatedMb: Math.round((blink?.allocated ?? 0) / 1024),
+    });
+  } catch {
+    // Renderer telemetry must never affect page startup or runtime behavior.
+  }
+}
+
+if (
+  typeof process === 'object' &&
+  process !== null &&
+  typeof setInterval === 'function'
+) {
+  const rawMs = Number(process.env?.CIRCLE_WORKBENCH_WINDOW_SAMPLE_MS);
+  const intervalMs =
+    Number.isFinite(rawMs) && rawMs >= 50 && rawMs <= 30_000 ? rawMs : 30_000;
+  reportRendererMemory();
+  setInterval(reportRendererMemory, intervalMs).unref?.();
+}

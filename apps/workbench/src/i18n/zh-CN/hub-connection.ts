@@ -1,4 +1,15 @@
 export const hubConnection: Record<string, string> = {
+  send: '发送',
+  'answer the bot': '回答机器人',
+  'private chat acknowledged': '企微已确认接收',
+  'private chat delivery unknown': '企微送达未知',
+  'private chat delivery refused': '企微未送达',
+  'private chat not bound': '尚未绑定企微身份',
+  'waiting for private chat delivery': '等待企微送达',
+  'my bot': '我的机器人',
+  'remote bot disconnected': '机器人连接中断',
+  'new bot conversation': '新建机器人对话',
+  'message your bot': '给机器人发消息',
   'Hub plugin': 'Hub 插件',
   'Connect a Circle Hub by its IP address and sign in with your Hub account.':
     '填写 IP 地址连接 Circle Hub，用 Hub 账号登录。',
@@ -25,4 +36,168 @@ export const hubConnection: Record<string, string> = {
     '用户名和密码在 Hub 的网页上填写，不写进地址',
   'a Hub address has no query or fragment': 'Hub 地址不带查询参数或片段',
   'type the Hub address without a path': 'Hub 地址不带路径',
+  'Circle update required': '需要更新 Circle',
+  'Hub rejected this Circle version for my bot.':
+    'Hub 拒绝了当前 Circle 版本的机器人连接。',
+  'Update Circle desktop, then reconnect.': '请更新 Circle 桌面版后重新连接。',
+  'invalid client version': '客户端版本无效',
+  'Hub could not recognize the Circle client version header.':
+    'Hub 无法识别当前 Circle 客户端版本头。',
+  'Reinstall or update Circle desktop, then try again.':
+    '请重新安装或更新 Circle 桌面版后再重试。',
+  'my bot is disabled': '我的机器人已停用',
+  'Your Hub administrator has disabled my bot access.':
+    'Hub 管理员已停用机器人功能。',
+  'Ask your Hub administrator to enable it, then retry.':
+    '请联系 Hub 管理员启用后再重试。',
+  'direct member token required': '需要使用直接成员令牌',
+  'Hub refused the OAuth sign-in token for my bot API.':
+    'Hub 拒绝了 OAuth 登录令牌对机器人接口的访问。',
+  'Configure a direct member Bearer token in the Hub MCP settings, then retry.':
+    '请在 Hub 的 MCP 设置中配置直接成员 Bearer 令牌后再重试。',
+  '<app data folder>/runtime-home/settings.json':
+    '<应用数据文件夹>/runtime-home/settings.json',
+  'Add a direct member Bearer Authorization header (format: Bearer <token>) for Hub in {path}, then retry. Disconnecting removes manual headers; add them again after reconnecting.':
+    '请先在 {path} 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌（格式：Bearer <令牌>），然后再重试。断开连接会移除手工添加的请求头，重新连接后需要再次添加。',
+  'console credential not allowed': '不能使用控制台凭据',
+  'Hub rejected the console session credential for my bot API.':
+    'Hub 拒绝了控制台会话凭据对机器人接口的访问。',
+  'Configure a direct member Bearer token (format: Bearer <token>) for Hub headers.Authorization in {path}, then retry. Disconnecting removes manual headers; add them again after reconnecting.':
+    '请先在 {path} 的 Hub 配置 headers.Authorization 中填入直接成员 Bearer 令牌（格式：Bearer <令牌>），然后再重试。断开连接会移除手工添加的请求头，重新连接后需要再次添加。',
+  'request origin or host rejected': '请求 Host 或 Origin 被拒绝',
+  'Hub rejected the request Host or Origin header for my bot API.':
+    'Hub 拒绝了当前请求的 Host 或 Origin 请求头。',
+  'Check the Hub address in Settings -> Extensions or allowed hosts on Hub, then retry.':
+    '请在 设置 -> 扩展 中检查 Hub 地址或确认 Hub 允许的 Host/Origin 配置后再重试。',
+  'bot sign-in expired': '机器人登录已过期',
+  'Hub rejected the credential because it expired or was revoked.':
+    'Hub 拒绝了当前凭据，可能已过期或被撤销。',
+  'Update the direct member Bearer token (format: Bearer <token>) for Hub in {path}, then retry.':
+    '请更新 {path} 中 Hub 的直接成员 Bearer 令牌（格式：Bearer <令牌>），然后再重试。',
+  'Sign in to Hub again in Settings -> Extensions, then retry.':
+    '请在 设置 -> 扩展 中重新登录 Hub 后再重试。',
+  'Hub authorization secret missing': '缺少 Hub 授权密钥',
+  'The Hub Authorization header references missing secret {name}.':
+    'Hub 的 Authorization 请求头引用了未设置的密钥 {name}。',
+  'Save secret {secret} (/secrets {secret}) in Settings -> Variables & Secrets or update headers.Authorization in {path}, then retry.':
+    '请在 设置 -> 变量与密钥 中保存密钥 {secret}（或使用 /secrets {secret}），或在 {path} 中更新 headers.Authorization 后再重试。',
+  'invalid Hub authorization header': 'Hub 授权请求头格式无效',
+  'The Hub Authorization header is missing a valid Bearer prefix or token.':
+    'Hub 的 Authorization 请求头缺少有效的 Bearer 前缀或令牌。',
+  'Update Hub headers.Authorization in {path} using Bearer <token> format, then retry.':
+    '请在 {path} 中将 Hub 的 headers.Authorization 修改为 Bearer <令牌> 格式后再重试。',
+  'Hub sign-in required': '需要登录 Hub',
+  'Hub connection is missing a valid local sign-in credential.':
+    '当前 Hub 连接缺少有效的本地登录凭据。',
+  'Sign in to Hub in Settings -> Extensions or add a direct member Bearer token (format: Bearer <token>) in {path}, then retry.':
+    '请在 设置 -> 扩展 中登录 Hub，或在 {path} 中填入直接成员 Bearer 令牌（格式：Bearer <令牌>）后再重试。',
+  'HTTPS required for remote bot': '远程机器人需要 HTTPS 连接',
+  'Remote bot connections require an https:// address or a loopback http:// address.':
+    '远程机器人连接需要使用 https:// 地址或本机回环 http:// 地址。',
+  'Update the Hub URL to https:// in Settings -> Extensions or {path}, then retry.':
+    '请在 设置 -> 扩展 或 {path} 中将 Hub 地址改为 https:// 后再重试。',
+  'Cannot reach the Hub bot endpoint right now.':
+    '暂时无法连接到 Hub 机器人接口。',
+  'Circle will retry automatically with backoff, or retry now.':
+    'Circle 将按退避间隔自动重试，也可以立即手动重试。',
+  'Hub is not connected right now.': '当前未连接到 Hub。',
+  'Check your Hub connection in Settings -> Extensions, or retry reconnecting.':
+    '请在 设置 -> 扩展 中检查 Hub 连接状态，或点击重试重新连接。',
+  'remote bot busy': '机器人请求繁忙',
+  'The bot queue is full or rate-limited right now.':
+    '机器人队列已满或触发限流，请稍候。',
+  'Circle will retry shortly with backoff, or retry now.':
+    'Circle 将在短时间退避后自动重试，也可以立即手动重试。',
+  'bot attachment quota exceeded': '机器人附件配额已满',
+  'Your member bot attachment storage has reached its limit.':
+    '当前成员的机器人附件存储已达到上限。',
+  'Wait for older attachments to expire, or send without attachments.':
+    '请等待旧附件过期清理后再上传，或先发送不带附件的消息。',
+  'remote bot resource not found': '未找到机器人目标资源',
+  'Hub could not find the requested bot conversation or file.':
+    'Hub 未找到请求的机器人对话或文件。',
+  'Start a new bot conversation or retry.': '请新建机器人对话后重试。',
+  'remote bot state conflict': '机器人请求状态冲突',
+  'The request conflicts with an earlier bot conversation or request record.':
+    '该请求与已有机器人对话或请求记录状态冲突。',
+  'Reload the bot conversation and retry with a new request.':
+    '请刷新机器人对话后重新发送请求。',
+  'invalid remote bot request': '机器人请求无效',
+  'Hub rejected the bot request because its parameters or size are invalid.':
+    '请求参数或内容长度不符合要求，已被 Hub 拒绝。',
+  'Check the message or attachment limits and retry.':
+    '请检查消息内容或附件限制后再重试。',
+  'attachment integrity check failed': '附件完整性校验失败',
+  'Hub rejected the message because the attachment check failed.':
+    '附件校验未通过，Hub 拒绝了该消息。',
+  'Remove and attach the file again, then retry.':
+    '请移除并重新附加该文件后再试。',
+  'remote bot request failed': '机器人请求失败',
+  'Hub returned an unexpected error for my bot.':
+    'Hub 返回了未预期的机器人错误。',
+  'Check the Hub connection and retry.': '请检查 Hub 连接状态后再重试。',
+  'select up to eight files': '最多只能选择 8 个文件',
+  'symbolic links cannot be attached': '无法附加符号链接',
+  'only a regular file can be attached': '只能附加普通文件',
+  'file exceeds the 100 MiB limit': '文件超过 100 MiB 限制',
+  'remote bot requires https or loopback http':
+    '远程机器人连接需要使用 HTTPS 或本机回环 HTTP 地址',
+  'file upload was not verified': '文件上传未通过验证',
+  'file unavailable': '文件不可用',
+  'file digest mismatch': '文件校验不一致',
+  'file size mismatch': '文件大小不一致',
+  'remote bot unavailable': '远程机器人暂不可用',
+  'remote bot connection changed': '机器人连接配置已变更，请重试',
+  'invalid remote bot server': '无效的远程机器人服务器地址',
+  'file identity changed': '文件在读取过程中发生变化',
+  'invalid file receipt': '文件凭证无效',
+  'invalid remote file': '远程文件参数无效',
+  'file transfer failed': '文件传输失败',
+  'fetch failed': '网络请求失败',
+  'The operation was aborted due to timeout': '操作因超时已中止',
+  'invalid remote bot connection': '无效的机器人连接参数',
+  'invalid remote file operation': '无效的文件传输操作',
+  'unknown remote bot operation': '未知的机器人操作',
+  'runtime not enabled': '运行时未启用',
+  'oauth client token rejected':
+    'Hub 拒绝了 OAuth 登录令牌，请先在 settings.json 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌后再重试',
+  'remote bot request timed out': '机器人请求接收超时',
+  'untrusted IPC sender': '不受信任的窗口请求，请刷新或重新打开窗口后再试',
+  'MCP sign-in is required':
+    '需要先完成 Hub 授权登录，或配置格式正确的 Bearer 令牌',
+  'Authorization header secret {name} is not set; save {secret} in Variables & Secrets first.':
+    '授权请求头引用的密钥 {name} 尚未设置，请先在变量与密钥中保存 {secret} 后再重试',
+  'file permission denied': '没有文件访问权限',
+  'cannot access a directory as a file': '无法将文件夹当作文件操作',
+  'Uploaded {uploaded} of {total} files; failed on {name}: {reason}':
+    '已上传 {uploaded}/{total} 个文件；{name} 上传失败：{reason}',
+  'send text or files to chat with your personal bot. send /new for a new conversation, or /stop to cancel the active reply.':
+    '可发送文字或文件与机器人对话。发送 /new 开始新对话，或发送 /stop 取消当前回复。',
+  'started a new conversation': '已开始新对话',
+  'requested stop for active reply': '已请求停止当前回复',
+  'no active reply to stop': '当前没有正在进行的回复可停止',
+  'bot model is disabled; queued message was not executed':
+    '机器人模型已停用，排队消息未执行',
+  'bot model was disabled; active reply stopped':
+    '机器人模型已停用，已中止当前回复',
+  'message cannot contain bot credentials': '消息中不能包含机器人凭据',
+  'reply stopped': '已停止回复',
+  'host restarted while queued; message not executed':
+    '宿主服务在排队期间重启，消息未执行',
+  'host restarted; previous request outcome unknown':
+    '宿主服务已重启，上一请求结果未知',
+  'bot model is not enabled': '机器人模型未启用',
+  'model did not provide a valid question': '模型未提供有效的提问内容',
+  'model reply contained credentials': '模型回复包含凭据，已拦截',
+  'model returned an empty reply': '模型返回了空回复',
+  'model endpoint rejected credentials': '模型端点拒绝了凭据',
+  'model id is unavailable': '模型 ID 不可用',
+  'endpoint or model not found': '未找到模型或端点',
+  'model endpoint unreachable or timed out': '无法连接模型端点或请求超时',
+  'model did not return a valid reply': '模型未返回有效回复',
+  'invalid attachment digest': '附件摘要无效',
+  'attachment could not be read': '无法读取附件',
+  'message was not processed; you can resend it':
+    '本条消息未被处理，可以重新发送',
+  'model reply interrupted; outcome unknown': '模型回复已中断，结果未知',
 };

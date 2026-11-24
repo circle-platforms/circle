@@ -236,6 +236,12 @@ A hook's deny overrides the approval mode, including accept-edits and auto. An a
 
 Read [Hooks](hooks.md) before you trust a repository that ships them.
 
+## Skills that pre-approve tools
+
+A skill's `allowed-tools` pre-approves the tools it names in the turn that loads it, and ends with your next message. See [Skills](skills.md#tools-a-skill-pre-approves-or-withholds). It answers as a hook's allow does: an ordinary approval card is skipped, and a call that always asks, a refused command, a rule that denies, a hook that asked or denied, and read-only mode all stand. `Bash(git add *)` covers only the commands that pattern covers, matched as an `allowed_commands` pattern is; a bare `Bash` covers every ordinary command of that turn. Nothing the skill does not name changes, and a subagent the turn starts does not get the pre-approval.
+
+A skill is text a repository can supply, and trusting the folder trusts its skills' `allowed-tools` too; Circle does not ask again. A project's rule files can only deny, but a project skill can pre-approve, so read a repository's skills before you trust it. Your own `allowed_commands`, and a card's "allow for this session", are broader and last longer than a skill's pre-approval.
+
 ## Secrets
 
 The model asks for a secret with the `question` tool, naming a variable such as `API_TOKEN` and the file to write it to. A card shows both. You choose `enter secret` and type the value, masked. `alt+k` opens a request that is already waiting. Circle writes it straight to that file as `NAME=value`, keeping the file's other lines, at mode `0600`, and tells the model only that it was collected. The value never enters the conversation, and a value that could not be collected is never asked for in chat. The model chooses the file: read the card before you enter a value. See [Secrets](usage.md#secrets).
@@ -270,7 +276,7 @@ Circle makes two kinds of request of its own that have nothing to do with your m
 - A hook is a command and runs with your rights. Trusting a folder is the gate for the project's hooks; there is no second approval of each version of the file. Your own hooks run in every folder. See [Hooks](hooks.md).
 - `webfetch` refuses local and private addresses only. Any URL can carry data out in its query string.
 - The credential-file check reads names, not contents (see [Credential files](#credential-files)).
-- Text files that Circle loads as instructions (`AGENTS.md`, `CLAUDE.md`, skills) can tell the model what to do. Read them in a repository you do not trust.
+- Text files that Circle loads as instructions (`AGENTS.md`, `CLAUDE.md`, skills) can tell the model what to do, and a skill can pre-approve tools for the turn that loads it (see [Skills that pre-approve tools](#skills-that-pre-approve-tools)). Read them in a repository you do not trust.
 
 ## Report a vulnerability
 

@@ -26,6 +26,7 @@ import type { Job } from './jobs.js';
 import {
   messageTokenEstimate,
   requestBudget,
+  resolveBudget,
   BudgetExceeded,
 } from './request_budget.js';
 import { CompactionEngine, type CompactionFrame } from './compaction_engine.js';
@@ -291,7 +292,11 @@ export class ContextManager {
     const pruned = nextPruneState(
       this.projectWith(messages, offloaded),
       offloaded,
-      this.options.prune,
+      {
+        // What a request can carry, which is less than the window of a model with a smaller input limit
+        inputLimit: resolveBudget(model, this.options.contextWindow).inputLimit,
+        ...this.options.prune,
+      },
     );
     const next = nextMediaState(this.projectWith(messages, pruned), pruned);
     if (next !== state) {

@@ -144,6 +144,17 @@ try {
   await duplicate(data, ['--instance-untrusted-argument=ignored']);
   assert.equal(await first.app.evaluate(() => globalThis.instanceEvents), 3);
 
+  const currentSamples = join(data, 'logs', 'window-samples.json');
+  const previousSamples = join(data, 'logs', 'window-samples.previous.json');
+  await mkdir(join(data, 'logs'), { recursive: true });
+  const currentSentinel = JSON.stringify({ sentinel: 'preserve-current' });
+  const previousSentinel = JSON.stringify({ sentinel: 'preserve-previous' });
+  await writeFile(currentSamples, currentSentinel);
+  await writeFile(previousSamples, previousSentinel);
+  await duplicate(data);
+  assert.equal(await readFile(currentSamples, 'utf8'), currentSentinel);
+  assert.equal(await readFile(previousSamples, 'utf8'), previousSentinel);
+
   await first.app.evaluate(({ dialog }) => {
     globalThis.instanceNotices = [];
     dialog.showMessageBox = async (options) => {

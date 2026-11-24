@@ -11,6 +11,8 @@ import { availableParallelism } from 'node:os';
 import { join } from 'node:path';
 import { Ajv } from 'ajv';
 import { EFFORT_LEVELS } from './effort.js';
+import { parseToolInput } from './tool_call_compat.js';
+import type { CommandResult } from './types.js';
 import {
   ScriptWorker,
   WORKFLOW_NAME,
@@ -65,6 +67,8 @@ export interface AgentRequest {
   model?: string;
   effort?: string;
   agentType?: string;
+  command?: string;
+  timeout?: number;
 }
 /** What one attempt of an agent tells the run while it works. */
 export interface AttemptHooks {
@@ -82,6 +86,13 @@ export type AgentRunner = (
   request: AgentRequest,
   hooks: AttemptHooks,
 ) => Promise<unknown>;
+export type CommandRunner = (
+  request: AgentRequest,
+  signal: AbortSignal,
+) => Promise<CommandResult>;
+export const COMMAND_SECONDS = 120;
+const MAX_COMMAND_SECONDS = 600;
+const MAX_RUN_COMMANDS = 10_000;
 /** The call itself failed, and the script gets the error: its schema never fit, or it stalled every time. */
 export class AgentCallError extends Error {
   constructor(message: string) {
@@ -110,7 +121,7 @@ export const realStallTimer: StallTimer = (ms, fire) => {
   return () => clearTimeout(timer);
 };
 
-const ajv = new Ajv({ strict: false, allErrors: true });
+const ajv = new Ajv({ strict: false, allErrors: true, validateFormats: false });
 /**
  * Why a schema cannot be met, when that can be shown from the schema alone: it is not an object
  * schema, it does not compile, or a part of it contradicts itself (a required key that
@@ -184,6 +195,7 @@ export interface WorkflowAgentView {
   error?: string;
   /** The start of what it returned. */
   result?: string;
+  command?: true;
 }
 /** One run, as /workflows shows it. */
 export interface WorkflowRunView {
@@ -348,6 +360,7 @@ export interface WorkflowRunOptions {
   script: string;
   scriptFile: string;
   runner: AgentRunner;
+  commandRunner?: CommandRunner;
   /** Checks an agent type before the agent starts: why it cannot be used, or nothing. */
   checkAgentType?: (name: string) => string | undefined;
   /** The run this one relaunches: its journal is replayed. */
@@ -387,6 +400,7 @@ export class WorkflowRun {
   private slots: Slots;
   private phase = '';
   private output = 0;
+  private commands = 0;
   private closed = false;
   private ending?: Promise<void>;
   private finish?: (text: string | Error) => void;
@@ -457,7 +471,7 @@ export class WorkflowRun {
       const script = new ScriptWorker(
         this.options.prepared,
         {
-          agent: (id, spec) =>
+          call: (id, spec) =>
             this.called(
               spec,
               (json) =>
@@ -542,14 +556,31 @@ export class WorkflowRun {
       /* The run goes on; only its record is missing. */
     }
   }
-  /** An `agent()` call, while the script runs: queued here, started once the script waits. */
+  private checkStringOptions(
+    caller: string,
+    options: Record<string, unknown>,
+    keys: readonly string[],
+    refuse: (message: string) => void,
+  ): boolean {
+    for (const key of keys) {
+      if (options[key] !== undefined && typeof options[key] !== 'string') {
+        refuse(`${caller}() option ${key} must be a string`);
+        return false;
+      }
+    }
+    return true;
+  }
   private called(
     spec: string,
     resolve: (json?: string) => void,
     reject: (message: string) => void,
   ): void {
     if (this.closed || this.outcome) return;
-    let parsed: { prompt: string; options: Record<string, unknown> };
+    let parsed: {
+      prompt: string;
+      command?: unknown;
+      options: Record<string, unknown>;
+    };
     try {
       parsed = JSON.parse(spec);
     } catch {
@@ -564,16 +595,20 @@ export class WorkflowRun {
       typeof options[key] === 'string' && (options[key] as string).trim()
         ? (options[key] as string).trim()
         : undefined;
-    for (const key of [
-      'label',
-      'phase',
-      'model',
-      'effort',
-      'agentType',
-      'isolation',
-    ])
-      if (options[key] !== undefined && typeof options[key] !== 'string')
-        return refuse(`agent() option ${key} must be a string`);
+    if (parsed.command !== undefined)
+      return this.calledCommand(parsed.command, options, text, refuse, {
+        resolve,
+        reject,
+      });
+    if (
+      !this.checkStringOptions(
+        'agent',
+        options,
+        ['label', 'phase', 'model', 'effort', 'agentType', 'isolation'],
+        refuse,
+      )
+    )
+      return;
     if (
       options.stallMs !== undefined &&
       !(
@@ -602,7 +637,7 @@ export class WorkflowRun {
       const why = this.options.checkAgentType?.(agentType);
       if (why) return refuse(why);
     }
-    if (this.calls.length >= MAX_RUN_AGENTS)
+    if (this.calls.length - this.commands >= MAX_RUN_AGENTS)
       return refuse(
         `this run has started ${MAX_RUN_AGENTS} agents, the most one run may start`,
       );
@@ -632,23 +667,88 @@ export class WorkflowRun {
         ]),
       )
       .digest('hex');
-    const view: WorkflowAgentView = {
+    this.issue(
+      request,
+      key,
+      (options.stallMs as number | undefined) ?? this.stallMs(),
+      { resolve, reject },
+    );
+  }
+  private calledCommand(
+    command: unknown,
+    options: Record<string, unknown>,
+    text: (key: string) => string | undefined,
+    refuse: (message: string) => void,
+    ends: Pick<Call, 'resolve' | 'reject'>,
+  ): void {
+    if (typeof command !== 'string' || !command.trim())
+      return refuse(
+        'execute() takes the command as its first argument, a string',
+      );
+    if (
+      !this.checkStringOptions('execute', options, ['label', 'phase'], refuse)
+    )
+      return;
+    const timeout = options.timeout;
+    if (
+      timeout !== undefined &&
+      !(
+        typeof timeout === 'number' &&
+        Number.isInteger(timeout) &&
+        timeout >= 1 &&
+        timeout <= MAX_COMMAND_SECONDS
+      )
+    )
+      return refuse(
+        `execute() option timeout must be a whole number of seconds from 1 to ${MAX_COMMAND_SECONDS}`,
+      );
+    if (!this.options.commandRunner)
+      return refuse('execute() is not available in this run');
+    if (this.commands >= MAX_RUN_COMMANDS)
+      return refuse(
+        `this run has started ${MAX_RUN_COMMANDS} commands, the most one run may start`,
+      );
+    const index = this.calls.length;
+    const phase = text('phase') ?? this.phase;
+    this.notePhase(phase);
+    const label = text('label') ?? `$ ${firstLine(command, 58)}`;
+    const request: AgentRequest = {
       index,
+      prompt: '',
       label,
       phase,
+      command,
+      timeout: (timeout as number | undefined) ?? COMMAND_SECONDS,
+    };
+    const key = createHash('sha256')
+      .update(JSON.stringify(['command', command, request.timeout]))
+      .digest('hex');
+    this.commands++;
+    this.issue(request, key, this.stallMs(), ends);
+  }
+  private issue(
+    request: AgentRequest,
+    key: string,
+    stallMs: number,
+    ends: Pick<Call, 'resolve' | 'reject'>,
+  ): void {
+    const view: WorkflowAgentView = {
+      index: request.index,
+      label: request.label,
+      phase: request.phase,
       state: 'queued',
       attempt: 0,
       endings: [],
       tokens: 0,
+      ...(request.command !== undefined ? { command: true as const } : {}),
     };
     this.view.agents.push(view);
     const call: Call = {
-      index,
+      index: request.index,
       key,
       request,
-      stallMs: (options.stallMs as number | undefined) ?? this.stallMs(),
-      resolve,
-      reject,
+      stallMs,
+      ...ends,
       view,
       abort: new AbortController(),
     };
@@ -770,8 +870,11 @@ export class WorkflowRun {
     let outcome:
       { value: unknown } | { nothing: string } | { error: string } | undefined;
     try {
-      await this.slots.take(call.abort.signal);
-      placed = true;
+      // A command takes no agent's place, so it runs while every place is taken
+      if (call.request.command === undefined) {
+        await this.slots.take(call.abort.signal);
+        placed = true;
+      }
       call.view.state = 'running';
       call.view.started = Date.now();
       this.progress(`${call.view.label}: started`);
@@ -847,6 +950,23 @@ export class WorkflowRun {
   }
   /** One agent's attempts: a stalled one starts over without its transcript, five times at most. */
   private async attempts(call: Call): Promise<unknown> {
+    if (call.request.command !== undefined) {
+      call.view.attempt = 1;
+      this.changed();
+      try {
+        return await this.options.commandRunner!(
+          call.request,
+          call.abort.signal,
+        );
+      } catch (error) {
+        // A command that did not run rejects the script's call: it never gives null
+        if (this.closed || call.stopped || error instanceof AgentCallError)
+          throw error;
+        throw new AgentCallError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
     const endings: string[] = [];
     for (let attempt = 1; ; attempt++) {
       const controller = new AbortController();
@@ -974,7 +1094,9 @@ export class WorkflowRun {
 /** One line for the strip and the run list: the phase it is in and how its agents stand. */
 export function workflowSummary(view: WorkflowRunView): string {
   const count = (...states: WorkflowAgentView['state'][]): number =>
-    view.agents.filter((agent) => states.includes(agent.state)).length;
+    view.agents.filter(
+      (agent) => !agent.command && states.includes(agent.state),
+    ).length;
   const running = count('running');
   const waiting = count('queued');
   const done = count('done', 'cached');
@@ -996,6 +1118,11 @@ export function workflowSummary(view: WorkflowRunView): string {
       .filter(Boolean)
       .join(' · ') || 'starting'
   );
+}
+export function workflowArgs(value: unknown): unknown {
+  if (typeof value !== 'string' || !/^\s*[[{]/.test(value)) return value;
+  const parsed = parseToolInput(value);
+  return parsed !== null && typeof parsed === 'object' ? parsed : value;
 }
 /** A run's id: `w` and eight hexadecimal digits, the folder its files are kept in. */
 export const RUN_ID = /^w[0-9a-f]{8}$/;

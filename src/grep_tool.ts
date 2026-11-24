@@ -1,12 +1,38 @@
-// The grep tool, as deepagents' filesystem middleware defines it: a
-// literal (not regex) search, `output_mode` files_with_matches (the default), content or
-// count, and a total cap on matches (`max_count`, 1000 unless the call asks otherwise).
 import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, join, posix, relative, sep } from 'node:path';
 import { glob } from 'glob';
 import type { Sandbox } from './sandbox.js';
+import { MAX_LINE_CHARS } from './file_read.js';
 
 export const GREP_DEFAULT_MAX_COUNT = 1000;
+const GREP_WINDOW_CHARS = 240;
+const GREP_WINDOWS = 5;
+const lowSurrogate = (text: string, at: number): boolean =>
+  /[\uDC00-\uDFFF]/.test(text[at] ?? '');
+export function matchedLine(line: string, pattern: string): string {
+  if (line.length <= MAX_LINE_CHARS) return line;
+  const length = Array.from(line).length;
+  if (length <= MAX_LINE_CHARS) return line;
+  const windows: string[] = [];
+  let hits = 0;
+  for (
+    let at = line.indexOf(pattern);
+    at >= 0;
+    at = line.indexOf(pattern, at + Math.max(1, pattern.length))
+  ) {
+    hits++;
+    if (windows.length >= GREP_WINDOWS) continue;
+    let start = Math.max(0, at - GREP_WINDOW_CHARS);
+    if (lowSurrogate(line, start)) start--;
+    let end = Math.min(line.length, at + pattern.length + GREP_WINDOW_CHARS);
+    if (lowSurrogate(line, end)) end++;
+    const offset = Array.from(line.slice(0, start)).length;
+    windows.push(
+      `    char_offset ${offset}: ${start > 0 ? '…' : ''}${line.slice(start, end)}${end < line.length ? '…' : ''}`,
+    );
+  }
+  return `[line of ${length} characters with ${hits} match${hits === 1 ? '' : 'es'}${hits > windows.length ? `, the first ${windows.length} shown` : ''}; read_file with char_offset and char_limit reads more of it]\n${windows.join('\n')}`;
+}
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const RESULT_LIMIT = 20000 * 4;
 const TRUNCATION_GUIDANCE =
@@ -15,9 +41,6 @@ export const GREP_TRUNCATION_NOTE =
   'Note: the search stopped early at the maximum match count. ' +
   'The matches above are valid but incomplete. Narrow the search (a more specific pattern or a ' +
   'narrower path), or raise max_count, to see the rest.';
-// A file the scan could not look inside is a false "no matches" waiting to happen, so the
-// reason is counted and told. Binary content and credential files are declared exclusions
-// (docs/tools.md) and stay out of the count, as do .git and node_modules in the walk.
 const SKIP_REASONS = ['too_big', 'not_utf8', 'unreadable'] as const;
 type SkipReason = (typeof SKIP_REASONS)[number];
 const SKIP_LABELS: Record<SkipReason, string> = {
@@ -25,7 +48,6 @@ const SKIP_LABELS: Record<SkipReason, string> = {
   not_utf8: 'not UTF-8 text',
   unreadable: 'not readable',
 };
-/** One line saying what the scan did not cover, or an empty string when it covered the rest. */
 function notSearchedNote(counts: Record<SkipReason, number>): string {
   const missed = SKIP_REASONS.reduce((sum, reason) => sum + counts[reason], 0);
   if (!missed) return '';
@@ -81,8 +103,6 @@ export const GREP_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 };
 
-// A pattern without '/' matches the file name at any depth; one with '/' matches the path
-// relative to the search root, and a leading '/' anchors it there.
 function includeMatcher(pattern: string): (rel: string) => boolean {
   if (pattern.replaceAll('\\', '/').split('/').includes('..'))
     throw new Error(`Path traversal not allowed in glob pattern '${pattern}'`);
@@ -111,8 +131,6 @@ function inside(root: string, path: string): string | undefined {
     : rel;
 }
 
-// How a path is shown to the model: '/' and the path inside the folder Circle works in (or
-// inside the data folder's offload root), else the real absolute path.
 function pathShower(sandbox: Sandbox): (path: string) => string {
   const roots = [sandbox.offloadRoot, sandbox.workspace]
     .filter((root): root is string => Boolean(root))
@@ -120,7 +138,7 @@ function pathShower(sandbox: Sandbox): (path: string) => string {
       try {
         return realpathSync(root);
       } catch {
-        return root; // a root that does not exist yet holds nothing
+        return root;
       }
     });
   return (path) => {
@@ -132,13 +150,9 @@ function pathShower(sandbox: Sandbox): (path: string) => string {
   };
 }
 
-// What one file gave the search: its bytes, a reason the model should hear about, or an
-// exclusion the rules state up front (a credential file, binary content, a link out of the root).
 type Read = { data: Buffer } | { skip: SkipReason } | { excluded: true };
 
-/** Read one file for the search. Only a link pays for path resolution: on Windows a
- * `realpathSync` costs about as much again as reading the file, so a scan of a big tree is
- * floored by it, and the search root is already resolved. */
+// Resolve symlinks only for symlink entries: on Windows per-file realpathSync dominates tree scan time.
 export function readSearchableFile(
   sandbox: Sandbox,
   file: string,
@@ -151,12 +165,10 @@ export function readSearchableFile(
     let data: Buffer;
     if (info.isSymbolicLink()) {
       const real = realpathSync(file);
-      // A link that leads out of the search root is not followed.
       if (directory && inside(root, real) === undefined)
         return { excluded: true };
       if (sandbox.isCredentialPath(real)) return { excluded: true };
       const target = statSync(real);
-      // A link to a folder is not a file to read: the walk does not follow it.
       if (target.isDirectory()) return { excluded: true };
       if (target.size > MAX_FILE_BYTES) return { skip: 'too_big' };
       data = readFileSync(real);
@@ -167,8 +179,6 @@ export function readSearchableFile(
     if (data.includes(0)) return { excluded: true };
     return { data };
   } catch (error) {
-    // The walk saw it, the read did not: deleted while the search ran, so there is
-    // nothing there to have missed. Anything else is a refusal worth telling the model about.
     if ((error as NodeJS.ErrnoException).code === 'ENOENT')
       return { excluded: true };
     return { skip: 'unreadable' };
@@ -231,9 +241,7 @@ export async function grepSearch(
     not_utf8: 0,
     unreadable: 0,
   };
-  // An ASCII pattern is the same bytes in any 8-bit encoding, so a byte search for it cannot
-  // miss a line a decoded search would have found. A non-ASCII pattern would miss text stored
-  // as GBK, so there the decode below is the filter instead.
+  // Raw byte pre-filter only works for ASCII patterns because non-ASCII encodings (e.g. GBK) differ from UTF-8 bytes.
   const needle = Buffer.from(pattern, 'utf8');
   const bytesFirst = needle.every((byte) => byte < 0x80);
   let total = 0;
@@ -246,8 +254,6 @@ export async function grepSearch(
       counts[read.skip]++;
       continue;
     }
-    // The byte search is what makes a full scan cheap: most files in a tree hold nothing the
-    // question is about, and decoding and splitting those was the cost.
     if (bytesFirst && !read.data.includes(needle)) continue;
     let text: string;
     try {
@@ -284,7 +290,9 @@ export async function grepSearch(
     body = paths
       .flatMap((path) => [
         `${path}:`,
-        ...results.get(path)!.map(([line, text]) => `  ${line}: ${text}`),
+        ...results
+          .get(path)!
+          .map(([line, text]) => `  ${line}: ${matchedLine(text, pattern)}`),
       ])
       .join('\n');
   body = truncate(body);

@@ -10,7 +10,13 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { JobRegistry, outputTail, plainJobOutput } from '../src/jobs.js';
+import {
+  JobRegistry,
+  REPORT_NOTICE_CHARS,
+  jobNotice,
+  outputTail,
+  plainJobOutput,
+} from '../src/jobs.js';
 import { Sandbox } from '../src/sandbox.js';
 import { AgentRuntime } from '../src/runtime.js';
 import { ScriptedModel } from '../src/testing.js';
@@ -335,6 +341,70 @@ test('a subagent job carries the session it runs in when it starts, when it ends
   );
   assert.equal('agent' in unnamed, false);
 });
+test('the notice of a finished subagent carries its report once, not the tail of what it did; without a report it shows the end of its output', async (t) => {
+  const root = scratch(t);
+  const jobs = new JobRegistry(new Sandbox(root, join(root, 'data')));
+  cleanup(t, () => jobs.close().then(() => {}));
+  const calls = Array.from(
+    { length: 40 },
+    (_, n) =>
+      `edit_file({"file_path":"plan.json","old_string":"${'旧'.repeat(200)}${n}"})`,
+  );
+  const done = jobs.startAgent(
+    'writer: case 9',
+    { sessionId: 'lead' },
+    async (_signal, log) => {
+      for (const call of calls) log(call);
+      log('完成。计划已写入 plan.json。');
+      return '完成。计划已写入 plan.json。';
+    },
+  );
+  await jobs.wait([done.id], 5, new AbortController().signal);
+  const ended = jobs.get(done.id)!;
+  assert.equal(ended.report, '完成。计划已写入 plan.json。');
+  const notice = jobNotice(ended);
+  assert.match(
+    notice,
+    /^j\d+ · agent · done · .* · writer: case 9 · output \S+\nReport:\n完成。计划已写入 plan\.json。$/,
+  );
+  assert.equal(
+    notice.includes('edit_file'),
+    false,
+    'what it did on the way stays in its output file',
+  );
+  assert.ok(
+    outputTail(ended.outputPath).includes('edit_file'),
+    'the output file still holds it',
+  );
+  const long = jobs.startAgent('analysis', { sessionId: 'lead' }, async () =>
+    '析'.repeat(REPORT_NOTICE_CHARS + 500),
+  );
+  await jobs.wait([long.id], 5, new AbortController().signal);
+  const cut = jobNotice(jobs.get(long.id)!);
+  assert.ok(
+    cut.includes(
+      '析'.repeat(REPORT_NOTICE_CHARS) +
+        '\n… the report goes on; the whole of it ends /background_jobs/',
+    ),
+  );
+  assert.equal(cut.includes('析'.repeat(REPORT_NOTICE_CHARS + 1)), false);
+  const failed = jobs.startAgent(
+    'broken',
+    { sessionId: 'lead' },
+    async (_signal, log) => {
+      for (const call of calls) log(call);
+      throw new Error('the endpoint rejected the request (429)');
+    },
+  );
+  await jobs.wait([failed.id], 5, new AbortController().signal);
+  const why = jobNotice(jobs.get(failed.id)!);
+  assert.equal(jobs.get(failed.id)!.report, undefined);
+  assert.match(
+    why,
+    /Last output:\n[\s\S]*the endpoint rejected the request \(429\)$/,
+  );
+  assert.ok(why.length < 4096 + 400, `${why.length} characters`);
+});
 test('subagent reports are logged and stopping awaits the asynchronous cancellation cleanup', async (t) => {
   const root = scratch(t);
   const jobs = new JobRegistry(new Sandbox(root, join(root, 'data')));
@@ -477,6 +547,42 @@ test('an idle job notice resumes the model without inventing a user prompt and s
   await runtime.jobs.stop(stopped.id);
   assert.equal(await runtime.runJobNotices(), undefined);
   assert.equal(model.requests.length, 1);
+});
+test('a turn that took its notice and then failed is run again only when it is owed: with no notice waiting, runJobNotices(true) asks the model about the conversation as it is', async (t) => {
+  const root = scratch(t);
+  const model = new ScriptedModel([
+    response('greeting', 'hello'),
+    async () => {
+      throw new Error('the model service broke off');
+    },
+    response('answer', 'read the job at last'),
+  ]);
+  const runtime = new AgentRuntime({
+    workspace: root,
+    home: root,
+    settings: defaultSettings(),
+    model,
+    headless: true,
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.harness.run('start');
+  const job = await runtime.jobs.startShell(
+    script(root, 'console.log("ready");'),
+    { sessionId: runtime.session.id },
+  );
+  await runtime.jobs.wait([job.id], 5, new AbortController().signal);
+  await assert.rejects(runtime.runJobNotices(), /broke off/);
+  assert.equal(runtime.jobs.hasNotices(runtime.session.id, true), false);
+  assert.equal(await runtime.runJobNotices(), undefined);
+  assert.equal(model.requests.length, 2);
+  assert.equal(await runtime.runJobNotices(true), 'read the job at last');
+  assert.equal(model.requests.length, 3);
+  assert.ok(
+    model.requests[2]!.messages.some(
+      (message) =>
+        message.internal === 'job_notice' && /ready/.test(message.content),
+    ),
+  );
 });
 test('native background subagents return immediately, retain live read-only checks, and start subagents of their own only in the foreground', async (t) => {
   const root = scratch(t);

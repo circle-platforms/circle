@@ -68,6 +68,7 @@ export interface Job extends JobOwner {
   id: string;
   kind: 'shell' | 'adopted' | 'agent' | 'watch' | 'call';
   title: string;
+  report?: string;
   status: 'running' | 'done' | 'failed' | 'stopped';
   reason: string;
   started: number;
@@ -76,22 +77,13 @@ export interface Job extends JobOwner {
   outputPath: string;
   virtualPath: string;
   detail?: string;
-  /** The command a shell job runs, as shown: after the Runtime's known-secret redaction. */
   command?: string;
   source?: string;
   execution?: CommandExecution;
-  /** The session a background subagent runs in. The job keeps it after the subagent ends. */
   agent?: string;
-  /** Messages sent to this subagent that it has not reached yet. */
   pending?: number;
-  /** A workflow run: its id, its workflow's name, and the file its result is kept in. */
   workflow?: { run: string; name: string; result?: string };
 }
-/**
- * Whose hand may reach one job. A conversation owns every job of its own session;
- * a subagent of a turn may reach only the job it is running as, so a sibling is out of
- * reach and so is the parent's other work. An id is not a permission.
- */
 export function jobReachable(owner: JobOwner, job: Job): boolean {
   if (owner.parent)
     return job.id === owner.parent || job.agent === owner.parent;
@@ -117,11 +109,8 @@ interface Entry {
   child?: ChildProcess;
   pid?: number;
   shellExited?: boolean;
-  /** When the shell was seen to end. */
   shellEnded?: number;
-  /** What the shell started, on Windows, for ending it later. */
   tree?: CommandTree;
-  /** Ending what a finished command left running. */
   leftoverStop?: Promise<void>;
   exitCode?: number;
   deadline?: number;
@@ -132,16 +121,14 @@ interface Entry {
   settle: () => void;
   finished: boolean;
   interrupt?: () => void;
+  report?: string;
 }
-/** What a shell started, kept so that it can be ended after the shell has ended. */
 export interface CommandTree {
-  /** Notes what is in the tree now. True when something the shell started still runs. */
   record(ended: number): boolean;
   end(ended: number): Promise<unknown>;
   dispose(): void;
 }
 export interface JobProcessOptions extends CommandProcessOptions {
-  /** How a shell's tree is followed; on Windows, the process list and a Job object. */
   commandTree?: (shell: {
     pid: number;
     started: number;
@@ -162,7 +149,6 @@ export interface ExecuteResult {
   execution?: CommandExecution;
 }
 
-// The first `limit` bytes of an output file, as text that ends on a whole character.
 function readHead(path: string, limit: number): string {
   try {
     const fd = openSync(path, 'r');
@@ -217,7 +203,6 @@ export function outputTail(
 export function jobLine(job: Job): string {
   return `${job.id} · ${job.kind} · ${job.status}${job.exitCode !== undefined ? `, exit ${job.exitCode}` : ''}${job.reason && job.reason !== 'exit' ? ` (${job.reason})` : ''} · ${elapsed(job)} · ${job.title} · output ${job.virtualPath}`;
 }
-// `done`, `failed · exit 1`, `failed · timeout`, `stopped`.
 export function outcomeWords(job: Job): string {
   if (job.status === 'done') return 'done';
   if (job.status === 'failed')
@@ -228,7 +213,6 @@ export function outcomeWords(job: Job): string {
         : 'failed';
   return job.status || 'ended';
 }
-// What the conversation shows for a finished job: `◆ j3 failed · exit 1 · npm test · 12s`.
 export function noticeLine(job: Job): string {
   const title = plainJobOutput(job.title)
     .split(/\s+/)
@@ -237,10 +221,24 @@ export function noticeLine(job: Job): string {
   const chars = Array.from(title);
   return `◆ ${job.id} ${outcomeWords(job)} · ${chars.length > 60 ? chars.slice(0, 59).join('') + '…' : title} · ${elapsed(job)}`;
 }
-/** The most of a workflow's result its notice carries; the rest stays in its file. */
+function mayWake(job: Job): boolean {
+  return job.status !== 'stopped' && job.startedBy !== 'user' && !job.parent;
+}
+export class CommandFailure extends Error {}
+export function commandAnswer(
+  output: string,
+  exitCode: number | null | undefined,
+  timedOut = false,
+): string {
+  const text = `${output}\nExit code: ${exitCode ?? 'none'}`;
+  if (timedOut || exitCode !== 0) throw new CommandFailure(text);
+  return text;
+}
 const RESULT_NOTICE_BYTES = 32_768;
+export const REPORT_NOTICE_CHARS = 8_192;
+const REPORT_KEPT_CHARS = 65_536;
+const AGENT_TAIL_BYTES = 4_096;
 export function jobNotice(job: Job): string {
-  // A workflow's notice is its result, whole up to a limit: the model reads the rest in its file
   if (job.workflow?.result && job.status === 'done')
     try {
       const size = statSync(job.workflow.result).size;
@@ -253,21 +251,36 @@ export function jobNotice(job: Job): string {
     } catch {
       /* Its output says how it ended. */
     }
+  if (job.kind === 'agent' && job.report !== undefined) {
+    const report = job.report.trimEnd();
+    const chars = Array.from(report);
+    return `${jobLine(job)}\nReport:\n${
+      chars.length > REPORT_NOTICE_CHARS
+        ? chars.slice(0, REPORT_NOTICE_CHARS).join('') +
+          `\n… the report goes on; the whole of it ends ${job.virtualPath}`
+        : report || '(empty)'
+    }`;
+  }
   let output = 'Output is unavailable.';
   try {
-    // A tool call's result is given whole: the call kept one too large for the model in a file and gave its path
     output =
       redact(
         job.kind === 'call'
           ? plainJobOutput(readFileSync(job.outputPath, 'utf8')).trimEnd()
-          : outputTail(job.outputPath, job.kind === 'watch' ? 4096 : 32768),
+          : outputTail(
+              job.outputPath,
+              job.kind === 'watch'
+                ? 4096
+                : job.kind === 'agent'
+                  ? AGENT_TAIL_BYTES
+                  : 32768,
+            ),
       ) || '(empty)';
   } catch {
     /* Preserve the notice even if an external process removed its output. */
   }
   return `${jobLine(job)}\n${job.kind === 'call' ? 'Result' : 'Last output'}:\n${output}`;
 }
-/** The folder in a project's data folder for what commands write for the model, one per run. */
 export const SCRATCH_FOLDER = 'scratch';
 function alive(pid: number): boolean {
   try {
@@ -300,15 +313,12 @@ async function kill(entry: Entry, force: boolean): Promise<void> {
   }
 }
 
-/** One application's jobs. Reopening a conversation never replays a command. */
 export class JobRegistry {
-  /** Hides what the model may not read in a session's notice, such as a secret a command printed. */
   redact: (text: string, sessionId: string) => string = (text) => text;
   private entries = new Set<Entry>();
   private jobs = new Map<string, Entry>();
   private executions = new Map<string, Entry>();
   private notices = new Map<string, Job[]>();
-  /** Finished commands whose shells left processes running (Windows). */
   private leftovers = new Set<Entry>();
   private changes = new EventEmitter();
   private next = 1;
@@ -336,7 +346,6 @@ export class JobRegistry {
   ) {
     if (process.platform === 'win32' && !processOptions.commandTree) {
       this.processOptions = { ...processOptions, commandTree: windowsTree };
-      // Loaded ahead, so that a shell can be put in its Job as soon as it starts.
       void loadChildrenApi().catch(() => {});
     }
     if (!sandbox.offloadRoot)
@@ -344,8 +353,6 @@ export class JobRegistry {
     const root = join(sandbox.offloadRoot, 'background_jobs');
     const scratch = join(sandbox.offloadRoot, SCRATCH_FOLDER);
     mkdirSync(root, { recursive: true, mode: 0o700 });
-    // A run's folders go a day after it ended: its jobs' output, and what its commands wrote
-    // there for the model to read back.
     for (const parent of [root, scratch])
       for (const name of existsSync(parent) ? readdirSync(parent) : []) {
         const match = /^(\d+)-(\d+)-[a-z0-9]+$/.exec(name);
@@ -387,7 +394,6 @@ export class JobRegistry {
       }
     }
   }
-  // Subagents are not counted here: the runtime holds them to its limit of running subagents, background or not
   private checkCapacity(kind: Job['kind']): void {
     if (this.closed) throw new Error('background jobs are closed');
     if (kind === 'agent') return;
@@ -433,7 +439,6 @@ export class JobRegistry {
       ...entry.owner,
       id,
       kind,
-      // The model's few words name a job; without them, the command it runs does.
       title: (
         entry.owner.origin?.description?.trim() ||
         (entry.ready
@@ -499,7 +504,6 @@ export class JobRegistry {
     const execution = this.executions.get(executionId)?.execution;
     return execution ? structuredClone(execution) : undefined;
   }
-  /** A reused tool ID is ambiguous; never bind an old card to a newer process. */
   executionFor(
     executionSessionId: string,
     toolCallId: string,
@@ -527,7 +531,6 @@ export class JobRegistry {
       ? structuredClone(matches[0]!.execution!)
       : undefined;
   }
-  /** Internal handoff control, scoped to the actual executing session. */
   async stopExecution(
     executionSessionId: string,
     executionId: string,
@@ -587,6 +590,8 @@ export class JobRegistry {
     }
     if (job) {
       job.ended = Date.now();
+      if (entry.report !== undefined)
+        job.report = redact(entry.report).slice(0, REPORT_KEPT_CHARS);
       job.reason = entry.reason ?? 'exit';
       job.exitCode = entry.exitCode;
       job.status = [
@@ -607,12 +612,10 @@ export class JobRegistry {
       this.notices.set(job.sessionId, queue);
       this.emit('job_ended', job);
     }
-    // A stop ends the tree itself once the shell has gone, then lets it go.
     if (!this.leftovers.has(entry) && !entry.stopPromise) entry.tree?.dispose();
     entry.settle();
     this.changes.emit('change');
   }
-  /** Ends what a finished command's shell left running. */
   private endLeftovers(entry: Entry): Promise<void> {
     if (!this.leftovers.has(entry))
       return entry.leftoverStop ?? Promise.resolve();
@@ -792,7 +795,6 @@ export class JobRegistry {
             execution.reason = 'transport error';
             execution.status = 'failed';
             this.executionChanged(entry);
-            // Reporting a failed logger must never require that logger to work.
             entry.fail?.(this.transportDiagnostic(entry, error));
             void this.stopEntry(entry, 'transport error').catch(() => {
               execution.reason = 'transport cleanup failed';
@@ -932,10 +934,6 @@ export class JobRegistry {
       signal?.removeEventListener('abort', cancel);
     }
   }
-  /**
-   * Runs a command in the foreground: one still running at `defaultTimeout` goes on as a job, and one the model gave
-   * its own `timeout` is ended then. `env`, when given, is the command's whole environment in place of the shell's.
-   */
   async execute(
     command: string,
     owner: JobOwner,
@@ -975,7 +973,6 @@ export class JobRegistry {
       release = resolve;
     });
     entry.interrupt = release;
-    // Why the command left the foreground, for the model.
     let why = 'The command was moved to the background.';
     const promote = (): void => {
       if (!entry.finished && !entry.stopPromise) {
@@ -1007,7 +1004,6 @@ export class JobRegistry {
         signal.throwIfAborted();
       }
       if (entry.job) {
-        // What it printed so far stays with the result; the rest goes to the job.
         const head = readHead(entry.path, 80_000).trimEnd();
         const adopted = entry.job.kind === 'adopted';
         if (adopted)
@@ -1088,9 +1084,7 @@ export class JobRegistry {
       log: (text: string) => void,
       job: Job,
     ) => Promise<string>,
-    /** The session the subagent runs in, so that its job and its conversation are one. */
     agent?: string,
-    /** A workflow run's job: what it is, and the reason a failure gives. */
     options: { workflow?: Job['workflow']; failure?: string } = {},
   ): Job {
     this.checkCapacity('agent');
@@ -1107,7 +1101,9 @@ export class JobRegistry {
     void Promise.resolve()
       .then(async () => {
         entry.controller.signal.throwIfAborted();
-        log(await run(entry.controller.signal, log, job));
+        const report = await run(entry.controller.signal, log, job);
+        entry.report = report;
+        log(report);
       })
       .catch((error: unknown) => {
         if (!entry.controller.signal.aborted) {
@@ -1121,11 +1117,6 @@ export class JobRegistry {
       });
     return { ...job };
   }
-  /**
-   * A tool call that went on in the background after it ran a while, as an MCP call of the conversation does: `run`
-   * gives its result, which is the job's output, and is told to stop with the job's signal. `log` shows what the call
-   * says of its progress on the job's row.
-   */
   startCall(
     title: string,
     owner: JobOwner,
@@ -1305,7 +1296,6 @@ export class JobRegistry {
       throw new Error(`there is no job ${id}`);
     await this.stopEntry(entry, reason);
   }
-  /** One message more, or none: the strip counts what the subagent has not read. */
   pending(id: string, count: number): void {
     const entry = this.jobs.get(id);
     if (!entry?.job) return;
@@ -1321,10 +1311,14 @@ export class JobRegistry {
   }
   hasNotices(sessionId: string, wakeOnly = false): boolean {
     return (this.notices.get(sessionId) ?? []).some(
-      (job) =>
-        !wakeOnly ||
-        (job.status !== 'stopped' && job.startedBy !== 'user' && !job.parent),
+      (job) => !wakeOnly || mayWake(job),
     );
+  }
+  waitingNotices(sessionId: string): { id: string; line: string }[] {
+    return (this.notices.get(sessionId) ?? []).filter(mayWake).map((job) => ({
+      id: job.id,
+      line: this.redact(noticeLine(job).replace(/^◆ /, ''), sessionId),
+    }));
   }
   takeNotices(sessionId: string, ids?: string[]): Message[] {
     const pending = this.notices.get(sessionId) ?? [];
@@ -1374,7 +1368,6 @@ export class JobRegistry {
     await Promise.all(
       [...this.entries].map((entry) => this.stopEntry(entry, 'exit')),
     );
-    // A command that ended meanwhile may have left something too.
     while (this.leftovers.size)
       await Promise.all(
         [...this.leftovers].map((entry) => this.endLeftovers(entry)),

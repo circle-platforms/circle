@@ -1,4 +1,5 @@
 import { knowledgeServerBound } from '../model/knowledge';
+import { isHubConnected } from '../model/remote-bot';
 import { KnowledgeSyncStatus } from '../features/KnowledgePage';
 import '../features/navigation-settings.css';
 import { openHome } from '../features/home-selection';
@@ -684,6 +685,18 @@ export function Sidebar({
           <Plus size={15} />
           <span>{t('new session')}</span>
         </button>
+        {isHubConnected(snapshot) && (
+          <NavLink
+            to="/page/remote-bot"
+            className={({ isActive }) =>
+              isActive ? 'sidebar-item active' : 'sidebar-item'
+            }
+            onClick={onNavigate}
+          >
+            <MessagesSquare size={15} />
+            <span>{t('my bot')}</span>
+          </NavLink>
+        )}
         <NavLink
           to="/page/sessions"
           className={({ isActive }) =>

@@ -1,7 +1,7 @@
 import { utilityProcess, type UtilityProcess } from 'electron';
-import { dirname, join } from 'node:path';
-import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { appendDiagnosticLog } from './diagnostic-log';
 import type { WorkspaceServiceEvent } from './workspace-protocol';
 import {
   executeCredentialRequest,
@@ -136,13 +136,14 @@ const STDERR_TAIL = 16 * 1024;
 // What the runtime wrote on stdout, kept for the one diagnosis stderr cannot give:
 // what a command that never answered was waiting on. It never reaches the window.
 const STDOUT_TAIL = 64 * 1024;
-const LOG_LIMIT = 1024 * 1024;
 /** A command this far from an answer is said to the windows: the runtime is busy. */
 export const RUNTIME_COMMAND_WAIT_MS = 4_000;
 /** How often that wait is restated, so a window can count the seconds. */
 const RUNTIME_COMMAND_WAIT_TICK_MS = 1_000;
 /** How long the runtime may keep a command before it is said to have failed. */
 export const RUNTIME_COMMAND_TIMEOUT_MS = 120_000;
+/** Native remote-bot batch transfers upload up to 8 files (120s per file). */
+export const REMOTE_BOT_FILE_COMMAND_TIMEOUT_MS = 960_000;
 /** A close the runtime does not answer within this is ended with a kill: quitting must work. */
 export const RUNTIME_CLOSE_LIMIT_MS = 10_000;
 /** After the kill, the exit is waited on only this long before a SIGKILL settles it. */
@@ -155,6 +156,8 @@ export interface RuntimeSupervisorOptions {
   version?: string;
   /** How long a command may go unanswered; a test shortens what a person waits for. */
   commandTimeoutMs?: number;
+  /** Dedicated timeout for remote-bot-native-file batch transfers. */
+  botFileCommandTimeoutMs?: number;
   /** How long a command may be held before the windows are told the runtime is busy. */
   commandWaitMs?: number;
   /** After the close's kill, how long the exit is waited on; a test shortens it. */
@@ -664,19 +667,7 @@ export class RuntimeSupervisor {
   }
   private log(text: string) {
     const file = this.options.logFile;
-    if (!file) return;
-    try {
-      mkdirSync(dirname(file), { recursive: true });
-      try {
-        if (statSync(file).size > LOG_LIMIT) renameSync(file, `${file}.1`);
-      } catch {
-        /* no log yet */
-      }
-      const where = `circle ${this.options.version ?? '?'} · electron ${process.versions.electron ?? '?'} · ${process.platform} ${process.arch}`;
-      appendFileSync(file, `${new Date().toISOString()} ${where}\n${text}\n\n`);
-    } catch {
-      /* the log is best effort */
-    }
+    if (file) appendDiagnosticLog(file, this.options.version, text);
   }
   /** Who carries out the runtime's browser requests: the window's browser sessions. */
   onBrowser(handler: BrowserHandler) {
@@ -978,6 +969,11 @@ export class RuntimeSupervisor {
     const now = Date.now();
     let longest: RuntimeCommandWait | undefined;
     for (const [id, entry] of this.pending) {
+      if (
+        entry.name === 'remote-bot' ||
+        entry.name === 'remote-bot-native-file'
+      )
+        continue;
       const waitedMs = now - entry.sentAt;
       if (waitedMs < (this.options.commandWaitMs ?? RUNTIME_COMMAND_WAIT_MS))
         continue;
@@ -1076,6 +1072,15 @@ export class RuntimeSupervisor {
       this.child!.postMessage(request);
     });
   }
+  private commandTimeoutFor(name: RuntimeCommand['name']): number {
+    if (name === 'remote-bot-native-file') {
+      return (
+        this.options.botFileCommandTimeoutMs ??
+        REMOTE_BOT_FILE_COMMAND_TIMEOUT_MS
+      );
+    }
+    return this.options.commandTimeoutMs ?? RUNTIME_COMMAND_TIMEOUT_MS;
+  }
   async command(command: RuntimeCommand): Promise<RuntimeReply> {
     if (!this.child) throw Error('runtime disconnected');
     if (this.pending.has(command.id)) throw Error('duplicate runtime command');
@@ -1100,7 +1105,7 @@ export class RuntimeSupervisor {
           ].join('\n'),
         );
         reject(commandTimeout(command.name, waited));
-      }, this.options.commandTimeoutMs ?? RUNTIME_COMMAND_TIMEOUT_MS);
+      }, this.commandTimeoutFor(command.name));
       this.pending.set(command.id, {
         resolve,
         reject,

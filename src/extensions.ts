@@ -19,7 +19,11 @@ import type {
   Tool,
   ToolContext,
 } from './types.js';
-import { isRecord, saveSettingsChange } from './settings.js';
+import {
+  isRecord,
+  saveSettingsChange,
+  type CircleSettings,
+} from './settings.js';
 import { Watch, waitWatch, abortable } from './watch.js';
 import { JobRegistry, jobLine, type JobOwner } from './jobs.js';
 import { ExtensionSecrets, SecretMask } from './extension_secrets.js';
@@ -275,22 +279,37 @@ export class ExtensionAPI {
    */
   async saveMcpServer(
     name: string,
-    entry: Record<string, unknown>,
+    entry:
+      | Record<string, unknown>
+      | ((settings: CircleSettings) => Record<string, unknown>),
   ): Promise<McpServerState> {
     const save = this.services?.saveMcpServer;
     if (!save)
       throw new ExtensionError('this interface cannot save MCP servers');
+    const validEntry = (value: unknown): value is Record<string, unknown> =>
+      isRecord(value) &&
+      (typeof value.url === 'string' || typeof value.command === 'string');
     if (
       typeof name !== 'string' ||
       !name.trim() ||
       name === '__proto__' ||
-      !isRecord(entry) ||
-      (typeof entry.url !== 'string' && typeof entry.command !== 'string')
+      (typeof entry !== 'function' && !validEntry(entry))
     )
       throw new ExtensionError(
         'an MCP server needs a name, and an entry with a url or a command',
       );
-    return save(name, structuredClone(entry));
+    const resolvedEntry =
+      typeof entry === 'function'
+        ? (settings: CircleSettings) => {
+            const next = entry(settings);
+            if (!validEntry(next))
+              throw new ExtensionError(
+                'an MCP server needs a name, and an entry with a url or a command',
+              );
+            return structuredClone(next);
+          }
+        : structuredClone(entry);
+    return save(name, resolvedEntry);
   }
   /** Open a web address in the browser: the system's, from the terminal or the application. */
   async openUrl(url: string): Promise<void> {
@@ -604,7 +623,9 @@ export interface ExtensionHostOptions {
   /** Writes an MCP server entry into settings.json, by its name, and connects that one server again (#548). */
   saveMcpServer?: (
     name: string,
-    entry: Record<string, unknown>,
+    entry:
+      | Record<string, unknown>
+      | ((settings: CircleSettings) => Record<string, unknown>),
   ) => Promise<McpServerState>;
 }
 /**

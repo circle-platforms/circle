@@ -1,3 +1,9 @@
+import { RemoteBotChat } from '../features/RemoteBotChat';
+import {
+  findHubConnection,
+  isHubConnected,
+  shouldOpenInitialConnectionModal,
+} from '../model/remote-bot';
 import { KnowledgePage } from '../features/KnowledgePage';
 import { CommandTerminalNavigation } from '../components/CommandTerminalNavigation';
 import type {
@@ -821,12 +827,30 @@ export function App() {
         : undefined,
     );
   };
-  // The first time, before anything is set up, the connection form opens by itself.
+  const connectedBot = isHubConnected(snapshot);
+  const automaticConnection = useRef(false);
   useEffect(() => {
-    if (runtime.mode === 'live' && snapshot.runtime?.configured === false)
-      onDialog('connect');
+    if (
+      shouldOpenInitialConnectionModal({
+        mode: runtime.mode,
+        configured: snapshot.runtime?.configured,
+        snapshot,
+        pathname: route.pathname,
+      })
+    ) {
+      automaticConnection.current = true;
+      setDialogSelection('');
+      setDialog('connect');
+    }
   }, []);
+  useEffect(() => {
+    if (connectedBot && automaticConnection.current) {
+      automaticConnection.current = false;
+      setDialog((current) => (current === 'connect' ? null : current));
+    }
+  }, [connectedBot]);
   const onDialog = (kind: DialogId, choice = '') => {
+    automaticConnection.current = false;
     setDialogSelection(choice);
     setDialog(kind);
   };
@@ -1517,6 +1541,8 @@ export function App() {
         {t('manage interface components')}
       </Button>
     </div>
+  ) : page === 'remote-bot' ? (
+    <RemoteBotChat />
   ) : page && ['knowledge', 'memory', 'workflows'].includes(page) ? (
     <KnowledgePage
       key={page}
@@ -1666,6 +1692,16 @@ export function App() {
             run: () => perform(() => selectSessionAndNavigate(item.id)),
           };
         }),
+        ...(connectedBot
+          ? [
+              {
+                id: 'page:remote-bot',
+                label: t('my bot'),
+                detail: t('page'),
+                run: () => navigate('/page/remote-bot'),
+              },
+            ]
+          : []),
         {
           id: 'page:sessions',
           label: t('all sessions'),

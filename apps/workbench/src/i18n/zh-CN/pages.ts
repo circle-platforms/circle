@@ -159,6 +159,9 @@ export const pages: Record<string, string> = {
   'reconnecting {name}': '正在重新连接 {name}',
   'reloading MCP servers': '正在重新加载 MCP 服务器',
   'reloading skills': '正在重新加载技能',
+  'reload requested; nothing was loaded': '已请求重新加载；未加载任何内容',
+  'Found Hub packs from earlier installs in ~/.agents/skills ({packs}). Desktop now installs packs under the app data folder, so reinstall or move them into Desktop if needed.':
+    '在 ~/.agents/skills 中发现早期安装的 Hub 扩展包（{packs}）。桌面端现将扩展包安装于应用数据文件夹，如需使用请在桌面端重新安装或迁移。',
   reload: '重新加载',
   'add server': '添加服务器',
   configure: '配置',
@@ -482,4 +485,18 @@ export const pages: Record<string, string> = {
   'enter a secret': '输入密钥',
   'start a new line': '换行',
   'move the running command to the background': '把正在运行的命令转到后台',
+  // skills tool restrictions
+  'allowed-tools: {tools}': '允许的工具：{tools}',
+  'disallowed-tools: {tools}': '禁用的工具：{tools}',
+  '{name} {field} {entry}: not a tool name · not applied':
+    '{name} 的 {field} {entry}：不是工具名称 · 未生效',
+  '{name} names tools that do not exist in {field}: {missing} · not applied':
+    '{name} 在 {field} 中写了不存在的工具：{missing} · 未生效',
+  '{name} allowed-tools {entry}: only execute takes a pattern · not applied':
+    '{name} 的 allowed-tools {entry}：只有 execute 接受模式 · 未生效',
+  '{name} disallowed-tools {entry}: a whole tool is withheld, never part of its calls · not applied':
+    '{name} 的 disallowed-tools {entry}：禁用的是整个工具，不能只禁用其中部分调用 · 未生效',
+  '{name} disallowed-tools {entry}: always offered · not applied':
+    '{name} 的 disallowed-tools {entry}：该工具始终提供 · 未生效',
+  '{detail} · not applied': '{detail} · 未生效',
 };

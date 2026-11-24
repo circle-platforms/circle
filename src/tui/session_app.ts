@@ -154,7 +154,7 @@ import { loadSecrets } from '../secrets.js';
 import { KnowledgeService } from '../knowledge/service.js';
 import { knowledgeLamp, knowledgeSyncNotice } from './knowledge_view.js';
 import { PROTOCOLS } from '../protocols.js';
-import { JobWake } from '../job_wake.js';
+import { JobWake, unsaidNotices, waitingSentence } from '../job_wake.js';
 export { VERSION } from '../version.js';
 interface DialogPending {
   complete: (answer: unknown) => void;
@@ -553,20 +553,30 @@ export class SessionApp {
       parked: new ParkedDraft(),
       backgroundCard: false,
     } as SessionView;
+    // The jobs this view has said wait for your message, until a turn reads their notices
+    const said = new Set<string>();
     // The clock that repaints the screen looks for it, in this view.
     view.jobWake = new JobWake(
       {
         hasNotice: () =>
           !!this.runtime?.jobs.hasNotices(this.runtime.session.id, true),
+        // A turn, a card, a list the person chooses from and what they typed hold it back; a list or a page that only
+        // shows the jobs does not (see `choosing`)
         occupied: () =>
           !!this.runtime?.busy ||
           !!this.state.waiting ||
-          !!this.state.picker ||
-          !!this.state.jobDetail ||
+          this.choosing() ||
           !!this.state.draft,
         closed: () => !this.runtime || this.ended,
-        start: () =>
-          this.runtime!.runJobNotices().finally(() => this.repaint()),
+        start: (owed) =>
+          this.runtime!.runJobNotices(owed).finally(() => this.repaint()),
+        // A notice no turn starts for is not shown until the model reads it with your next message
+        holding: (hold) => {
+          const runtime = this.runtime;
+          if (!runtime) return;
+          for (const notice of unsaidNotices(runtime, said))
+            this.notice(waitingSentence(notice.line, hold));
+        },
       },
       { timed: false },
     );
@@ -3156,6 +3166,17 @@ export class SessionApp {
     if (this.state.picker === open.list) {
       if (!open.list.asking) open.list.setItems(open.rows());
     } else if (!this.state.dialog) this.jobsList = undefined;
+  }
+  /**
+   * A list is open that the person chooses from. A list that follows this conversation's jobs (/jobs, /workflows, a run,
+   * a phase of it) is not one: it was opened to watch, and the turn that a finished job starts changes nothing in it
+   * but its rows. While it asks something (stop this job?) a choice is under way, and it holds like any other. A job's
+   * page is no list; it is not counted at all.
+   */
+  private choosing(): boolean {
+    const list = this.state.picker;
+    if (!list) return false;
+    return this.jobsList?.list !== list || list.asking;
   }
   /** The open reason row, drawn from the composer so the cursor and completions match. */
   private publishExplain(card: ApprovalCard): void {

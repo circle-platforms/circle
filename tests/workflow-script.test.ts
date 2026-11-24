@@ -47,7 +47,7 @@ async function runScript(
   let worker!: ScriptWorker;
   await new Promise<void>((resolve) => {
     const host: ScriptHost = {
-      agent: (id, spec) => {
+      call: (id, spec) => {
         const { prompt, options } = JSON.parse(spec);
         asked.push({ prompt, options });
         pending.push({ id, prompt, options });

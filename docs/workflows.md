@@ -71,11 +71,12 @@ The body is plain JavaScript, not TypeScript, run as an async function: it can `
 | Name | What it is |
 |---|---|
 | `agent(prompt, options)` | Starts one subagent and resolves to its final text, or, with `schema`, to the object it returned. Resolves to `null` when you stopped the agent or its model failed for good. |
+| `execute(command, options)` | Runs a shell command in the workspace and resolves, once it has ended, to `{ code, output }`: its exit code and what it printed. One stopped when its seconds were over has a non-zero code, and its output ends with `Command ended: timeout`. See [Commands of the script](#commands-of-the-script). |
 | `parallel(tasks)` | Runs a list of functions at once and resolves when all have ended, to their results in order; one that throws gives `null`. A value that is not a function is taken as it is. |
 | `pipeline(items, stage1, stage2, …)` | Runs each item through the stages without waiting for the other items. A stage gets the previous stage's result, the item and its index; one that throws gives `null` for that item and skips its later stages. |
 | `phase(title)` | The agents started after it are grouped under that title. |
 | `log(message)` | A line for `/workflows` and the run's output. `console.log` does the same. |
-| `args` | The `args` the call gave, as data, or `undefined`. |
+| `args` | The `args` the call gave, as data, or `undefined`. A list or an object the model wrote as JSON text is read as that list or object: some models write a tool argument that has no type as text. |
 | `budget` | `budget.spent()` is the output tokens this run's agents have used; `budget.total` is `null` and `budget.remaining()` is `Infinity`. |
 
 The options of `agent()`:
@@ -90,7 +91,23 @@ The options of `agent()`:
 | `agentType` | a subagent type `task` takes, such as `explore` or one of [yours](agents.md); without it, a workflow agent |
 | `stallMs` | how long its model may send nothing before it starts over; see [When an agent stalls](#when-an-agent-stalls) |
 
-A run is meant to be repeatable: `Date.now()`, `Math.random()`, `Date()` and `new Date()` without an argument throw, and so does formatting the current time with `Intl`. Pass a time in through `args`. A script cannot read or write files, run commands, reach the network, `import` anything or make code from strings: its agents do that work. A script that imports is refused before it runs, and so is one that does not parse, with the line.
+A run is meant to be repeatable: `Date.now()`, `Math.random()`, `Date()` and `new Date()` without an argument throw, and so does formatting the current time with `Intl`. Pass a time in through `args`. A script cannot read or write files, reach the network, `import` anything or make code from strings: its agents do that work, and `execute()` runs a command for it. A script that imports is refused before it runs, and so is one that does not parse, with the line.
+
+### Commands of the script
+
+`execute(command, options)` is for the script's own bookkeeping: a tool that keeps the state of a long job and says what to start next, a check of what an agent wrote. Work that needs judgment stays with agents. With it a script can run a loop that needs no model between its steps: ask the tool, start the agents it names, ask again when one ends.
+
+A command runs as the conversation's own `execute` call would. The same rules, hooks and approval mode decide it, `%NAME%` takes its value from your variables and secrets the same way, and a secret's value in what it printed is shown as its name. It is not shown in the conversation and its result is not kept there: the run's log has a line when it starts and when it ends, and the run's journal has what it gave. What a `PostToolUse` or `PostToolUseFailure` hook adds to the output, or puts in its place, does not reach the script.
+
+The call rejects when the command did not run: a rule or a hook refused it, or you did. A command that ran and failed is a result, with its exit code. A command takes no agent's place, so it runs while every place is taken. It has 120 seconds unless `timeout` names others, 600 at most, and is stopped when they are over; a job that takes longer is an agent's to start in the background, or the conversation's.
+
+| Option | What it does |
+|---|---|
+| `label` | the name it has in the run's log; without it, `$` and the start of the command |
+| `phase` | the group it belongs to |
+| `timeout` | the seconds it may take, from 1 to 600 |
+
+A [relaunch](#relaunch-a-run) hands back a command's saved result as it does an agent's, without running it again, as long as the command and its seconds are the same. A script whose commands change something outside the run, such as a state file, is better started anew than relaunched: the saved results are of the state as it was.
 
 ## How a run goes
 
@@ -170,7 +187,7 @@ These folders are not removed; delete old ones by hand.
 
 The script runs in a worker thread of its own, inside a `node:vm` context made without any of Node's objects: no `require`, `process`, `fs`, timers or network, and code generation from strings is off. Values pass between the script and Circle as JSON text, so the script holds nothing of Circle's. The worker has its own heap, of at most 256 MB, and a stretch of script that runs for 5 seconds without waiting for an agent ends the run, as does running out of memory; neither stops Circle.
 
-This keeps a script from doing anything but orchestrate by accident or by mistake. It is not a security boundary: Node says of `node:vm` that it is not a security mechanism, and a flaw in Node or V8 could let a script out of its context into the worker, which has Node's APIs. Treat a workflow script as code you run: read a saved or a pack's workflow before you allow it, as you would a pack's scripts. What a run changes, it changes through its agents, and their calls ask as any call does.
+This keeps a script from doing anything but orchestrate by accident or by mistake. It is not a security boundary: Node says of `node:vm` that it is not a security mechanism, and a flaw in Node or V8 could let a script out of its context into the worker, which has Node's APIs. Treat a workflow script as code you run: read a saved or a pack's workflow before you allow it, as you would a pack's scripts. What a run changes, it changes through its agents and its commands, and their calls ask as any call does.
 
 ## What is not here
 

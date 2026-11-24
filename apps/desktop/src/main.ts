@@ -5,6 +5,8 @@ import {
   credentialsAfter,
 } from './private-credentials';
 import { nativeHttpsUrl } from './native-links';
+import { appendDiagnosticLog } from './diagnostic-log';
+import { createWindowDiagnostics } from './window-diagnostics';
 import { BrowserSessions } from './browser';
 import {
   devToolsMenuShortcut,
@@ -66,6 +68,7 @@ import {
   parseImageDataUrl,
   validSaveName,
 } from './policy';
+import { liveBroadcastTargets, verifyAppWindowSender } from './window-sender';
 import type {
   DesktopAction,
   DesktopInfo,
@@ -140,7 +143,8 @@ const instanceIdentity: InstanceIdentity = {
   build: app.getAppPath(),
   version: circleVersion,
 };
-if (!app.requestSingleInstanceLock(instanceIdentity)) app.exit(0);
+const hasSingleInstanceLock = app.requestSingleInstanceLock(instanceIdentity);
+if (!hasSingleInstanceLock) app.exit(0);
 // --no-sandbox contradicts enableSandbox(): the main process then crashes
 // with an access violation when the first child process starts
 // (https://github.com/electron/electron/issues/54838).
@@ -151,6 +155,33 @@ if (app.commandLine.hasSwitch('no-sandbox')) {
   process.exit(1);
 }
 app.enableSandbox();
+const rawSampleMs = process.env.CIRCLE_WORKBENCH_TEST_PROFILE
+  ? Number(process.env.CIRCLE_WORKBENCH_WINDOW_SAMPLE_MS)
+  : NaN;
+const windowSampleMs =
+  Number.isFinite(rawSampleMs) && rawSampleMs >= 50 && rawSampleMs <= 30_000
+    ? rawSampleMs
+    : undefined;
+const windowDiagnostics = hasSingleInstanceLock
+  ? createWindowDiagnostics({
+      log: (text) =>
+        appendDiagnosticLog(
+          join(dataPath, 'logs', 'runtime.log'),
+          circleVersion,
+          text,
+        ),
+      windowPids: () =>
+        appWindows()
+          .filter(
+            (one) =>
+              !one.webContents.isDestroyed() && !one.webContents.isCrashed(),
+          )
+          .map((one) => one.webContents.getOSProcessId()),
+      metrics: () => app.getAppMetrics(),
+      snapshotFile: join(dataPath, 'logs', 'window-samples.json'),
+      ...(windowSampleMs !== undefined ? { sampleMs: windowSampleMs } : {}),
+    })
+  : undefined;
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'circle',
@@ -248,22 +279,22 @@ function appWindows(): BrowserWindow[] {
 }
 /** What the runtime, the browser and the terminals tell the window, told to every window. */
 function broadcast(channel: string, ...args: unknown[]) {
-  for (const one of appWindows()) one.webContents.send(channel, ...args);
+  const targets = liveBroadcastTargets(appWindows());
+  windowDiagnostics?.sent(
+    channel,
+    args,
+    targets.map((one) => one.webContents.id),
+  );
+  for (const one of targets) {
+    one.webContents.send(channel, ...args);
+  }
 }
 /** The application's window that sent a message, or a throw for anything else. */
 function checkSender(event: {
   sender: WebContents;
   senderFrame: WebFrameMain | null;
 }): BrowserWindow {
-  const own = appWindows().find((one) => one.webContents === event.sender);
-  if (
-    !own ||
-    event.senderFrame?.routingId !== own.webContents.mainFrame.routingId ||
-    event.senderFrame?.processId !== own.webContents.mainFrame.processId ||
-    !trustedAppUrl(event.senderFrame.url)
-  )
-    throw Error('untrusted IPC sender');
-  return own;
+  return verifyAppWindowSender(appWindows(), event);
 }
 function handle(channel: string, handler: (...args: unknown[]) => unknown) {
   ipcMain.handle(channel, (event, ...args) => {
@@ -370,7 +401,16 @@ function configureMenu() {
         {
           label: text('reload window'),
           accelerator: 'CmdOrCtrl+Shift+R',
-          click: () => window?.webContents.reload(),
+          click: (_item, currentWindow) => {
+            const candidate =
+              currentWindow ?? BrowserWindow.getFocusedWindow() ?? window;
+            const target =
+              (candidate &&
+                !candidate.isDestroyed() &&
+                appWindows().find((one) => one === candidate)) ||
+              window;
+            if (target && !target.isDestroyed()) target.webContents.reload();
+          },
         },
         {
           ...role('toggleDevTools', 'Toggle Developer Tools'),
@@ -526,6 +566,7 @@ function showAttention(update: Parameters<typeof attention>[0]) {
  * main window and for one a mode of the drawer was popped out into.
  */
 function installWindowChrome(target: BrowserWindow) {
+  windowDiagnostics?.watch(target === window ? 'main' : 'popout', target);
   // Electron gives the window no right-click menu of its own. A text field gets the
   // system's editing commands, selected text gets Copy; the page asks nothing of the
   // main process for it, so the preload bridge stays as it is.
@@ -929,6 +970,37 @@ app
       frontendOnly: previewMode,
       language: forcedLanguage,
     }));
+    ipcMain.on('circle:renderer-memory', (event, value) => {
+      try {
+        checkSender(event);
+      } catch {
+        return;
+      }
+      if (!value || typeof value !== 'object') return;
+      const stats = value as {
+        jsHeapMb?: unknown;
+        jsHeapLimitMb?: unknown;
+        blinkAllocatedMb?: unknown;
+      };
+      if (
+        typeof stats.jsHeapMb !== 'number' ||
+        !Number.isFinite(stats.jsHeapMb) ||
+        stats.jsHeapMb < 0 ||
+        typeof stats.jsHeapLimitMb !== 'number' ||
+        !Number.isFinite(stats.jsHeapLimitMb) ||
+        stats.jsHeapLimitMb < 0 ||
+        typeof stats.blinkAllocatedMb !== 'number' ||
+        !Number.isFinite(stats.blinkAllocatedMb) ||
+        stats.blinkAllocatedMb < 0
+      ) {
+        return;
+      }
+      windowDiagnostics?.rendererMemory(event.sender.id, {
+        jsHeapMb: Math.round(stats.jsHeapMb),
+        jsHeapLimitMb: Math.round(stats.jsHeapLimitMb),
+        blinkAllocatedMb: Math.round(stats.blinkAllocatedMb),
+      });
+    });
     if (!previewMode) {
       runtime = new RuntimeSupervisor(
         join(dataPath, 'runtime-home'),
@@ -1004,6 +1076,8 @@ app
     handle('circle:runtime-command', async (value) => {
       if (!runtime) throw Error('runtime not enabled');
       const command = validateRuntimeCommand(value);
+      if (command.name === 'remote-bot-native-file')
+        throw Error('native file selection required');
       if (
         command.name === 'open-workspace' ||
         command.name === 'set-default-workspace' ||
@@ -1142,6 +1216,128 @@ app
         },
       });
     });
+    async function transferSelectedFile(payload: Record<string, unknown>) {
+      if (!runtime) throw Error('runtime not enabled');
+      const result = await runtime.command({
+        id: randomUUID(),
+        name: 'remote-bot-native-file',
+        payload,
+      });
+      if (!result.ok) {
+        throw Object.assign(Error(result.error ?? 'file transfer failed'), {
+          ...(result.errorStatus !== undefined
+            ? { status: result.errorStatus }
+            : {}),
+          ...(result.errorCode !== undefined ? { code: result.errorCode } : {}),
+          ...(result.errorDetail !== undefined
+            ? { detail: result.errorDetail }
+            : {}),
+          ...(result.errorUploaded !== undefined
+            ? { uploaded: result.errorUploaded }
+            : {}),
+          ...(result.errorTotal !== undefined
+            ? { total: result.errorTotal }
+            : {}),
+          ...(result.errorFileName !== undefined
+            ? { fileName: result.errorFileName }
+            : {}),
+          ...(result.errorReason !== undefined
+            ? { reason: result.errorReason }
+            : {}),
+        });
+      }
+      return result.data;
+    }
+    async function runBotTransferEnvelope(run: () => Promise<unknown>) {
+      try {
+        return { ok: true, data: await run() };
+      } catch (error) {
+        const meta =
+          error && typeof error === 'object'
+            ? (error as {
+                status?: unknown;
+                code?: unknown;
+                detail?: unknown;
+                remoteMessage?: unknown;
+                uploaded?: unknown;
+                total?: unknown;
+                fileName?: unknown;
+                reason?: unknown;
+              })
+            : undefined;
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          ...(typeof meta?.status === 'number'
+            ? { errorStatus: meta.status }
+            : {}),
+          ...(typeof meta?.code === 'string' ? { errorCode: meta.code } : {}),
+          ...(typeof meta?.detail === 'string'
+            ? { errorDetail: meta.detail }
+            : typeof meta?.remoteMessage === 'string'
+              ? { errorDetail: meta.remoteMessage }
+              : {}),
+          ...(typeof meta?.uploaded === 'number'
+            ? { errorUploaded: meta.uploaded }
+            : {}),
+          ...(typeof meta?.total === 'number'
+            ? { errorTotal: meta.total }
+            : {}),
+          ...(typeof meta?.fileName === 'string'
+            ? { errorFileName: meta.fileName }
+            : {}),
+          ...(typeof meta?.reason === 'string'
+            ? { errorReason: meta.reason }
+            : {}),
+        };
+      }
+    }
+    handle('circle:attach-bot-files', (binding) =>
+      runBotTransferEnvelope(async () => {
+        if (typeof binding !== 'string')
+          throw Error('invalid remote bot connection');
+        let paths: string[];
+        if (fixtureProfile?.files !== undefined) {
+          paths = fixtureProfile.files;
+        } else {
+          const picked = await dialog.showOpenDialog(window!, {
+            title: text('choose files'),
+            properties: ['openFile', 'multiSelections'],
+          });
+          if (picked.canceled || picked.filePaths.length === 0) return null;
+          paths = picked.filePaths;
+        }
+        if (paths.length > 8) throw Error('select up to eight files');
+        return await transferSelectedFile({
+          action: 'upload-batch',
+          binding,
+          paths,
+        });
+      }),
+    );
+    handle('circle:save-bot-file', (binding, file) =>
+      runBotTransferEnvelope(async () => {
+        if (typeof binding !== 'string' || !file || typeof file !== 'object')
+          throw Error('invalid remote file');
+        const descriptor =
+          file as import('../../../src/remote_bot_protocol.js').ChatFile;
+        const name = validSaveName(descriptor.name);
+        const result = fixtureProfile?.exportPath
+          ? { canceled: false, filePath: fixtureProfile.exportPath }
+          : await dialog.showSaveDialog(window!, {
+              defaultPath: name,
+              properties: ['showOverwriteConfirmation'],
+            });
+        if (result.canceled || !result.filePath) return false;
+        await transferSelectedFile({
+          action: 'save',
+          binding,
+          file: descriptor,
+          path: result.filePath,
+        });
+        return true;
+      }),
+    );
     handle('circle:choose-files', async (purpose) => {
       if (!['attach', 'import', 'source'].includes(String(purpose)))
         throw Error('invalid file selection purpose');
@@ -1697,6 +1893,9 @@ app
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
+app.on('child-process-gone', (_event, details) =>
+  windowDiagnostics?.childGone(details),
+);
 let quitting = false;
 let quitPending = false;
 // Quitting always ends the process. A runtime that cannot stop is ended by the bounded

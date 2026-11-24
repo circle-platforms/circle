@@ -574,6 +574,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       if (network.bundle || network.proxy)
         process.stderr.write(networkSummary(network) + '\n');
     }
+    if (argv[0] === 'remote-bot') {
+      const { runRemoteBot } = await import('./remote_bot_service.js');
+      return await runRemoteBot(argv.slice(1));
+    }
     if (argv[0] === 'update') {
       const { updateInstalled } = await import('./update.js');
       return await updateInstalled(argv.slice(1));

@@ -129,6 +129,12 @@ export const conversation: Record<string, string> = {
   'plan steps': '计划步骤',
   'plan completed · {n} steps': '计划已完成 · {n} 个步骤',
   '✖ the turn failed': '✖ 这一轮失败了',
+  // a finished job's notice that waits for the next message
+  'waits for your message': '等待下一条消息',
+  'waits for your message after {n} turn started by jobs':
+    '由任务触发 {n} 轮后，等待下一条消息',
+  'waits for your message after {n} turns in a row started by jobs':
+    '已连续由任务触发 {n} 轮，等待下一条消息',
   'title failed · {message}': '标题失败 · {message}',
   'archived conversation · read only': '已归档对话 · 只读',
   'restore conversation': '恢复对话',

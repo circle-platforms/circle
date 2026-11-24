@@ -986,6 +986,11 @@ const ruleToolFor = (tool: string, args: Record<string, unknown>): string =>
   terminalTabWrite(tool, args)?.command !== undefined
     ? 'execute'
     : ruleTool(tool);
+/** The tools whose rules can judge a tool's calls: a line typed into a terminal tab is judged by `execute` rules. */
+export const judgingRuleTools = (tool: string): string[] =>
+  TERMINAL_TAB_WRITES.has(tool)
+    ? [ruleTool(tool), 'execute']
+    : [ruleTool(tool)];
 export class ApprovalPolicy {
   private modes = new Map<string, ApprovalMode>();
   // Tools whose every call a person approves, as an MCP tool its server marks so: no rule covers one, and every mode

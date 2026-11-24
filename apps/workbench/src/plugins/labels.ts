@@ -1,6 +1,5 @@
 import { t } from '../i18n/index.ts';
 
-/** What a failed extension load says on screen. Paths stay as they are. */
 export function extensionErrorText(error: string): string {
   const missing = /Cannot find module '([^']+)'/.exec(error);
   if (missing)
@@ -8,18 +7,16 @@ export function extensionErrorText(error: string): string {
   return t('could not load the extension: {error}', { error });
 }
 
-/**
- * The name in the top bar. The sessions page has its own word; a plugin page keeps its
- * id. Every other page is a group of the settings dialog, which has no top bar of its own.
- */
+const SHELL_PAGE_TITLES: Record<string, () => string> = {
+  'remote-bot': () => t('my bot'),
+  sessions: () => t('sessions'),
+  knowledge: () => t('knowledge'),
+  memory: () => t('memory'),
+  workflows: () => t('workflows'),
+};
+
 export function shellPageTitle(page: string): string {
-  return page === 'sessions'
-    ? t('sessions')
-    : page === 'knowledge'
-      ? t('knowledge')
-      : page === 'memory'
-        ? t('memory')
-        : page === 'workflows'
-          ? t('workflows')
-          : page;
+  return Object.hasOwn(SHELL_PAGE_TITLES, page)
+    ? SHELL_PAGE_TITLES[page]!()
+    : page;
 }

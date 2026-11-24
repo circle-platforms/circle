@@ -149,15 +149,52 @@ export function hubEndpoint(settings: CircleSettings): string | undefined {
  */
 export const HUB_PLACEHOLDERS = { url: 'HUB_URL', token: 'HUB_TOKEN' } as const;
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function sameEndpoint(existingUrl: unknown, nextEndpoint: string): boolean {
+  if (typeof existingUrl !== 'string') return false;
+  try {
+    return new URL(existingUrl).href === new URL(nextEndpoint).href;
+  } catch {
+    return false;
+  }
+}
+
 /** The MCP entry of a Hub at this endpoint, saved under HUB_SERVER: the one the desktop's Hub page and `/hub` save. */
-export function hubEntry(endpoint: string): Record<string, unknown> {
+export function hubEntry(
+  endpoint: string,
+  headers?: Record<string, unknown>,
+): Record<string, unknown> {
   return {
     type: 'http',
     url: endpoint,
     enabled: true,
     placeholders: { ...HUB_PLACEHOLDERS },
+    ...(headers ? { headers: { ...headers } } : {}),
   };
 }
+
+/**
+ * The MCP entry for `endpoint` given existing `settings`, keeping `headers` when reconnecting to the same endpoint.
+ */
+export function hubEntryFor(
+  settings: CircleSettings,
+  endpoint: string,
+): Record<string, unknown> {
+  const existing = settings.mcpServers
+    ? mcpServer(settings.mcpServers, HUB_SERVER)
+    : undefined;
+  const headers =
+    existing &&
+    sameEndpoint(existing.url, endpoint) &&
+    isPlainObject(existing.headers)
+      ? existing.headers
+      : undefined;
+  return hubEntry(endpoint, headers);
+}
+
 /**
  * Puts the Hub entry for `endpoint` into `settings` (as saveSettingsChange changes them), under HUB_SERVER in
  * `mcpServers`, and keeps the extension on.
@@ -165,7 +202,7 @@ export function hubEntry(endpoint: string): Record<string, unknown> {
 export function addHub(settings: CircleSettings, endpoint: string): void {
   settings.mcpServers = {
     ...settings.mcpServers,
-    [HUB_SERVER]: hubEntry(endpoint),
+    [HUB_SERVER]: hubEntryFor(settings, endpoint),
   };
   settings.extensions = {
     ...settings.extensions,

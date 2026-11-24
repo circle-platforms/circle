@@ -1,4 +1,10 @@
 import {
+  saveRemoteFile,
+  uploadSelected,
+  uploadSelectedBatch,
+} from './remote-bot-files.js';
+import { remoteBotPort, remoteBotRequest } from './remote-bot.js';
+import {
   activeChatGPTAccount,
   CHATGPT_RESOURCE,
   chatgptModels,
@@ -48,7 +54,7 @@ import {
   unlinkSync,
 } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
-import { basename, join, relative, isAbsolute, sep } from 'node:path';
+import { basename, join, relative, isAbsolute, resolve, sep } from 'node:path';
 import { AgentRuntime, type InteractionContext } from '../../../src/runtime.js';
 import { TOOLS_NOT_LISTED_AGAIN } from '../../../src/mcp_loader.js';
 import { defaultRunOptions } from '../../../src/run_options.js';
@@ -261,7 +267,11 @@ import {
   outputTail,
   type Job as BackgroundJob,
 } from '../../../src/jobs.js';
-import { JobWake } from '../../../src/job_wake.js';
+import {
+  JobWake,
+  unsaidNotices,
+  waitingSentence,
+} from '../../../src/job_wake.js';
 import type { CircleEvent } from '../../../src/events.js';
 import type {
   WorkbenchSnapshot,
@@ -408,6 +418,27 @@ interface Streaming {
   text: string;
   thinking: string;
 }
+function findLegacySkillPacks(
+  legacyRoot?: string,
+  currentRoot?: string,
+): string[] {
+  if (!legacyRoot) return [];
+  if (currentRoot && resolve(legacyRoot) === resolve(currentRoot)) return [];
+  try {
+    const packs: string[] = [];
+    for (const entry of readdirSync(legacyRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      if (!existsSync(join(legacyRoot, entry.name, 'pack.json'))) continue;
+      if (currentRoot && existsSync(join(currentRoot, entry.name, 'pack.json')))
+        continue;
+      packs.push(entry.name);
+    }
+    return packs.sort();
+  } catch {
+    return [];
+  }
+}
+
 export interface ControllerOptions {
   home: string;
   onFatalError?: (error: Error) => void;
@@ -425,6 +456,8 @@ export interface ControllerOptions {
   dataFolder?: string;
   workspace?: string;
   userHome?: string;
+  localSkillsRoot?: string;
+  legacySkillsRoot?: string;
   model?: ChatModel;
   catalog?: (home: string) => ModelCatalog;
   emit: (update: RuntimeUpdate) => void;
@@ -2583,6 +2616,16 @@ export class RuntimeController {
           await this.options.beforeDelete?.(runtime.session.id);
         },
         userHome: this.options.userHome,
+        ...(this.options.workspaceTools?.runtimeExecutable
+          ? { nodeExecutable: this.options.workspaceTools.runtimeExecutable }
+          : {}),
+        ...(this.options.localSkillsRoot || this.options.userHome
+          ? {
+              localSkillsRoot:
+                this.options.localSkillsRoot ??
+                join(this.options.userHome!, '.agents', 'skills'),
+            }
+          : {}),
         localContext: !!task || isFolderTrusted(settings, workspace),
         settings,
         model:
@@ -2728,6 +2771,8 @@ export class RuntimeController {
         this.event(runtime, event);
       }
     });
+    // The jobs this conversation has said wait for the person's message, until a turn reads their notices
+    const said = new Set<string>();
     // A task's runtime ends with its turn; only a conversation waits for its jobs.
     if (!task)
       this.jobWakes.set(
@@ -2749,10 +2794,27 @@ export class RuntimeController {
               runtime.options.settings,
               runtime.options.workspace,
             ),
-          start: () => {
-            const run = runtime.runJobNotices();
+          start: (owed) => {
+            const run = runtime.runJobNotices(owed);
             this.track(run, runtime);
             return run;
+          },
+          // A notice no turn starts for waits for the person's next message: a line in the conversation, as in the
+          // terminal, placed after the last stored row and not stored in the history
+          holding: (hold) => {
+            const id = runtime.session.id;
+            const news = unsaidNotices(runtime, said);
+            if (news.length === 0) return;
+            const rows = this.notices.get(id) ?? [];
+            for (const notice of news)
+              rows.push({
+                id: `job-waits-${randomUUID()}`,
+                after: runtime.store.get(id)?.head ?? null,
+                text: waitingSentence(notice.line, hold),
+                at: new Date().toISOString(),
+              });
+            this.notices.set(id, rows);
+            this.publish();
           },
         }),
       );
@@ -3668,21 +3730,42 @@ export class RuntimeController {
       models,
       skills: inspecting
         ? []
-        : runtime.skills.map((skill) => ({
-            id: identity(skill.path),
-            name: skill.name,
-            description: skill.description,
-            path: skill.path,
-            // One that ships with Circle is bundled, as an extension that does is.
-            scope:
-              skill.source_label === BUILTIN_SKILL_SOURCE
-                ? 'bundled'
-                : skill.source_label.startsWith('Project') ||
-                    skill.source_label.startsWith('Ancestor')
-                  ? 'project'
-                  : 'user',
-            content: loadSkillBody(skill.name, runtime.skills),
-          })),
+        : runtime.skills.map((skill) => {
+            const problems = runtime.skillTools(skill).problems;
+            return {
+              id: identity(skill.path),
+              name: skill.name,
+              description: skill.description,
+              path: skill.path,
+              scope:
+                skill.source_label === BUILTIN_SKILL_SOURCE
+                  ? ('bundled' as const)
+                  : skill.source_label.startsWith('Project') ||
+                      skill.source_label.startsWith('Ancestor')
+                    ? ('project' as const)
+                    : ('user' as const),
+              content: loadSkillBody(skill.name, runtime.skills),
+              ...(skill.allowed_tools
+                ? { allowedTools: skill.allowed_tools }
+                : {}),
+              ...(skill.disallowed_tools
+                ? { disallowedTools: skill.disallowed_tools }
+                : {}),
+              ...(problems.length ? { toolProblems: problems } : {}),
+            };
+          }),
+      ...(!inspecting
+        ? (() => {
+            const currentSkillsRoot =
+              this.options.localSkillsRoot ??
+              join(this.options.userHome ?? homedir(), '.agents', 'skills');
+            const legacySkillPacks = findLegacySkillPacks(
+              this.options.legacySkillsRoot,
+              currentSkillsRoot,
+            );
+            return legacySkillPacks.length ? { legacySkillPacks } : {};
+          })()
+        : {}),
       commands:
         !inspecting && isFolderTrusted(settings, runtime.options.workspace)
           ? [
@@ -3721,6 +3804,19 @@ export class RuntimeController {
         const status = inspecting
           ? undefined
           : runtime.mcp.status.find((row) => row.name === name);
+        const rawHeaders =
+          spec.headers &&
+          typeof spec.headers === 'object' &&
+          !Array.isArray(spec.headers)
+            ? (spec.headers as Record<string, unknown>)
+            : undefined;
+        const hasAuthorizationHeader = Boolean(
+          rawHeaders &&
+          Object.entries(rawHeaders).some(
+            ([key, value]) =>
+              key.toLowerCase() === 'authorization' && Boolean(value),
+          ),
+        );
         return {
           id: name,
           name,
@@ -3729,6 +3825,8 @@ export class RuntimeController {
           args: Array.isArray(spec.args) ? formatMcpArguments(spec.args) : '',
           url: String(spec.url ?? ''),
           enabled: spec.enabled !== false,
+          hasAuthorizationHeader,
+          settingsPath: join(this.home, 'settings.json'),
           status: pendingReload
             ? 'reload required'
             : spec.enabled === false
@@ -4767,12 +4865,19 @@ export class RuntimeController {
             'workspace-service',
             'list-external-file-grants',
             'revoke-external-file-grant',
+            'remote-bot',
+            'remote-bot-native-file',
           ].includes(command.name)
         )
           throw Error('session changed; retry from the current session');
         const data = await this.execute(command);
         let appliedState: RuntimeReply['appliedState'];
-        if (!this.closing && command.name !== 'workspace-service') {
+        if (
+          !this.closing &&
+          command.name !== 'workspace-service' &&
+          command.name !== 'remote-bot' &&
+          command.name !== 'remote-bot-native-file'
+        ) {
           const publication = this.publish();
           if (publication?.tokenStream)
             appliedState = {
@@ -4787,11 +4892,47 @@ export class RuntimeController {
           ...(appliedState ? { appliedState } : {}),
         };
       } catch (error) {
+        const meta =
+          error instanceof Error
+            ? (error as Error & {
+                status?: unknown;
+                code?: unknown;
+                detail?: unknown;
+                remoteMessage?: unknown;
+                uploaded?: unknown;
+                total?: unknown;
+                fileName?: unknown;
+                reason?: unknown;
+              })
+            : undefined;
+        const errorDetail =
+          typeof meta?.detail === 'string'
+            ? meta.detail
+            : typeof meta?.remoteMessage === 'string'
+              ? meta.remoteMessage
+              : undefined;
         return {
           id: command.id,
           ok: false,
           error:
             error instanceof Error ? error.message : 'runtime command failed',
+          ...(typeof meta?.status === 'number'
+            ? { errorStatus: meta.status }
+            : {}),
+          ...(typeof meta?.code === 'string' ? { errorCode: meta.code } : {}),
+          ...(errorDetail ? { errorDetail } : {}),
+          ...(typeof meta?.uploaded === 'number'
+            ? { errorUploaded: meta.uploaded }
+            : {}),
+          ...(typeof meta?.total === 'number'
+            ? { errorTotal: meta.total }
+            : {}),
+          ...(typeof meta?.fileName === 'string'
+            ? { errorFileName: meta.fileName }
+            : {}),
+          ...(typeof meta?.reason === 'string'
+            ? { errorReason: meta.reason }
+            : {}),
         };
       }
     };
@@ -4809,6 +4950,8 @@ export class RuntimeController {
       'select-session',
       'list-external-file-grants',
       'revoke-external-file-grant',
+      'remote-bot',
+      'remote-bot-native-file',
       // A sign-in waits on the browser; pasting or cancelling must reach it meanwhile.
       'chatgpt-sign-in',
     ].includes(command.name);
@@ -5254,6 +5397,27 @@ export class RuntimeController {
       }
       return {};
     }
+    if (command.name === 'remote-bot-native-file') {
+      const { binding, path, paths, action, file } = command.payload;
+      if (typeof binding !== 'string') throw Error('invalid remote file');
+      const port = remoteBotPort(this.home, binding);
+      if (action === 'upload-batch') {
+        if (!Array.isArray(paths) || paths.some((p) => typeof p !== 'string'))
+          throw Error('invalid remote file');
+        return uploadSelectedBatch(port, paths as string[]);
+      }
+      if (typeof path !== 'string') throw Error('invalid remote file');
+      if (action === 'upload') return uploadSelected(port, path);
+      if (action === 'save')
+        return saveRemoteFile(
+          port,
+          file as import('../../../src/remote_bot_protocol.js').ChatFile,
+          path,
+        );
+      throw Error('invalid remote file operation');
+    }
+    if (command.name === 'remote-bot')
+      return remoteBotRequest(remoteBotPort(this.home), command.payload);
     if (command.name === 'knowledge') {
       if (command.sessionId && command.sessionId !== this.selectedSessionId)
         throw Error('knowledge-changed');
@@ -6660,6 +6824,7 @@ export class RuntimeController {
         // A skill that cannot be read is not loaded: nothing of it starts
         const body = loadSkillBody(skill.name, runtime.skills);
         const tools = await runtime.activateSkillHooks(skill.name);
+        runtime.applySkillTools(skill, 'person');
         return {
           name: skill.name,
           content: tools ? `${body}\n\n${tools}` : body,

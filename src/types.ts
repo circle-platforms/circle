@@ -177,7 +177,12 @@ export interface Tool {
   ) => Promise<PreparedRun>;
   run(args: Record<string, unknown>, context: ToolContext): Promise<string>;
 }
+export interface CommandResult {
+  code: number | null;
+  output: string;
+}
 export interface ToolContext {
+  onCommandResult?: (result: CommandResult) => void;
   signal: AbortSignal;
   readOnlyCommand?: string;
   sessionId: string;

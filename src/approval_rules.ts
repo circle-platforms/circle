@@ -173,7 +173,7 @@ function globMatches(glob: string, value: string): boolean {
  * any tool name it matches, such as `mcp__*`. A project's deny written with the name such a tool had before
  * (`<server>_<tool>`) denies it too.
  */
-function ruleNames(
+export function ruleNames(
   rule: ApprovalRule,
   tool: string,
   mcp?: McpToolOwner,

@@ -56,6 +56,19 @@ export const BUDGETS: Record<RetryKind, RetryBudget> = {
     jitter: 0.1,
   },
 };
+export function rateLimitBudget(
+  env: Record<string, string | undefined> = process.env,
+): RetryBudget {
+  const usual = BUDGETS.rate_limit;
+  const patience = Number(env.CIRCLE_RATE_LIMIT_PATIENCE_MS);
+  if (!Number.isSafeInteger(patience) || patience <= usual.deadlineMs)
+    return usual;
+  return {
+    ...usual,
+    maxRetries: Math.ceil(patience / usual.capMs) + 8,
+    deadlineMs: patience,
+  };
+}
 export function envFlag(name: string): boolean {
   return !['0', 'false', 'off', 'no'].includes(
     (process.env[name] || '1').trim().toLowerCase(),
@@ -427,7 +440,10 @@ export class ModelGuard {
     const counts = new Map<RetryKind, number>();
     const now = this.options.now ?? Date.now;
     const started = now();
-    const budgets = this.options.budgets ?? BUDGETS;
+    const budgets = this.options.budgets ?? {
+      ...BUDGETS,
+      rate_limit: rateLimitBudget(),
+    };
     let drops = 0;
     let repeats = 0;
     let tries = 0;
@@ -559,6 +575,16 @@ export class ModelGuard {
         if (
           attempts >= budget.maxRetries ||
           (budget.deadlineMs > 0 && now() - started >= budget.deadlineMs)
+        )
+          throw attempts ? new RetriesExhausted(error, attempts) : error;
+        // The endpoint said when to come back, and that is after this request's last try: asking again before then
+        // only delays its answer. A monthly quota that reset sixteen days later kept each agent silent for ten minutes.
+        const comeBackMs =
+          kind === 'rate_limit' ? retryAfterMs(error) : undefined;
+        if (
+          comeBackMs !== undefined &&
+          budget.deadlineMs > 0 &&
+          now() - started + comeBackMs > budget.deadlineMs
         )
           throw attempts ? new RetriesExhausted(error, attempts) : error;
         const waitMs = backoffMs(

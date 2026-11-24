@@ -40,6 +40,7 @@ export type SettingsSectionId =
   | 'sync';
 /** `settings` opens the dialog at its first group; every group also has its own page id. */
 export type PageId =
+  | 'remote-bot'
   | 'sessions'
   | 'knowledge'
   | 'memory'
@@ -400,6 +401,9 @@ export interface Skill {
   /** bundled: ships with Circle; a project or user skill of the same name replaces it. */
   scope: 'project' | 'user' | 'bundled';
   content: string;
+  allowedTools?: string[];
+  disallowedTools?: string[];
+  toolProblems?: string[];
 }
 export interface PromptCommand {
   name: string;
@@ -416,6 +420,8 @@ export interface McpServer {
   args: string;
   url: string;
   enabled: boolean;
+  hasAuthorizationHeader?: boolean;
+  settingsPath?: string;
   status:
     'sample' | 'not connected' | 'connected' | 'error' | 'reload required';
   tools: { name: string; description: string; schema: unknown }[];
@@ -565,6 +571,8 @@ export interface WorkbenchSnapshot {
   approvalRules: ApprovalRule[];
   models: Model[];
   skills: Skill[];
+  /** Skill packs found only in ~/.agents/skills (CLI), outside desktop runtime-home. */
+  legacySkillPacks?: string[];
   commands: PromptCommand[];
   mcp: McpServer[];
   extensions: RuntimeExtension[];

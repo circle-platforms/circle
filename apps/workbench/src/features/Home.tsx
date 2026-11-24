@@ -1,3 +1,4 @@
+import { RemoteBotLink } from './RemoteBotChat';
 import { taskWorkspaceIds } from '../model/session-management';
 import { workspaceHint } from '../model/workspace-label';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -366,6 +367,7 @@ export function Home({
             t('what are we working on?')
           )}
         </h2>
+        <RemoteBotLink />
       </div>
       <div className="home-composer">
         <div

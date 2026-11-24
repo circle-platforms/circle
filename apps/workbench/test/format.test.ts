@@ -11,6 +11,7 @@ import {
 import type { Message } from '../src/model/types.ts';
 import { setLanguage } from '../src/i18n/index.ts';
 import { planVisible } from '../../../src/plan_state.ts';
+import { waitingSentence } from '../../../src/job_notice_words.ts';
 import {
   contextPercent,
   formatBusyElapsed,
@@ -100,6 +101,41 @@ test('only typed completion diagnostics translate; model and provider text stay 
     }),
     '✖ 模型上下文已满，响应未完成\ncontext_length_exceeded: 400 Your input exceeds the context window of this model.',
   );
+});
+
+test("a finished job's notice that waits for the next message keeps the job's line and is translated after it", (context) => {
+  context.after(() => setLanguage('en'));
+  const line = 'j21 done · stage 21 · 7m 38s';
+  // The sentences are the runtime's own, so a change of its words fails here and not in front of a person
+  const limit = waitingSentence(line, { why: 'limit', most: 20 });
+  const one = waitingSentence('j2 failed · exit 1 · npm test · 4s', {
+    why: 'limit',
+    most: 1,
+  });
+  const stopped = waitingSentence(line, { why: 'stopped' });
+  assert.equal(
+    limit,
+    line + ' · waits for your message after 20 turns in a row started by jobs',
+  );
+  setLanguage('en');
+  for (const text of [limit, one, stopped])
+    assert.equal(completionNoticeText({ text }), text);
+  setLanguage('zh-CN');
+  assert.equal(
+    completionNoticeText({ text: limit }),
+    line + ' · 已连续由任务触发 20 轮，等待下一条消息',
+  );
+  assert.equal(
+    completionNoticeText({ text: one }),
+    'j2 failed · exit 1 · npm test · 4s · 由任务触发 1 轮后，等待下一条消息',
+  );
+  assert.equal(
+    completionNoticeText({ text: stopped }),
+    line + ' · 等待下一条消息',
+  );
+  // A text that only ends in the same words, with no job's line before it, is left as it is
+  const title = 'echo waits for your message';
+  assert.equal(completionNoticeText({ text: title }), title);
 });
 
 test('a stopped reply keeps one interrupt mark, under the stats', () => {

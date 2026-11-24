@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { createServer, type IncomingMessage } from 'node:http';
 import { resolveEndpoint } from '../src/probe.js';
 import { availableModels, connectionModels } from '../src/connection_models.js';
-import { PROVIDER_PRESETS } from '../src/providers.js';
+import { PROVIDER_PRESETS, providerPreset } from '../src/providers.js';
 import { SetupFlow } from '../src/tui/setup_flow.js';
 import { runLineInit, type LinePrompter } from '../src/line_setup.js';
 import {
@@ -279,6 +279,35 @@ test('legacy preset routes are inferred without overriding explicit custom or un
     auth: { provider: ' future-provider ', protocol: 'openai' },
   });
   assert.equal(settings.auth.provider, 'future-provider');
+});
+
+test('both Zhipu presets list glm-5.4 first, for a saved provider and for a connection saved without one', async () => {
+  const listed = ['glm-5.4', 'glm-5.3', 'glm-5.2', 'glm-5.1', 'glm-4.7'];
+  for (const [provider, protocol, baseUrl] of [
+    ['zhipu', 'openai', 'https://open.bigmodel.cn/api/paas/v4'],
+    ['zhipu-anthropic', 'anthropic', 'https://open.bigmodel.cn/api/anthropic'],
+  ] as const) {
+    assert.deepEqual([...providerPreset(provider).models], listed, provider);
+    // The saved provider names the list; an older connection has only its URL and protocol.
+    for (const saved of [provider, undefined]) {
+      const found = await availableModels(
+        {
+          ...(saved ? { provider: saved } : {}),
+          protocol,
+          base_url: baseUrl,
+          model: 'glm-5.4',
+          api_key_ref: 'api_key',
+        },
+        'key',
+        async () => {
+          throw Error('a preset must not discover');
+        },
+      );
+      assert.equal(found.status, 'preset', `${provider} ${saved}`);
+      assert.equal(found.protocol, protocol, `${provider} ${saved}`);
+      assert.deepEqual(found.models, listed, `${provider} ${saved}`);
+    }
+  }
 });
 
 test('an online provider failure remains a failure and never falls back to presets or another protocol', async (t) => {

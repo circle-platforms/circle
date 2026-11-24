@@ -71,7 +71,9 @@ export function BrowserApproval({
     <dl className="browser-approval-input">
       {rows.map(({ key, value }) => (
         <div key={key}>
-          <dt>{BROWSER_FIELDS[key]?.() ?? key}</dt>
+          <dt>
+            {Object.hasOwn(BROWSER_FIELDS, key) ? BROWSER_FIELDS[key]() : key}
+          </dt>
           <dd>
             <code>{value}</code>
           </dd>

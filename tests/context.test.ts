@@ -7,7 +7,9 @@ import { CheckpointStore, emptyContextState } from '../src/checkpoint_store.js';
 import { ContextManager } from '../src/context_middleware.js';
 import {
   nextPruneState,
+  pruneBatchTokens,
   pruneMessages,
+  pruneProtectTokens,
 } from '../src/middleware/tool_result_prune.js';
 import { planReminder, planTail } from '../src/middleware/plan_tail.js';
 import { analyze, loopReminder } from '../src/middleware/loop_guard.js';
@@ -270,7 +272,10 @@ test('plan reminders are bounded, after tool results, current-turn-only and do n
     );
   const reminder = planReminder(raw, raw, todos)!;
   assert.equal(reminder.internal, 'plan-reminder');
-  assert.match(reminder.content, /\[>\] work/);
+  assert.match(
+    reminder.content,
+    /^<system-reminder data-source="circle-plan">\n[\s\S]*\[>\] work[\s\S]*<\/system-reminder>$/,
+  );
   assert.equal(planReminder(raw, raw, todos, true), undefined);
   assert.equal(
     planReminder(
@@ -326,6 +331,86 @@ test('loop analysis groups parallel empty results as one round and permits order
   assert.equal(analyze(pages).loose, 0);
   for (const message of pages) message.tool_calls![0]!.args.offset = 1;
   assert.equal(analyze(pages).loose, 8);
+  const charPages = Array.from({ length: 8 }, (_, index) =>
+    assistant('char-page-' + index, '', 'read_file', {
+      file_path: 'long.txt',
+      offset: 1,
+      char_offset: index * 2000,
+    }),
+  );
+  assert.equal(analyze(charPages).loose, 0);
+  const editedReads: Message[] = [
+    { id: 'u', role: 'user', content: 'edit loop' },
+  ];
+  for (let index = 0; index < 6; index++) {
+    editedReads.push(
+      assistant(`read-${index}`, '', 'read_file', {
+        file_path: 'a.ts',
+        offset: 1,
+      }),
+      tool(`read-${index}`, 'read_file', 'line 1'),
+    );
+    if (index < 5)
+      editedReads.push(
+        assistant(`edit-${index}`, '', 'edit_file', {
+          file_path: 'a.ts',
+          old_string: `v${index}`,
+          new_string: `v${index + 1}`,
+        }),
+        tool(`edit-${index}`, 'edit_file', 'Edited a.ts'),
+      );
+  }
+  assert.equal(analyze(editedReads).loose, 0);
+  assert.equal(analyze(editedReads).duplicate, 1);
+  const failedEditReads: Message[] = [
+    { id: 'u', role: 'user', content: 'failed edit loop' },
+  ];
+  for (let index = 0; index < 6; index++) {
+    failedEditReads.push(
+      assistant(`fread-${index}`, '', 'read_file', {
+        file_path: 'a.ts',
+        offset: 1,
+      }),
+      tool(`fread-${index}`, 'read_file', 'line 1'),
+    );
+    if (index < 5)
+      failedEditReads.push(
+        assistant(`fedit-${index}`, '', 'edit_file', {
+          file_path: 'a.ts',
+          old_string: `v${index}`,
+          new_string: `v${index + 1}`,
+        }),
+        {
+          id: `fedit-${index}-err`,
+          role: 'tool',
+          content: 'no match',
+          tool_call_id: `call-fedit-${index}`,
+          status: 'error',
+        },
+      );
+  }
+  assert.equal(analyze(failedEditReads).loose, 6);
+  const patchedReads: Message[] = [
+    { id: 'u', role: 'user', content: 'patch loop' },
+  ];
+  for (let index = 0; index < 6; index++) {
+    patchedReads.push(
+      assistant(`pread-${index}`, '', 'read_file', {
+        file_path: 'a.ts',
+        offset: 1,
+      }),
+      tool(`pread-${index}`, 'read_file', 'line 1'),
+    );
+    if (index < 5)
+      patchedReads.push(
+        assistant(`patch-${index}`, '', 'apply_patch', {
+          patchText: `*** Begin Patch\n*** Update File: a.ts\n@@\n-v${index}\n+v${index + 1}\n*** End Patch`,
+        }),
+        tool(`patch-${index}`, 'apply_patch', 'Updated a.ts'),
+      );
+  }
+  assert.equal(analyze(patchedReads).loose, 0);
+  assert.equal(analyze(patchedReads).duplicate, 1);
 });
 test('productive long turns are not cut off at the prototype one-hundred-call limit', async (t) => {
   const root = scratch(t);
@@ -360,11 +445,43 @@ test('productive long turns are not cut off at the prototype one-hundred-call li
     'completed the long task',
   );
   assert.equal(model.requests.length, 106);
-  assert.ok(
-    runtime.harness.messages.some(
+  assert.equal(
+    runtime.harness.messages.filter(
       (message) => message.internal === 'loop-guard',
-    ),
+    ).length,
+    1,
   );
+});
+test('loop guard resets repeated-call evidence across warnings without repeating soft-budget noise', () => {
+  const messages: Message[] = [
+    { id: 'u', role: 'user', content: 'investigate' },
+  ];
+  for (let index = 0; index < 4; index++) {
+    messages.push(
+      assistant(`dup-${index}`, '', 'read_file', { file_path: 'same.txt' }),
+      tool(`dup-${index}`, 'read_file', 'same content'),
+    );
+  }
+  const first = loopReminder(messages);
+  assert.equal(first?.internal, 'loop-guard');
+  assert.match(first!.content, /going in circles/);
+  messages.push(first!);
+  for (let index = 0; index < 9; index++) {
+    messages.push(
+      assistant(`next-${index}`, '', 'grep', { pattern: `token-${index}` }),
+      tool(`next-${index}`, 'grep', `match ${index}`),
+    );
+  }
+  assert.equal(loopReminder(messages), undefined);
+  for (let index = 0; index < 4; index++) {
+    messages.push(
+      assistant(`again-${index}`, '', 'read_file', { file_path: 'again.txt' }),
+      tool(`again-${index}`, 'read_file', 'same again'),
+    );
+  }
+  const second = loopReminder(messages);
+  assert.equal(second?.internal, 'loop-guard');
+  assert.match(second!.content, /going in circles/);
 });
 
 for (const reason of [
@@ -417,3 +534,144 @@ for (const reason of [
     assert.equal(digest(store.messages(session.id)), before);
   });
 }
+
+// Ten results of 10,000 tokens each, or as many as asked, as an agent that read ten files leaves them
+const reads = (count: number): Parameters<typeof nextPruneState>[0] => {
+  const messages: Parameters<typeof nextPruneState>[0] = [];
+  for (let index = 0; index < count; index++)
+    messages.push(
+      assistant('read-' + index, 'step', 'read_file', { index }),
+      tool('read-' + index, 'read_file', 'x'.repeat(40000)),
+    );
+  return messages;
+};
+const unlessSet = async (run: () => void | Promise<void>) => {
+  const saved = process.env.CIRCLE_PRUNE_PROTECT_TOKENS;
+  delete process.env.CIRCLE_PRUNE_PROTECT_TOKENS;
+  try {
+    await run();
+  } finally {
+    if (saved === undefined) delete process.env.CIRCLE_PRUNE_PROTECT_TOKENS;
+    else process.env.CIRCLE_PRUNE_PROTECT_TOKENS = saved;
+  }
+};
+
+test('the tool output pruning leaves untouched grows with the most input the model takes, and the environment setting still decides when it is given', () =>
+  unlessSet(() => {
+    assert.equal(pruneProtectTokens(), 40000);
+    assert.equal(pruneProtectTokens(128000), 40000);
+    assert.equal(pruneProtectTokens(200000), 50000);
+    assert.equal(pruneProtectTokens(1000000), 250000);
+    const messages = reads(10);
+    const pruned = (options: Parameters<typeof nextPruneState>[2]) =>
+      nextPruneState(messages, emptyContextState(), options).prunedIds;
+    // ten results of 10,000 tokens each: the default keeps the four most recent
+    assert.deepEqual(
+      pruned({}),
+      [0, 1, 2, 3, 4, 5].map((index) => 'result-read-' + index),
+    );
+    assert.deepEqual(
+      pruned({ inputLimit: 200000 }),
+      [0, 1, 2, 3, 4].map((index) => 'result-read-' + index),
+    );
+    assert.deepEqual(
+      pruned({ inputLimit: 1000000 }),
+      [],
+      'a model that takes a million tokens keeps what its agent read',
+    );
+    assert.equal(
+      pruned({ inputLimit: 1000000, protectTokens: 0 }).length,
+      10,
+      'an explicit option still decides',
+    );
+    process.env.CIRCLE_PRUNE_PROTECT_TOKENS = '10000';
+    assert.equal(
+      pruned({ inputLimit: 1000000 }).length,
+      9,
+      'CIRCLE_PRUNE_PROTECT_TOKENS still decides',
+    );
+  }));
+
+test('the least pruned in one batch is half of what is left untouched, 20,000 tokens at least, and an explicit option still wins', () =>
+  unlessSet(() => {
+    assert.equal(pruneBatchTokens(40000), 20000);
+    assert.equal(pruneBatchTokens(250000), 125000);
+    assert.equal(pruneBatchTokens(10000), 20000, 'never less than the floor');
+    const pruned = (
+      count: number,
+      options: Parameters<typeof nextPruneState>[2] = {},
+    ) =>
+      nextPruneState(reads(count), emptyContextState(), options).prunedIds
+        .length;
+    // At the floor, as before: 40,000 tokens stay, and a batch is 20,000, two of the results
+    assert.equal(pruned(5), 0, 'one result is less than a batch');
+    assert.equal(pruned(6), 2);
+    // A model that takes a million tokens leaves 250,000 and waits for 125,000 more
+    assert.equal(
+      pruned(37, { inputLimit: 1000000 }),
+      0,
+      '120,000 are no batch',
+    );
+    assert.equal(pruned(38, { inputLimit: 1000000 }), 13);
+    // The same when what is left untouched is given
+    assert.equal(pruned(14, { protectTokens: 100000 }), 0);
+    assert.equal(pruned(15, { protectTokens: 100000 }), 5);
+    process.env.CIRCLE_PRUNE_PROTECT_TOKENS = '100000';
+    assert.equal(pruned(14), 0);
+    assert.equal(pruned(15), 5);
+    // An explicit least wins over both
+    assert.equal(
+      pruned(14, { protectTokens: 100000, minimumTokens: 30000 }),
+      4,
+    );
+    assert.equal(
+      pruned(15, { protectTokens: 100000, minimumTokens: 60000 }),
+      0,
+    );
+  }));
+
+test('the context middleware sizes what pruning leaves untouched from the most input the model takes', (t) =>
+  unlessSet(async () => {
+    const root = scratch(t);
+    const store = new CheckpointStore(root);
+    cleanup(t, () => store.close());
+    const manager = new ContextManager(store, join(root, 'data'), {
+      autoCompact: false,
+    });
+    const signal = new AbortController().signal;
+    // Six results of 10,000 tokens each, in a conversation of their own, for a model with these limits
+    const prunedFor = async (limits: {
+      contextWindow?: number;
+      inputLimit?: number;
+    }) => {
+      const session = store.create(root, 'test');
+      store.append(session.id, [
+        { id: 'user', role: 'user', content: 'go' },
+        ...reads(6),
+      ]);
+      await manager.prepare(
+        session.id,
+        Object.assign(new ScriptedModel(), limits),
+        '',
+        [],
+        signal,
+      );
+      return store.contextState(session.id).prunedIds;
+    };
+    const oldest = ['result-read-0', 'result-read-1'];
+    assert.deepEqual(
+      await prunedFor({}),
+      oldest,
+      'the default window leaves 40,000 tokens untouched',
+    );
+    assert.deepEqual(
+      await prunedFor({ contextWindow: 1000000 }),
+      [],
+      'a window of a million tokens leaves 250,000: nothing is pruned',
+    );
+    assert.deepEqual(
+      await prunedFor({ contextWindow: 1000000, inputLimit: 100000 }),
+      oldest,
+      'a model that takes 100,000 tokens of input is sized by that, not by its window',
+    );
+  }));

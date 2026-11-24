@@ -21,10 +21,17 @@ test('a clean desktop build loads a shipped extension from extension.js', async 
   mkdirSync(home);
   await buildBundledExtensions(dist);
 
-  const folder = join(dist, 'extensions', 'github');
-  assert.equal(existsSync(join(folder, 'extension.js')), true);
-  assert.equal(existsSync(join(folder, 'extension.ts')), false);
-  assert.equal(existsSync(join(folder, 'extension.json')), true);
+  for (const name of ['github', 'hub']) {
+    const folder = join(dist, 'extensions', name);
+    assert.equal(existsSync(join(folder, 'extension.js')), true);
+    assert.equal(existsSync(join(folder, 'extension.ts')), false);
+    assert.equal(existsSync(join(folder, 'extension.json')), true);
+    assert.equal(
+      readFileSync(join(folder, 'extension.js'), 'utf8').includes('__require('),
+      false,
+      `${name}/extension.js must not contain __require(`,
+    );
+  }
   assert.equal(existsSync(join(dist, 'extension_error.js')), true);
 
   const host = await new ExtensionHost({
@@ -32,14 +39,16 @@ test('a clean desktop build loads a shipped extension from extension.js', async 
     workspace,
     trusted: true,
     bundledRoot: join(dist, 'extensions'),
-    settings: { github: { enabled: true } },
+    settings: { github: { enabled: true }, hub: { enabled: true } },
   }).load();
   cleanup(t, () => host.close());
-  const github = host.extensions.find((ext) => ext.name === 'github');
-  assert.ok(github, 'github was not discovered');
-  assert.equal(github.error, '', github.error);
-  assert.equal(github.path.endsWith(`${sep}extension.js`), true);
-  assert.equal(host.commands().has('github'), true);
+  for (const name of ['github', 'hub']) {
+    const ext = host.extensions.find((item) => item.name === name);
+    assert.ok(ext, `${name} was not discovered`);
+    assert.equal(ext.error, '', ext.error);
+    assert.equal(ext.path.endsWith(`${sep}extension.js`), true);
+    assert.equal(host.commands().has(name), true);
+  }
 });
 
 test('a shipped extension and the desktop worker share one ExtensionError', async (t) => {

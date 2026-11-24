@@ -1024,6 +1024,68 @@ else process.stdout.write('plain words nobody reads');
   assert.equal(seenInputs(failures).length, 1);
 });
 
+test('a command that exits non-zero is a failed call that PostToolUseFailure hears, and its output reads as that of one that exits 0', async (t) => {
+  const dirs = layout(t);
+  const posted = join(dirs.root, 'posted');
+  const failures = join(dirs.root, 'failures');
+  const emit = script(
+    dirs.root,
+    'emit',
+    "const words = process.argv.slice(2);\nprocess.stdout.write(words.slice(0, -1).join(' '));\nprocess.exit(Number(words.at(-1)));\n",
+  );
+  writeHooks(join(dirs.home, 'settings.json'), {
+    PostToolUse: [
+      group(
+        'execute',
+        handler(answering(dirs.root, 'post', undefined, { seen: posted })),
+      ),
+    ],
+    PostToolUseFailure: [
+      group(
+        'execute',
+        handler(answering(dirs.root, 'failed', undefined, { seen: failures })),
+      ),
+    ],
+  });
+  const command = (code: number) =>
+    `${JSON.stringify(process.execPath)} ${JSON.stringify(emit)} token=abc1234567 %LAB_SECRET% ${code}`;
+  const run = await turn({
+    ...dirs,
+    t,
+    mode: 'auto',
+    secrets: { LAB_SECRET: 'q9z8x7w6v5' },
+    replies: [
+      assistant('', [
+        { id: 'bad', name: 'execute', args: { command: command(1) } },
+        { id: 'good', name: 'execute', args: { command: command(0) } },
+      ]),
+      assistant('done'),
+    ],
+  });
+  const result = (id: string) =>
+    run.model.requests[1]!.messages.find(
+      (message) => message.tool_call_id === id,
+    )!;
+  assert.equal(result('bad').status, 'error');
+  assert.equal(
+    result('bad').content,
+    'token=abc1234567 %LAB_SECRET%\nExit code: 1',
+  );
+  assert.equal(result('good').status, 'success');
+  assert.equal(
+    result('good').content,
+    'token=abc1234567 %LAB_SECRET%\nExit code: 0',
+  );
+  assert.deepEqual(
+    seenInputs(failures).map((input) => input.error),
+    ['token=abc1234567 %LAB_SECRET%\nExit code: 1'],
+  );
+  assert.deepEqual(
+    seenInputs(posted).map((input) => input.tool_response),
+    ['token=abc1234567 %LAB_SECRET%\nExit code: 0'],
+  );
+});
+
 test('a hook that says continue: false ends the turn once the calls under way are done', async (t) => {
   const dirs = layout(t);
   const stop = answering(dirs.root, 'stop', {

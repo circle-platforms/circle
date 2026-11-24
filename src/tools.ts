@@ -9,16 +9,20 @@ import {
   writeFileSync,
   rmSync,
 } from 'node:fs';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { glob } from 'glob';
 import type { Tool, ToolContext } from './types.js';
 import { Sandbox, identityEnvironment } from './sandbox.js';
 import { loadToolPrompt } from './system_prompt.js';
-import { applyPatch, patchFilePaths } from './apply_patch.js';
+import { applyPatch, patchFilePaths, patchSummary } from './apply_patch.js';
 import { QUESTION_SCHEMA } from './questions.js';
-import { JobRegistry, jobLine, jobNotice } from './jobs.js';
-import { readTextWindow, readTextContentWindow } from './file_read.js';
+import { JobRegistry, commandAnswer, jobLine, jobNotice } from './jobs.js';
+import {
+  MAX_LINE_CHARS,
+  readTextWindow,
+  readTextContentWindow,
+} from './file_read.js';
 import { FileMutationTools, type FileMutations } from './file_mutations.js';
 import { authorizeFileRead, authorizeSearch } from './file_access.js';
 import { oldStringMissing } from './edit_miss.js';
@@ -44,24 +48,18 @@ export interface ToolHooks {
   knowledge?: KnowledgeService;
   knowledgeShare?: Parameters<typeof knowledgeTools>[1];
   fileMutations?: FileMutations;
-  /**
-   * The conversation's file journal, for a Circle with no native workspace backend: it
-   * records what a direct write changed, so `/rewind` can bring the older text back.
-   */
   captures?: <T>(
     paths: string[],
     signal: AbortSignal,
     write: () => T | Promise<T>,
   ) => Promise<T>;
   jobs?: JobRegistry;
-  /** One message to a running subagent, or the reason it did not go. */
   sendToJob?: (
     context: ToolContext,
     jobId: string,
     message: string,
   ) => string | Promise<string>;
   jobOwner?: (context: ToolContext) => import('./jobs.js').JobOwner;
-  /** Only the runtime may turn original arguments into public command display. */
   displayCommand?: (rawCommand: string, context: ToolContext) => string;
   todos?: (todos: Todo[]) => void;
   question?: (
@@ -73,10 +71,6 @@ export interface ToolHooks {
     args: Record<string, unknown>,
     context: ToolContext,
   ) => Promise<string>;
-  /**
-   * `workflow`: reads and checks the script a call names, before anyone is asked, and gives back what starts
-   * it, with the script's meta for the card.
-   */
   workflow?: (
     args: Record<string, unknown>,
     context: ToolContext,
@@ -88,30 +82,20 @@ export interface ToolHooks {
     context?: ToolContext,
   ) => Promise<string>;
   compact?: (hint: string, context: ToolContext) => Promise<string>;
-  /**
-   * The installer/runner of the local tools an MCP server publishes: the settings as they are now (the Hub can be
-   * connected after the tools were made), the secrets and variables it may put in, and the home whose MCP sign-ins it
-   * may use. `root` is the skills root; tests give their own.
-   */
   localSkills?: {
     home: string;
     settings: () => CircleSettings;
     secrets: () => Record<string, string>;
     variables: () => Record<string, string>;
     root?: string;
-    /** The typed tool offered for this script of a pack, when its skill is loaded and the pack declares it. */
+    nodeExecutable?: string;
     typed?: (
       pack: string,
       script: string,
       sessionId?: string,
     ) => string | undefined;
   };
-  /** Offer `screenshot`; tests give it their own runner. */
   screenshot?: Omit<ScreenshotOptions, 'app' | 'target'>;
-  /**
-   * Describes image files with the run's side vision model; adds the `vision` tool and
-   * the picture descriptions of the tools above when set.
-   */
   vision?: (
     paths: string[],
     question: string,
@@ -138,8 +122,26 @@ const integer = (description: string, minimum = 1) => ({
   minimum,
   description,
 });
+const answerCommand = (
+  context: ToolContext,
+  output: string,
+  exitCode: number | null | undefined,
+  timedOut = false,
+): string => {
+  context.onCommandResult?.({ code: exitCode ?? null, output });
+  return commandAnswer(output, exitCode, timedOut);
+};
 export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
-  const read = new Set<string>();
+  const readBySession = new Map<string, Set<string>>();
+  const sessionRead = (context: ToolContext): Set<string> => {
+    const key = context.sessionId ?? '';
+    let seen = readBySession.get(key);
+    if (!seen) {
+      seen = new Set();
+      readBySession.set(key, seen);
+    }
+    return seen;
+  };
   const mutations = hooks.fileMutations
     ? new FileMutationTools(sandbox, hooks.fileMutations)
     : undefined;
@@ -226,6 +228,17 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
           default: 2000,
           description: 'Maximum lines; non-positive values request no lines',
         },
+        char_offset: {
+          type: 'integer',
+          default: 0,
+          description: 'Characters to skip per line, 0 indexed',
+        },
+        char_limit: {
+          type: 'integer',
+          minimum: 1,
+          default: MAX_LINE_CHARS,
+          description: 'Maximum characters per line',
+        },
       },
       ['file_path'],
     ),
@@ -236,7 +249,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       sandbox.checkCredentialPath(path);
       const native = await authorizeRead(path, context);
       if (statSync(path).isDirectory()) {
-        // A folder is listed as ls lists it, within the same bounds
         await authorizeSearch(sandbox, mutations, path, context);
         return readdirSync(path, { withFileTypes: true })
           .map((entry) => entry.name + (entry.isDirectory() ? '/' : ''))
@@ -264,16 +276,23 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         }
         const { attachment, size } = await readMedia(path, context.signal);
         context.emitAttachments([attachment]);
-        read.add(path);
+        sessionRead(context).add(path);
         return `Read ${attachment.filename} (${attachment.mime_type}${size ? ', ' + size : ''}) as an attachment.`;
       }
       const offset = Math.max(0, Math.trunc(Number(args.offset ?? 0)));
       const limit = Math.max(0, Math.trunc(Number(args.limit ?? 2000)));
+      const charOffset = Math.max(0, Math.trunc(Number(args.char_offset ?? 0)));
+      const charLimit = Math.max(
+        1,
+        Math.trunc(Number(args.char_limit ?? MAX_LINE_CHARS)),
+      );
       const content = native
         ? readTextContentWindow(
             (await native.read(path, context)).content!,
             offset,
             limit,
+            charOffset,
+            charLimit,
           )
         : await readTextWindow(
             path,
@@ -281,8 +300,10 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
             limit,
             context.signal,
             sandbox.isJobOutput(path),
+            charOffset,
+            charLimit,
           );
-      read.add(path);
+      sessionRead(context).add(path);
       return content;
     },
   );
@@ -298,6 +319,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         return (await mutations.prepareWrite(args, context))(args, context);
       const path = sandbox.resolvePath(string(args, 'file_path', 'path'));
       sandbox.checkMutablePath(path);
+      const seen = sessionRead(context);
       const content = string(args, 'content');
       const write = (): void => {
         mkdirSync(dirname(path), { recursive: true });
@@ -305,6 +327,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       };
       if (worthRecording(path)) await captures!([path], context.signal, write);
       else write();
+      seen.add(path);
       return `Wrote ${path}`;
     },
   );
@@ -325,7 +348,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         return (await mutations.prepareEdit(args, context))(args, context);
       const path = sandbox.resolvePath(string(args, 'file_path', 'path'));
       sandbox.checkMutablePath(path);
-      if (!read.has(path))
+      if (!sessionRead(context).has(path))
         throw new Error('read_file must be called before editing this file');
       const content = readFileSync(path, 'utf8');
       const old = string(args, 'old_string', 'oldString');
@@ -359,13 +382,20 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       const patch = string(args, 'patchText');
       if (mutations && !writesPlan('apply_patch', args))
         return (await mutations.preparePatch(args, context))(args, context);
+      const seen = sessionRead(context);
+      const apply = (): string => {
+        const changes = applyPatch(patch, sandbox);
+        for (const change of changes) {
+          if (change.content === null) seen.delete(change.path);
+          else seen.add(change.path);
+        }
+        return patchSummary(changes);
+      };
       const paths = patchFilePaths(patch, sandbox);
       if (paths.length && paths.every((path) => worthRecording(path)))
         // The journal needs the paths before the patch runs; applyPatch checks them again.
-        return await captures!(paths, context.signal, () =>
-          applyPatch(patch, sandbox),
-        );
-      return applyPatch(patch, sandbox);
+        return await captures!(paths, context.signal, apply);
+      return apply();
     },
   );
   if (mutations)
@@ -375,11 +405,9 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       ['apply_patch', mutations.preparePatch],
     ] as const) {
       const tool = tools.find((tool) => tool.name === name)!;
-      // The plan file has nothing to snapshot: the tool writes it when it runs
       tool.prepare = async (args, context) =>
         writesPlan(name, args) ? tool.run : prepare(args, context);
     }
-  // Listing and searching show what reading would: they keep to read_file's bounds
   add(
     'ls',
     'read',
@@ -508,9 +536,8 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
           context.signal,
           args.timeout === undefined ? undefined : Number(args.timeout),
         );
-        return result.job
-          ? result.output
-          : `${result.output}\nExit code: ${result.exit_code}`;
+        if (result.job) return result.output;
+        return answerCommand(context, result.output, result.exit_code);
       }
       if (args.background === true)
         throw new Error('background commands are not available here');
@@ -520,7 +547,12 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         Math.max(1, Number(args.timeout) || 120) * 1000,
         context.identity,
       );
-      return `${result.output}\nExit code: ${result.exit_code}`;
+      return answerCommand(
+        context,
+        result.output,
+        result.exit_code,
+        result.timed_out,
+      );
     },
   );
   if (hooks.localSkills) {
@@ -630,7 +662,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         ['pack', 'script'],
       ),
       async (args, context) => {
-        // A script whose parameters the pack declares runs through its own tool, which checks them first
         const typed = localSkills.typed?.(
           string(args, 'pack'),
           string(args, 'script'),
@@ -655,6 +686,9 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
               ...(typeof args.stdin === 'string' ? { stdin: args.stdin } : {}),
               variables: localSkills.variables(),
               secrets: localSkills.secrets(),
+              ...(localSkills.nodeExecutable
+                ? { nodeExecutable: localSkills.nodeExecutable }
+                : {}),
               ...(localSkills.home
                 ? { dataRoot: join(localSkills.home, SKILL_DATA_FOLDER) }
                 : {}),
@@ -669,7 +703,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
                   executionSessionId: context.sessionId,
                   toolCallId: context.callId,
                   ...(context.identity ? { identity: context.identity } : {}),
-                  // As the model wrote them: %NAME% stays unfilled on screen
                   displayCommand: [
                     string(args, 'pack'),
                     string(args, 'script'),
@@ -834,7 +867,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
     add(
       'task',
       'read',
-      // As in deepagents' task schema, both fields are required.
       schema(
         {
           description: text(
@@ -873,7 +905,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         ),
         args: {
           description:
-            'The value the script reads as its args global, as JSON data: a list or an object stays one.',
+            'The value the script reads as its args global, as JSON data: a list or an object stays one, and one written as JSON text is read as that list or object.',
         },
         resume_from_run_id: text(
           'An earlier run of this conversation to relaunch: agents called as in that run return its saved results.',
@@ -881,7 +913,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       }),
       async (args, context) => (await prepare(args, context))(args, context),
     );
-    // What the call runs is read and checked before the card: what was approved is what starts
     tool.prepare = prepare;
     tool.subagents = false;
   }
@@ -972,8 +1003,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
           folder,
           new Date().toISOString().replace(/[:.]/g, '-') + '.png',
         );
-        // Nothing is taken for a model that could not look at it, unless the side vision
-        // model will describe what was taken
         if (context.imageInput === false && !hooks.vision)
           throw new Error(
             'the model in use does not read images; no side vision model is configured (CIRCLE_VISION_BASE_URL, CIRCLE_VISION_KEY, CIRCLE_VISION_MODEL)',
@@ -1013,8 +1042,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         );
       },
     );
-    // The card says who sees the picture: for a model that cannot read images the side
-    // vision model does, and the model gets its words
     if (hooks.vision)
       screenshot.approvalFacts = (_args, _sessionId, _shown, imageInput) =>
         imageInput === false ? { seen_by: 'side vision model' } : undefined;
@@ -1041,7 +1068,6 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
         if (!type) throw new Error('not a picture file');
         if (type === 'application/pdf')
           throw new Error('the vision model reads pictures, not PDFs');
-        // What read_file may not read does not go to the side vision model either
         await authorizeRead(path, context);
         if (!statSync(path).isFile()) throw new Error(`no such file: ${path}`);
         const described = await hooks.vision!(
@@ -1061,6 +1087,10 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}): Tool[] {
       const path = sandbox.resolvePath(string(args, 'file_path', 'path'));
       sandbox.checkMutablePath(path);
       rmSync(path, { recursive: true });
+      const seen = sessionRead(context);
+      const prefix = path + sep;
+      for (const entry of seen)
+        if (entry === path || entry.startsWith(prefix)) seen.delete(entry);
       return `Deleted ${path}`;
     },
   );

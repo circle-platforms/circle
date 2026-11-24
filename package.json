@@ -28,10 +28,11 @@
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/**/*.ts\" \"*.json\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"scripts/**/*.ts\" \"*.json\"",
     "check": "npm run typecheck && npm test && npm run build",
+    "test:wecom": "npm --prefix apps/wecom test && npm --prefix apps/wecom run test:paired",
     "release:build": "tsx scripts/build-release.ts",
     "release:smoke": "tsx scripts/smoke-release.ts",
     "release": "tsx scripts/release.ts",
-    "check:apps": "npm --prefix apps/workbench run typecheck && npm --prefix apps/workbench test && npm --prefix apps/desktop run typecheck && npm --prefix apps/desktop test && npm --prefix apps/desktop run test:runtime && npm --prefix apps/desktop run build"
+    "check:apps": "npm --prefix apps/workbench run typecheck && npm --prefix apps/workbench test && npm --prefix apps/desktop run typecheck && npm --prefix apps/desktop test && npm --prefix apps/desktop run test:runtime && npm --prefix apps/desktop run build && node apps/desktop/test/bundled-extensions-smoke.mjs"
   },
   "repository": {
     "type": "git",

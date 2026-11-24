@@ -69,7 +69,12 @@ import { emptyUsage } from '../types.js';
 import { EFFORT_LEVELS } from '../model.js';
 import { exportKind, toHtml } from '../session_export.js';
 import { discoverCustomCommands, expandCommandTemplate } from '../commands.js';
-import { discoverSkills, loadSkillBody } from '../skills.js';
+import {
+  discoverSkills,
+  findSkill,
+  loadSkillBody,
+  type SkillInfo,
+} from '../skills.js';
 import { CONTEXT_FILE_CAP } from '../memory_sources.js';
 import {
   addMemory,
@@ -135,7 +140,8 @@ export interface CommandHost {
   setTheme(mode: CircleSettings['theme']): void;
   trustWorkspace(): void;
   clipboard(text: string): Promise<boolean>;
-  // While `list` is open it takes `rows()` again whenever a job starts, changes or ends.
+  // While `list` is open it takes `rows()` again whenever a job starts, changes or ends. Following also says that the list
+  // only shows the jobs: a job that ends while it is open still starts its turn. Never follow a list the person chooses from.
   followJobs(list: Picker, rows: () => PickerItem[]): void;
   // Open the page of a subagent of this conversation, by its session: false when there is none.
   openAgent?(id: string): boolean;
@@ -1297,7 +1303,7 @@ function agents(host: CommandHost, args: string): void {
         one.effort ? `  effort: ${one.effort}` : '  effort: the conversation’s',
         one.tools
           ? `  tools: ${one.tools.join(', ')}`
-          : '  tools: every tool a subagent may have',
+          : '  tools: every tool a subagent may have, except question',
         one.disallowedTools
           ? `  disallowed tools: ${one.disallowedTools.join(', ')}`
           : '',
@@ -1859,7 +1865,9 @@ function runMeta(run: WorkflowRunView): string {
     ? `running · ${workflowSummary(run)} · ${took(run.started)}`
     : [
         run.status,
-        `${run.agents.length} ${run.agents.length === 1 ? 'agent' : 'agents'}`,
+        ((count) => `${count} ${count === 1 ? 'agent' : 'agents'}`)(
+          run.agents.filter((agent) => !agent.command).length,
+        ),
         took(run.started, run.ended ?? run.started),
       ].join(' · ');
 }
@@ -1911,7 +1919,12 @@ function runRows(run: WorkflowRunView, only?: string): PickerItem[] {
   ].filter((title, index, all) => all.indexOf(title) === index);
   for (const title of titles) {
     if (only !== undefined && title !== only) continue;
-    const agents = run.agents.filter((agent) => agent.phase === title);
+    const agents = run.agents.filter(
+      (agent) =>
+        agent.phase === title &&
+        (!agent.command ||
+          ['running', 'queued', 'failed'].includes(agent.state)),
+    );
     const counts = (
       ['running', 'queued', 'done', 'cached', 'failed', 'stopped'] as const
     )
@@ -2134,6 +2147,20 @@ async function skill(host: CommandHost, args: string): Promise<void> {
   );
   const token = args.trim();
   if (!token) {
+    const fields = (item: SkillInfo): string[] =>
+      (
+        [
+          ['allowed-tools', item.allowed_tools],
+          ['disallowed-tools', item.disallowed_tools],
+        ] as const
+      ).flatMap(([field, entries]) =>
+        entries
+          ? [aligned(' '.repeat(23), `${field}: ${entries.join(', ')}`)]
+          : [],
+      );
+    const problems = skills
+      .filter((item) => item.allowed_tools || item.disallowed_tools)
+      .flatMap((item) => runtime.skillTools(item).problems);
     host.notice(
       skills.length
         ? [
@@ -2143,11 +2170,17 @@ async function skill(host: CommandHost, args: string): Promise<void> {
               const source = skill.source_label
                 ? ` (${skill.source_label})`
                 : '';
-              return aligned(
-                `  ${pad(skill.name, 20)} `,
-                `${skill.description}${source}`,
-              );
+              return [
+                aligned(
+                  `  ${pad(skill.name, 20)} `,
+                  `${skill.description}${source}`,
+                ),
+                ...fields(skill),
+              ].join('\n');
             }),
+            ...(problems.length
+              ? ['', 'Not applied:', ...problems.map((line) => `  ${line}`)]
+              : []),
             '',
             'Load with /skill <name>',
           ].join('\n')
@@ -2165,7 +2198,7 @@ async function skill(host: CommandHost, args: string): Promise<void> {
     return;
   }
   const tools = await runtime.activateSkillHooks(name);
-  // Into the conversation without a turn: the model reads it with your next message.
+  const applied = runtime.applySkillTools(findSkill(name, skills)!, 'person');
   runtime.store.append(runtime.session.id, [
     {
       id: randomUUID(),
@@ -2179,7 +2212,10 @@ async function skill(host: CommandHost, args: string): Promise<void> {
     },
   ]);
   host.notice(
-    `Loaded skill \`${name}\`` + (skillArgs ? ` args='${skillArgs}'` : ''),
+    [
+      `Loaded skill \`${name}\`` + (skillArgs ? ` args='${skillArgs}'` : ''),
+      ...applied.lines.map((line) => `  ${line}`),
+    ].join('\n'),
   );
 }
 

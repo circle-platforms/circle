@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import type {
+  ChatCompletionContentPart,
   ChatCompletionMessageParam,
   ChatCompletionCreateParamsStreaming,
 } from 'openai/resources/chat/completions';
@@ -137,6 +138,51 @@ export function defaultEffort(
     return fallback;
   return chosen;
 }
+const INTERNAL_REMINDERS = new Set([
+  'loop-guard',
+  'plan-reminder',
+  'context_reminder',
+  'job_reminder',
+  'job_poll_reminder',
+  'hook_notice',
+  'hook_context',
+  'mode-boundary',
+  'model-retry',
+  'skill',
+  'turn_limit',
+]);
+
+function isInternalReminder(message: Message): boolean {
+  return (
+    message.role === 'user' &&
+    Boolean(message.internal && INTERNAL_REMINDERS.has(message.internal)) &&
+    !message.attachments?.length &&
+    !message.shell
+  );
+}
+
+function appendTextToChatContent(
+  existing: string | ChatCompletionContentPart[],
+  note: string,
+): string | ChatCompletionContentPart[] {
+  if (typeof existing === 'string')
+    return existing ? `${existing}\n\n${note}` : note;
+  return [...existing, { type: 'text' as const, text: note }];
+}
+
+function prependNotesToChatContent(
+  notes: string[],
+  content: string | ChatCompletionContentPart[],
+): string | ChatCompletionContentPart[] {
+  if (!notes.length) return content;
+  if (typeof content === 'string')
+    return [...notes, ...(content ? [content] : [])].join('\n\n');
+  return [
+    ...notes.map((text) => ({ type: 'text' as const, text })),
+    ...content,
+  ];
+}
+
 export class GatewayModel implements ChatModel {
   readonly model: string;
   /** A title request may call `complete` while a turn is in flight. */
@@ -180,6 +226,7 @@ export class GatewayModel implements ChatModel {
     modelOverride?: string,
     guardOptions: GuardOptions = {},
     catalog?: ModelCatalog,
+    suppliedKey?: string,
   ) {
     this.model = modelOverride || settings.auth.model;
     this.catalog = catalog ?? new ModelCatalog(circleHome(home));
@@ -196,18 +243,22 @@ export class GatewayModel implements ChatModel {
       identity = chatgptIdentityIfSignedIn(signedIn) ?? 'chatgpt signed out';
       apiKey = () => chatgptAccessToken(signedIn);
     } else {
-      const credentials = loadCredentials(home);
-      const key = credentials[settings.auth.api_key_ref] || credentials.api_key;
+      const credentials =
+        suppliedKey === undefined ? loadCredentials(home) : {};
+      const key =
+        suppliedKey ??
+        (credentials[settings.auth.api_key_ref] || credentials.api_key);
       if (!key)
         throw new Error(desktopText('missing API key; re-run circle --init'));
       apiKey = identity = key;
-      this.searchConnection = Object.freeze({
-        baseUrl: settings.auth.base_url,
-        protocol:
-          settings.auth.protocol === 'anthropic' ? 'anthropic' : 'openai',
-        model: this.model,
-        apiKey: key,
-      });
+      if (suppliedKey === undefined)
+        this.searchConnection = Object.freeze({
+          baseUrl: settings.auth.base_url,
+          protocol:
+            settings.auth.protocol === 'anthropic' ? 'anthropic' : 'openai',
+          model: this.model,
+          apiKey: key,
+        });
     }
     // Keyed identity lets saved history detect account/endpoint/model changes without
     // storing a key or endpoint in the transcript. Rotation conservatively drops replay.
@@ -644,6 +695,27 @@ export class GatewayModel implements ChatModel {
       { role: 'system', content: request.system },
     ];
     const toolMedia: import('./types.js').MediaAttachment[] = [];
+    const pendingNotes: string[] = [];
+    const attachNote = (note: string, allowUser = true): boolean => {
+      const last = messages.at(-1);
+      if (last?.role === 'tool') {
+        last.content =
+          typeof last.content === 'string' && last.content
+            ? `${last.content}\n\n${note}`
+            : note;
+        return true;
+      }
+      if (allowUser && last?.role === 'user') {
+        last.content = appendTextToChatContent(last.content, note);
+        return true;
+      }
+      return false;
+    };
+    const flushPendingNotes = (): void => {
+      if (!pendingNotes.length) return;
+      const note = pendingNotes.splice(0).join('\n\n');
+      if (!attachNote(note)) messages.push({ role: 'system', content: note });
+    };
     const flushToolMedia = (): void => {
       if (!toolMedia.length) return;
       messages.push({
@@ -656,13 +728,21 @@ export class GatewayModel implements ChatModel {
       toolMedia.length = 0;
     };
     for (const message of request.messages) {
+      if (isInternalReminder(message)) {
+        const content = commandExecutionModelContent(message);
+        if (!content.trim()) continue;
+        if (!attachNote(content, !toolMedia.length)) pendingNotes.push(content);
+        continue;
+      }
       // Chat Completions allows media only in user content. Keep the complete
       // tool-result batch together, then project its media into a user item.
       if (message.role !== 'tool') flushToolMedia();
       if (message.role === 'system') {
+        flushPendingNotes();
         if (message.content.trim())
           messages.push({ role: 'system', content: message.content });
       } else if (message.role === 'tool') {
+        flushPendingNotes();
         messages.push({
           role: 'tool',
           content: commandExecutionModelContent(message) || EMPTY_TOOL_RESULT,
@@ -673,6 +753,7 @@ export class GatewayModel implements ChatModel {
         // A thinking-only/interrupted turn has no Chat Completions content.
         // Preserve it in history, but do not send it: there is nothing to say.
         if (!message.content?.trim() && !message.tool_calls?.length) continue;
+        flushPendingNotes();
         // Content is a string on every row, '' beside tool calls. OpenAI takes
         // '' as it takes null; strict gateways such as DashScope reject null
         // ("The content field is a required field") and accept ''.
@@ -692,24 +773,24 @@ export class GatewayModel implements ChatModel {
               }
             : {}),
         });
-      } else if (
-        !message.attachments?.length &&
-        !commandExecutionModelContent(message).trim()
-      )
+      } else {
+        const text = commandExecutionModelContent(message);
         // An empty prompt says nothing, and strict gateways reject it.
-        continue;
-      else
+        if (!message.attachments?.length && !text.trim()) continue;
+        const notes = pendingNotes.splice(0);
         messages.push({
           role: 'user',
-          content: message.attachments?.length
-            ? openAIContent(
-                commandExecutionModelContent(message),
-                message.attachments,
-              )
-            : commandExecutionModelContent(message),
+          content: prependNotesToChatContent(
+            notes,
+            message.attachments?.length
+              ? openAIContent(text, message.attachments)
+              : text,
+          ),
         });
+      }
     }
     flushToolMedia();
+    flushPendingNotes();
     const body: ChatCompletionCreateParamsStreaming = {
       model: this.model,
       messages,
@@ -983,6 +1064,9 @@ export class GatewayModel implements ChatModel {
             name: call.name,
             arguments: JSON.stringify(call.args),
           });
+      } else if (isInternalReminder(message)) {
+        const content = commandExecutionModelContent(message);
+        if (content.trim()) text('developer', content);
       } else {
         const content = commandExecutionModelContent(message);
         // An empty prompt says nothing, and strict gateways reject it.

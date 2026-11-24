@@ -82,6 +82,8 @@ export const COMPONENT_SUITES = Object.freeze([
   'git-changes-refresh-ui.mjs',
   'plan-review-ui.mjs',
   'terminal-tab-menu-ui.mjs',
+  'skills-page-ui.mjs',
+  'remote-bot-chat-ui.mjs',
 ]);
 
 /**

@@ -653,3 +653,48 @@ test('words in the prompt never list the deferred knowledge tools', async (t) =>
   for (const name of KNOWLEDGE_TOOLS.filter((n) => n !== 'knowledge_read'))
     assert.equal(tools.includes(name), false, name);
 });
+
+test('knowledge_search rejects non-logical paths recoverably and explains when the local store is empty', async (t) => {
+  const { prepareToolCall, RecoverableToolError } =
+    await import('../src/tool_call_compat.js');
+  const root = scratch(t);
+  const service = new KnowledgeService(join(root, 'empty-personal'));
+  const tools = knowledgeTools(service);
+  const search = tools.find((entry) => entry.name === 'knowledge_search')!;
+
+  assert.throws(
+    () =>
+      prepareToolCall(
+        {
+          id: 'bad-path',
+          name: 'knowledge_search',
+          args: { query: 'api', path: 'notes' },
+        },
+        tools,
+      ),
+    (error) => {
+      assert.ok(error instanceof RecoverableToolError);
+      assert.match(error.message, /Logical folder path inside local personal/);
+      assert.match(error.message, /for example "\/"/);
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    search.run(
+      { query: 'api', path: 'notes' },
+      { signal: new AbortController().signal, sessionId: 'test' },
+    ),
+    RecoverableToolError,
+  );
+
+  const empty = JSON.parse(
+    await search.run(
+      { query: 'api', path: '/' },
+      { signal: new AbortController().signal, sessionId: 'test' },
+    ),
+  );
+  assert.equal(empty.snapshot, null);
+  assert.deepEqual(empty.items, []);
+  assert.match(empty.note, /empty.*read_file.*MCP/s);
+});

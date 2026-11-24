@@ -1,5 +1,5 @@
 import type { ExtensionAPI, McpServerState } from '../../extensions.js';
-import { findHub, HUB_SERVER, hubEntry } from '../../hub_connection.js';
+import { findHub, HUB_SERVER, hubEntryFor } from '../../hub_connection.js';
 // The Hub extension: given a Hub's address, it finds the Hub's MCP endpoint and saves the MCP entry named Hub
 // (src/hub_connection.ts), in the desktop from its page and in the terminal from /hub. The sign-in is the MCP
 // authorization of any server. No Hub address is built in.
@@ -39,7 +39,9 @@ export function register(api: ExtensionAPI) {
       }
       context.append(
         stateLine(
-          await api.saveMcpServer(HUB_SERVER, hubEntry(endpoint)),
+          await api.saveMcpServer(HUB_SERVER, (settings) =>
+            hubEntryFor(settings, endpoint),
+          ),
           endpoint,
         ),
       );

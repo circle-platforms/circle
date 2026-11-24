@@ -921,6 +921,71 @@ test('/skill loads a skill into the conversation without starting a turn', async
   assert.equal(model.requests[0]!.messages.at(-1)!.content, 'write a poem');
 });
 
+test('/skill shows the tool fields under a skill, says which names are no tool, and says what loading one did', async (t) => {
+  const workspace = scratch(t);
+  const skills: Record<string, string> = {
+    ship: 'description: Commit and push\nallowed-tools: Bash(git add *), Read, Wrench\ndisallowed-tools:\n  - AskUserQuestion',
+    plain: 'description: Nothing special',
+  };
+  for (const [name, text] of Object.entries(skills)) {
+    mkdirSync(join(workspace, '.circle', 'skills', name), { recursive: true });
+    writeFileSync(
+      join(workspace, '.circle', 'skills', name, 'SKILL.md'),
+      `---\nname: ${name}\n${text}\n---\nDo ${name}.\n`,
+    );
+  }
+  const { app, model } = await session(t, [answer('ok'), answer('again')], {
+    workspace,
+    userHome: scratch(t),
+  });
+  await app.submit('/skill');
+  const list = app.state.notices.at(-1)!;
+  const under = ' '.repeat(23);
+  assert.ok(
+    list.includes(
+      [
+        `  ship${' '.repeat(17)}Commit and push (Project Circle)`,
+        `${under}allowed-tools: Bash(git add *), Read, Wrench`,
+        `${under}disallowed-tools: AskUserQuestion`,
+      ].join('\n'),
+    ),
+    list,
+  );
+  assert.ok(
+    list.endsWith(
+      [
+        'Not applied:',
+        '  ship names tools that do not exist in allowed-tools: Wrench · not applied',
+        '',
+        'Load with /skill <name>',
+      ].join('\n'),
+    ),
+    list,
+  );
+  assert.match(
+    list,
+    /\n {2}plain {16}Nothing special \(Project Circle\)\n {2}pr-review /,
+  );
+  await app.submit('/skill ship');
+  assert.equal(
+    app.state.notices.at(-1),
+    [
+      'Loaded skill `ship`',
+      '  pre-approved for your next message: execute(git add *), read_file',
+      '  not offered for your next message: question',
+      '  ship names tools that do not exist in allowed-tools: Wrench · not applied',
+    ].join('\n'),
+  );
+  await app.submit('go');
+  const offered = model.requests[0]!.tools.map((tool) => tool.name);
+  assert.ok(!offered.includes('question'));
+  assert.ok(offered.includes('read_file'));
+  await app.submit('and again');
+  assert.ok(model.requests[1]!.tools.some((tool) => tool.name === 'question'));
+  await app.submit('/skill plain');
+  assert.equal(app.state.notices.at(-1), 'Loaded skill `plain`');
+});
+
 test('/skill lists the skills that ship with Circle as built-in, loads one, and lists a project skill of the same name in its place', async (t) => {
   const workspace = scratch(t);
   const userHome = scratch(t);
@@ -2324,6 +2389,11 @@ test('/agents lists the subagents, a single one, and what is wrong with a file',
   );
   await app.submit('/agents nobody');
   assert.match(app.state.notices.at(-1)!, /No subagent nobody/);
+  await app.submit('/agents general-purpose');
+  assert.match(
+    app.state.notices.at(-1)!,
+    /tools: every tool a subagent may have, except question/,
+  );
 });
 
 test('/agents shows the keys a definition sets, and the ones Circle does not apply yet', async (t) => {
@@ -2441,5 +2511,63 @@ test('/hub names the switch while the hub extension is off, and once on connects
   );
   assert.ok(
     on.runtime.harness.tools.some((tool) => tool.name === 'mcp__Hub__search'),
+  );
+
+  // M4: /hub <same-address> preserves existing manual headers; /hub <different-address> drops them.
+  const sameWithHeaders = defaultSettings();
+  sameWithHeaders.extensions = {
+    ...sameWithHeaders.extensions,
+    hub: { enabled: true },
+  };
+  sameWithHeaders.mcpServers = {
+    Hub: {
+      type: 'http',
+      url: endpoint,
+      enabled: true,
+      placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
+      headers: { Authorization: 'Bearer HAND-ADDED-TOKEN', 'X-Custom': 'keep' },
+    },
+  };
+  const homeHeaders = scratch(t);
+  saveSettings(sameWithHeaders, homeHeaders);
+  const keepSession = await session(t, [], {
+    integrations: true,
+    home: homeHeaders,
+    settings: sameWithHeaders,
+  });
+  const reqCountBefore = hub.requests.length;
+  await keepSession.app.submit(`/hub ${address}`);
+  const afterSame = loadSettings(homeHeaders).mcpServers.Hub;
+  assert.deepEqual(afterSame?.headers, {
+    Authorization: 'Bearer HAND-ADDED-TOKEN',
+    'X-Custom': 'keep',
+  });
+  assert.equal(
+    hub.requests
+      .slice(reqCountBefore)
+      .some((req) => req.headers.authorization === 'Bearer HAND-ADDED-TOKEN'),
+    true,
+  );
+
+  const otherHub = await mcpStub(t, {
+    tools: [
+      { name: 'other_tool', inputSchema: { type: 'object', properties: {} } },
+    ],
+    get: (path, origin) =>
+      path === '/.well-known/knowledge-sync'
+        ? {
+            schema: 'knowledge-sync-discovery@1',
+            mcp: { endpoint: `${origin}/mcp` },
+          }
+        : undefined,
+  });
+  const otherAddress = new URL(otherHub.url).host;
+  await keepSession.app.submit(`/hub ${otherAddress}`);
+  const afterOther = loadSettings(homeHeaders).mcpServers.Hub;
+  assert.equal(afterOther?.url, `http://${otherAddress}/mcp`);
+  assert.equal('headers' in (afterOther ?? {}), false);
+  assert.equal(
+    otherHub.requests.some((req) => req.headers.authorization !== undefined),
+    false,
   );
 });

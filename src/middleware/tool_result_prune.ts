@@ -2,6 +2,7 @@ import type { Message } from '../types.js';
 import type { ContextState } from '../checkpoint_store.js';
 import { envFlag } from '../model_guard.js';
 import { isRecord } from '../settings.js';
+
 export function tokenLen(text: string): number {
   let cjk = 0;
   let other = 0;
@@ -18,6 +19,7 @@ export function tokenLen(text: string): number {
   }
   return cjk + Math.ceil(other / 4);
 }
+
 export function completeJson(text: string): boolean {
   if (!/^\s*[{[]/.test(text)) return false;
   try {
@@ -27,20 +29,43 @@ export function completeJson(text: string): boolean {
     return false;
   }
 }
+
 export interface PruneOptions {
   protectTokens?: number;
   minimumTokens?: number;
   enabled?: boolean;
+  inputLimit?: number;
 }
+
+export const PRUNE_PROTECT_FLOOR = 40000;
+export const PRUNE_BATCH_FLOOR = PRUNE_PROTECT_FLOOR / 2;
+
+export function pruneProtectTokens(inputLimit?: number): number {
+  const input =
+    typeof inputLimit === 'number' && Number.isFinite(inputLimit)
+      ? inputLimit
+      : 0;
+  return Math.max(PRUNE_PROTECT_FLOOR, Math.floor(input / 4));
+}
+
+// A batch invalidates prompt cache back to the oldest pruned message, so require at least half the protect window.
+export function pruneBatchTokens(protect: number): number {
+  return Math.max(PRUNE_BATCH_FLOOR, Math.floor(protect / 2));
+}
+
 export function nextPruneState(
   messages: Message[],
   state: ContextState,
   options: PruneOptions = {},
 ): ContextState {
   if (!(options.enabled ?? envFlag('CIRCLE_PRUNE_TOOL_OUTPUTS'))) return state;
-  const fromEnv = Number(process.env.CIRCLE_PRUNE_PROTECT_TOKENS || 40000);
+  const configured = process.env.CIRCLE_PRUNE_PROTECT_TOKENS;
+  const fromEnv = configured ? Number(configured) : NaN;
   const protect =
-    options.protectTokens ?? (Number.isFinite(fromEnv) ? fromEnv : 40000);
+    options.protectTokens ??
+    (Number.isFinite(fromEnv)
+      ? fromEnv
+      : pruneProtectTokens(options.inputLimit));
   const old = new Set(state.prunedIds);
   const callNames = new Map(
     messages
@@ -63,7 +88,6 @@ export function nextPruneState(
       message.role !== 'tool' ||
       old.has(message.id) ||
       Boolean(message.attachments?.length) ||
-      // its images were left out: its text says so and where they were
       state.droppedMedia?.includes(message.id) ||
       ['question', 'skill'].includes(name) ||
       message === latestTodos ||
@@ -77,11 +101,12 @@ export function nextPruneState(
   }
   if (
     candidates.reduce((sum, item) => sum + item.tokens, 0) <
-    (options.minimumTokens ?? 20000)
+    (options.minimumTokens ?? pruneBatchTokens(protect))
   )
     return state;
   const newIds = candidates.reverse().map((item) => item.id);
-  const first = messages.findIndex((message) => newIds.includes(message.id));
+  const newSet = new Set(newIds);
+  const first = messages.findIndex((message) => newSet.has(message.id));
   const strip = messages
     .slice(first + 1)
     .filter((message) => message.role === 'assistant')
@@ -92,6 +117,7 @@ export function nextPruneState(
     stripThinkingIds: [...new Set([...state.stripThinkingIds, ...strip])],
   };
 }
+
 export function pruneMessages(
   messages: Message[],
   state: ContextState,
