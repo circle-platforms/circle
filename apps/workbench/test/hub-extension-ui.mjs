@@ -146,6 +146,68 @@ try {
             { exact: true },
           )
           .waitFor();
+        // C3-S4: re-authorization required has its own badge, and failed re-sign-in on a live /mcp stays connected in badge without "could not be connected".
+        await page.evaluate(() =>
+          window.hubExtensionFixture.reauthRequired(false),
+        );
+        await hub
+          .getByRole('status')
+          .getByText(label('re-authorization required', '需要重新授权'), {
+            exact: true,
+          })
+          .waitFor();
+        await hub
+          .getByRole('button', { name: label('retry', '重试'), exact: true })
+          .click();
+        assert.deepEqual(
+          await page.evaluate(() =>
+            window.hubExtensionFixture.commands
+              .filter((command) => command.name === 'mcp-reload-server')
+              .map((command) => ({
+                name: command.name,
+                payload: command.payload,
+              })),
+          ),
+          [{ name: 'mcp-reload-server', payload: { name: 'Hub' } }],
+        );
+        await page.evaluate(() =>
+          window.hubExtensionFixture.liveSignInFailed(),
+        );
+        await hub
+          .getByRole('status')
+          .getByText(label('connected', '已连接'), { exact: true })
+          .waitFor();
+        await hub
+          .getByText('sign-in failed: denied', { exact: true })
+          .waitFor();
+        assert.equal(
+          await hub
+            .getByText(
+              label('The Hub could not be connected.', '无法连接 Hub。'),
+              { exact: true },
+            )
+            .count(),
+          0,
+        );
+        // C4-S2: MCP page uses the same display status as HubConnectionCard when /mcp is still connected despite sign-in failure.
+        await open('/page/mcp');
+        await page.evaluate(() =>
+          window.hubExtensionFixture.liveSignInFailed(),
+        );
+        const filesRow = page
+          .locator('.record-row')
+          .filter({ hasText: 'files-server' });
+        await filesRow
+          .locator('.status')
+          .getByText(label('connected', '已连接'), { exact: true })
+          .waitFor();
+        await filesRow.locator('.record-main').click();
+        await page
+          .getByRole('dialog')
+          .locator('.facts dd')
+          .getByText('connected', { exact: true })
+          .waitFor();
+        await open('/page/extensions?plugin=hub');
         // No Hub yet: its IP address alone is asked for, and where the sign-in happens is said
         await page.evaluate(() => window.hubExtensionFixture.removeHub());
         const address = hub.getByRole('textbox', {

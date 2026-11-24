@@ -25,6 +25,8 @@ export interface RemoteBotFailureContext {
 export interface RemoteBotFailure {
   kind: RemoteBotFailureKind;
   retryable: boolean;
+  canReauthorize?: boolean;
+  reauthorizeScope?: string;
   title: string;
   cause: string;
   action: string;
@@ -140,10 +142,26 @@ export function findHubConnection(
   return snapshot.mcp.find((row) => row.name === HUB_SERVER);
 }
 
+export type McpDisplayStatus = McpServer['status'] | 'waiting for sign-in';
+
+export function mcpDisplayStatus(row: McpServer | undefined): McpDisplayStatus {
+  if (!row) return 'not connected';
+  if (row.signIn) return 'waiting for sign-in';
+  if (row.status === 're-authorization required')
+    return 're-authorization required';
+  if (row.status === 'reload required') return 'reload required';
+  if (row.status === 'connected') return 'connected';
+  if (row.status === 'error') return row.mcpConnected ? 'connected' : 'error';
+  return row.status;
+}
+
 export function isHubConnected(
   snapshot: Pick<WorkbenchSnapshot, 'mcp'>,
 ): boolean {
-  return findHubConnection(snapshot)?.status === 'connected';
+  const row = findHubConnection(snapshot);
+  if (!row || row.enabled === false) return false;
+  if (typeof row.mcpConnected === 'boolean') return row.mcpConnected;
+  return row.status === 'connected';
 }
 
 export function shouldOpenInitialConnectionModal(params: {
@@ -177,6 +195,7 @@ function readFailureMeta(reason: unknown): {
   code?: string;
   message?: string;
   detail?: string;
+  scope?: string;
   isTimeout?: boolean;
   errorUploaded?: number;
   errorTotal?: number;
@@ -195,6 +214,8 @@ function readFailureMeta(reason: unknown): {
     message?: unknown;
     detail?: unknown;
     remoteMessage?: unknown;
+    scope?: unknown;
+    errorScope?: unknown;
     errorUploaded?: unknown;
     uploaded?: unknown;
     errorTotal?: unknown;
@@ -214,6 +235,8 @@ function readFailureMeta(reason: unknown): {
           message?: unknown;
           detail?: unknown;
           remoteMessage?: unknown;
+          scope?: unknown;
+          errorScope?: unknown;
           errorUploaded?: unknown;
           uploaded?: unknown;
           errorTotal?: unknown;
@@ -252,6 +275,17 @@ function readFailureMeta(reason: unknown): {
           : typeof nested?.remoteMessage === 'string'
             ? nested.remoteMessage
             : undefined;
+  const rawScope =
+    typeof err.scope === 'string'
+      ? err.scope
+      : typeof err.errorScope === 'string'
+        ? err.errorScope
+        : typeof nested?.scope === 'string'
+          ? nested.scope
+          : typeof nested?.errorScope === 'string'
+            ? nested.errorScope
+            : undefined;
+  const scope = rawScope?.trim() || undefined;
   const isTimeout =
     err.name === 'TimeoutError' || nested?.name === 'TimeoutError';
   const errorUploaded =
@@ -299,6 +333,7 @@ function readFailureMeta(reason: unknown): {
     code,
     ...(rawMessage ? { message: stripInvokeErrorPrefix(rawMessage) } : {}),
     ...(detail ? { detail } : {}),
+    ...(scope ? { scope } : {}),
     ...(isTimeout ? { isTimeout: true } : {}),
     ...(errorUploaded !== undefined ? { errorUploaded } : {}),
     ...(errorTotal !== undefined ? { errorTotal } : {}),
@@ -311,7 +346,8 @@ export function classifyRemoteBotFailure(
   reason: unknown,
   ctx?: RemoteBotFailureContext,
 ): RemoteBotFailure {
-  const { status, code, message, detail, isTimeout } = readFailureMeta(reason);
+  const { status, code, message, detail, scope, isTimeout } =
+    readFailureMeta(reason);
   const combinedDetail = [message, detail].filter(Boolean).join('\n');
   const settingsPath =
     ctx?.settingsPath || t('<app data folder>/runtime-home/settings.json');
@@ -384,6 +420,22 @@ export function classifyRemoteBotFailure(
           'Check the Hub address in Settings -> Extensions or allowed hosts on Hub, then retry.',
         ),
         ...(detail || message ? { detail: detail ?? message } : {}),
+      };
+    }
+    if (!ctx?.hasAuthorizationHeader) {
+      return {
+        kind: 'oauth-forbidden',
+        retryable: false,
+        canReauthorize: true,
+        ...(scope ? { reauthorizeScope: scope } : {}),
+        title: t('bot access not granted'),
+        cause: t(
+          'Sign in again, and check “Allow this client to use my bot” on the Hub confirmation page.',
+        ),
+        action: t(
+          'Or configure a direct member Bearer token (format: Bearer <token>) for Hub headers.Authorization in {path}, then retry. Disconnecting removes manual headers; add them again after reconnecting.',
+          { path: settingsPath },
+        ),
       };
     }
     return {

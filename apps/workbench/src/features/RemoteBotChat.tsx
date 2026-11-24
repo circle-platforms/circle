@@ -6,6 +6,7 @@ import { useRuntime } from '../app/context';
 import { useStableCallback } from '../app/stable-callback';
 import { MessageView } from '../components/MessageView';
 import { Button, FileChip } from '../components/common';
+import { HubSignInButtons, HubSignInGuidance } from '../components/HubSignIn';
 import { t, useLocale } from '../i18n';
 import {
   HUB_SERVER,
@@ -40,26 +41,51 @@ export function RemoteBotLink() {
 
 function DisconnectedPanel({
   detail,
+  signIn,
   reconnecting,
   onRetry,
 }: {
   detail?: string;
+  signIn?: { url: string; code?: string };
   reconnecting: boolean;
   onRetry: () => void;
 }) {
+  const [openError, setOpenError] = useState('');
   return (
     <div className="empty-state" data-bot-error-kind="disconnected">
       <h2>{t('remote bot disconnected')}</h2>
-      <p role="status">{t('Hub is not connected right now.')}</p>
-      <p className="muted small">
-        {t(
-          'Check your Hub connection in Settings -> Extensions, or retry reconnecting.',
+      {signIn ? (
+        <HubSignInGuidance
+          signIn={signIn}
+          statusRole="status"
+          hint={t(
+            'Check “Allow this client to use my bot” on the Hub confirmation page.',
+          )}
+        />
+      ) : (
+        <>
+          <p role="status">{t('Hub is not connected right now.')}</p>
+          <p className="muted small">
+            {t(
+              'Check your Hub connection in Settings -> Extensions, or retry reconnecting.',
+            )}
+          </p>
+        </>
+      )}
+      {detail && !signIn && <p className="muted small">{detail}</p>}
+      {openError && (
+        <p className="muted small" role="alert">
+          {openError}
+        </p>
+      )}
+      <span className="empty-state-actions">
+        {signIn && (
+          <HubSignInButtons signIn={signIn} onOpenError={setOpenError} />
         )}
-      </p>
-      {detail && <p className="muted small">{detail}</p>}
-      <Button type="button" disabled={reconnecting} onClick={onRetry}>
-        {t('retry')}
-      </Button>
+        <Button type="button" disabled={reconnecting} onClick={onRetry}>
+          {t('retry')}
+        </Button>
+      </span>
     </div>
   );
 }
@@ -72,9 +98,10 @@ export function RemoteBotChat() {
   return connection ? (
     <Chat
       key={connection.url}
-      connected={connection.status === 'connected'}
+      connected={isHubConnected(snapshot) && !connection.signIn}
       connectionStatus={connection.status}
       connectionError={connection.error}
+      signIn={connection.signIn}
       hasAuthorizationHeader={connection.hasAuthorizationHeader}
       settingsPath={connection.settingsPath}
       request={runtime.request}
@@ -97,12 +124,14 @@ function Chat({
   connected,
   connectionStatus,
   connectionError,
+  signIn,
   hasAuthorizationHeader,
   settingsPath,
 }: {
   connected: boolean;
   connectionStatus: string;
   connectionError?: string;
+  signIn?: { url: string; code?: string };
   hasAuthorizationHeader?: boolean;
   settingsPath?: string;
   request: ReturnType<typeof useRuntime>['runtime']['request'];
@@ -260,6 +289,7 @@ function Chat({
     return (
       <DisconnectedPanel
         detail={connectionError}
+        signIn={signIn}
         reconnecting={reconnecting}
         onRetry={() => {
           setReconnecting(true);
@@ -290,9 +320,40 @@ function Chat({
         <p role="status">{view.cause}</p>
         <p className="muted small">{view.action}</p>
         {view.detail && <p className="muted small">{view.detail}</p>}
-        <Button type="button" onClick={() => setEpoch((n) => n + 1)}>
-          {t('retry')}
-        </Button>
+        <span className="empty-state-actions">
+          {view.canReauthorize && (
+            <Button
+              className="primary"
+              type="button"
+              disabled={reconnecting}
+              onClick={() => {
+                setReconnecting(true);
+                void Promise.resolve(
+                  request('mcp.reauthorize-server', {
+                    name: HUB_SERVER,
+                    ...(view.reauthorizeScope
+                      ? { scope: view.reauthorizeScope }
+                      : {}),
+                  }),
+                )
+                  .catch(() => {})
+                  .finally(() => {
+                    setReconnecting(false);
+                    setEpoch((n) => n + 1);
+                  });
+              }}
+            >
+              {t('sign in again')}
+            </Button>
+          )}
+          <Button
+            type="button"
+            disabled={reconnecting}
+            onClick={() => setEpoch((n) => n + 1)}
+          >
+            {t('retry')}
+          </Button>
+        </span>
       </div>
     );
   }

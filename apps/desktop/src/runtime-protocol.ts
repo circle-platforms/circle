@@ -41,6 +41,7 @@ export type RuntimeCommandName =
   | 'save-settings'
   | 'reload'
   | 'mcp-reload-server'
+  | 'mcp-reauthorize-server'
   | 'answer'
   | 'terminal-tab-run'
   | 'compact'
@@ -92,6 +93,7 @@ export interface RuntimeReply {
   errorStatus?: number;
   errorCode?: string;
   errorDetail?: string;
+  errorScope?: string;
   errorUploaded?: number;
   errorTotal?: number;
   errorFileName?: string;
@@ -174,6 +176,7 @@ export const runtimeCommands = new Set<RuntimeCommandName>([
   'save-settings',
   'reload',
   'mcp-reload-server',
+  'mcp-reauthorize-server',
   'answer',
   'terminal-tab-run',
   'compact',

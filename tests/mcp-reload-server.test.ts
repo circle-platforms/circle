@@ -143,3 +143,247 @@ test('an extension saving a server while a turn runs is refused, and nothing is 
   release();
   await turn;
 });
+
+test('AgentRuntime.reauthorizeMcpServer forwards dynamic scope while keeping stored tokens until re-login completes', async (t) => {
+  const { createServer } = await import('node:http');
+  const { McpAuthProvider, keptFor, redirectPort } =
+    await import('../src/mcp_auth.js');
+  let port = 0;
+  const base = () => `http://127.0.0.1:${port}`;
+  const seenDeviceScopes: string[] = [];
+  let tokenSeq = 0;
+  const validTokens = new Set(['tok-before']);
+  const srv = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', base());
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf8');
+      if (url.pathname === '/.well-known/oauth-authorization-server') {
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            issuer: base(),
+            authorization_endpoint: `${base()}/authorize`,
+            token_endpoint: `${base()}/token`,
+            registration_endpoint: `${base()}/register`,
+            response_types_supported: ['code'],
+            code_challenge_methods_supported: ['S256'],
+            grant_types_supported: [
+              'authorization_code',
+              'urn:ietf:params:oauth:grant-type:device_code',
+            ],
+            device_authorization_endpoint: `${base()}/device`,
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/device') {
+        seenDeviceScopes.push(new URLSearchParams(body).get('scope') ?? '');
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            device_code: 'dc-rt',
+            user_code: 'BCDF-GHJK',
+            verification_uri: `${base()}/verify`,
+            verification_uri_complete: `${base()}/verify?user_code=BCDF-GHJK`,
+            expires_in: 600,
+            interval: 1,
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/token') {
+        const tok = `tok-rt-${++tokenSeq}`;
+        validTokens.add(tok);
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            access_token: tok,
+            token_type: 'Bearer',
+            scope: 'custom-bot',
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/mcp') {
+        const bearer = (req.headers.authorization ?? '').replace(
+          /^Bearer /i,
+          '',
+        );
+        if (!validTokens.has(bearer)) {
+          res.writeHead(401).end();
+          return;
+        }
+        const rpc = JSON.parse(body) as { id?: unknown; method?: string };
+        const result =
+          rpc.method === 'initialize'
+            ? {
+                protocolVersion: '2025-03-26',
+                capabilities: { tools: {} },
+                serverInfo: { name: 'srv', version: '1.0.0' },
+              }
+            : rpc.method === 'tools/list'
+              ? { tools: [] }
+              : {};
+        res
+          .writeHead(200, { 'content-type': 'application/json' })
+          .end(
+            rpc.id === undefined
+              ? ''
+              : JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }),
+          );
+        return;
+      }
+      res.writeHead(404).end();
+    });
+  });
+  await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  port = (srv.address() as { port: number }).port;
+  cleanup(t, () => {
+    srv.closeAllConnections?.();
+    return new Promise<void>((resolve) => srv.close(() => resolve()));
+  });
+
+  const root = scratch(t);
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  mkdirSync(home);
+  mkdirSync(workspace);
+  const serverKey = `${base()}/mcp`;
+  const portUsed = await redirectPort(home, serverKey);
+  const seed = new McpAuthProvider(home, serverKey, portUsed);
+  seed.saveClientInformation({
+    client_id: 'cli-rt',
+    redirect_uris: [seed.redirectUrl],
+  });
+  seed.saveTokens({ access_token: 'tok-before', token_type: 'Bearer' });
+  seed.saveDiscoveryState({
+    authorizationServerUrl: base(),
+    resourceMetadata: { resource: serverKey, authorization_servers: [base()] },
+    authorizationServerMetadata: {
+      issuer: base(),
+      authorization_endpoint: `${base()}/authorize`,
+      token_endpoint: `${base()}/token`,
+      registration_endpoint: `${base()}/register`,
+      response_types_supported: ['code'],
+      code_challenge_methods_supported: ['S256'],
+      grant_types_supported: [
+        'authorization_code',
+        'urn:ietf:params:oauth:grant-type:device_code',
+      ],
+      device_authorization_endpoint: `${base()}/device`,
+    },
+  });
+
+  const settings = defaultSettings();
+  settings.mcpServers = { remote: { type: 'http', url: serverKey } };
+  saveSettings(settings, home);
+  const runtime = new AgentRuntime({
+    home,
+    workspace,
+    userHome: join(root, 'user'),
+    settings,
+    model: new ScriptedModel([]),
+  });
+  cleanup(t, () => runtime.close());
+  await runtime.initialize();
+  await runtime.reauthorizeMcpServer('remote', 'custom-bot');
+  await until(
+    () => keptFor(home, serverKey).tokens?.access_token === 'tok-rt-1',
+  );
+  assert.deepEqual(seenDeviceScopes, ['custom-bot']);
+  assert.equal(
+    'required_scope' in (keptFor(home, serverKey) as Record<string, unknown>),
+    false,
+  );
+});
+
+test('C3-M1: invalid header config records error on row without throwing across reloadMcpServer, reconnectMcpServers, and saveMcpServer', async (t) => {
+  const { createServer } = await import('node:http');
+  let allowRecover = false;
+  let port = 0;
+  const base = () => `http://127.0.0.1:${port}/mcp`;
+  const srv = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      if (!allowRecover) {
+        res.writeHead(500).end('unavailable');
+        return;
+      }
+      const rpc = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+        id?: unknown;
+        method?: string;
+      };
+      const result =
+        rpc.method === 'initialize'
+          ? {
+              protocolVersion: '2025-03-26',
+              capabilities: { tools: {} },
+              serverInfo: { name: 'recoverable', version: '1.0.0' },
+            }
+          : rpc.method === 'tools/list'
+            ? {
+                tools: [
+                  {
+                    name: 'pong',
+                    description: 'pong',
+                    inputSchema: { type: 'object', properties: {} },
+                  },
+                ],
+              }
+            : {};
+      res
+        .writeHead(200, { 'content-type': 'application/json' })
+        .end(
+          rpc.id === undefined
+            ? ''
+            : JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }),
+        );
+    });
+  });
+  await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  port = (srv.address() as { port: number }).port;
+  t.after(() => {
+    srv.closeAllConnections?.();
+    return new Promise<void>((resolve) => srv.close(() => resolve()));
+  });
+
+  const { runtime } = await runtimeWith(t, {
+    bad: {
+      type: 'http',
+      url: 'https://mcp.example.test/mcp',
+      headers: { 'Bad Name': 'v' },
+    },
+    recoverable: {
+      type: 'http',
+      url: base(),
+    },
+  });
+
+  const badBefore = runtime.mcp.status.find((s) => s.name === 'bad');
+  assert.match(badBefore?.error ?? '', /invalid header name 'Bad Name'/);
+
+  await assert.doesNotReject(() => runtime.reloadMcpServer('bad'));
+  const badAfterReload = runtime.mcp.status.find((s) => s.name === 'bad');
+  assert.match(badAfterReload?.error ?? '', /invalid header name 'Bad Name'/);
+  assert.deepEqual(badAfterReload?.tools, []);
+
+  allowRecover = true;
+  const retried = await runtime.reconnectMcpServers();
+  assert.deepEqual(retried, ['bad', 'recoverable']);
+  assert.match(
+    runtime.mcp.status.find((s) => s.name === 'bad')?.error ?? '',
+    /invalid header name 'Bad Name'/,
+  );
+  const recovered = runtime.mcp.status.find((s) => s.name === 'recoverable');
+  assert.equal(recovered?.error, '');
+  assert.deepEqual(recovered?.tools, ['mcp__recoverable__pong']);
+
+  const saved = await runtime.saveMcpServer('bad-saved', {
+    type: 'http',
+    url: 'https://mcp.example.test/mcp',
+    headers: { 'Bad Name': 'v' },
+  });
+  assert.equal(saved.state, 'failed');
+  assert.match(saved.error ?? '', /invalid header name 'Bad Name'/);
+  assert.equal(saved.tools, 0);
+});

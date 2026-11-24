@@ -734,6 +734,9 @@ export class LiveRuntime implements RuntimePort {
           ...(reply.errorDetail !== undefined
             ? { detail: reply.errorDetail }
             : {}),
+          ...(reply.errorScope !== undefined
+            ? { scope: reply.errorScope }
+            : {}),
           ...(reply.errorUploaded !== undefined
             ? { errorUploaded: reply.errorUploaded }
             : {}),
@@ -1170,6 +1173,7 @@ export class LiveRuntime implements RuntimePort {
         'export-session': 'export',
         'mcp.reload': 'reload',
         'mcp.reload-server': 'mcp-reload-server',
+        'mcp.reauthorize-server': 'mcp-reauthorize-server',
         'extensions.reload': 'reload',
         'set-model': 'set-model',
         'set-plan-mode': 'set-plan-mode',

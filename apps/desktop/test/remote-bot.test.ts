@@ -39,6 +39,10 @@ import {
   uploadSelectedBatch,
 } from '../src/remote-bot-files';
 import {
+  runBotTransferEnvelope,
+  unwrapBotTransferReply,
+} from '../src/bot-transfer-envelope';
+import {
   RemoteBotError,
   remoteBotPort,
   remoteBotRequest,
@@ -482,12 +486,17 @@ test('remoteBotRequest sends bot-client-version header and attaches structured e
     },
     {
       status: 403,
+      headers: {
+        'www-authenticate':
+          'Bearer error="insufficient_scope", scope="custom-bot"',
+      },
       body: {
         code: 'BOT_CLIENT_FORBIDDEN',
         message: 'oauth client token is not allowed',
       },
       expectedCode: 'BOT_CLIENT_FORBIDDEN',
       expectedMessage: 'oauth client token is not allowed',
+      expectedScope: 'custom-bot',
     },
     {
       status: 401,
@@ -535,7 +544,12 @@ test('remoteBotRequest sends bot-client-version header and attaches structured e
           scenario.body
             ? new Response(JSON.stringify(scenario.body), {
                 status: scenario.status,
-                headers: { 'content-type': 'application/json' },
+                headers: {
+                  'content-type': 'application/json',
+                  ...('headers' in scenario && scenario.headers
+                    ? scenario.headers
+                    : {}),
+                },
               })
             : new Response('unavailable', {
                 status: scenario.status,
@@ -547,10 +561,14 @@ test('remoteBotRequest sends bot-client-version header and attaches structured e
           status?: number;
           code?: string;
           remoteMessage?: string;
+          scope?: string;
         };
         assert.equal(meta.status, scenario.status);
         assert.equal(meta.code, scenario.expectedCode);
         assert.equal(error.message, scenario.expectedMessage);
+        if ('expectedScope' in scenario) {
+          assert.equal(meta.scope, scenario.expectedScope);
+        }
         return true;
       },
     );
@@ -943,14 +961,22 @@ test('C20: RuntimeController upload-batch pre-validates all files locally before
               code: 'BOT_CLIENT_FORBIDDEN',
               message: 'direct member token required',
             }),
-            { status: 403, headers: { 'content-type': 'application/json' } },
+            {
+              status: 403,
+              headers: {
+                'content-type': 'application/json',
+                'www-authenticate':
+                  'Bearer error="insufficient_scope", scope="custom-file-scope"',
+              },
+            },
           )) as typeof fetch,
       ),
     (error: unknown) =>
       error instanceof RemoteBotError &&
       error.status === 403 &&
       error.code === 'BOT_CLIENT_FORBIDDEN' &&
-      error.remoteMessage === 'direct member token required',
+      error.remoteMessage === 'direct member token required' &&
+      error.scope === 'custom-file-scope',
   );
 
   // S12: uploadSelectedBatch mid-batch failure on file 3 of 5 reports uploaded count, total, and failing filename.
@@ -1041,6 +1067,7 @@ test('T2: preload unwrapBotTransfer preserves structured error metadata and fail
     errorStatus: 413,
     errorCode: 'BOT_QUOTA_EXCEEDED',
     errorDetail: 'quota full',
+    errorScope: 'custom-bot',
     errorUploaded: 1,
     errorTotal: 3,
     errorFileName: 'c: d.txt',
@@ -1054,6 +1081,7 @@ test('T2: preload unwrapBotTransfer preserves structured error metadata and fail
         status?: number;
         code?: string;
         detail?: string;
+        scope?: string;
         errorUploaded?: number;
         errorTotal?: number;
         errorFileName?: string;
@@ -1065,6 +1093,7 @@ test('T2: preload unwrapBotTransfer preserves structured error metadata and fail
         meta.status === 413 &&
         meta.code === 'BOT_QUOTA_EXCEEDED' &&
         meta.detail === 'quota full' &&
+        meta.scope === 'custom-bot' &&
         meta.errorUploaded === 1 &&
         meta.errorTotal === 3 &&
         meta.errorFileName === 'c: d.txt' &&
@@ -1197,6 +1226,9 @@ test('F11/F15: docs/extensions.md and CHANGELOG.md document remote-bot contracts
     join(repoRoot, 'docs', 'extensions.md'),
     'utf8',
   );
+  assert.match(extensionsDoc, /Allow this client to use my bot/);
+  assert.match(extensionsDoc, /BOT_CLIENT_FORBIDDEN.*insufficient_scope/);
+  assert.match(extensionsDoc, /sign in again/);
   assert.match(extensionsDoc, /configVersion/);
   assert.match(extensionsDoc, /disable.*bot_disabled_aborted/);
   assert.match(extensionsDoc, /16,000/);
@@ -1221,7 +1253,40 @@ test('F11/F15: docs/extensions.md and CHANGELOG.md document remote-bot contracts
     /test:paired.*WeCom adapter.*WeCom SDK.*\/api\/bot-channel\/v1.*direct `?\/api\/bot\/v1`?.*not Desktop's/s,
   );
 
+  const desktopDoc = await readFile(
+    join(repoRoot, 'docs', 'desktop.md'),
+    'utf8',
+  );
+  assert.match(desktopDoc, /Allow this client to use my bot/);
+  assert.match(desktopDoc, /sign in again/);
+  assert.match(desktopDoc, /preserving the existing token and connection/);
+
+  const mcpDoc = await readFile(join(repoRoot, 'docs', 'mcp.md'), 'utf8');
+  assert.match(mcpDoc, /insufficient_scope/);
+  assert.match(mcpDoc, /re-authorization required/);
+  assert.doesNotMatch(mcpDoc, /required_scope/);
+  assert.doesNotMatch(mcpDoc, /cancel it and reconnect normally/);
+  assert.match(
+    mcpDoc,
+    /Running `\/mcp reconnect <name>`.*starts one sign-in asking for the additional scope/,
+  );
+  assert.match(mcpDoc, /starting Circle again leaves none in `mcp-auth\.json`/);
+  assert.match(
+    mcpDoc,
+    /while a server already waiting on a sign-in keeps showing the one under way/,
+  );
+  assert.match(
+    mcpDoc,
+    /for a server marked `re-authorization required`, start one sign-in/,
+  );
+  assert.match(mcpDoc, /keeping the stored tokens and any live connection/);
+
   const changelog = await readFile(join(repoRoot, 'CHANGELOG.md'), 'utf8');
+  assert.match(
+    changelog,
+    /checked the bot permission on the Hub confirmation page/,
+  );
+  assert.match(changelog, /sign in again.*requested scope/);
   assert.doesNotMatch(changelog, /^### Added\n\n- \*\*Private remote chat/m);
   assert.doesNotMatch(
     changelog,
@@ -1235,4 +1300,82 @@ test('F11/F15: docs/extensions.md and CHANGELOG.md document remote-bot contracts
     changelog,
     /The narrow settings dialog stays on whole pixels\..*\n\n## 1\.14\.0/m,
   );
+});
+
+test('C3-S2: RuntimeController and main bot transfer helpers propagate errorScope across 403 insufficient_scope replies', async (t: TestContext) => {
+  const root = await mkdtemp(join(tmpdir(), 'circle-bot-c3s2-'));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(home, { recursive: true });
+  await mkdir(workspace, { recursive: true });
+  const settings = defaultSettings();
+  settings.mcpServers[HUB_SERVER] = {
+    type: 'http',
+    url: 'http://127.0.0.1:7420/mcp',
+    headers: { Authorization: 'Bearer member-tok' },
+  };
+  saveSettings(settings, home);
+  const binding = remoteBotPort(home).binding;
+  const sampleFile = join(root, 'sample.txt');
+  await writeFile(sampleFile, 'hello');
+
+  t.mock.method(globalThis, 'fetch', async () => {
+    return new Response(
+      JSON.stringify({
+        code: 'BOT_CLIENT_FORBIDDEN',
+        message: 'oauth client token rejected',
+      }),
+      {
+        status: 403,
+        headers: {
+          'content-type': 'application/json',
+          'www-authenticate':
+            'Bearer error="insufficient_scope", scope="custom-scope"',
+        },
+      },
+    );
+  });
+
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model: new ScriptedModel([]),
+    emit: () => {},
+  });
+  t.after(async () => {
+    await controller.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const botReply = await controller.dispatch({
+    id: randomUUID(),
+    name: 'remote-bot',
+    payload: { action: 'discover' },
+    sessionId: controller.snapshot().activeSessionId,
+  });
+  assert.equal(botReply.ok, false);
+  assert.equal(botReply.errorStatus, 403);
+  assert.equal(botReply.errorCode, 'BOT_CLIENT_FORBIDDEN');
+  assert.equal(botReply.errorScope, 'custom-scope');
+
+  const envelope = await runBotTransferEnvelope(async () => {
+    const fileReply = await controller.dispatch({
+      id: randomUUID(),
+      name: 'remote-bot-native-file',
+      payload: {
+        action: 'upload-batch',
+        binding,
+        paths: [sampleFile],
+      },
+      sessionId: controller.snapshot().activeSessionId,
+    });
+    return unwrapBotTransferReply(fileReply);
+  });
+  assert.equal(envelope.ok, false);
+  if (!envelope.ok) {
+    assert.equal(envelope.errorStatus, 403);
+    assert.equal(envelope.errorCode, 'BOT_CLIENT_FORBIDDEN');
+    assert.equal(envelope.errorScope, 'custom-scope');
+  }
 });

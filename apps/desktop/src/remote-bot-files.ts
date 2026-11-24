@@ -151,6 +151,7 @@ export class PartialBatchUploadError extends Error {
   readonly status?: number;
   readonly code?: string;
   readonly remoteMessage?: string;
+  readonly scope?: string;
 
   constructor(
     uploaded: number,
@@ -173,11 +174,13 @@ export class PartialBatchUploadError extends Error {
         status?: unknown;
         code?: unknown;
         remoteMessage?: unknown;
+        scope?: unknown;
       };
       if (typeof meta.status === 'number') this.status = meta.status;
       if (typeof meta.code === 'string') this.code = meta.code;
       if (typeof meta.remoteMessage === 'string')
         this.remoteMessage = meta.remoteMessage;
+      if (typeof meta.scope === 'string') this.scope = meta.scope;
     }
   }
 }

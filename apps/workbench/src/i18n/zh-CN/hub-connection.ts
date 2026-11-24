@@ -50,6 +50,13 @@ export const hubConnection: Record<string, string> = {
     'Hub 管理员已停用机器人功能。',
   'Ask your Hub administrator to enable it, then retry.':
     '请联系 Hub 管理员启用后再重试。',
+  'bot access not granted': '未授予机器人访问权限',
+  'Check “Allow this client to use my bot” on the Hub confirmation page.':
+    '请在 Hub 的确认页勾选「允许这个客户端使用我的机器人」。',
+  'Sign in again, and check “Allow this client to use my bot” on the Hub confirmation page.':
+    '重新登录，并在 Hub 的确认页勾选「允许这个客户端使用我的机器人」。',
+  'Or configure a direct member Bearer token (format: Bearer <token>) for Hub headers.Authorization in {path}, then retry. Disconnecting removes manual headers; add them again after reconnecting.':
+    '也可以在 {path} 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌（格式：Bearer <令牌>），然后再重试。断开连接会移除手工添加的请求头，重新连接后需要再次添加。',
   'direct member token required': '需要使用直接成员令牌',
   'Hub refused the OAuth sign-in token for my bot API.':
     'Hub 拒绝了 OAuth 登录令牌对机器人接口的访问。',
@@ -160,7 +167,7 @@ export const hubConnection: Record<string, string> = {
   'unknown remote bot operation': '未知的机器人操作',
   'runtime not enabled': '运行时未启用',
   'oauth client token rejected':
-    'Hub 拒绝了 OAuth 登录令牌，请先在 settings.json 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌后再重试',
+    '重新登录并在 Hub 的确认页勾选「允许这个客户端使用我的机器人」，或在 settings.json 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌后再重试',
   'remote bot request timed out': '机器人请求接收超时',
   'untrusted IPC sender': '不受信任的窗口请求，请刷新或重新打开窗口后再试',
   'MCP sign-in is required':

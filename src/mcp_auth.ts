@@ -48,6 +48,170 @@ interface Kept {
   direct_id?: string;
 }
 
+export interface BearerChallenge {
+  scheme?: string;
+  error?: string;
+  errorDescription?: string;
+  scope?: string;
+  resourceMetadataUrl?: string;
+}
+
+export function parseBearerChallenge(header: string | null): BearerChallenge {
+  if (!header) return {};
+  const fields: Record<string, string> = {};
+  let matchedScheme: string | undefined;
+  let currentScheme: string | undefined;
+  let justStartedScheme = false;
+  let index = 0;
+  while (index < header.length) {
+    while (
+      index < header.length &&
+      (header[index] === ',' || /\s/.test(header[index]!))
+    ) {
+      index++;
+    }
+    if (index >= header.length) break;
+    const tokenMatch = /^([!#$%&'*+\-.^_`|~0-9A-Za-z/]+)/.exec(
+      header.slice(index),
+    );
+    if (!tokenMatch) break;
+    const token = tokenMatch[1]!;
+    index += token.length;
+    while (index < header.length && /[ \t]/.test(header[index]!)) index++;
+    if (
+      header[index] === '=' &&
+      !(justStartedScheme && /^=+(?:\s*,|\s*$)/.test(header.slice(index)))
+    ) {
+      justStartedScheme = false;
+      index++;
+      while (index < header.length && /[ \t]/.test(header[index]!)) index++;
+      let value = '';
+      if (header[index] === '"') {
+        index++;
+        while (index < header.length && header[index] !== '"') {
+          if (header[index] === '\\' && index + 1 < header.length) index++;
+          value += header[index]!;
+          index++;
+        }
+        if (header[index] !== '"') break;
+        index++;
+      } else {
+        const start = index;
+        while (
+          index < header.length &&
+          header[index] !== ',' &&
+          !/\s/.test(header[index]!)
+        ) {
+          index++;
+        }
+        value = header.slice(start, index);
+      }
+      const key = token.toLowerCase();
+      if (
+        matchedScheme &&
+        currentScheme === matchedScheme &&
+        value &&
+        !(key in fields)
+      )
+        fields[key] = value;
+      while (index < header.length && /[ \t]/.test(header[index]!)) index++;
+      if (index < header.length && header[index] !== ',') break;
+      continue;
+    }
+    if (justStartedScheme && /^=*(?:\s*,|\s*$)/.test(header.slice(index))) {
+      justStartedScheme = false;
+      while (index < header.length && header[index] === '=') index++;
+      while (index < header.length && /[ \t]/.test(header[index]!)) index++;
+      if (index < header.length && header[index] !== ',') break;
+      continue;
+    }
+    const lower = token.toLowerCase();
+    if (matchedScheme) break;
+    currentScheme = lower;
+    if (lower === 'bearer' || lower === 'dpop') matchedScheme = lower;
+    justStartedScheme = index < header.length && header[index] !== ',';
+  }
+  if (!matchedScheme) return {};
+  return {
+    scheme: matchedScheme,
+    error: fields['error'],
+    errorDescription: fields['error_description'],
+    scope: fields['scope'],
+    resourceMetadataUrl: fields['resource_metadata'],
+  };
+}
+
+function isResourceChallengeTarget(
+  rawUrl: string | URL,
+  serverUrl: string,
+  asMeta?: Record<string, unknown>,
+): boolean {
+  let parsed: URL;
+  try {
+    parsed = rawUrl instanceof URL ? rawUrl : new URL(rawUrl, serverUrl);
+  } catch {
+    return false;
+  }
+  if (
+    parsed.pathname.startsWith('/.well-known/') ||
+    parsed.pathname.endsWith('/register')
+  ) {
+    return false;
+  }
+  const target = `${parsed.origin}${parsed.pathname}`;
+  if (asMeta) {
+    for (const key of [
+      'authorization_endpoint',
+      'token_endpoint',
+      'registration_endpoint',
+      'revocation_endpoint',
+      'device_authorization_endpoint',
+      'introspection_endpoint',
+    ]) {
+      const endpoint = asMeta[key];
+      if (typeof endpoint !== 'string') continue;
+      try {
+        const parsedEndpoint = new URL(endpoint);
+        if (`${parsedEndpoint.origin}${parsedEndpoint.pathname}` === target) {
+          return false;
+        }
+      } catch {
+        // Ignore invalid cached endpoint URL.
+      }
+    }
+  }
+  return true;
+}
+
+export function mergeScopes(
+  ...parts: Array<string | readonly string[] | undefined>
+): string | undefined {
+  const unique = new Set<string>();
+  for (const part of parts) {
+    if (!part) continue;
+    const items = typeof part === 'string' ? part.trim().split(/\s+/) : part;
+    for (const item of items) {
+      const trimmed = item.trim();
+      if (trimmed) unique.add(trimmed);
+    }
+  }
+  return unique.size > 0 ? [...unique].join(' ') : undefined;
+}
+
+export function selectAuthorizationScope(options: {
+  challengeScope?: string;
+  discovery?: OAuthDiscoveryState;
+  requiredScope?: string;
+}): string | undefined {
+  const supported = options.discovery?.resourceMetadata?.scopes_supported;
+  const base =
+    options.challengeScope?.trim() ||
+    (Array.isArray(supported) && supported.length > 0
+      ? supported.join(' ')
+      : undefined);
+  return mergeScopes(base, options.requiredScope);
+}
+
 export const mcpAuthPath = (home: string): string => join(home, MCP_AUTH_FILE);
 
 function loadAll(home: string): Record<string, Kept> {
@@ -181,11 +345,32 @@ export class McpAuthProvider implements OAuthClientProvider {
   #observedAccess?: string;
   #refreshGrant?: string;
   #refreshFailed = false;
+  #challengeScope?: string;
+  #insufficientScope?: BearerChallenge;
+  #requiredScope?: string;
   constructor(
     readonly home: string,
     readonly server: string,
     readonly port: number,
-  ) {}
+    requiredScope?: string,
+  ) {
+    this.#requiredScope = requiredScope;
+  }
+  authorizationScope(): string | undefined {
+    return (
+      selectAuthorizationScope({
+        challengeScope: this.#challengeScope,
+        discovery: this.discoveryState(),
+        requiredScope: this.#requiredScope,
+      }) ??
+      (this.authorizationUrl?.searchParams.get('scope') || undefined)
+    );
+  }
+  takeInsufficientScope(): BearerChallenge | undefined {
+    const challenge = this.#insufficientScope;
+    this.#insufficientScope = undefined;
+    return challenge;
+  }
   get redirectUrl(): string {
     return `http://127.0.0.1:${this.port}/callback`;
   }
@@ -237,6 +422,11 @@ export class McpAuthProvider implements OAuthClientProvider {
     }
     const interactive = !!this.authorizationUrl;
     this.authorizationUrl = undefined;
+    if (interactive) {
+      this.#challengeScope = undefined;
+      this.#insufficientScope = undefined;
+      this.#requiredScope = undefined;
+    }
     change(this.home, this.server, (kept) => ({
       ...kept,
       tokens,
@@ -253,6 +443,16 @@ export class McpAuthProvider implements OAuthClientProvider {
   redirectToAuthorization(url: URL): void {
     if (this.#refreshFailed) throw new McpLoginRequired();
     this.#refreshGrant = undefined;
+    const kept = keptFor(this.home, this.server);
+    const selected = mergeScopes(
+      url.searchParams.get('scope') ||
+        selectAuthorizationScope({
+          challengeScope: this.#challengeScope,
+          discovery: kept.discovery,
+        }),
+      this.#requiredScope,
+    );
+    if (selected) url.searchParams.set('scope', selected);
     this.authorizationUrl = url;
   }
   saveCodeVerifier(verifier: string): void {
@@ -268,6 +468,11 @@ export class McpAuthProvider implements OAuthClientProvider {
     if (scope === 'verifier') {
       this.#verifier = '';
       return;
+    }
+    if (scope === 'all') {
+      this.#challengeScope = undefined;
+      this.#insufficientScope = undefined;
+      this.#requiredScope = undefined;
     }
     change(this.home, this.server, (kept) => ({
       ...kept,
@@ -343,8 +548,33 @@ export class McpAuthProvider implements OAuthClientProvider {
       if (
         init?.method?.toUpperCase() !== 'POST' ||
         form?.get('grant_type') !== 'refresh_token'
-      )
-        return fetcher(url, init);
+      ) {
+        const isCodeExchange =
+          init?.method?.toUpperCase() === 'POST' &&
+          form?.get('grant_type') === 'authorization_code';
+        const response = await fetcher(url, init);
+        const asMeta = keptFor(this.home, this.server).discovery
+          ?.authorizationServerMetadata as Record<string, unknown> | undefined;
+        if (
+          !isCodeExchange &&
+          isResourceChallengeTarget(url, this.server, asMeta)
+        ) {
+          if (response.status === 401) {
+            const challenge = parseBearerChallenge(
+              response.headers.get('www-authenticate'),
+            );
+            if (challenge.scope) this.#challengeScope = challenge.scope;
+          } else if (response.status === 403) {
+            const challenge = parseBearerChallenge(
+              response.headers.get('www-authenticate'),
+            );
+            if (challenge.error === 'insufficient_scope') {
+              this.#insufficientScope = challenge;
+            }
+          }
+        }
+        return response;
+      }
       const state = keptFor(this.home, this.server),
         endpoint =
           state.discovery?.authorizationServerMetadata?.token_endpoint ??

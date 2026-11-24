@@ -1,11 +1,11 @@
 import './HubConnectionCard.css';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { useRuntime } from '../app/context';
-import { desktopHost } from '../host';
 import { locale, t, tn } from '../i18n';
-import { HUB_SERVER } from '../model/remote-bot';
+import { HUB_SERVER, mcpDisplayStatus } from '../model/remote-bot';
 import type { McpServer } from '../model/types';
-import { Badge, Button, CopyButton, DeviceCode, Switch } from './common';
+import { Badge, Button, Switch } from './common';
+import { HubSignInButtons, HubSignInGuidance } from './HubSignIn';
 
 export { HUB_SERVER };
 
@@ -17,17 +17,20 @@ export function connectionChip(row: McpServer | undefined): {
   tone: 'neutral' | 'green' | 'amber' | 'blue';
   text: string;
 } {
-  return !row
-    ? { tone: 'neutral', text: t('not connected') }
-    : row.status === 'connected'
-      ? { tone: 'green', text: t('connected') }
-      : row.signIn
-        ? { tone: 'blue', text: t('waiting for sign-in') }
-        : row.status === 'reload required'
-          ? { tone: 'amber', text: t('reload required') }
-          : row.status === 'error'
-            ? { tone: 'amber', text: t('not connected') }
-            : { tone: 'neutral', text: t('not connected') };
+  switch (mcpDisplayStatus(row)) {
+    case 'waiting for sign-in':
+      return { tone: 'blue', text: t('waiting for sign-in') };
+    case 're-authorization required':
+      return { tone: 'amber', text: t('re-authorization required') };
+    case 'connected':
+      return { tone: 'green', text: t('connected') };
+    case 'reload required':
+      return { tone: 'amber', text: t('reload required') };
+    case 'error':
+      return { tone: 'amber', text: t('not connected') };
+    default:
+      return { tone: 'neutral', text: t('not connected') };
+  }
 }
 
 /** What finding a Hub at a typed address says (src/hub_connection.ts), in the window's language; anything else as it is. */
@@ -133,7 +136,6 @@ export function HubConnectionCard({
     event.preventDefault();
     if (await run('hub-connect', { address })) setAddress('');
   }
-  const https = signIn?.url.startsWith('https://') ?? false;
   return (
     <section
       className="hub-connector"
@@ -189,7 +191,7 @@ export function HubConnectionCard({
         {row && (
           <p className="hub-status">
             {t('Hub at {address}', { address: hubAddress(row.url) })}
-            {row.status === 'connected' &&
+            {(row.status === 'connected' || row.mcpConnected) &&
               ' · ' +
                 tn(
                   row.tools.length,
@@ -199,21 +201,11 @@ export function HubConnectionCard({
           </p>
         )}
         {available && signIn && (
-          <p className="hub-status">
-            {t(
-              'sign in on the Hub’s page with your Hub user name and password',
-            )}
-          </p>
-        )}
-        {available && signIn?.code && (
-          <DeviceCode
-            prompt={t('then enter this code there')}
-            code={signIn.code}
-          />
+          <HubSignInGuidance signIn={signIn} statusClassName="hub-status" />
         )}
         {available && row?.status === 'error' && !signIn && row.error && (
           <div className="hub-alert" role="alert">
-            <p>{t('The Hub could not be connected.')}</p>
+            {!row.mcpConnected && <p>{t('The Hub could not be connected.')}</p>}
             <pre tabIndex={0}>{row.error}</pre>
           </div>
         )}
@@ -225,26 +217,25 @@ export function HubConnectionCard({
         {available && row && (
           <div className="hub-actions">
             {signIn && (
-              <>
-                <Button
-                  className="primary"
-                  disabled={!https || !desktopHost()?.openExternal}
-                  onClick={async () => {
-                    try {
-                      await desktopHost()?.openExternal?.(signIn.url);
-                    } catch (reason) {
-                      setError(String(reason));
-                    }
-                  }}
-                >
-                  {t('open the Hub’s page')}
-                </Button>
-                <CopyButton text={signIn.url} label={t('copy link')} />
-              </>
+              <HubSignInButtons signIn={signIn} onOpenError={setError} />
             )}
-            {(row.status === 'error' || row.status === 'reload required') &&
+            {(row.status === 'error' ||
+              row.status === 'reload required' ||
+              row.status === 're-authorization required') &&
               !signIn && (
-                <Button disabled={busy} onClick={() => void run('reload')}>
+                <Button
+                  disabled={busy}
+                  onClick={() =>
+                    void run(
+                      row.status === 're-authorization required'
+                        ? 'mcp.reload-server'
+                        : 'reload',
+                      row.status === 're-authorization required'
+                        ? { name: HUB_SERVER }
+                        : {},
+                    )
+                  }
+                >
                   {t('retry')}
                 </Button>
               )}

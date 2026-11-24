@@ -85,6 +85,7 @@ import {
 } from '../model/session-management';
 import { openHome } from './home-selection';
 import { BUILTIN_TOOL_INFO } from '../model/tool-info';
+import { mcpDisplayStatus } from '../model/remote-bot';
 import { t, tn } from '../i18n';
 interface Props {
   page: PageId;
@@ -945,7 +946,7 @@ export function McpPage() {
                     {item.error ? ' · ' + item.error : ''}
                   </small>
                 </span>
-                <Status value={item.status} />
+                <Status value={mcpDisplayStatus(item)} />
               </button>
               <Button onClick={() => setEditing(structuredClone(item))}>
                 {t('configure')}
@@ -983,7 +984,7 @@ export function McpPage() {
                 [t('command')]: server.command || '—',
                 [t('arguments')]: server.args || '—',
                 [t('url')]: server.url || '—',
-                [t('status')]: server.status,
+                [t('status')]: mcpDisplayStatus(server),
               }}
             />
             <div className="inline-actions">

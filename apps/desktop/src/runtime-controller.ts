@@ -56,7 +56,10 @@ import {
 import { setTimeout as delay } from 'node:timers/promises';
 import { basename, join, relative, isAbsolute, resolve, sep } from 'node:path';
 import { AgentRuntime, type InteractionContext } from '../../../src/runtime.js';
-import { TOOLS_NOT_LISTED_AGAIN } from '../../../src/mcp_loader.js';
+import {
+  REAUTHORIZATION_REQUIRED,
+  TOOLS_NOT_LISTED_AGAIN,
+} from '../../../src/mcp_loader.js';
 import { defaultRunOptions } from '../../../src/run_options.js';
 import type { Extension, ExtensionCommand } from '../../../src/extensions.js';
 import { SessionRuntimeManager } from '../../../src/session_manager.js';
@@ -3827,15 +3830,18 @@ export class RuntimeController {
           enabled: spec.enabled !== false,
           hasAuthorizationHeader,
           settingsPath: join(this.home, 'settings.json'),
+          mcpConnected: runtime.mcp.isConnected(name),
           status: pendingReload
             ? 'reload required'
             : spec.enabled === false
               ? 'not connected'
               : status
-                ? // Tools that may be out of date are still the server's: the note says why, and it is connected
-                  status.error && status.error !== TOOLS_NOT_LISTED_AGAIN
-                  ? 'error'
-                  : 'connected'
+                ? status.error === REAUTHORIZATION_REQUIRED
+                  ? 're-authorization required'
+                  : // Tools that may be out of date are still the server's: the note says why, and it is connected
+                    status.error && status.error !== TOOLS_NOT_LISTED_AGAIN
+                    ? 'error'
+                    : 'connected'
                 : 'not connected',
           error: status?.error === 'disabled' ? undefined : status?.error,
           // A sign-in under way: its page, and the code to type there when it is a device sign-in
@@ -4899,6 +4905,7 @@ export class RuntimeController {
                 code?: unknown;
                 detail?: unknown;
                 remoteMessage?: unknown;
+                scope?: unknown;
                 uploaded?: unknown;
                 total?: unknown;
                 fileName?: unknown;
@@ -4921,6 +4928,9 @@ export class RuntimeController {
             : {}),
           ...(typeof meta?.code === 'string' ? { errorCode: meta.code } : {}),
           ...(errorDetail ? { errorDetail } : {}),
+          ...(typeof meta?.scope === 'string' && meta.scope
+            ? { errorScope: meta.scope }
+            : {}),
           ...(typeof meta?.uploaded === 'number'
             ? { errorUploaded: meta.uploaded }
             : {}),
@@ -6621,6 +6631,19 @@ export class RuntimeController {
         )
           throw Error('trust the workspace first');
         await runtime.reloadMcpServer(text(p.name, 'server', 200));
+        return {};
+      }
+      case 'mcp-reauthorize-server': {
+        if (
+          !isFolderTrusted(loadSettings(this.home), runtime.options.workspace)
+        )
+          throw Error('trust the workspace first');
+        await runtime.reauthorizeMcpServer(
+          text(p.name, 'server', 200),
+          typeof p.scope === 'string' && p.scope.trim()
+            ? text(p.scope, 'scope', 200)
+            : undefined,
+        );
         return {};
       }
       case 'reload': {

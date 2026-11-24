@@ -35,6 +35,7 @@ const unwrapBotTransfer = <T>(reply: unknown): T => {
       errorStatus?: number;
       errorCode?: string;
       errorDetail?: string;
+      errorScope?: string;
       errorUploaded?: number;
       errorTotal?: number;
       errorFileName?: string;
@@ -52,6 +53,9 @@ const unwrapBotTransfer = <T>(reply: unknown): T => {
       ...(envelope.errorCode !== undefined ? { code: envelope.errorCode } : {}),
       ...(envelope.errorDetail !== undefined
         ? { detail: envelope.errorDetail }
+        : {}),
+      ...(envelope.errorScope !== undefined
+        ? { scope: envelope.errorScope }
         : {}),
       ...(envelope.errorUploaded !== undefined
         ? { errorUploaded: envelope.errorUploaded }

@@ -13,6 +13,7 @@ import {
   SseError,
   StreamableHTTPClientTransport,
   UnauthorizedError,
+  auth,
   type CallToolResult,
   type ConnectOptions,
   type ElicitResult,
@@ -65,6 +66,7 @@ import {
   redirectPort,
   startRedirect,
   keptFor,
+  mergeScopes,
   directMcpGrant,
   McpLoginRequired,
   oauthMcpGrant,
@@ -155,9 +157,21 @@ interface SignInShown {
   error: string;
   authorize: string;
   code?: string;
+  port?: number;
+  cancel?: () => void;
+  done?: Promise<void>;
+  reauthorizing?: boolean;
+}
+function showSignIn(shown: SignInShown, current: McpStatus): void {
+  current.error = shown.error;
+  current.authorize = shown.authorize;
+  if (shown.code) current.code = shown.code;
+  else delete current.code;
 }
 /** What a server waiting for its browser sign-in says in place of its tools. */
 export const SIGN_IN_WAITING = 'waiting for sign-in in the browser';
+/** What a server says when an operation fails because the token lacks required scope. */
+export const REAUTHORIZATION_REQUIRED = 're-authorization required';
 /** The headers Circle sends of its own; lowercase, as compared. */
 const OWN_HEADERS = new Set([
   'circle-session-id',
@@ -790,7 +804,9 @@ function transportFor(
     return new StreamableHTTPClientTransport(url, {
       requestInit,
       fetch: authProvider ? authProvider.authorizedFetch(fetch) : fetch,
-      ...(authProvider ? { authProvider } : {}),
+      ...(authProvider
+        ? { authProvider, onInsufficientScope: 'throw' as const }
+        : {}),
     });
   if (connection.transport === 'ws') {
     if (requestInit) throw new Error('a ws server cannot be sent headers yet');
@@ -1302,6 +1318,8 @@ interface Connected {
   name: string;
   client: CircleClient;
   connection: McpConnection;
+  state: McpStatus;
+  provider?: McpAuthProvider;
   /** The address it was reached at, its references filled in. */
   url?: string;
   instructions?: string;
@@ -1541,6 +1559,24 @@ export class McpManager {
   private lifetime = new AbortController();
   // A sign-in under way, by server address: its page
   private signingIn = new Map<string, SignInShown>();
+  // Additional scopes requested via 403 insufficient_scope or reauthorizeServer, scoped to this manager.
+  private requiredScopes = new Map<string, string>();
+  private reauthServers = new Map<string, string>();
+  private recordInsufficientScope(
+    name: string,
+    provider: McpAuthProvider,
+  ): boolean {
+    const challenge = provider.takeInsufficientScope();
+    if (!challenge) return false;
+    const merged = mergeScopes(
+      this.requiredScopes.get(provider.server),
+      keptFor(provider.home, provider.server).tokens?.scope,
+      challenge.scope,
+    );
+    if (merged) this.requiredScopes.set(provider.server, merged);
+    this.reauthServers.set(name, provider.server);
+    return true;
+  }
   // A server's tools to list again after it said they changed: the wait, the listing under way, and another notice
   private relisting = new Map<
     Connected,
@@ -1880,6 +1916,17 @@ export class McpManager {
                   );
                 } catch (error) {
                   if (own.signal.aborted || made) throw error;
+                  const live = this.servers.find(
+                    (item) => item.name === connection.name,
+                  );
+                  if (
+                    live?.provider &&
+                    this.recordInsufficientScope(connection.name, live.provider)
+                  ) {
+                    live.state.error = REAUTHORIZATION_REQUIRED;
+                    this.services.onChange?.();
+                    throw error;
+                  }
                   const said =
                     error instanceof Error ? error.message : String(error);
                   if (notSent(error)) {
@@ -2077,6 +2124,8 @@ export class McpManager {
       });
       status.push(...skipped, ...(options.waiting ?? []));
       this.reserved = reserved;
+      this.requiredScopes.clear();
+      this.reauthServers.clear();
       signal?.throwIfAborted();
       const outcomes = await Promise.allSettled(
         connections.map((connection) =>
@@ -2253,6 +2302,8 @@ export class McpManager {
         name: connection.name,
         client,
         connection,
+        state,
+        provider,
         ...(filled.url ? { url: filled.url } : {}),
         instructions: serverInstructions(client.getInstructions(), hide),
         open: true,
@@ -2288,15 +2339,24 @@ export class McpManager {
         if (client.getProtocolEra() === 'modern') this.listenForChanges(server);
       }
       state.tools = registered.map((tool) => tool.name);
+      this.reauthServers.delete(connection.name);
       return { state, server, tools: registered, said };
     } catch (error) {
       if (
+        !signal?.aborted &&
+        provider &&
+        this.recordInsufficientScope(connection.name, provider)
+      ) {
+        state.error = REAUTHORIZATION_REQUIRED;
+      } else if (
         error instanceof UnauthorizedError &&
         provider?.authorizationUrl &&
         !signal?.aborted
-      )
+      ) {
         this.signIn(connection, provider, state);
-      else state.error = hide(failureText(error));
+      } else {
+        state.error = hide(failureText(error));
+      }
       await client.close().catch(() => {});
       await transport?.close().catch(() => {});
       if (signal?.aborted) throw signal.reason;
@@ -2312,6 +2372,7 @@ export class McpManager {
   private async authProvider(
     connection: McpConnection,
     resolved: Resolved,
+    requiredScope?: string,
   ): Promise<McpAuthProvider | undefined> {
     const home = this.services.home;
     if (
@@ -2322,7 +2383,14 @@ export class McpManager {
     )
       return undefined;
     const server = new URL(resolved.url).href;
-    return new McpAuthProvider(home, server, await redirectPort(home, server));
+    const port =
+      this.signingIn.get(server)?.port ?? (await redirectPort(home, server));
+    return new McpAuthProvider(
+      home,
+      server,
+      port,
+      requiredScope ?? this.requiredScopes.get(server),
+    );
   }
   /**
    * A connection's values as it is made now: its references filled in from the environment and the saved secrets, and
@@ -2389,27 +2457,30 @@ export class McpManager {
     connection: McpConnection,
     provider: McpAuthProvider,
     state: McpStatus,
+    reauthorizing = false,
   ): void {
     const pending = this.signingIn.get(provider.server);
-    const show = (shown: SignInShown, current: McpStatus): void => {
-      current.error = shown.error;
-      current.authorize = shown.authorize;
-      if (shown.code) current.code = shown.code;
-      else delete current.code;
-    };
-    if (pending) return show(pending, state);
+    if (pending) return showSignIn(pending, state);
     const url = provider.authorizationUrl!.href;
-    const shown: SignInShown = { error: SIGN_IN_WAITING, authorize: url };
-    show(shown, state);
+    const attempt = new AbortController();
+    const lifetime = AbortSignal.any([this.lifetime.signal, attempt.signal]);
+    const shown: SignInShown = {
+      error: SIGN_IN_WAITING,
+      authorize: url,
+      port: provider.port,
+      cancel: () => attempt.abort(),
+      ...(reauthorizing ? { reauthorizing: true } : {}),
+    };
+    showSignIn(shown, state);
     this.signingIn.set(provider.server, shown);
-    const lifetime = this.lifetime.signal;
     const discovery = provider.discoveryState();
     const device = deviceEndpoint(discovery);
     const tokenEndpoint =
       discovery?.authorizationServerMetadata?.token_endpoint;
     const clientId = provider.clientInformation()?.client_id;
     const resource = discovery?.resourceMetadata?.resource ?? provider.server;
-    void (async () => {
+    let reconnecting = false;
+    shown.done = (async () => {
       if (device && tokenEndpoint && clientId) {
         const authorization = await startDeviceAuthorization(
           device,
@@ -2417,6 +2488,8 @@ export class McpManager {
           resource,
           fetch,
           lifetime,
+          this.now,
+          provider.authorizationScope(),
         ).catch((error: unknown) => {
           // A server that gives no device code is signed in to in the browser instead
           if (lifetime.aborted) throw error;
@@ -2428,7 +2501,7 @@ export class McpManager {
             authorization.verificationUriComplete ??
             authorization.verificationUri;
           shown.code = authorization.userCode;
-          show(
+          showSignIn(
             shown,
             this.status.find((item) => item.name === connection.name) ?? state,
           );
@@ -2446,6 +2519,8 @@ export class McpManager {
           );
           // The sign-in under way makes these the tokens of a new grant
           provider.saveTokens(tokens);
+          this.requiredScopes.delete(provider.server);
+          reconnecting = true;
           await this.connectAgain(connection, lifetime);
           return;
         }
@@ -2473,6 +2548,8 @@ export class McpManager {
       } finally {
         await exchange.close().catch(() => {});
       }
+      this.requiredScopes.delete(provider.server);
+      reconnecting = true;
       await this.connectAgain(connection, lifetime);
     })()
       .catch((error: unknown) => {
@@ -2484,7 +2561,12 @@ export class McpManager {
         delete current.code;
         this.services.onChange?.();
       })
-      .finally(() => this.signingIn.delete(provider.server));
+      .finally(() => {
+        if (!reconnecting) this.requiredScopes.delete(provider.server);
+        if (this.signingIn.get(provider.server) === shown) {
+          this.signingIn.delete(provider.server);
+        }
+      });
   }
   /**
    * A server's tools as it lists them now, page by page, each page tried again as a listing that may pass is: Circle
@@ -2713,7 +2795,12 @@ export class McpManager {
       if (!current()) return;
       if (state)
         state.error =
-          why === 'changed' ? TOOLS_NOT_LISTED_AGAIN : TOOLS_EXPIRED_NOT_LISTED;
+          server.provider &&
+          this.recordInsufficientScope(server.name, server.provider)
+            ? REAUTHORIZATION_REQUIRED
+            : why === 'changed'
+              ? TOOLS_NOT_LISTED_AGAIN
+              : TOOLS_EXPIRED_NOT_LISTED;
     }
     // What a tool of the server returned before may not hold for the tools it has now
     this.results.forget(server.name);
@@ -3304,6 +3391,48 @@ export class McpManager {
     entries: Record<string, McpServerConfig> | McpEntry[],
     options: { waiting?: McpStatus[]; trusted?: boolean } = {},
   ): Promise<void> {
+    await this.reloadEntry(name, entries, options);
+  }
+  /** Records additional scopes and starts sign-in while keeping the registered client and live connection until new tokens arrive. */
+  async reauthorizeServer(
+    name: string,
+    entries: Record<string, McpServerConfig> | McpEntry[],
+    options: { waiting?: McpStatus[]; trusted?: boolean; scope?: string } = {},
+  ): Promise<void> {
+    await this.reloadEntry(name, entries, { ...options, reauthorize: true });
+  }
+  private serverAuthTarget(
+    connection: McpConnection,
+  ): { resolved: Resolved; server: string } | undefined {
+    const home = this.services.home;
+    if (
+      !home ||
+      (connection.transport !== 'http' && connection.transport !== 'sse')
+    )
+      return undefined;
+    try {
+      const resolved = resolveConnection(
+        connection,
+        process.env,
+        this.services.secrets?.() ?? {},
+      );
+      if (!resolved.url || Object.keys(resolved.headers).some(credentialHeader))
+        return undefined;
+      return { resolved, server: new URL(resolved.url).href };
+    } catch {
+      return undefined;
+    }
+  }
+  private async reloadEntry(
+    name: string,
+    entries: Record<string, McpServerConfig> | McpEntry[],
+    options: {
+      waiting?: McpStatus[];
+      trusted?: boolean;
+      scope?: string;
+      reauthorize?: boolean;
+    } = {},
+  ): Promise<void> {
     const { connections, skipped } = buildMcpConnections(entries, {
       trusted: options.trusted,
     });
@@ -3315,11 +3444,103 @@ export class McpManager {
       !this.status.some((item) => item.name === name)
     )
       throw new Error(`no MCP server named ${name}`);
+    const marked = this.reauthServers.get(name);
+    const clearMarkedScope = () => {
+      if (!marked) return;
+      this.reauthServers.delete(name);
+      if (![...this.reauthServers.values()].includes(marked)) {
+        this.requiredScopes.delete(marked);
+      }
+    };
     if (connection) {
+      let state = this.status.find((item) => item.name === name);
+      const checkTarget =
+        Boolean(options.reauthorize) ||
+        state?.error === REAUTHORIZATION_REQUIRED ||
+        Boolean(marked) ||
+        [...this.signingIn.values()].some((shown) => shown.reauthorizing);
+      const target = checkTarget
+        ? this.serverAuthTarget(connection)
+        : undefined;
+      const sameServer = Boolean(marked) && target?.server === marked;
+      if (marked && !sameServer) {
+        clearMarkedScope();
+        if (state?.error === REAUTHORIZATION_REQUIRED) state.error = '';
+      }
+      const needsReauth =
+        Boolean(options.reauthorize) ||
+        (state?.error === REAUTHORIZATION_REQUIRED && sameServer);
+      const pending = target ? this.signingIn.get(target.server) : undefined;
+      if (pending && (!options.reauthorize || !needsReauth)) {
+        if (state && (needsReauth || pending.reauthorizing)) {
+          showSignIn(pending, state);
+          this.services.onChange?.();
+          return;
+        }
+      }
+      if (needsReauth && target) {
+        this.reauthServers.delete(name);
+        if (pending) {
+          pending.cancel?.();
+          await pending.done?.catch(() => {});
+        }
+        const home = this.services.home!;
+        const requestedScope = mergeScopes(
+          this.requiredScopes.get(target.server),
+          keptFor(home, target.server).tokens?.scope,
+          options.scope,
+        );
+        if (requestedScope)
+          this.requiredScopes.set(target.server, requestedScope);
+        else this.requiredScopes.delete(target.server);
+        const provider = await this.authProvider(
+          connection,
+          target.resolved,
+          requestedScope,
+        );
+        if (provider) {
+          if (!state) {
+            state = {
+              name,
+              connection: connection.url ?? target.resolved.url!,
+              tools: [],
+              error: '',
+              scope: connection.scope,
+            };
+            this.status.push(state);
+          }
+          try {
+            await auth(provider, {
+              serverUrl: new URL(target.server),
+              scope: provider.authorizationScope(),
+              forceReauthorization: true,
+              fetchFn: provider.authorizedFetch(
+                requestFetch(this.services.sessionId),
+                this.lifetime.signal,
+              ),
+            });
+          } catch (error) {
+            if (!provider.authorizationUrl) {
+              this.requiredScopes.delete(target.server);
+              state.error = hideFilled(target.resolved.filled)(
+                failureText(error),
+              );
+              this.services.onChange?.();
+              return;
+            }
+          }
+          if (provider.authorizationUrl) {
+            this.signIn(connection, provider, state, true);
+            return;
+          }
+        }
+        this.requiredScopes.delete(target.server);
+      }
       await this.connectAgain(connection, this.lifetime.signal);
       return;
     }
     // Not to be connected (removed, turned off, or not valid): what it had goes, and the status says why
+    clearMarkedScope();
     const before = this.status.find((item) => item.name === name);
     const own = new Set(before?.tools ?? []);
     const replaced = this.servers.filter((item) => item.name === name);
@@ -3469,6 +3690,9 @@ export class McpManager {
       .filter((server) => server.open && server.instructions)
       .map((server) => ({ server: server.name, text: server.instructions! }));
   }
+  isConnected(name: string): boolean {
+    return this.servers.some((server) => server.name === name && server.open);
+  }
   /** What moving the configuration into the current format did, said in /mcp until the next start. */
   notes: string[] = [];
   describe(): string {
@@ -3490,7 +3714,8 @@ export class McpManager {
             : server.error === 'disabled'
               ? '\n    disabled'
               : server.error === TOOLS_NOT_LISTED_AGAIN ||
-                  server.error === TOOLS_EXPIRED_NOT_LISTED
+                  server.error === TOOLS_EXPIRED_NOT_LISTED ||
+                  server.error === REAUTHORIZATION_REQUIRED
                 ? '\n    ' + server.tools.join(', ') + '\n    ' + server.error
                 : server.error
                   ? '\n    failed: ' + server.error
@@ -3528,6 +3753,8 @@ export class McpManager {
     this.lifetime.abort();
     this.lifetime = new AbortController();
     this.signingIn.clear();
+    this.requiredScopes.clear();
+    this.reauthServers.clear();
     const servers = this.servers.splice(0);
     this.tools = [];
     this.hinted = new Map();

@@ -94,6 +94,7 @@ export async function startDeviceAuthorization(
   fetcher: FetchLike = fetch,
   signal?: AbortSignal,
   now: () => number = Date.now,
+  scope?: string,
 ): Promise<DeviceAuthorization> {
   const response = await fetcher(endpoint, {
     method: 'POST',
@@ -101,7 +102,7 @@ export async function startDeviceAuthorization(
       'content-type': 'application/x-www-form-urlencoded',
       accept: 'application/json',
     },
-    body: form({ client_id: clientId, resource }),
+    body: form({ client_id: clientId, resource, ...(scope ? { scope } : {}) }),
     redirect: 'error',
     signal,
   });

@@ -308,6 +308,7 @@ try {
           error: 'oauth client token rejected',
           errorStatus: 403,
           errorCode: 'BOT_CLIENT_FORBIDDEN',
+          errorScope: 'custom-bot-scope',
         },
         {
           error: '参数无效：机器人附件完整性校验未通过。请重新上传附件后再试。',
@@ -344,11 +345,39 @@ try {
           assert.match(body, /\/tmp\/circle-ui\/runtime-home\/settings\.json/);
           assert.match(body, /Bearer <(token|令牌)>/);
           if (language === 'zh-CN') {
+            assert.match(body, /未授予机器人访问权限/);
             assert.match(
               body,
-              /请先在 \/tmp\/circle-ui\/runtime-home\/settings\.json 的 Hub 配置 headers\.Authorization/,
+              /重新登录，并在 Hub 的确认页勾选「允许这个客户端使用我的机器人」。/,
+            );
+            assert.match(
+              body,
+              /也可以在 \/tmp\/circle-ui\/runtime-home\/settings\.json 的 Hub 配置 headers\.Authorization/,
+            );
+          } else {
+            assert.match(body, /bot access not granted/);
+            assert.match(
+              body,
+              /Sign in again, and check “Allow this client to use my bot” on the Hub confirmation page\./,
             );
           }
+          await page.evaluate(() =>
+            window.remoteBotUiFixture.resetReauthorizeCalls(),
+          );
+          await page
+            .locator('.empty-state')
+            .getByRole('button', {
+              name: label('sign in again', '重新登录'),
+              exact: true,
+            })
+            .click();
+          await flushMicrotasks(page);
+          assert.deepEqual(
+            await page.evaluate(() =>
+              window.remoteBotUiFixture.reauthorizePayloads(),
+            ),
+            [{ name: 'Hub', scope: 'custom-bot-scope' }],
+          );
         }
         if (
           failure.errorCode === 'BOT_UNAUTHENTICATED' &&
@@ -399,6 +428,46 @@ try {
         }),
       );
 
+      // 403 with hasAuthorizationHeader shows direct-token prompt without "sign in again".
+      await page.evaluate(() => {
+        window.remoteBotUiFixture.setHubConfig({
+          hasAuthorizationHeader: true,
+          settingsPath: '/tmp/circle-ui/runtime-home/settings.json',
+        });
+        window.remoteBotUiFixture.resetDiscoverCalls();
+        window.remoteBotUiFixture.setFailure({
+          error: 'oauth client token rejected',
+          errorStatus: 403,
+          errorCode: 'BOT_CLIENT_FORBIDDEN',
+        });
+      });
+      await flushMicrotasks(page);
+      const forbiddenHeaderPanel = page.locator(
+        '[data-bot-error-kind="oauth-forbidden"]',
+      );
+      await forbiddenHeaderPanel.waitFor();
+      assert.equal(
+        await forbiddenHeaderPanel
+          .getByRole('button', {
+            name: label('sign in again', '重新登录'),
+            exact: true,
+          })
+          .count(),
+        0,
+      );
+      assert.match(
+        (await forbiddenHeaderPanel.textContent()) ?? '',
+        language === 'zh-CN'
+          ? /需要使用直接成员令牌/
+          : /direct member token required/,
+      );
+      await page.evaluate(() =>
+        window.remoteBotUiFixture.setHubConfig({
+          hasAuthorizationHeader: false,
+          settingsPath: '/tmp/circle-ui/runtime-home/settings.json',
+        }),
+      );
+
       // 401 with BOT_CLIENT_FORBIDDEN must still classify as auth (expired login), not oauth-forbidden.
       await page.evaluate(() => {
         window.remoteBotUiFixture.resetDiscoverCalls();
@@ -424,6 +493,29 @@ try {
       await page.evaluate(() => {
         window.remoteBotUiFixture.resetReloadCalls();
         window.remoteBotUiFixture.setFailure(undefined);
+        window.remoteBotUiFixture.setHubSignIn({
+          url: 'http://127.0.0.1:7420/console/device',
+          code: 'WXYZ-1234',
+        });
+        window.remoteBotUiFixture.setHubStatus(
+          'not connected',
+          'waiting for sign-in',
+        );
+      });
+      const signInPanel = page.locator('[data-bot-error-kind="disconnected"]');
+      await signInPanel.waitFor();
+      const signInText = (await signInPanel.textContent()) ?? '';
+      assert.match(signInText, /WXYZ-1234/);
+      assert.ok(
+        signInText.includes(
+          language === 'zh-CN'
+            ? '请在 Hub 的确认页勾选「允许这个客户端使用我的机器人」。'
+            : 'Check “Allow this client to use my bot” on the Hub confirmation page.',
+        ),
+        signInText,
+      );
+      await page.evaluate(() => {
+        window.remoteBotUiFixture.setHubSignIn(undefined);
         window.remoteBotUiFixture.setHubStatus('not connected', 'ECONNREFUSED');
       });
       const disconnectedPanel = page.locator(
@@ -460,9 +552,75 @@ try {
         await page.evaluate(() => window.remoteBotUiFixture.reloadCalls()),
         1,
       );
-      await page.evaluate(() =>
-        window.remoteBotUiFixture.setHubStatus('connected'),
+      await page.evaluate(() => {
+        window.remoteBotUiFixture.setHubMcpConnected(false);
+        window.remoteBotUiFixture.setHubStatus(
+          're-authorization required',
+          're-authorization required',
+        );
+      });
+      await flushMicrotasks(page);
+      assert.equal(
+        await page
+          .getByRole('link', {
+            name: label('my bot', '我的机器人'),
+            exact: true,
+          })
+          .count(),
+        0,
+        'connect-time re-authorization required hides My Bot while /mcp is disconnected',
       );
+      await page.evaluate(() => {
+        window.remoteBotUiFixture.setHubMcpConnected(true);
+      });
+      await page
+        .getByRole('link', { name: label('my bot', '我的机器人'), exact: true })
+        .waitFor();
+      await page.locator('#remote-bot-input').waitFor();
+      await page.evaluate(() => {
+        window.remoteBotUiFixture.setHubSignIn({
+          url: 'http://127.0.0.1:7420/console/device',
+          code: 'LIVE-REAUTH',
+        });
+        window.remoteBotUiFixture.setHubStatus(
+          'error',
+          'enter the code LIVE-REAUTH',
+        );
+      });
+      await flushMicrotasks(page);
+      assert.equal(
+        await page
+          .getByRole('link', {
+            name: label('my bot', '我的机器人'),
+            exact: true,
+          })
+          .count(),
+        1,
+        'active re-sign-in keeps My Bot visible while /mcp is live',
+      );
+      await page.evaluate(() => {
+        window.remoteBotUiFixture.setHubSignIn(undefined);
+        window.remoteBotUiFixture.setHubStatus(
+          'error',
+          'sign-in failed: the sign-in was refused',
+        );
+      });
+      await flushMicrotasks(page);
+      assert.equal(
+        await page
+          .getByRole('link', {
+            name: label('my bot', '我的机器人'),
+            exact: true,
+          })
+          .count(),
+        1,
+        'failed re-sign-in keeps My Bot visible while /mcp is live',
+      );
+      await page.locator('#remote-bot-input').waitFor();
+      await page.evaluate(() => {
+        window.remoteBotUiFixture.setHubMcpConnected(undefined);
+        window.remoteBotUiFixture.setHubStatus('connected');
+      });
       await page.locator('#remote-bot-input').waitFor();
       await page.screenshot({ path: join(output, `${name}.png`) });
       assert.deepEqual(errors, []);

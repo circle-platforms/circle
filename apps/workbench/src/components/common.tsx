@@ -227,6 +227,8 @@ const STATES: Record<string, () => string> = {
   connected: () => t('connected'),
   'not connected': () => t('not connected'),
   'reload required': () => t('reload required'),
+  're-authorization required': () => t('re-authorization required'),
+  'waiting for sign-in': () => t('waiting for sign-in'),
   added: () => t('added'),
   modified: () => t('modified'),
   'native browser': () => t('native browser'),

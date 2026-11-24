@@ -1,3 +1,4 @@
+import { parseBearerChallenge } from '../../../src/mcp_auth.js';
 import {
   buildMcpConnections,
   backgroundMcpConnection,
@@ -29,10 +30,16 @@ export class RemoteBotError extends Error {
   readonly status?: number;
   readonly code?: string;
   readonly remoteMessage?: string;
+  readonly scope?: string;
 
   constructor(
     message: string,
-    options?: { status?: number; code?: string; remoteMessage?: string },
+    options?: {
+      status?: number;
+      code?: string;
+      remoteMessage?: string;
+      scope?: string;
+    },
   ) {
     super(message);
     this.name = 'RemoteBotError';
@@ -40,6 +47,7 @@ export class RemoteBotError extends Error {
     if (options?.code !== undefined) this.code = options.code;
     if (options?.remoteMessage !== undefined)
       this.remoteMessage = options.remoteMessage;
+    if (options?.scope !== undefined) this.scope = options.scope;
   }
 }
 
@@ -83,6 +91,10 @@ export async function parseRemoteBotError(
   } else {
     await response.body?.cancel();
   }
+  const scope =
+    response.status === 403
+      ? parseBearerChallenge(response.headers.get('www-authenticate')).scope
+      : undefined;
   const message =
     remoteMessage ??
     (code ? BOT_CODE_FALLBACKS[code] : undefined) ??
@@ -91,6 +103,7 @@ export async function parseRemoteBotError(
     status: response.status,
     code,
     remoteMessage,
+    scope,
   });
 }
 

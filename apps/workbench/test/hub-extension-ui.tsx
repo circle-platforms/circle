@@ -137,6 +137,36 @@ Object.assign(window, {
       ];
       emit();
     },
+    reauthRequired: (mcpConnected: boolean) => {
+      snapshot.mcp = [
+        {
+          ...hub,
+          mcpConnected,
+          status: 're-authorization required',
+          error: 're-authorization required',
+          tools: mcpConnected ? hub.tools : [],
+        },
+        other,
+      ];
+      emit();
+    },
+    liveSignInFailed: () => {
+      snapshot.mcp = [
+        {
+          ...hub,
+          mcpConnected: true,
+          status: 'error',
+          error: 'sign-in failed: denied',
+        },
+        {
+          ...other,
+          mcpConnected: true,
+          status: 'error',
+          error: 'sign-in failed: denied',
+        },
+      ];
+      emit();
+    },
   },
 });
 location.hash = query.get('route') ?? '/page/extensions';

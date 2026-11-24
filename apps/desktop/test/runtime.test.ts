@@ -3661,6 +3661,538 @@ test('an MCP server that signs in after the start reaches the window without ano
   assert.ok(row(updates.at(-1)!)!.tools.length > 0);
 });
 
+test('mcp-reauthorize-server forwards scope to device auth when cached discovery lacks scopes_supported, and REAUTHORIZATION_REQUIRED uses distinct status while keeping live /mcp usable', async (t) => {
+  const { createServer } = await import('node:http');
+  const { McpAuthProvider, redirectPort } =
+    await import('../../../src/mcp_auth.js');
+  const { REAUTHORIZATION_REQUIRED } =
+    await import('../../../src/mcp_loader.js');
+  let port = 0;
+  const base = () => `http://127.0.0.1:${port}`;
+  const seenDeviceScopes: string[] = [];
+  let tokenSeq = 0;
+  const validTokens = new Set(['tok-controller-before']);
+  let rejectToolWithScope = false;
+  let rejectConnectWithScope = false;
+  let rejectDeviceWithRefusal = false;
+
+  const srv = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', base());
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf8');
+      if (url.pathname === '/.well-known/oauth-authorization-server') {
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            issuer: base(),
+            authorization_endpoint: `${base()}/authorize`,
+            token_endpoint: `${base()}/token`,
+            registration_endpoint: `${base()}/register`,
+            response_types_supported: ['code'],
+            code_challenge_methods_supported: ['S256'],
+            grant_types_supported: [
+              'authorization_code',
+              'urn:ietf:params:oauth:grant-type:device_code',
+            ],
+            device_authorization_endpoint: `${base()}/device`,
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/device') {
+        seenDeviceScopes.push(new URLSearchParams(body).get('scope') ?? '');
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            device_code: 'dc-ctrl',
+            user_code: 'BCDF-GHJK',
+            verification_uri: `${base()}/verify`,
+            verification_uri_complete: `${base()}/verify?user_code=BCDF-GHJK`,
+            expires_in: 600,
+            interval: 1,
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/token') {
+        const bodyForm = new URLSearchParams(body);
+        if (
+          rejectDeviceWithRefusal &&
+          bodyForm.get('grant_type') ===
+            'urn:ietf:params:oauth:grant-type:device_code'
+        ) {
+          res
+            .writeHead(400, { 'content-type': 'application/json' })
+            .end(JSON.stringify({ error: 'access_denied' }));
+          return;
+        }
+        const tok = `tok-ctrl-${++tokenSeq}`;
+        validTokens.add(tok);
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            access_token: tok,
+            token_type: 'Bearer',
+            scope: 'custom-bot',
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/mcp') {
+        const bearer = (req.headers.authorization ?? '').replace(
+          /^Bearer /i,
+          '',
+        );
+        if (!validTokens.has(bearer)) {
+          res.writeHead(401).end();
+          return;
+        }
+        const rpc = JSON.parse(body) as { id?: unknown; method?: string };
+        if (
+          (rpc.method === 'initialize' && rejectConnectWithScope) ||
+          (rpc.method === 'tools/call' && rejectToolWithScope)
+        ) {
+          res
+            .writeHead(403, {
+              'www-authenticate':
+                'Bearer error="insufficient_scope", scope="custom-bot"',
+            })
+            .end();
+          return;
+        }
+        const result =
+          rpc.method === 'initialize'
+            ? {
+                protocolVersion: '2025-03-26',
+                capabilities: { tools: {} },
+                serverInfo: { name: 'srv', version: '1.0.0' },
+              }
+            : rpc.method === 'tools/list'
+              ? {
+                  tools: [
+                    {
+                      name: 'ping',
+                      description: 'ping',
+                      inputSchema: { type: 'object', properties: {} },
+                    },
+                  ],
+                }
+              : { content: [{ type: 'text', text: 'pong' }] };
+        res
+          .writeHead(200, { 'content-type': 'application/json' })
+          .end(
+            rpc.id === undefined
+              ? ''
+              : JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }),
+          );
+        return;
+      }
+      res.writeHead(404).end();
+    });
+  });
+  await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  port = (srv.address() as { port: number }).port;
+  const root = await mkdtemp(join(tmpdir(), 'circle-reauth-ctrl-'));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(home, { recursive: true });
+  await mkdir(join(workspace, '.git'), { recursive: true });
+  const serverKey = `${base()}/mcp`;
+  const portUsed = await redirectPort(home, serverKey);
+  const seed = new McpAuthProvider(home, serverKey, portUsed);
+  seed.saveClientInformation({
+    client_id: 'cli-ctrl',
+    redirect_uris: [seed.redirectUrl],
+  });
+  seed.saveTokens({
+    access_token: 'tok-controller-before',
+    token_type: 'Bearer',
+  });
+  seed.saveDiscoveryState({
+    authorizationServerUrl: base(),
+    resourceMetadata: { resource: serverKey, authorization_servers: [base()] },
+    authorizationServerMetadata: {
+      issuer: base(),
+      authorization_endpoint: `${base()}/authorize`,
+      token_endpoint: `${base()}/token`,
+      registration_endpoint: `${base()}/register`,
+      response_types_supported: ['code'],
+      code_challenge_methods_supported: ['S256'],
+      grant_types_supported: [
+        'authorization_code',
+        'urn:ietf:params:oauth:grant-type:device_code',
+      ],
+      device_authorization_endpoint: `${base()}/device`,
+    },
+  });
+  const settings = trustFolder(defaultSettings(), workspace);
+  settings.mcpServers = { remote: { url: serverKey, type: 'http' } };
+  saveSettings(settings, home);
+
+  const updates: RuntimeUpdate[] = [];
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model: new ScriptedModel([]),
+    emit: (update) => updates.push(update),
+    openUrl: () => {},
+  });
+  t.after(async () => {
+    await controller.close();
+    srv.closeAllConnections?.();
+    await new Promise<void>((resolve) => srv.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  });
+  const row = () =>
+    controller.snapshot().mcp.find((item) => item.name === 'remote');
+  await controller.initialize();
+  await wait(
+    () => row()?.status === 'connected' && (row()?.tools.length ?? 0) > 0,
+    'initial connected MCP server',
+  );
+
+  // REAUTHORIZATION_REQUIRED has its own distinct status while keeping live MCP connection & tools intact.
+  rejectToolWithScope = true;
+  const activeRuntime = (
+    controller as unknown as { runtime(ws: string): AgentRuntime }
+  ).runtime(workspace);
+  await assert.rejects(() =>
+    activeRuntime.mcp.tools[0]!.run({}, {
+      sessionId: controller.snapshot().activeSessionId,
+      signal: new AbortController().signal,
+      approve: async () => 'once',
+      log: () => {},
+    } as never),
+  );
+  await wait(
+    () => row()?.error === REAUTHORIZATION_REQUIRED,
+    're-authorization required note on connected server',
+  );
+  assert.equal(row()?.status, 're-authorization required');
+  assert.equal(row()?.mcpConnected, true);
+  assert.equal(row()?.tools.length, 1);
+  assert.equal(
+    keptFor(home, serverKey).tokens?.access_token,
+    'tok-controller-before',
+  );
+
+  // Refused / abandoned re-sign-in writes sign-in failed while keeping the open /mcp connection usable.
+  rejectToolWithScope = false;
+  rejectDeviceWithRefusal = true;
+  const failedReply = await controller.dispatch({
+    id: randomUUID(),
+    name: 'mcp-reauthorize-server',
+    sessionId: controller.snapshot().activeSessionId,
+    payload: { name: 'remote', scope: 'extra-bot' },
+  });
+  assert.equal(failedReply.ok, true, failedReply.error);
+  await wait(
+    () => Boolean(row()?.signIn?.code),
+    'in-progress device sign-in keeps live connection',
+  );
+  assert.equal(row()?.status, 'error');
+  assert.equal(row()?.mcpConnected, true);
+  await wait(
+    () => (row()?.error ?? '').startsWith('sign-in failed:'),
+    'refused re-sign-in records sign-in failed while /mcp remains usable',
+  );
+  assert.equal(row()?.status, 'error');
+  assert.equal(row()?.mcpConnected, true);
+  assert.equal(row()?.tools.length, 1);
+  assert.equal(
+    'required_scope' in (keptFor(home, serverKey) as Record<string, unknown>),
+    false,
+  );
+
+  rejectDeviceWithRefusal = false;
+  const reply = await controller.dispatch({
+    id: randomUUID(),
+    name: 'mcp-reauthorize-server',
+    sessionId: controller.snapshot().activeSessionId,
+    payload: { name: 'remote', scope: 'extra-bot' },
+  });
+  assert.equal(reply.ok, true, reply.error);
+  await wait(
+    () => keptFor(home, serverKey).tokens?.access_token === 'tok-ctrl-1',
+    'reauthorized token saved after device poll',
+  );
+  await wait(
+    () => row()?.status === 'connected' && !row()?.error,
+    'reconnected without error after reauthorization',
+  );
+  assert.equal(row()?.mcpConnected, true);
+  assert.deepEqual(seenDeviceScopes, ['custom-bot extra-bot', 'extra-bot']);
+  assert.equal(
+    'required_scope' in (keptFor(home, serverKey) as Record<string, unknown>),
+    false,
+  );
+
+  // Connect-time 403 insufficient_scope sets distinct 're-authorization required' (never 'connected' or 'error') and mcpConnected: false.
+  rejectConnectWithScope = true;
+  await controller.dispatch({
+    id: randomUUID(),
+    name: 'reload',
+    sessionId: controller.snapshot().activeSessionId,
+    payload: {},
+  });
+  await wait(
+    () =>
+      row()?.status === 're-authorization required' &&
+      row()?.mcpConnected === false,
+    'connect-time re-authorization required status with mcpConnected false',
+  );
+  assert.equal(row()?.tools.length, 0);
+});
+
+test('C5-S2: mcp-reauthorize-server in session A does not reload session B and preserves in-progress browser sign-in client registration', async (t) => {
+  const { createServer } = await import('node:http');
+  const { McpAuthProvider, keptFor, redirectPort } =
+    await import('../../../src/mcp_auth.js');
+  let port = 0;
+  const base = () => `http://127.0.0.1:${port}`;
+  const validTokens = new Set(['tok-init']);
+  const openedUrls: string[] = [];
+  let mcpInitializes = 0;
+  let seenAuthClientId = '';
+  let regSeq = 0;
+
+  const srv = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', base());
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf8');
+      if (url.pathname === '/.well-known/oauth-authorization-server') {
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            issuer: base(),
+            authorization_endpoint: `${base()}/authorize`,
+            token_endpoint: `${base()}/token`,
+            registration_endpoint: `${base()}/register`,
+            response_types_supported: ['code'],
+            code_challenge_methods_supported: ['S256'],
+            grant_types_supported: ['authorization_code'],
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/register') {
+        const cid = `cli-reg-${++regSeq}`;
+        res.writeHead(201, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            client_id: cid,
+            redirect_uris: [],
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/authorize') {
+        seenAuthClientId = url.searchParams.get('client_id') ?? '';
+        const redirect = new URL(url.searchParams.get('redirect_uri')!);
+        redirect.searchParams.set('code', 'c-reauth');
+        redirect.searchParams.set('state', url.searchParams.get('state')!);
+        redirect.searchParams.set('iss', base());
+        res.writeHead(302, { location: redirect.href }).end();
+        return;
+      }
+      if (url.pathname === '/token') {
+        const form = new URLSearchParams(body);
+        if (
+          !form.get('client_id') ||
+          form.get('client_id') !== seenAuthClientId
+        ) {
+          res
+            .writeHead(400, { 'content-type': 'application/json' })
+            .end(JSON.stringify({ error: 'invalid_client' }));
+          return;
+        }
+        validTokens.add('tok-reauthed');
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            access_token: 'tok-reauthed',
+            token_type: 'Bearer',
+            scope: 'bot',
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/mcp') {
+        const bearer = (req.headers.authorization ?? '').replace(
+          /^Bearer /i,
+          '',
+        );
+        if (!validTokens.has(bearer)) {
+          res.writeHead(401).end();
+          return;
+        }
+        const rpc = JSON.parse(body) as { id?: unknown; method?: string };
+        if (rpc.method === 'initialize') mcpInitializes += 1;
+        const result =
+          rpc.method === 'initialize'
+            ? {
+                protocolVersion: '2025-03-26',
+                capabilities: { tools: {} },
+                serverInfo: { name: 'srv', version: '1.0.0' },
+              }
+            : rpc.method === 'tools/list'
+              ? {
+                  tools: [
+                    {
+                      name: 'ping',
+                      description: 'ping',
+                      inputSchema: { type: 'object', properties: {} },
+                    },
+                  ],
+                }
+              : { content: [{ type: 'text', text: 'pong' }] };
+        res
+          .writeHead(200, { 'content-type': 'application/json' })
+          .end(
+            rpc.id === undefined
+              ? ''
+              : JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }),
+          );
+        return;
+      }
+      res.writeHead(404).end();
+    });
+  });
+  await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  port = (srv.address() as { port: number }).port;
+  const root = await mkdtemp(join(tmpdir(), 'circle-reauth-sessions-'));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(home, { recursive: true });
+  await mkdir(join(workspace, '.git'), { recursive: true });
+  const serverKey = `${base()}/mcp`;
+  const portUsed = await redirectPort(home, serverKey);
+  const seed = new McpAuthProvider(home, serverKey, portUsed);
+  seed.saveClientInformation({
+    client_id: 'cli-init',
+    redirect_uris: [seed.redirectUrl],
+  });
+  seed.saveTokens({ access_token: 'tok-init', token_type: 'Bearer' });
+  seed.saveDiscoveryState({
+    authorizationServerUrl: base(),
+    resourceMetadata: { resource: serverKey, authorization_servers: [base()] },
+    authorizationServerMetadata: {
+      issuer: base(),
+      authorization_endpoint: `${base()}/authorize`,
+      token_endpoint: `${base()}/token`,
+      registration_endpoint: `${base()}/register`,
+      response_types_supported: ['code'],
+      code_challenge_methods_supported: ['S256'],
+      grant_types_supported: ['authorization_code'],
+    },
+  });
+  const settings = trustFolder(defaultSettings(), workspace);
+  settings.mcpServers = { remote: { url: serverKey, type: 'http' } };
+  saveSettings(settings, home);
+
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model: new ScriptedModel([{ message: assistant('noted') }]),
+    emit: () => {},
+    openUrl: (url) => {
+      openedUrls.push(url);
+    },
+  });
+  t.after(async () => {
+    await controller.close();
+    srv.closeAllConnections?.();
+    await new Promise<void>((resolve) => srv.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  });
+  const row = () =>
+    controller.snapshot().mcp.find((item) => item.name === 'remote');
+
+  await controller.initialize();
+  await wait(
+    () => row()?.status === 'connected' && mcpInitializes === 1,
+    'session B connected',
+  );
+  const sessionB = controller.snapshot().activeSessionId;
+  const promptReply = await controller.dispatch({
+    id: randomUUID(),
+    name: 'prompt',
+    sessionId: sessionB,
+    payload: { text: 'keep session B open' },
+  });
+  assert.equal(promptReply.ok, true, promptReply.error);
+  await wait(
+    () =>
+      controller.snapshot().sessions.find((s) => s.id === sessionB)?.state ===
+      'idle',
+    'session B idle after first turn',
+  );
+
+  const created = await controller.dispatch({
+    id: randomUUID(),
+    name: 'new-session',
+    sessionId: sessionB,
+    payload: {},
+  });
+  assert.equal(created.ok, true, created.error);
+  const sessionA = (created.data as { sessionId: string }).sessionId;
+  assert.notEqual(sessionA, sessionB);
+  assert.equal(controller.snapshot().sessions.length, 2);
+
+  const reloadA = await controller.dispatch({
+    id: randomUUID(),
+    name: 'reload',
+    sessionId: sessionA,
+    payload: {},
+  });
+  assert.equal(reloadA.ok, true, reloadA.error);
+  await wait(
+    () => row()?.status === 'connected' && mcpInitializes === 2,
+    'session A connected',
+  );
+
+  const sessionBRuntime = (
+    controller as unknown as {
+      runtime(ws: string, sid?: string): AgentRuntime;
+    }
+  ).runtime(workspace, sessionB);
+  assert.equal(sessionBRuntime.session.id, sessionB);
+  let sessionBReloads = 0;
+  const origReload = sessionBRuntime.reloadIntegrations.bind(sessionBRuntime);
+  sessionBRuntime.reloadIntegrations = async () => {
+    sessionBReloads += 1;
+    return origReload();
+  };
+
+  const initsBefore = mcpInitializes;
+  const reauthReply = await controller.dispatch({
+    id: randomUUID(),
+    name: 'mcp-reauthorize-server',
+    sessionId: sessionA,
+    payload: { name: 'remote', scope: 'bot' },
+  });
+  assert.equal(reauthReply.ok, true, reauthReply.error);
+  await wait(() => openedUrls.length === 1, 'browser authorize URL opened');
+  assert.equal(sessionBReloads, 0);
+  assert.equal(mcpInitializes, initsBefore);
+  assert.equal(keptFor(home, serverKey).client?.client_id, 'cli-init');
+
+  const page = await fetch(openedUrls[0]!, { redirect: 'manual' });
+  const location = page.headers.get('location');
+  assert.ok(location);
+  const callback = await fetch(location);
+  assert.equal(callback.status, 200);
+  await wait(
+    () => keptFor(home, serverKey).tokens?.access_token === 'tok-reauthed',
+    'browser reauthorization exchanged token cleanly',
+  );
+  await wait(
+    () => row()?.status === 'connected' && !row()?.error,
+    'session A reconnected after browser reauthorization',
+  );
+  assert.equal(sessionBReloads, 0);
+});
+
 const activeSession = (f: { controller: RuntimeController }) => {
   const snapshot = f.controller.snapshot();
   return snapshot.sessions.find((row) => row.id === snapshot.activeSessionId)!;
