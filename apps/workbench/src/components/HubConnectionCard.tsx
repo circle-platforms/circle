@@ -2,7 +2,7 @@ import './HubConnectionCard.css';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { useRuntime } from '../app/context';
 import { locale, t, tn } from '../i18n';
-import { HUB_SERVER } from '../model/remote-bot';
+import { HUB_SERVER, mcpDisplayStatus } from '../model/remote-bot';
 import type { McpServer } from '../model/types';
 import { Badge, Button, Switch } from './common';
 import { HubSignInButtons, HubSignInGuidance } from './HubSignIn';
@@ -17,21 +17,20 @@ export function connectionChip(row: McpServer | undefined): {
   tone: 'neutral' | 'green' | 'amber' | 'blue';
   text: string;
 } {
-  return !row
-    ? { tone: 'neutral', text: t('not connected') }
-    : row.signIn
-      ? { tone: 'blue', text: t('waiting for sign-in') }
-      : row.status === 're-authorization required'
-        ? { tone: 'amber', text: t('re-authorization required') }
-        : row.status === 'connected'
-          ? { tone: 'green', text: t('connected') }
-          : row.status === 'reload required'
-            ? { tone: 'amber', text: t('reload required') }
-            : row.status === 'error'
-              ? row.mcpConnected
-                ? { tone: 'green', text: t('connected') }
-                : { tone: 'amber', text: t('not connected') }
-              : { tone: 'neutral', text: t('not connected') };
+  switch (mcpDisplayStatus(row)) {
+    case 'waiting for sign-in':
+      return { tone: 'blue', text: t('waiting for sign-in') };
+    case 're-authorization required':
+      return { tone: 'amber', text: t('re-authorization required') };
+    case 'connected':
+      return { tone: 'green', text: t('connected') };
+    case 'reload required':
+      return { tone: 'amber', text: t('reload required') };
+    case 'error':
+      return { tone: 'amber', text: t('not connected') };
+    default:
+      return { tone: 'neutral', text: t('not connected') };
+  }
 }
 
 /** What finding a Hub at a typed address says (src/hub_connection.ts), in the window's language; anything else as it is. */

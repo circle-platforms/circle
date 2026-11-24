@@ -15,6 +15,7 @@ import {
   deliveryText,
   formatRemoteBotNotice,
   isHubConnected,
+  mcpDisplayStatus,
   mergeDeliveryStates,
   nextBotRetryDelay,
   shouldOpenInitialConnectionModal,
@@ -106,6 +107,59 @@ test('isHubConnected matches only a connected Hub entry', () => {
       true,
     );
   }
+});
+
+test('C4-S2: mcpDisplayStatus aligns MCP page and Hub card status for live, waiting, and re-auth servers', () => {
+  const base = {
+    id: 'srv',
+    name: 'srv',
+    url: 'https://127.0.0.1:7420/mcp',
+    transport: 'streamable_http' as const,
+    command: '',
+    args: '',
+    enabled: true,
+    tools: [],
+  };
+  assert.equal(mcpDisplayStatus(undefined), 'not connected');
+  assert.equal(
+    mcpDisplayStatus({
+      ...base,
+      status: 'error',
+      mcpConnected: true,
+      error: 'sign-in failed: denied',
+    }),
+    'connected',
+  );
+  assert.equal(
+    mcpDisplayStatus({
+      ...base,
+      status: 'error',
+      mcpConnected: false,
+      error: 'ECONNREFUSED',
+    }),
+    'error',
+  );
+  assert.equal(
+    mcpDisplayStatus({
+      ...base,
+      status: 'error',
+      mcpConnected: true,
+      signIn: { url: 'https://127.0.0.1:7420/authorize', code: 'ABCD-EFGH' },
+    }),
+    'waiting for sign-in',
+  );
+  assert.equal(
+    mcpDisplayStatus({
+      ...base,
+      status: 're-authorization required',
+      mcpConnected: false,
+    }),
+    're-authorization required',
+  );
+  assert.equal(
+    mcpDisplayStatus({ ...base, status: 'reload required' }),
+    'reload required',
+  );
 });
 
 test('mergeDeliveryStates combines message and attachment delivery states', () => {

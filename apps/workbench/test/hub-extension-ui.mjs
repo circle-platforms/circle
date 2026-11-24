@@ -189,6 +189,25 @@ try {
             .count(),
           0,
         );
+        // C4-S2: MCP page uses the same display status as HubConnectionCard when /mcp is still connected despite sign-in failure.
+        await open('/page/mcp');
+        await page.evaluate(() =>
+          window.hubExtensionFixture.liveSignInFailed(),
+        );
+        const filesRow = page
+          .locator('.record-row')
+          .filter({ hasText: 'files-server' });
+        await filesRow
+          .locator('.status')
+          .getByText(label('connected', '已连接'), { exact: true })
+          .waitFor();
+        await filesRow.locator('.record-main').click();
+        await page
+          .getByRole('dialog')
+          .locator('.facts dd')
+          .getByText('connected', { exact: true })
+          .waitFor();
+        await open('/page/extensions?plugin=hub');
         // No Hub yet: its IP address alone is asked for, and where the sign-in happens is said
         await page.evaluate(() => window.hubExtensionFixture.removeHub());
         const address = hub.getByRole('textbox', {

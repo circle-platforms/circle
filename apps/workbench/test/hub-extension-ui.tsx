@@ -158,7 +158,12 @@ Object.assign(window, {
           status: 'error',
           error: 'sign-in failed: denied',
         },
-        other,
+        {
+          ...other,
+          mcpConnected: true,
+          status: 'error',
+          error: 'sign-in failed: denied',
+        },
       ];
       emit();
     },

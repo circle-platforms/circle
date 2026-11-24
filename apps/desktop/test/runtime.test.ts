@@ -3899,7 +3899,10 @@ test('mcp-reauthorize-server forwards scope to device auth when cached discovery
   assert.equal(row()?.status, 'error');
   assert.equal(row()?.mcpConnected, true);
   assert.equal(row()?.tools.length, 1);
-  assert.equal(keptFor(home, serverKey).required_scope, undefined);
+  assert.equal(
+    'required_scope' in (keptFor(home, serverKey) as Record<string, unknown>),
+    false,
+  );
 
   rejectDeviceWithRefusal = false;
   const reply = await controller.dispatch({
@@ -3919,7 +3922,10 @@ test('mcp-reauthorize-server forwards scope to device auth when cached discovery
   );
   assert.equal(row()?.mcpConnected, true);
   assert.deepEqual(seenDeviceScopes, ['custom-bot extra-bot', 'extra-bot']);
-  assert.equal(keptFor(home, serverKey).required_scope, undefined);
+  assert.equal(
+    'required_scope' in (keptFor(home, serverKey) as Record<string, unknown>),
+    false,
+  );
 
   // Connect-time 403 insufficient_scope sets distinct 're-authorization required' (never 'connected' or 'error') and mcpConnected: false.
   rejectConnectWithScope = true;

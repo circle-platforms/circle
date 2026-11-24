@@ -142,6 +142,19 @@ export function findHubConnection(
   return snapshot.mcp.find((row) => row.name === HUB_SERVER);
 }
 
+export type McpDisplayStatus = McpServer['status'] | 'waiting for sign-in';
+
+export function mcpDisplayStatus(row: McpServer | undefined): McpDisplayStatus {
+  if (!row) return 'not connected';
+  if (row.signIn) return 'waiting for sign-in';
+  if (row.status === 're-authorization required')
+    return 're-authorization required';
+  if (row.status === 'reload required') return 'reload required';
+  if (row.status === 'connected') return 'connected';
+  if (row.status === 'error') return row.mcpConnected ? 'connected' : 'error';
+  return row.status;
+}
+
 export function isHubConnected(
   snapshot: Pick<WorkbenchSnapshot, 'mcp'>,
 ): boolean {

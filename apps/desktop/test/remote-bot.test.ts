@@ -1265,9 +1265,15 @@ test('F11/F15: docs/extensions.md and CHANGELOG.md document remote-bot contracts
   assert.match(mcpDoc, /insufficient_scope/);
   assert.match(mcpDoc, /re-authorization required/);
   assert.doesNotMatch(mcpDoc, /required_scope/);
+  assert.doesNotMatch(mcpDoc, /cancel it and reconnect normally/);
   assert.match(
     mcpDoc,
     /Running `\/mcp reconnect <name>`.*starts one sign-in asking for the additional scope/,
+  );
+  assert.match(mcpDoc, /starting Circle again leaves none in `mcp-auth\.json`/);
+  assert.match(
+    mcpDoc,
+    /while a server already waiting on a sign-in keeps showing the one under way/,
   );
   assert.match(
     mcpDoc,

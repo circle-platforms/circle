@@ -1345,7 +1345,8 @@ button.project-chip > span:first-of-type {
 }
 .status-running i,
 .status-active i,
-.status-waiting i {
+.status-waiting i,
+.status-waiting-for-sign-in i {
   background: var(--status-info);
 }
 .status-failed i,

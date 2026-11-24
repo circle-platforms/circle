@@ -4,7 +4,7 @@
 // the Circle home and their file mode, the tools offered after the sign-in, and a second start that needs no sign-in.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { statSync } from 'node:fs';
+import { readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { test } from 'node:test';
 import {
@@ -13,7 +13,6 @@ import {
   mcpAuthPath,
   mergeScopes,
   parseBearerChallenge,
-  reauthorizeServer,
   redirectPort,
   selectAuthorizationScope,
   startRedirect,
@@ -845,9 +844,7 @@ test('reauthorizeServer preserves tokens while merging scope, and sends passed s
       },
     });
 
-    reauthorizeServer(home, serverKey, 'bot');
     assert.equal(keptFor(home, serverKey).tokens?.access_token, 'tok-old');
-    assert.equal(keptFor(home, serverKey).required_scope, 'bot');
 
     const change = changes();
     const manager = new McpManager(scratch(t), 5000, undefined, {
@@ -878,7 +875,10 @@ test('reauthorizeServer preserves tokens while merging scope, and sends passed s
     );
     assert.equal(manager.status[0]!.error, '');
     assert.equal(keptFor(home, serverKey).tokens?.access_token, 'tok-new-1');
-    assert.equal(keptFor(home, serverKey).required_scope, undefined);
+    assert.equal(
+      'required_scope' in (keptFor(home, serverKey) as Record<string, unknown>),
+      false,
+    );
     assert.equal(keptFor(home, serverKey).client?.client_id, 'cli-old');
     if (flow === 'browser') {
       assert.deepEqual(seenAuthScopes, ['bot']);
@@ -1193,7 +1193,10 @@ test('403 insufficient_scope on StreamableHTTP and SSE preserves tokens and live
     assert.equal(manager.tools.length, 1);
     assert.deepEqual(manager.status[0]!.tools, ['mcp__remote__ping']);
     assert.equal(keptFor(home, serverKey).tokens?.access_token, 'tok-initial');
-    assert.equal(keptFor(home, serverKey).required_scope, 'bot');
+    assert.equal(
+      'required_scope' in (keptFor(home, serverKey) as Record<string, unknown>),
+      false,
+    );
     assert.equal(keptFor(home, serverKey).client?.client_id, 'cli-seed');
     releaseSlow!();
     assert.equal(await slowPromise, 'slow-ok');
@@ -1225,7 +1228,10 @@ test('403 insufficient_scope on StreamableHTTP and SSE preserves tokens and live
       keptFor(home, serverKey).tokens?.access_token,
       'tok-upgraded-1',
     );
-    assert.equal(keptFor(home, serverKey).required_scope, undefined);
+    assert.equal(
+      'required_scope' in (keptFor(home, serverKey) as Record<string, unknown>),
+      false,
+    );
     assert.equal(registeredIds.length, 0);
     assert.equal(revoked.length, 0);
     assert.equal(authRequests.at(-1)?.searchParams.get('scope'), 'bot');
@@ -1251,7 +1257,11 @@ test('403 insufficient_scope on StreamableHTTP and SSE preserves tokens and live
     assert.equal(manager2.status[0]!.error, REAUTHORIZATION_REQUIRED);
     assert.equal(manager2.status[0]!.authorize, undefined);
     assert.equal(keptFor(home2, serverKey).tokens?.access_token, 'tok-initial');
-    assert.equal(keptFor(home2, serverKey).required_scope, 'bot');
+    assert.equal(
+      'required_scope' in
+        (keptFor(home2, serverKey) as Record<string, unknown>),
+      false,
+    );
     assert.equal(
       keptFor(home2, serverKey).client?.client_id,
       'cli-connect-seed',
@@ -1334,7 +1344,10 @@ test('403 insufficient_scope on StreamableHTTP and SSE preserves tokens and live
     cleanup(t, () => manager.close());
     await manager.load({ remote: { url: serverKey, type: 'http' } });
     assert.notEqual(manager.status[0]!.error, REAUTHORIZATION_REQUIRED);
-    assert.equal(keptFor(home, serverKey).required_scope, undefined);
+    assert.equal(
+      'required_scope' in (keptFor(home, serverKey) as Record<string, unknown>),
+      false,
+    );
   }
 });
 
@@ -1477,14 +1490,77 @@ test('a device sign-in refused on the page says so and leaves no code shown', as
   assert.deepEqual(manager.status[0]!.tools, []);
 });
 
-test('C3-S1/C3-S2/C3-S4: required_scope is one-shot across invalid_scope, abandoned sign-in, and restarts; reloadServer delegates while REAUTHORIZATION_REQUIRED is pending', async (t) => {
+test('C4-M1: reconnecting while initial sign-in is waiting preserves device code and browser URL identically to main', async (t) => {
+  for (const flow of ['device', 'browser'] as const) {
+    const server = await oauthServer(
+      t,
+      flow === 'device' ? { device: {} } : {},
+    );
+    const opened: string[] = [];
+    const change = changes();
+    const manager = new McpManager(scratch(t), 5000, undefined, {
+      home: scratch(t),
+      onChange: change.onChange,
+      openUrl: async (url) => {
+        opened.push(url);
+      },
+    });
+    cleanup(t, () => manager.close());
+
+    const entry = {
+      remote: { type: 'http' as const, url: `${server.origin}/mcp` },
+    };
+    const loadWait =
+      flow === 'device'
+        ? until(() => Boolean(manager.status[0]?.code))
+        : Promise.resolve();
+    await manager.load(entry);
+    await loadWait;
+    if (flow === 'browser') await until(() => opened.length === 1);
+
+    const authorizeBefore = manager.status[0]!.authorize;
+    const codeBefore = manager.status[0]!.code;
+    const errorBefore = manager.status[0]!.error;
+    const devicesBefore = server.devices.length;
+    const clientsBefore = server.clients.length;
+
+    await manager.reloadServer('remote', entry);
+
+    assert.equal(manager.status[0]!.authorize, authorizeBefore);
+    assert.equal(manager.status[0]!.code, codeBefore);
+    assert.equal(manager.status[0]!.error, errorBefore);
+    assert.equal(opened.length, 1);
+    assert.equal(server.devices.length, devicesBefore);
+    assert.equal(server.clients.length, clientsBefore);
+
+    if (flow === 'device') {
+      const connected = change.next();
+      server.approved = true;
+      await connected;
+    } else {
+      const page = await fetch(authorizeBefore!, { redirect: 'manual' });
+      const location = page.headers.get('location');
+      assert.ok(location);
+      const response = await fetch(location);
+      assert.equal(response.status, 200);
+      await until(() => manager.status[0]?.error === '');
+    }
+    assert.equal(manager.status[0]!.error, '');
+    assert.deepEqual(manager.status[0]!.tools, ['mcp__remote__echo']);
+  }
+});
+
+test('C4-S1/C4-M1: required scope lives only in McpManager memory, isolates sibling managers, survives post-sign-in connect 403, and tolerates null mcp-auth entries', async (t) => {
   let port = 0;
   const base = () => `http://127.0.0.1:${port}`;
   const validTokens = new Set(['tok-1']);
+  const tokensNeedingScope = new Set<string>();
   const authRequests: URL[] = [];
   let tokenSeq = 1;
-  let mode: 'ok' | 'scope_x' | 'unauthorized' = 'ok';
-  let callbackMode: 'hold' | 'invalid_scope' | 'approve' = 'approve';
+  let toolMode: 'ok' | 'scope_x' = 'ok';
+  let connect403ForToken = false;
+  let callbackMode: 'hold' | 'invalid_scope' | 'approve' | 'approve_no_scope' =
+    'approve';
 
   const srv = createServer((req, res) => {
     const url = new URL(req.url ?? '/', base());
@@ -1509,6 +1585,7 @@ test('C3-S1/C3-S2/C3-S4: required_scope is one-shot across invalid_scope, abando
       if (url.pathname === '/token') {
         const tok = `tok-${++tokenSeq}`;
         validTokens.add(tok);
+        if (connect403ForToken) tokensNeedingScope.add(tok);
         res.writeHead(200, { 'content-type': 'application/json' }).end(
           JSON.stringify({
             access_token: tok,
@@ -1522,12 +1599,15 @@ test('C3-S1/C3-S2/C3-S4: required_scope is one-shot across invalid_scope, abando
           /^Bearer /i,
           '',
         );
-        if (mode === 'unauthorized' || !validTokens.has(bearer)) {
+        if (!validTokens.has(bearer)) {
           res.writeHead(401).end();
           return;
         }
         const rpc = JSON.parse(body) as { id?: unknown; method?: string };
-        if (rpc.method === 'tools/call' && mode === 'scope_x') {
+        if (
+          (rpc.method === 'initialize' && tokensNeedingScope.has(bearer)) ||
+          (rpc.method === 'tools/call' && toolMode === 'scope_x')
+        ) {
           res
             .writeHead(403, {
               'www-authenticate':
@@ -1580,6 +1660,13 @@ test('C3-S1/C3-S2/C3-S4: required_scope is one-shot across invalid_scope, abando
   });
   seed.saveTokens({ access_token: 'tok-1', token_type: 'Bearer' });
 
+  // Null entry in mcp-auth.json must not throw on load().
+  const rawAuth = JSON.parse(readFileSync(mcpAuthPath(home), 'utf8')) as {
+    servers: Record<string, unknown>;
+  };
+  rawAuth.servers.x = null;
+  writeFileSync(mcpAuthPath(home), JSON.stringify(rawAuth, null, 2));
+
   const change = changes();
   const manager = new McpManager(scratch(t), 5000, undefined, {
     home,
@@ -1612,13 +1699,25 @@ test('C3-S1/C3-S2/C3-S4: required_scope is one-shot across invalid_scope, abando
     log: () => {},
   } as never;
 
-  // 1) 403 insufficient_scope records scope="x"; reloadServer delegates to reauthorizeServer (C3-S2).
-  //    When AS rejects with invalid_scope, required_scope is cleared and the next ordinary sign-in has no "x" (C3-S1).
-  mode = 'scope_x';
+  // 1) 403 insufficient_scope stays only in manager memory (never written to mcp-auth.json);
+  //    when AS rejects invalid_scope, memory is cleared so next ordinary 401 sign-in has no "x".
+  toolMode = 'scope_x';
   await assert.rejects(() => manager.tools[0]!.run({}, context));
   assert.equal(manager.status[0]!.error, REAUTHORIZATION_REQUIRED);
-  assert.equal(manager.isConnected('remote'), true);
-  assert.equal(keptFor(home, serverKey).required_scope, 'x');
+  assert.equal(
+    'required_scope' in (keptFor(home, serverKey) as Record<string, unknown>),
+    false,
+  );
+
+  // Sibling McpManager sharing the same home loading cleanly must not erase manager's in-memory mark/scope.
+  toolMode = 'ok';
+  const sibling = new McpManager(scratch(t), 5000, undefined, {
+    home,
+    openUrl: async () => {},
+  });
+  cleanup(t, () => sibling.close());
+  await sibling.load(entry);
+  assert.equal(sibling.isConnected('remote'), true);
 
   callbackMode = 'invalid_scope';
   await manager.reloadServer('remote', entry);
@@ -1626,12 +1725,9 @@ test('C3-S1/C3-S2/C3-S4: required_scope is one-shot across invalid_scope, abando
   assert.equal(authRequests[0]!.searchParams.get('scope'), 'x');
   await until(() => manager.status[0]!.error.startsWith('sign-in failed:'));
   assert.match(manager.status[0]!.error, /invalid_scope/);
-  assert.equal(manager.status[0]!.authorize, undefined);
   assert.equal(manager.isConnected('remote'), true);
-  assert.equal(keptFor(home, serverKey).required_scope, undefined);
 
   validTokens.clear();
-  mode = 'ok';
   callbackMode = 'approve';
   await manager.reloadServer('remote', entry);
   await until(() => manager.status[0]!.error === '');
@@ -1639,51 +1735,59 @@ test('C3-S1/C3-S2/C3-S4: required_scope is one-shot across invalid_scope, abando
   assert.equal(authRequests[1]!.searchParams.get('scope'), null);
   assert.equal(manager.isConnected('remote'), true);
 
-  // 2) Abandoned sign-in (started with no response) is treated as failed on next reconnect: clears required_scope and reconnects normally.
-  mode = 'scope_x';
+  // 2) An interactive sign-in completes without scope, then connectAgain gets connect-time 403 scope="x":
+  //    the connect-time 403 mark and scope survive signIn's .finally(), and subsequent reload sends "x".
+  validTokens.clear();
+  connect403ForToken = true;
+  callbackMode = 'approve_no_scope';
+  await manager.reloadServer('remote', entry);
+  await until(() => manager.status[0]!.error === REAUTHORIZATION_REQUIRED);
+  assert.equal(authRequests.length, 3);
+  connect403ForToken = false;
+  tokensNeedingScope.clear();
+  callbackMode = 'approve';
+  await manager.reloadServer('remote', entry);
+  await until(() => manager.status[0]!.error === '');
+  assert.equal(authRequests.length, 4);
+  assert.equal(authRequests[3]!.searchParams.get('scope'), 'x');
+
+  // 3) Waiting re-authorization sign-in is preserved by reloadServer (no cancel), whereas reauthorizeServer cancels it.
+  toolMode = 'scope_x';
   await assert.rejects(() => manager.tools[0]!.run({}, context));
-  assert.equal(keptFor(home, serverKey).required_scope, 'x');
-  mode = 'ok';
+  toolMode = 'ok';
   callbackMode = 'hold';
   await manager.reloadServer('remote', entry);
-  await until(() => authRequests.length === 3);
-  assert.equal(authRequests[2]!.searchParams.get('scope'), 'x');
-  assert.equal(manager.status[0]!.error, SIGN_IN_WAITING);
-  assert.ok(manager.status[0]!.authorize);
-
+  await until(() => authRequests.length === 5);
+  const firstReauthUrl = manager.status[0]!.authorize;
+  assert.ok(firstReauthUrl);
   await manager.reloadServer('remote', entry);
-  assert.equal(
-    authRequests.length,
-    3,
-    'abandoned sign-in cancel + reconnect opens no second sign-in',
-  );
-  assert.equal(manager.status[0]!.authorize, undefined);
-  assert.equal(manager.status[0]!.error, '');
-  assert.equal(manager.isConnected('remote'), true);
-  assert.equal(keptFor(home, serverKey).required_scope, undefined);
+  assert.equal(authRequests.length, 5);
+  assert.equal(manager.status[0]!.authorize, firstReauthUrl);
 
-  // 3) Restart clears persisted required_scope so /mcp reconnect after restart is an ordinary reconnect.
-  mode = 'scope_x';
+  callbackMode = 'approve';
+  await manager.reauthorizeServer('remote', entry, { scope: 'y' });
+  await until(() => manager.status[0]!.error === '');
+  assert.equal(authRequests.length, 6);
+  assert.equal(authRequests[5]!.searchParams.get('scope'), 'y');
+
+  // 4) Restart (fresh McpManager on same home) has empty in-memory scope so reloadServer is a plain reconnect.
+  toolMode = 'scope_x';
   await assert.rejects(() => manager.tools[0]!.run({}, context));
-  assert.equal(keptFor(home, serverKey).required_scope, 'x');
   await manager.close();
-  assert.equal(keptFor(home, serverKey).required_scope, 'x');
-
-  mode = 'ok';
+  toolMode = 'ok';
   const authAfterRestart: URL[] = [];
-  const manager2 = new McpManager(scratch(t), 5000, undefined, {
+  const restarted = new McpManager(scratch(t), 5000, undefined, {
     home,
     openUrl: async (target) => {
       authAfterRestart.push(new URL(target));
     },
   });
-  cleanup(t, () => manager2.close());
-  await manager2.load(entry);
-  assert.equal(keptFor(home, serverKey).required_scope, undefined);
-  await manager2.reloadServer('remote', entry);
+  cleanup(t, () => restarted.close());
+  await restarted.load(entry);
+  await restarted.reloadServer('remote', entry);
   assert.equal(authAfterRestart.length, 0);
-  assert.equal(manager2.status[0]!.error, '');
-  assert.equal(manager2.isConnected('remote'), true);
+  assert.equal(restarted.status[0]!.error, '');
+  assert.equal(restarted.isConnected('remote'), true);
 });
 
 test('C3-S4 Hypothesis 3: abandoned device sign-in that expires overwrites mark with sign-in failed while preserving live MCP connection', async (t) => {
@@ -1802,5 +1906,8 @@ test('C3-S4 Hypothesis 3: abandoned device sign-in that expires overwrites mark 
   assert.match(manager.status[0]!.error, /expired/);
   assert.equal(manager.isConnected('remote'), true);
   assert.equal(manager.tools.length, 1);
-  assert.equal(keptFor(home, serverKey).required_scope, undefined);
+  assert.equal(
+    'required_scope' in (keptFor(home, serverKey) as Record<string, unknown>),
+    false,
+  );
 });

@@ -290,7 +290,10 @@ test('AgentRuntime.reauthorizeMcpServer forwards dynamic scope while keeping sto
     () => keptFor(home, serverKey).tokens?.access_token === 'tok-rt-1',
   );
   assert.deepEqual(seenDeviceScopes, ['custom-bot']);
-  assert.equal(keptFor(home, serverKey).required_scope, undefined);
+  assert.equal(
+    'required_scope' in (keptFor(home, serverKey) as Record<string, unknown>),
+    false,
+  );
 });
 
 test('C3-M1: invalid header config records error on row without throwing across reloadMcpServer, reconnectMcpServers, and saveMcpServer', async (t) => {
