@@ -67,6 +67,8 @@ const REMOTE_BOT_NOTICE_LABELS: Readonly<Record<string, () => string>> = {
   attachment_integrity_failed: () => t('attachment integrity check failed'),
   invalid_attachment_digest: () => t('invalid attachment digest'),
   attachment_unavailable: () => t('attachment could not be read'),
+  message_not_processed: () =>
+    t('message was not processed; you can resend it'),
   reply_interrupted: () => t('model reply interrupted; outcome unknown'),
 };
 
@@ -95,6 +97,7 @@ const REMOTE_BOT_NOTICE_FALLBACKS: Readonly<Record<string, string>> = {
   'attachment integrity check failed': 'attachment_integrity_failed',
   'invalid attachment digest': 'invalid_attachment_digest',
   'attachment could not be read': 'attachment_unavailable',
+  'message was not processed; you can resend it': 'message_not_processed',
   'model reply interrupted; outcome unknown': 'reply_interrupted',
 };
 
@@ -363,7 +366,7 @@ export function classifyRemoteBotFailure(
         title: t('console credential not allowed'),
         cause: t('Hub rejected the console session credential for my bot API.'),
         action: t(
-          'Configure a direct member Bearer token (format: Bearer <token>) for Hub headers.Authorization in {path}, then retry.',
+          'Configure a direct member Bearer token (format: Bearer <token>) for Hub headers.Authorization in {path}, then retry. Disconnecting removes manual headers; add them again after reconnecting.',
           { path: settingsPath },
         ),
         ...(detail || message ? { detail: detail ?? message } : {}),
@@ -389,7 +392,7 @@ export function classifyRemoteBotFailure(
       title: t('direct member token required'),
       cause: t('Hub refused the OAuth sign-in token for my bot API.'),
       action: t(
-        'Add a direct member Bearer Authorization header (format: Bearer <token>) for Hub in {path}, then retry.',
+        'Add a direct member Bearer Authorization header (format: Bearer <token>) for Hub in {path}, then retry. Disconnecting removes manual headers; add them again after reconnecting.',
         { path: settingsPath },
       ),
     };

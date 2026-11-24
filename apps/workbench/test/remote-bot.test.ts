@@ -217,6 +217,20 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
       { settingsPath: customSettingsPath },
     );
     assert.ok(forbiddenWithPath.action.includes(customSettingsPath));
+    if (lang === 'en') {
+      assert.match(
+        forbiddenWithPath.action,
+        /Disconnecting removes manual headers; add them again after reconnecting\./,
+      );
+      const forbiddenConsoleEn = classifyRemoteBotFailure(
+        makeErr(403, 'BOT_CLIENT_FORBIDDEN', 'console credential rejected'),
+        { settingsPath: customSettingsPath },
+      );
+      assert.match(
+        forbiddenConsoleEn.action,
+        /Disconnecting removes manual headers; add them again after reconnecting\./,
+      );
+    }
 
     // 401 with hasAuthorizationHeader gives settings.json token-update instructions instead of Settings -> Extensions.
     const authFixedHeader = classifyRemoteBotFailure(
@@ -297,7 +311,7 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
 
       assert.equal(
         forbidden.action,
-        '请先在 <应用数据文件夹>/runtime-home/settings.json 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌（格式：Bearer <令牌>），然后再重试。',
+        '请先在 <应用数据文件夹>/runtime-home/settings.json 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌（格式：Bearer <令牌>），然后再重试。断开连接会移除手工添加的请求头，重新连接后需要再次添加。',
       );
       assert.equal(forbiddenWithPath.title, '需要使用直接成员令牌');
       assert.equal(
@@ -306,7 +320,7 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
       );
       assert.equal(
         forbiddenWithPath.action,
-        `请先在 ${customSettingsPath} 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌（格式：Bearer <令牌>），然后再重试。`,
+        `请先在 ${customSettingsPath} 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌（格式：Bearer <令牌>），然后再重试。断开连接会移除手工添加的请求头，重新连接后需要再次添加。`,
       );
 
       const forbiddenConsole = classifyRemoteBotFailure(
@@ -326,7 +340,7 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
       );
       assert.equal(
         forbiddenConsole.action,
-        `请先在 ${customSettingsPath} 的 Hub 配置 headers.Authorization 中填入直接成员 Bearer 令牌（格式：Bearer <令牌>），然后再重试。`,
+        `请先在 ${customSettingsPath} 的 Hub 配置 headers.Authorization 中填入直接成员 Bearer 令牌（格式：Bearer <令牌>），然后再重试。断开连接会移除手工添加的请求头，重新连接后需要再次添加。`,
       );
 
       const forbiddenOrigin = classifyRemoteBotFailure(
@@ -525,7 +539,7 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
   }
 });
 
-test('R1: formatRemoteBotNotice translates all 23 notice codes and English fallbacks', (t) => {
+test('R1/S2: formatRemoteBotNotice translates all 24 notice codes and English fallbacks', (t) => {
   t.after(() => setLanguage('en'));
   const codes = [
     [
@@ -562,6 +576,7 @@ test('R1: formatRemoteBotNotice translates all 23 notice codes and English fallb
     ['attachment_integrity_failed', 'attachment integrity check failed'],
     ['invalid_attachment_digest', 'invalid attachment digest'],
     ['attachment_unavailable', 'attachment could not be read'],
+    ['message_not_processed', 'message was not processed; you can resend it'],
     ['reply_interrupted', 'model reply interrupted; outcome unknown'],
   ] as const;
 
@@ -576,6 +591,14 @@ test('R1: formatRemoteBotNotice translates all 23 notice codes and English fallb
   assert.equal(
     formatRemoteBotNotice(undefined, 'unrecognized notice'),
     'unrecognized notice',
+  );
+  assert.equal(
+    formatRemoteBotNotice('message_not_processed', 'raw'),
+    '本条消息未被处理，可以重新发送',
+  );
+  assert.equal(
+    formatRemoteBotNotice('reply_interrupted', 'raw'),
+    '模型回复已中断，结果未知',
   );
 });
 

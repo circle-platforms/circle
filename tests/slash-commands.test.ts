@@ -2512,4 +2512,62 @@ test('/hub names the switch while the hub extension is off, and once on connects
   assert.ok(
     on.runtime.harness.tools.some((tool) => tool.name === 'mcp__Hub__search'),
   );
+
+  // M4: /hub <same-address> preserves existing manual headers; /hub <different-address> drops them.
+  const sameWithHeaders = defaultSettings();
+  sameWithHeaders.extensions = {
+    ...sameWithHeaders.extensions,
+    hub: { enabled: true },
+  };
+  sameWithHeaders.mcpServers = {
+    Hub: {
+      type: 'http',
+      url: endpoint,
+      enabled: true,
+      placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
+      headers: { Authorization: 'Bearer HAND-ADDED-TOKEN', 'X-Custom': 'keep' },
+    },
+  };
+  const homeHeaders = scratch(t);
+  saveSettings(sameWithHeaders, homeHeaders);
+  const keepSession = await session(t, [], {
+    integrations: true,
+    home: homeHeaders,
+    settings: sameWithHeaders,
+  });
+  const reqCountBefore = hub.requests.length;
+  await keepSession.app.submit(`/hub ${address}`);
+  const afterSame = loadSettings(homeHeaders).mcpServers.Hub;
+  assert.deepEqual(afterSame?.headers, {
+    Authorization: 'Bearer HAND-ADDED-TOKEN',
+    'X-Custom': 'keep',
+  });
+  assert.equal(
+    hub.requests
+      .slice(reqCountBefore)
+      .some((req) => req.headers.authorization === 'Bearer HAND-ADDED-TOKEN'),
+    true,
+  );
+
+  const otherHub = await mcpStub(t, {
+    tools: [
+      { name: 'other_tool', inputSchema: { type: 'object', properties: {} } },
+    ],
+    get: (path, origin) =>
+      path === '/.well-known/knowledge-sync'
+        ? {
+            schema: 'knowledge-sync-discovery@1',
+            mcp: { endpoint: `${origin}/mcp` },
+          }
+        : undefined,
+  });
+  const otherAddress = new URL(otherHub.url).host;
+  await keepSession.app.submit(`/hub ${otherAddress}`);
+  const afterOther = loadSettings(homeHeaders).mcpServers.Hub;
+  assert.equal(afterOther?.url, `http://${otherAddress}/mcp`);
+  assert.equal('headers' in (afterOther ?? {}), false);
+  assert.equal(
+    otherHub.requests.some((req) => req.headers.authorization !== undefined),
+    false,
+  );
 });

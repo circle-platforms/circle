@@ -2638,13 +2638,282 @@ test(
   },
 );
 
-test('F9: pre-model non-attachment errors emit reply_interrupted while missing current attachment emits attachment_unavailable', async () => {
+test(
+  'M2: authoritative _hub configure and disable reset monotonic configVersion while ordinary frames stay guarded',
+  { skip: process.platform === 'win32', timeout: 15000 },
+  async () => {
+    const { createServer, request } = await import('node:http');
+    const { serveRemoteBot } = await import('../src/remote_bot_service.js');
+    const dir = await mkdtemp(join(tmpdir(), 'remote-bot-m2-'));
+
+    const seen: Array<{ auth: string; text: string }> = [];
+    const modelServer = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const c of req) chunks.push(c);
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+        messages: Array<{ content: string }>;
+      };
+      const text = String(body.messages.at(-1)?.content ?? '');
+      seen.push({ auth: String(req.headers.authorization ?? ''), text });
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(
+        'data: ' +
+          JSON.stringify({
+            id: 'x',
+            object: 'chat.completion.chunk',
+            model: 'm',
+            choices: [
+              {
+                index: 0,
+                delta: { role: 'assistant', content: 'ok ' + text },
+                finish_reason: null,
+              },
+            ],
+          }) +
+          '\n\n',
+      );
+      res.write(
+        'data: ' +
+          JSON.stringify({
+            id: 'x',
+            object: 'chat.completion.chunk',
+            model: 'm',
+            choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          }) +
+          '\n\n',
+      );
+      res.end('data: [DONE]\n\n');
+    });
+    await new Promise<void>((ok) => modelServer.listen(0, '127.0.0.1', ok));
+    const port = (modelServer.address() as { port: number }).port;
+    const cfgV5: RemoteModel = {
+      ...config,
+      endpoint: `http://127.0.0.1:${port}/v1`,
+      key: 'KEY-V5',
+    };
+    const cfgRestored: RemoteModel = {
+      ...config,
+      endpoint: `http://127.0.0.1:${port}/v1`,
+      key: 'KEY-RESTORED',
+    };
+    const cfgUnversioned: RemoteModel = {
+      ...config,
+      endpoint: `http://127.0.0.1:${port}/v1`,
+      key: 'KEY-RESET',
+    };
+
+    const stop = await serveRemoteBot(dir);
+    const call = (frame: unknown) =>
+      new Promise<{ status: number; body: Record<string, unknown> }>(
+        (ok, fail) => {
+          const payload = Buffer.from(JSON.stringify(frame));
+          const req = request(
+            {
+              socketPath: join(dir, 'host.sock'),
+              path: '/chat',
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                'content-length': payload.length,
+              },
+            },
+            (res) => {
+              const out: Buffer[] = [];
+              res.on('data', (c: Buffer) => out.push(c));
+              res.on('end', () =>
+                ok({
+                  status: res.statusCode ?? 500,
+                  body: JSON.parse(Buffer.concat(out).toString('utf8')),
+                }),
+              );
+            },
+          );
+          req.on('error', fail);
+          req.end(payload);
+        },
+      );
+    const waitSocketIdle = async (conversation: string) => {
+      const deadline = Date.now() + 5000;
+      while (true) {
+        const hist = (
+          await call({
+            owner: 'member',
+            op: { action: 'history', conversation, after: 0 },
+          })
+        ).body as { active: unknown; queued: unknown[] };
+        if (!hist.active && hist.queued.length === 0) return hist;
+        if (Date.now() > deadline)
+          throw new Error('socket queue did not drain');
+        await new Promise<void>((ok) => setImmediate(ok));
+      }
+    };
+    try {
+      const { current } = (
+        await call({ owner: 'member', op: { action: 'discover' } })
+      ).body as { current: string };
+
+      const cfg5Res = await call({
+        op: { action: 'configure' },
+        config: cfgV5,
+        configVersion: 5,
+      });
+      assert.equal(cfg5Res.status, 200);
+
+      // Authoritative _hub configure version 2 (e.g. after backup restore) resets version and applies KEY-RESTORED.
+      const hubRestoredRes = await call({
+        owner: '_hub',
+        op: { action: 'configure' },
+        config: cfgRestored,
+        configVersion: 2,
+      });
+      assert.equal(hubRestoredRes.status, 200);
+      assert.equal(hubRestoredRes.body.configured, true);
+
+      const sendV2 = await call({
+        owner: 'member',
+        op: {
+          action: 'send',
+          conversation: current,
+          request: randomUUID(),
+          text: 'restored-v2',
+        },
+        config: cfgRestored,
+        configVersion: 2,
+      });
+      assert.equal(sendV2.status, 200);
+      await waitSocketIdle(current);
+      assert.deepEqual(seen, [
+        { auth: 'Bearer KEY-RESTORED', text: 'restored-v2' },
+      ]);
+
+      // Authoritative _hub disable version 1 disables host and rejects stale ordinary sends (v=0 and unversioned).
+      const hubDisableRes = await call({
+        owner: '_hub',
+        op: { action: 'disable' },
+        configVersion: 1,
+      });
+      assert.equal(hubDisableRes.status, 200);
+      assert.equal(hubDisableRes.body.disabled, true);
+
+      const sendAfterDisable = await call({
+        owner: 'member',
+        op: {
+          action: 'send',
+          conversation: current,
+          request: randomUUID(),
+          text: 'after-hub-disable',
+        },
+      });
+      assert.equal(sendAfterDisable.status, 503);
+      assert.equal(sendAfterDisable.body.code, 'bot_not_enabled');
+
+      const staleZeroSend = await call({
+        owner: 'member',
+        op: {
+          action: 'send',
+          conversation: current,
+          request: randomUUID(),
+          text: 'stale-zero',
+        },
+        config: cfgV5,
+        configVersion: 0,
+      });
+      assert.equal(staleZeroSend.status, 503);
+      assert.equal(staleZeroSend.body.code, 'bot_not_enabled');
+
+      const staleUnversionedSend = await call({
+        owner: 'member',
+        op: {
+          action: 'send',
+          conversation: current,
+          request: randomUUID(),
+          text: 'stale-unversioned',
+        },
+        config: cfgV5,
+      });
+      assert.equal(staleUnversionedSend.status, 503);
+      assert.equal(staleUnversionedSend.body.code, 'bot_not_enabled');
+
+      // Even if a discover/send frame spoofs owner: '_hub', non-configure/disable actions remain non-authoritative.
+      const spoofedHubDiscover = await call({
+        owner: '_hub',
+        op: { action: 'discover' },
+        config: cfgV5,
+        configVersion: 0,
+      });
+      assert.equal(spoofedHubDiscover.status, 200);
+      const spoofedHubSend = await call({
+        owner: '_hub',
+        op: {
+          action: 'send',
+          conversation: String(spoofedHubDiscover.body.current),
+          request: randomUUID(),
+          text: 'spoofed-hub-send',
+        },
+        config: cfgV5,
+        configVersion: 0,
+      });
+      assert.equal(spoofedHubSend.status, 503);
+      assert.equal(spoofedHubSend.body.code, 'bot_not_enabled');
+
+      // Host must still remain disabled.
+      const followUpSend = await call({
+        owner: 'member',
+        op: {
+          action: 'send',
+          conversation: current,
+          request: randomUUID(),
+          text: 'still-disabled',
+        },
+      });
+      assert.equal(followUpSend.status, 503);
+      assert.equal(followUpSend.body.code, 'bot_not_enabled');
+
+      // Authoritative _hub unversioned configure resets #configVersion to 0 and enables the host.
+      const hubResetRes = await call({
+        owner: '_hub',
+        op: { action: 'configure' },
+        config: cfgUnversioned,
+      });
+      assert.equal(hubResetRes.status, 200);
+      assert.equal(hubResetRes.body.configured, true);
+
+      const sendAfterReset = await call({
+        owner: 'member',
+        op: {
+          action: 'send',
+          conversation: current,
+          request: randomUUID(),
+          text: 'after-unversioned-hub-configure',
+        },
+      });
+      assert.equal(sendAfterReset.status, 200);
+      await waitSocketIdle(current);
+      assert.deepEqual(seen, [
+        { auth: 'Bearer KEY-RESTORED', text: 'restored-v2' },
+        {
+          auth: 'Bearer KEY-RESET',
+          text: 'after-unversioned-hub-configure',
+        },
+      ]);
+    } finally {
+      modelServer.closeAllConnections();
+      await new Promise<void>((ok) => modelServer.close(() => ok()));
+      await stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+test('F9/S2: pre-model non-attachment errors emit message_not_processed while during-model errors emit reply_interrupted and missing attachment emits attachment_unavailable', async () => {
   const { createHash } = await import('node:crypto');
   const { mkdir, writeFile } = await import('node:fs/promises');
   const home = await mkdtemp(join(tmpdir(), 'remote-bot-f9-'));
   let modelCalls = 0;
+  let failInModel = false;
   const host = new RemoteBot(home, async () => {
     modelCalls++;
+    if (failInModel) throw new Error('stream dropped mid-reply');
     return 'unexpected';
   });
   const waitIdle = async (conversation: string) => {
@@ -2693,8 +2962,8 @@ test('F9: pre-model non-attachment errors emit reply_interrupted while missing c
     assert.deepEqual(histAfterMkdirFail.events.at(-1), {
       ...histAfterMkdirFail.events.at(-1)!,
       role: 'notice',
-      code: 'reply_interrupted',
-      text: 'model reply interrupted; outcome unknown',
+      code: 'message_not_processed',
+      text: 'message was not processed; you can resend it',
     });
 
     // Missing current-turn attachment still emits attachment_unavailable.
@@ -2725,6 +2994,33 @@ test('F9: pre-model non-attachment errors emit reply_interrupted while missing c
       role: 'notice',
       code: 'attachment_unavailable',
       text: 'attachment could not be read',
+    });
+
+    // Once complete() has been invoked, an unexpected error emits reply_interrupted.
+    await rm(join(membersDir, memberHash));
+    failInModel = true;
+    host.run(
+      'member',
+      {
+        action: 'send',
+        conversation: current,
+        request: randomUUID(),
+        text: 'fails inside model',
+      },
+      config,
+    );
+    await waitIdle(current);
+    assert.equal(modelCalls, 1);
+    const histAfterModelFail = host.run('member', {
+      action: 'history',
+      conversation: current,
+      after: 0,
+    }) as { events: Array<{ role: string; code?: string; text: string }> };
+    assert.deepEqual(histAfterModelFail.events.at(-1), {
+      ...histAfterModelFail.events.at(-1)!,
+      role: 'notice',
+      code: 'reply_interrupted',
+      text: 'model reply interrupted; outcome unknown',
     });
   } finally {
     await host.close();

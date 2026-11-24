@@ -175,11 +175,14 @@ export function hubEntry(
     ...(headers ? { headers: { ...headers } } : {}),
   };
 }
+
 /**
- * Puts the Hub entry for `endpoint` into `settings` (as saveSettingsChange changes them), under HUB_SERVER in
- * `mcpServers`, and keeps the extension on.
+ * The MCP entry for `endpoint` given existing `settings`, keeping `headers` when reconnecting to the same endpoint.
  */
-export function addHub(settings: CircleSettings, endpoint: string): void {
+export function hubEntryFor(
+  settings: CircleSettings,
+  endpoint: string,
+): Record<string, unknown> {
   const existing = settings.mcpServers
     ? mcpServer(settings.mcpServers, HUB_SERVER)
     : undefined;
@@ -189,9 +192,17 @@ export function addHub(settings: CircleSettings, endpoint: string): void {
     isPlainObject(existing.headers)
       ? existing.headers
       : undefined;
+  return hubEntry(endpoint, headers);
+}
+
+/**
+ * Puts the Hub entry for `endpoint` into `settings` (as saveSettingsChange changes them), under HUB_SERVER in
+ * `mcpServers`, and keeps the extension on.
+ */
+export function addHub(settings: CircleSettings, endpoint: string): void {
   settings.mcpServers = {
     ...settings.mcpServers,
-    [HUB_SERVER]: hubEntry(endpoint, headers),
+    [HUB_SERVER]: hubEntryFor(settings, endpoint),
   };
   settings.extensions = {
     ...settings.extensions,

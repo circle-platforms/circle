@@ -181,12 +181,15 @@ export async function serveRemoteBot(directory: string) {
                 'invalid_request',
                 'missing bot configuration',
               );
-            if (frame.config === null) host.disable(frame.configVersion);
-            else host.configure(frame.config, frame.configVersion);
+            const authoritative = frame.owner === '_hub';
+            if (frame.config === null)
+              host.disable(frame.configVersion, authoritative);
+            else
+              host.configure(frame.config, frame.configVersion, authoritative);
             return answer(response, 200, { configured: frame.config !== null });
           }
           if (frame.op.action === 'disable') {
-            host.disable(frame.configVersion);
+            host.disable(frame.configVersion, frame.owner === '_hub');
             return answer(response, 200, { disabled: true });
           }
           if (frame.op.action === 'test') {

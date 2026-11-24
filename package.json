@@ -32,7 +32,7 @@
     "release:build": "tsx scripts/build-release.ts",
     "release:smoke": "tsx scripts/smoke-release.ts",
     "release": "tsx scripts/release.ts",
-    "check:apps": "npm --prefix apps/workbench run typecheck && npm --prefix apps/workbench test && npm --prefix apps/desktop run typecheck && npm --prefix apps/desktop test && npm --prefix apps/desktop run test:runtime && npm --prefix apps/desktop run build"
+    "check:apps": "npm --prefix apps/workbench run typecheck && npm --prefix apps/workbench test && npm --prefix apps/desktop run typecheck && npm --prefix apps/desktop test && npm --prefix apps/desktop run test:runtime && npm --prefix apps/desktop run build && node apps/desktop/test/bundled-extensions-smoke.mjs"
   },
   "repository": {
     "type": "git",

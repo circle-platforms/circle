@@ -1210,6 +1210,10 @@ test('F11/F15: docs/extensions.md and CHANGELOG.md document remote-bot contracts
   );
   assert.match(
     extensionsDoc,
+    /test:remote-bot.*member token redaction in DOM and logs.*model secret redaction runs in paired mode/s,
+  );
+  assert.match(
+    extensionsDoc,
     /test:remote-bot.*without.*asserting notice classification/s,
   );
   assert.match(

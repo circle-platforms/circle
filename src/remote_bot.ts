@@ -395,7 +395,11 @@ export class RemoteBot {
       FROM event e WHERE e.role='user' AND NOT EXISTS (SELECT 1 FROM event f WHERE f.conversation=e.conversation AND f.request=e.request AND f.role<>'user')`);
   }
 
-  #applyConfig(config: RemoteModel | null, configVersion?: number): void {
+  #applyConfig(
+    config: RemoteModel | null,
+    configVersion?: number,
+    authoritative = false,
+  ): void {
     if (configVersion !== undefined) {
       if (
         typeof configVersion !== 'number' ||
@@ -404,8 +408,10 @@ export class RemoteBot {
       ) {
         throw new BotError(400, 'invalid_request', 'invalid config version');
       }
-      if (configVersion < this.#configVersion) return;
+      if (!authoritative && configVersion < this.#configVersion) return;
       this.#configVersion = configVersion;
+    } else if (authoritative) {
+      this.#configVersion = 0;
     } else if (this.#configVersion !== 0) {
       return;
     }
@@ -420,12 +426,16 @@ export class RemoteBot {
     this.#activeConfig = config.key ? { ...config } : null;
   }
 
-  configure(config: RemoteModel | null, configVersion?: number): void {
-    this.#applyConfig(config, configVersion);
+  configure(
+    config: RemoteModel | null,
+    configVersion?: number,
+    authoritative = false,
+  ): void {
+    this.#applyConfig(config, configVersion, authoritative);
   }
 
-  disable(configVersion?: number): void {
-    this.#applyConfig(null, configVersion);
+  disable(configVersion?: number, authoritative = false): void {
+    this.#applyConfig(null, configVersion, authoritative);
   }
 
   private tx<T>(fn: () => T): T {
@@ -987,6 +997,7 @@ export class RemoteBot {
     ]);
     const memberHome = join(this.home, 'members', ownerHash(owner));
     let tail = '';
+    let modelInvoked = false;
     running.done = Promise.all([
       mkdir(memberHome, { recursive: true, mode: 0o700 }),
       (async () => {
@@ -1048,6 +1059,7 @@ export class RemoteBot {
             'bot_not_enabled',
           );
         }
+        modelInvoked = true;
         return this.complete(
           memberHome,
           currentConfig,
@@ -1104,10 +1116,15 @@ export class RemoteBot {
                   code: error.noticeCode ?? error.code,
                   text: error.message,
                 }
-              : {
-                  code: 'reply_interrupted',
-                  text: 'model reply interrupted; outcome unknown',
-                };
+              : modelInvoked
+                ? {
+                    code: 'reply_interrupted',
+                    text: 'model reply interrupted; outcome unknown',
+                  }
+                : {
+                    code: 'message_not_processed',
+                    text: 'message was not processed; you can resend it',
+                  };
         this.append(
           conversation,
           op.request,

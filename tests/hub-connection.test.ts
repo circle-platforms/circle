@@ -9,6 +9,7 @@ import {
   findHub,
   hubCandidates,
   hubEndpoint,
+  hubEntryFor,
   keepHubPlaceholders,
   removeHub,
 } from '../src/hub_connection.js';
@@ -240,6 +241,23 @@ test('F14: addHub preserves headers on same-URL reconnect and drops them when co
   };
   addHub(settings, 'https://other.example.test/mcp');
   assert.equal('headers' in settings.mcpServers[HUB_SERVER]!, false);
+
+  settings.mcpServers[HUB_SERVER] = {
+    type: 'http',
+    url: 'https://hub.example.test/mcp',
+    headers: { Authorization: 'Bearer direct-tok' },
+  };
+  assert.deepEqual(hubEntryFor(settings, 'https://hub.example.test/mcp'), {
+    type: 'http',
+    url: 'https://hub.example.test/mcp',
+    enabled: true,
+    placeholders: { url: 'HUB_URL', token: 'HUB_TOKEN' },
+    headers: { Authorization: 'Bearer direct-tok' },
+  });
+  assert.equal(
+    'headers' in hubEntryFor(settings, 'https://different.example.test/mcp'),
+    false,
+  );
 });
 
 test('signing out revokes the tokens at the revocation endpoint and forgets them, also when revoking fails', async (t) => {

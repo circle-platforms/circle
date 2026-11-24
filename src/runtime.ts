@@ -123,7 +123,11 @@ import {
   type McpEntry,
 } from './mcp_config.js';
 import { migrateMcpRuleNames } from './approval_rules.js';
-import { ExtensionHost, type SubagentSpec } from './extensions.js';
+import {
+  ExtensionError,
+  ExtensionHost,
+  type SubagentSpec,
+} from './extensions.js';
 import {
   discoverSubagents,
   readSubagentFolder,
@@ -3840,7 +3844,9 @@ export class AgentRuntime {
    */
   async saveMcpServer(
     name: string,
-    entry: Record<string, unknown>,
+    entry:
+      | Record<string, unknown>
+      | ((settings: CircleSettings) => Record<string, unknown>),
   ): Promise<import('./extensions.js').McpServerState> {
     if (this.ownershipError) throw this.ownershipError;
     if (this.closing || this.deleting) throw new Error('session is closing');
@@ -3848,8 +3854,25 @@ export class AgentRuntime {
       throw new Error(
         'a turn is running: nothing was saved; try again after it',
       );
+    if (typeof name !== 'string' || !name.trim() || name === '__proto__')
+      throw new ExtensionError(
+        'an MCP server needs a name, and an entry with a url or a command',
+      );
     saveSettingsChange(this.options.home, (settings) => {
-      settings.mcpServers = { ...settings.mcpServers, [name]: entry };
+      const resolved = typeof entry === 'function' ? entry(settings) : entry;
+      if (
+        !isRecord(resolved) ||
+        (typeof resolved.url !== 'string' &&
+          typeof resolved.command !== 'string')
+      ) {
+        throw new ExtensionError(
+          'an MCP server needs a name, and an entry with a url or a command',
+        );
+      }
+      settings.mcpServers = {
+        ...settings.mcpServers,
+        [name]: structuredClone(resolved),
+      };
     });
     await this.reloadMcpServer(name);
     const row = this.mcp.status.find((item) => item.name === name);

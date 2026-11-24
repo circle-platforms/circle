@@ -57,13 +57,13 @@ export const hubConnection: Record<string, string> = {
     '请在 Hub 的 MCP 设置中配置直接成员 Bearer 令牌后再重试。',
   '<app data folder>/runtime-home/settings.json':
     '<应用数据文件夹>/runtime-home/settings.json',
-  'Add a direct member Bearer Authorization header (format: Bearer <token>) for Hub in {path}, then retry.':
-    '请先在 {path} 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌（格式：Bearer <令牌>），然后再重试。',
+  'Add a direct member Bearer Authorization header (format: Bearer <token>) for Hub in {path}, then retry. Disconnecting removes manual headers; add them again after reconnecting.':
+    '请先在 {path} 的 Hub 配置 headers.Authorization 中填入成员直接访问令牌（格式：Bearer <令牌>），然后再重试。断开连接会移除手工添加的请求头，重新连接后需要再次添加。',
   'console credential not allowed': '不能使用控制台凭据',
   'Hub rejected the console session credential for my bot API.':
     'Hub 拒绝了控制台会话凭据对机器人接口的访问。',
-  'Configure a direct member Bearer token (format: Bearer <token>) for Hub headers.Authorization in {path}, then retry.':
-    '请先在 {path} 的 Hub 配置 headers.Authorization 中填入直接成员 Bearer 令牌（格式：Bearer <令牌>），然后再重试。',
+  'Configure a direct member Bearer token (format: Bearer <token>) for Hub headers.Authorization in {path}, then retry. Disconnecting removes manual headers; add them again after reconnecting.':
+    '请先在 {path} 的 Hub 配置 headers.Authorization 中填入直接成员 Bearer 令牌（格式：Bearer <令牌>），然后再重试。断开连接会移除手工添加的请求头，重新连接后需要再次添加。',
   'request origin or host rejected': '请求 Host 或 Origin 被拒绝',
   'Hub rejected the request Host or Origin header for my bot API.':
     'Hub 拒绝了当前请求的 Host 或 Origin 请求头。',
@@ -197,5 +197,7 @@ export const hubConnection: Record<string, string> = {
   'model did not return a valid reply': '模型未返回有效回复',
   'invalid attachment digest': '附件摘要无效',
   'attachment could not be read': '无法读取附件',
+  'message was not processed; you can resend it':
+    '本条消息未被处理，可以重新发送',
   'model reply interrupted; outcome unknown': '模型回复已中断，结果未知',
 };

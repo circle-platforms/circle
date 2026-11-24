@@ -4,7 +4,14 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:http';
-import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  readdir,
+  rm,
+  readFile,
+  writeFile,
+} from 'node:fs/promises';
 import { once } from 'node:events';
 import { spawn } from 'node:child_process';
 import { join, resolve } from 'node:path';
@@ -28,7 +35,6 @@ async function startStandaloneBackend() {
   await auth.start();
 
   const memberToken = 'synthetic-direct-member-token';
-  const secretKey = 'synthetic-model-key-standalone';
   const logs = [];
   const storedFiles = new Map();
   const seenBotHeaders = [];
@@ -249,7 +255,6 @@ async function startStandaloneBackend() {
   return {
     url: origin,
     memberToken,
-    secretKey,
     logs,
     seenBotHeaders,
     setForceUnauthenticated: (value) => {
@@ -772,7 +777,7 @@ try {
     'verified native download',
   );
   const domTextPhase2 = await page.locator('body').innerText();
-  if (backend.secretKey) {
+  if (!standalone && backend.secretKey) {
     assert.ok(!domTextPhase2.includes(backend.secretKey));
   }
   assert.ok(!domTextPhase2.includes(backend.memberToken));
@@ -852,7 +857,6 @@ try {
       'localized attachBotFiles 413 BOT_QUOTA_EXCEEDED error',
     );
     const zhDomText = await page.locator('body').innerText();
-    assert.ok(!zhDomText.includes(backend.secretKey));
     assert.ok(!zhDomText.includes(backend.memberToken));
     await Promise.race([app.close().catch(() => {}), delay(4000)]);
     try {
@@ -862,23 +866,44 @@ try {
     page = undefined;
     backend.setForceQuotaExceeded(false);
   }
-  if (backend.secretKey) {
+  async function readLogFiles(dir) {
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    const files = [];
+    for (const entry of entries) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...(await readLogFiles(full)));
+      } else if (entry.isFile()) {
+        files.push({ path: full, text: await readFile(full, 'utf8') });
+      }
+    }
+    return files;
+  }
+  const logFiles = await readLogFiles(join(data, 'logs'));
+  for (const file of logFiles) {
+    assert.ok(
+      !file.text.includes(backend.memberToken),
+      `memberToken leaked into log file: ${file.path}`,
+    );
+  }
+  if (!standalone && backend.secretKey) {
     assert.ok(!JSON.stringify(issued).includes(backend.secretKey));
     assert.ok(!backend.logs.join('').includes(backend.secretKey));
     assert.ok(
       !(await readFile(settingsPath, 'utf8')).includes(backend.secretKey),
     );
-    assert.ok(
-      !(
-        await readFile(join(data, 'logs', 'runtime.log'), 'utf8').catch(
-          () => '',
-        )
-      ).includes(backend.secretKey),
-    );
+    for (const file of logFiles) {
+      assert.ok(
+        !file.text.includes(backend.secretKey),
+        `secretKey leaked into log file: ${file.path}`,
+      );
+    }
   }
   console.log(
     (packaged ? 'Packaged' : 'Development') +
-      ` (${standalone ? 'standalone' : 'paired'}): OAuth H5 refusal, direct Bearer chat, scripted remote reply, reload, attachment round trip and completion after app exit passed.`,
+      (standalone
+        ? ' (standalone): OAuth H5 refusal, direct Bearer chat, scripted remote reply, reload, attachment round trip, member token redaction and completion after app exit passed (model secret redaction not checked in standalone mode).'
+        : ' (paired): OAuth H5 refusal, direct Bearer chat, scripted remote reply, reload, attachment round trip and completion after app exit passed.'),
   );
 } catch (error) {
   if (page)
