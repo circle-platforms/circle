@@ -27,7 +27,7 @@ Read `docs/development/tui-contract.md` before you change anything on screen. Wh
 
 - Take colours only from `palette()` in `src/ink/theme.ts`. Do not write a hex value, a truecolor code or a raw colour SGR string anywhere else. `tests/render-colors.test.ts` fails if you do.
 - When you join a background with a foreground, use `sgrJoin`.
-- Interface words are English, short, lowercase. Never translate content. The desktop application also shows them in Simplified Chinese, by the owner's decision (2026-10-12): write its words as `t('…')` and add the Chinese, as [docs/development/desktop-i18n.md](docs/development/desktop-i18n.md) says. The terminal stays English whatever the system language, by the owner's decision (2026-10-21).
+- Interface words are English, short, lowercase. Never translate content. The desktop application also shows them in Simplified Chinese, by the owner's decision (2026-10-12): write its words as `t('…')` and add the Chinese, as [docs/development/desktop-i18n.md](docs/development/desktop-i18n.md) says. The terminal stays English whatever the system language, by the owner's decision (2026-10-21). Text that a channel adapter sends to members on an external platform is not interface text: it is written in that platform's language (the WeCom adapter under `apps/wecom` writes Simplified Chinese) and does not go through `t()`, by the owner's decision (2026-11-24).
 - Check a change on a dark and on a light palette. The `auto` theme follows the terminal while Circle runs (`src/ink/theme_watch.ts`), so nothing may cache a colour past a repaint.
 - Do not add key hints except where something is folded.
 
