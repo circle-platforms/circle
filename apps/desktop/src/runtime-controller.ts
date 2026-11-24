@@ -6644,7 +6644,6 @@ export class RuntimeController {
             ? text(p.scope, 'scope', 200)
             : undefined,
         );
-        await this.reloadOtherRuntimes(runtime);
         return {};
       }
       case 'reload': {

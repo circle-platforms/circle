@@ -1490,7 +1490,7 @@ test('a device sign-in refused on the page says so and leaves no code shown', as
   assert.deepEqual(manager.status[0]!.tools, []);
 });
 
-test('C4-M1: reconnecting while initial sign-in is waiting preserves device code and browser URL identically to main', async (t) => {
+test('C4-M1: reconnecting while initial sign-in is waiting preserves device code (as on main) and browser URL (reusing the waiting redirect port so client registration stays valid)', async (t) => {
   for (const flow of ['device', 'browser'] as const) {
     const server = await oauthServer(
       t,
@@ -1910,4 +1910,232 @@ test('C3-S4 Hypothesis 3: abandoned device sign-in that expires overwrites mark 
     'required_scope' in (keptFor(home, serverKey) as Record<string, unknown>),
     false,
   );
+});
+
+test('C5-S1: re-authorization mark is bound to the server URL that answered 403, so switching URLs reconnects ordinarily and clears the mark and remembered scope', async (t) => {
+  let portA = 0;
+  let portB = 0;
+  const baseA = () => `http://127.0.0.1:${portA}`;
+  const baseB = () => `http://127.0.0.1:${portB}`;
+  const validTokens = new Set(['tok-a1']);
+  const authRequests: URL[] = [];
+  const bRequests: Array<{ method: string; pathname: string }> = [];
+  let rejectToolWithScope = false;
+  let tokenSeq = 0;
+
+  const srvA = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', baseA());
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf8');
+      if (url.pathname === '/.well-known/oauth-authorization-server') {
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            issuer: baseA(),
+            authorization_endpoint: `${baseA()}/authorize`,
+            token_endpoint: `${baseA()}/token`,
+            registration_endpoint: `${baseA()}/register`,
+            response_types_supported: ['code'],
+            code_challenge_methods_supported: ['S256'],
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/authorize') {
+        authRequests.push(url);
+        const redirect = new URL(url.searchParams.get('redirect_uri')!);
+        redirect.searchParams.set('code', `code-${authRequests.length}`);
+        redirect.searchParams.set('state', url.searchParams.get('state')!);
+        redirect.searchParams.set('iss', baseA());
+        res.writeHead(302, { location: redirect.href }).end();
+        return;
+      }
+      if (url.pathname === '/token') {
+        const tok = `tok-a-${++tokenSeq}`;
+        validTokens.add(tok);
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            access_token: tok,
+            token_type: 'Bearer',
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/mcp') {
+        const bearer = (req.headers.authorization ?? '').replace(
+          /^Bearer /i,
+          '',
+        );
+        if (!validTokens.has(bearer)) {
+          res.writeHead(401).end();
+          return;
+        }
+        const rpc = JSON.parse(body) as { id?: unknown; method?: string };
+        if (rpc.method === 'tools/call' && rejectToolWithScope) {
+          res
+            .writeHead(403, {
+              'www-authenticate':
+                'Bearer error="insufficient_scope", scope="x"',
+            })
+            .end();
+          return;
+        }
+        const result =
+          rpc.method === 'initialize'
+            ? {
+                protocolVersion: '2025-03-26',
+                capabilities: { tools: {} },
+                serverInfo: { name: 'srv-a', version: '1.0.0' },
+              }
+            : rpc.method === 'tools/list'
+              ? {
+                  tools: [
+                    {
+                      name: 'a_ping',
+                      description: 'a_ping',
+                      inputSchema: { type: 'object', properties: {} },
+                    },
+                  ],
+                }
+              : { content: [{ type: 'text', text: 'pong-a' }] };
+        res
+          .writeHead(200, { 'content-type': 'application/json' })
+          .end(
+            rpc.id === undefined
+              ? ''
+              : JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }),
+          );
+        return;
+      }
+      res.writeHead(404).end();
+    });
+  });
+
+  const srvB = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', baseB());
+    bRequests.push({ method: req.method ?? 'GET', pathname: url.pathname });
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf8');
+      if (req.method === 'POST' && url.pathname === '/mcp') {
+        const rpc = JSON.parse(body) as { id?: unknown; method?: string };
+        const result =
+          rpc.method === 'initialize'
+            ? {
+                protocolVersion: '2025-03-26',
+                capabilities: { tools: {} },
+                serverInfo: { name: 'srv-b', version: '1.0.0' },
+              }
+            : rpc.method === 'tools/list'
+              ? {
+                  tools: [
+                    {
+                      name: 'b_ping',
+                      description: 'b_ping',
+                      inputSchema: { type: 'object', properties: {} },
+                    },
+                  ],
+                }
+              : { content: [{ type: 'text', text: 'pong-b' }] };
+        res
+          .writeHead(200, { 'content-type': 'application/json' })
+          .end(
+            rpc.id === undefined
+              ? ''
+              : JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }),
+          );
+        return;
+      }
+      res.writeHead(404).end();
+    });
+  });
+
+  await Promise.all([
+    new Promise<void>((resolve) => srvA.listen(0, '127.0.0.1', resolve)),
+    new Promise<void>((resolve) => srvB.listen(0, '127.0.0.1', resolve)),
+  ]);
+  portA = (srvA.address() as { port: number }).port;
+  portB = (srvB.address() as { port: number }).port;
+  cleanupServer(t, srvA);
+  cleanupServer(t, srvB);
+
+  const home = scratch(t);
+  const serverKeyA = `${baseA()}/mcp`;
+  const serverKeyB = `${baseB()}/mcp`;
+  const portUsed = await redirectPort(home, serverKeyA);
+  const seed = new McpAuthProvider(home, serverKeyA, portUsed);
+  seed.saveClientInformation({
+    client_id: 'cli-a',
+    redirect_uris: [seed.redirectUrl],
+  });
+  seed.saveTokens({ access_token: 'tok-a1', token_type: 'Bearer' });
+
+  const manager = new McpManager(scratch(t), 5000, undefined, {
+    home,
+    openUrl: async (target) => {
+      const parsed = new URL(target);
+      const page = await fetch(parsed, { redirect: 'manual' });
+      const loc = page.headers.get('location');
+      if (loc) await fetch(loc);
+    },
+  });
+  cleanup(t, () => manager.close());
+
+  const context = {
+    sessionId: 's-c5',
+    signal: new AbortController().signal,
+    approve: async () => 'once' as const,
+    log: () => {},
+  } as never;
+
+  const entryA = { remote: { type: 'http' as const, url: serverKeyA } };
+  await manager.load(entryA);
+  assert.equal(manager.isConnected('remote'), true);
+
+  // 1) Unchanged URL: after A marks the row REAUTHORIZATION_REQUIRED, reloading A starts scoped sign-in with scope=x.
+  rejectToolWithScope = true;
+  await assert.rejects(() => manager.tools[0]!.run({}, context));
+  assert.equal(manager.status[0]!.error, REAUTHORIZATION_REQUIRED);
+  rejectToolWithScope = false;
+  await manager.reloadServer('remote', entryA);
+  await until(
+    () => manager.status[0]!.error === '' && manager.isConnected('remote'),
+  );
+  assert.equal(authRequests.length, 1);
+  assert.equal(authRequests[0]!.searchParams.get('scope'), 'x');
+
+  // 2) Changed URL: after A marks the row REAUTHORIZATION_REQUIRED, switching URL to B reconnects ordinarily without hitting A or sending discovery/register to B.
+  rejectToolWithScope = true;
+  await assert.rejects(() => manager.tools[0]!.run({}, context));
+  assert.equal(manager.status[0]!.error, REAUTHORIZATION_REQUIRED);
+  bRequests.length = 0;
+  await manager.reloadServer('remote', {
+    remote: { type: 'http' as const, url: serverKeyB },
+  });
+  assert.equal(manager.status[0]!.error, '');
+  assert.equal(manager.isConnected('remote'), true);
+  assert.equal(
+    manager.tools.some((tool) => tool.name === 'mcp__remote__b_ping'),
+    true,
+  );
+  assert.equal(authRequests.length, 1);
+  assert.ok(bRequests.length > 0);
+  assert.equal(
+    bRequests.every((r) => r.method === 'POST' && r.pathname === '/mcp'),
+    true,
+  );
+
+  // 3) Switching away also cleared A's remembered scope, so switching back to A on 401 does an ordinary sign-in without scope=x.
+  validTokens.clear();
+  rejectToolWithScope = false;
+  await manager.reloadServer('remote', entryA);
+  await until(
+    () =>
+      authRequests.length === 2 &&
+      manager.status[0]!.error === '' &&
+      manager.isConnected('remote'),
+  );
+  assert.equal(authRequests[1]!.searchParams.get('scope'), null);
 });

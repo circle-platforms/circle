@@ -3944,6 +3944,255 @@ test('mcp-reauthorize-server forwards scope to device auth when cached discovery
   assert.equal(row()?.tools.length, 0);
 });
 
+test('C5-S2: mcp-reauthorize-server in session A does not reload session B and preserves in-progress browser sign-in client registration', async (t) => {
+  const { createServer } = await import('node:http');
+  const { McpAuthProvider, keptFor, redirectPort } =
+    await import('../../../src/mcp_auth.js');
+  let port = 0;
+  const base = () => `http://127.0.0.1:${port}`;
+  const validTokens = new Set(['tok-init']);
+  const openedUrls: string[] = [];
+  let mcpInitializes = 0;
+  let seenAuthClientId = '';
+  let regSeq = 0;
+
+  const srv = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', base());
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf8');
+      if (url.pathname === '/.well-known/oauth-authorization-server') {
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            issuer: base(),
+            authorization_endpoint: `${base()}/authorize`,
+            token_endpoint: `${base()}/token`,
+            registration_endpoint: `${base()}/register`,
+            response_types_supported: ['code'],
+            code_challenge_methods_supported: ['S256'],
+            grant_types_supported: ['authorization_code'],
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/register') {
+        const cid = `cli-reg-${++regSeq}`;
+        res.writeHead(201, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            client_id: cid,
+            redirect_uris: [],
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/authorize') {
+        seenAuthClientId = url.searchParams.get('client_id') ?? '';
+        const redirect = new URL(url.searchParams.get('redirect_uri')!);
+        redirect.searchParams.set('code', 'c-reauth');
+        redirect.searchParams.set('state', url.searchParams.get('state')!);
+        redirect.searchParams.set('iss', base());
+        res.writeHead(302, { location: redirect.href }).end();
+        return;
+      }
+      if (url.pathname === '/token') {
+        const form = new URLSearchParams(body);
+        if (
+          !form.get('client_id') ||
+          form.get('client_id') !== seenAuthClientId
+        ) {
+          res
+            .writeHead(400, { 'content-type': 'application/json' })
+            .end(JSON.stringify({ error: 'invalid_client' }));
+          return;
+        }
+        validTokens.add('tok-reauthed');
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            access_token: 'tok-reauthed',
+            token_type: 'Bearer',
+            scope: 'bot',
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/mcp') {
+        const bearer = (req.headers.authorization ?? '').replace(
+          /^Bearer /i,
+          '',
+        );
+        if (!validTokens.has(bearer)) {
+          res.writeHead(401).end();
+          return;
+        }
+        const rpc = JSON.parse(body) as { id?: unknown; method?: string };
+        if (rpc.method === 'initialize') mcpInitializes += 1;
+        const result =
+          rpc.method === 'initialize'
+            ? {
+                protocolVersion: '2025-03-26',
+                capabilities: { tools: {} },
+                serverInfo: { name: 'srv', version: '1.0.0' },
+              }
+            : rpc.method === 'tools/list'
+              ? {
+                  tools: [
+                    {
+                      name: 'ping',
+                      description: 'ping',
+                      inputSchema: { type: 'object', properties: {} },
+                    },
+                  ],
+                }
+              : { content: [{ type: 'text', text: 'pong' }] };
+        res
+          .writeHead(200, { 'content-type': 'application/json' })
+          .end(
+            rpc.id === undefined
+              ? ''
+              : JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }),
+          );
+        return;
+      }
+      res.writeHead(404).end();
+    });
+  });
+  await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  port = (srv.address() as { port: number }).port;
+  const root = await mkdtemp(join(tmpdir(), 'circle-reauth-sessions-'));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(home, { recursive: true });
+  await mkdir(join(workspace, '.git'), { recursive: true });
+  const serverKey = `${base()}/mcp`;
+  const portUsed = await redirectPort(home, serverKey);
+  const seed = new McpAuthProvider(home, serverKey, portUsed);
+  seed.saveClientInformation({
+    client_id: 'cli-init',
+    redirect_uris: [seed.redirectUrl],
+  });
+  seed.saveTokens({ access_token: 'tok-init', token_type: 'Bearer' });
+  seed.saveDiscoveryState({
+    authorizationServerUrl: base(),
+    resourceMetadata: { resource: serverKey, authorization_servers: [base()] },
+    authorizationServerMetadata: {
+      issuer: base(),
+      authorization_endpoint: `${base()}/authorize`,
+      token_endpoint: `${base()}/token`,
+      registration_endpoint: `${base()}/register`,
+      response_types_supported: ['code'],
+      code_challenge_methods_supported: ['S256'],
+      grant_types_supported: ['authorization_code'],
+    },
+  });
+  const settings = trustFolder(defaultSettings(), workspace);
+  settings.mcpServers = { remote: { url: serverKey, type: 'http' } };
+  saveSettings(settings, home);
+
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model: new ScriptedModel([{ message: assistant('noted') }]),
+    emit: () => {},
+    openUrl: (url) => {
+      openedUrls.push(url);
+    },
+  });
+  t.after(async () => {
+    await controller.close();
+    srv.closeAllConnections?.();
+    await new Promise<void>((resolve) => srv.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  });
+  const row = () =>
+    controller.snapshot().mcp.find((item) => item.name === 'remote');
+
+  await controller.initialize();
+  await wait(
+    () => row()?.status === 'connected' && mcpInitializes === 1,
+    'session B connected',
+  );
+  const sessionB = controller.snapshot().activeSessionId;
+  const promptReply = await controller.dispatch({
+    id: randomUUID(),
+    name: 'prompt',
+    sessionId: sessionB,
+    payload: { text: 'keep session B open' },
+  });
+  assert.equal(promptReply.ok, true, promptReply.error);
+  await wait(
+    () =>
+      controller.snapshot().sessions.find((s) => s.id === sessionB)?.state ===
+      'idle',
+    'session B idle after first turn',
+  );
+
+  const created = await controller.dispatch({
+    id: randomUUID(),
+    name: 'new-session',
+    sessionId: sessionB,
+    payload: {},
+  });
+  assert.equal(created.ok, true, created.error);
+  const sessionA = (created.data as { sessionId: string }).sessionId;
+  assert.notEqual(sessionA, sessionB);
+  assert.equal(controller.snapshot().sessions.length, 2);
+
+  const reloadA = await controller.dispatch({
+    id: randomUUID(),
+    name: 'reload',
+    sessionId: sessionA,
+    payload: {},
+  });
+  assert.equal(reloadA.ok, true, reloadA.error);
+  await wait(
+    () => row()?.status === 'connected' && mcpInitializes === 2,
+    'session A connected',
+  );
+
+  const sessionBRuntime = (
+    controller as unknown as {
+      runtime(ws: string, sid?: string): AgentRuntime;
+    }
+  ).runtime(workspace, sessionB);
+  assert.equal(sessionBRuntime.session.id, sessionB);
+  let sessionBReloads = 0;
+  const origReload = sessionBRuntime.reloadIntegrations.bind(sessionBRuntime);
+  sessionBRuntime.reloadIntegrations = async () => {
+    sessionBReloads += 1;
+    return origReload();
+  };
+
+  const initsBefore = mcpInitializes;
+  const reauthReply = await controller.dispatch({
+    id: randomUUID(),
+    name: 'mcp-reauthorize-server',
+    sessionId: sessionA,
+    payload: { name: 'remote', scope: 'bot' },
+  });
+  assert.equal(reauthReply.ok, true, reauthReply.error);
+  await wait(() => openedUrls.length === 1, 'browser authorize URL opened');
+  assert.equal(sessionBReloads, 0);
+  assert.equal(mcpInitializes, initsBefore);
+  assert.equal(keptFor(home, serverKey).client?.client_id, 'cli-init');
+
+  const page = await fetch(openedUrls[0]!, { redirect: 'manual' });
+  const location = page.headers.get('location');
+  assert.ok(location);
+  const callback = await fetch(location);
+  assert.equal(callback.status, 200);
+  await wait(
+    () => keptFor(home, serverKey).tokens?.access_token === 'tok-reauthed',
+    'browser reauthorization exchanged token cleanly',
+  );
+  await wait(
+    () => row()?.status === 'connected' && !row()?.error,
+    'session A reconnected after browser reauthorization',
+  );
+  assert.equal(sessionBReloads, 0);
+});
+
 const activeSession = (f: { controller: RuntimeController }) => {
   const snapshot = f.controller.snapshot();
   return snapshot.sessions.find((row) => row.id === snapshot.activeSessionId)!;
