@@ -966,7 +966,7 @@ test('failing sender batch backs off and quarantines across restarts without blo
     assert.equal(quarantined.attempts, 5);
     assert.equal(
       warnLogs.filter((l) => l[0] === '[wecom] inbound batch retrying:').length,
-      4,
+      2,
     );
     assert.equal(
       errorLogs.filter((l) => l[0] === '[wecom] inbound batch quarantined:')
@@ -1832,7 +1832,7 @@ test('R6: transient Hub outages retry past 15s and 5 attempts without quarantini
     );
     assert.equal(
       warnLogs.filter((l) => l[0] === '[wecom] inbound batch retrying:').length,
-      8,
+      7,
     );
     await adapter.flush();
     assert.equal(
@@ -3440,6 +3440,1192 @@ test('F6: transferHubFile 900s timeout, README alignment, >16k/>8 batch splittin
     assert.equal(fileBatchCalls[1]!.files?.length, 2);
   } finally {
     console.warn = origWarn;
+    await adapter.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('M1-a/b: pre-auth rejects 403 and permanent identity errors with 0 media fetches/staging, avoids duplicate authorize, and preserves F2 on transient authorize', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wecom-m1-preauth-'));
+  const stagingDir = join(dir, 'staging');
+  let time = 1000;
+  let wecomMode: 'ok' | 'perm-60011' = 'ok';
+  let hubAuthMode: '403' | '503' | 'ok' = '403';
+  let mediaFetchCount = 0;
+  let fromBotCalls = 0;
+  let authorizeCalls = 0;
+  let putCalls = 0;
+  const hubStaged = new Map<string, Buffer>();
+  const acceptedPayloads: Array<Record<string, unknown>> = [];
+  const origWarn = console.warn;
+  const origError = console.error;
+  console.warn = () => {};
+  console.error = () => {};
+
+  const emitter = new EventEmitter();
+  const sdk = Object.assign(emitter, {
+    connect() {
+      emitter.emit('authenticated');
+    },
+    disconnect() {},
+    async sendMessage() {
+      return { headers: { req_id: 'r' }, errcode: 0 };
+    },
+  });
+
+  const plainOk = Buffer.from('m1-authorized-ok');
+  const shaOk = createHash('sha256').update(plainOk).digest('hex');
+  const encOk = encryptWeComBytes(plainOk, 0x31);
+  const plainTrans = Buffer.from('m1-transient-f2');
+  const shaTrans = createHash('sha256').update(plainTrans).digest('hex');
+  const encTrans = encryptWeComBytes(plainTrans, 0x32);
+
+  const adapter = new ChannelSession(
+    dir,
+    () => sdk as unknown as WSClient,
+    async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'qyapi.weixin.qq.com') {
+        if (url.pathname.endsWith('/gettoken')) {
+          return Response.json({
+            errcode: 0,
+            access_token: 'tok',
+            expires_in: 7200,
+          });
+        }
+        fromBotCalls++;
+        if (wecomMode === 'perm-60011') {
+          return Response.json({ errcode: 60011, errmsg: 'no privilege' });
+        }
+        const id = JSON.parse(String(init?.body)).open_userid_list[0];
+        return Response.json({
+          errcode: 0,
+          userid_list: [{ open_userid: id, userid: 'u-' + id }],
+        });
+      }
+      if (url.hostname === 'wwcdn.weixin.qq.com') {
+        mediaFetchCount++;
+        const payload = url.pathname.endsWith('/ok.bin')
+          ? encOk.encrypted
+          : encTrans.encrypted;
+        return new Response(payload, {
+          status: 200,
+          headers: {
+            'content-length': String(payload.length),
+            'content-disposition': `attachment; filename="${url.pathname.slice(1)}"`,
+          },
+        });
+      }
+      if (init?.method === 'PUT') {
+        putCalls++;
+        const sha = url.pathname.split('/').at(-1)!;
+        const buf = Buffer.from(await new Response(init.body).arrayBuffer());
+        hubStaged.set(sha, buf);
+        return Response.json({ sha256: sha, size: buf.length });
+      }
+      const op = JSON.parse(String(init?.body));
+      if (op.action === 'authorize') {
+        authorizeCalls++;
+        if (hubAuthMode === '403') return Response.json({}, { status: 403 });
+        if (hubAuthMode === '503') return new Response('down', { status: 503 });
+        return Response.json({ bound: true });
+      }
+      if (op.action === 'next') return Response.json({ delivery: null });
+      if (op.action === 'inbound') {
+        if (op.subject === 'u-unbound-peer' || op.subject === 'u-bad-wecom') {
+          return Response.json({}, { status: 403 });
+        }
+        if (hubAuthMode !== 'ok') return new Response('down', { status: 503 });
+        for (const f of op.files ?? []) {
+          if (!hubStaged.has(f.sha256)) {
+            return Response.json({}, { status: 400 });
+          }
+        }
+        acceptedPayloads.push(op);
+        return Response.json({ accepted: true });
+      }
+      return Response.json({});
+    },
+    () => time,
+  );
+
+  try {
+    adapter.configure(channel, identity);
+
+    // 1. Unbound 403 sender with reachable Hub -> 0 media fetches, 0 staging files!
+    hubAuthMode = '403';
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'unbound-peer' },
+        msgid: 'm1-403',
+        msgtype: 'file',
+        file: {
+          url: 'https://wwcdn.weixin.qq.com/ok.bin',
+          aeskey: encOk.aeskey,
+        },
+      },
+    });
+    await untilPartSettled(adapter, 'm1-403');
+    assert.equal(authorizeCalls, 1);
+    assert.equal(mediaFetchCount, 0);
+    await assert.rejects(stat(stagingDir));
+    const p403 = adapter.db
+      .prepare('SELECT body,files FROM part WHERE platform_id=?')
+      .get('m1-403') as { body: string; files: string };
+    assert.equal(p403.files, '[]');
+    assert.match(p403.body, /附件未接收/);
+
+    // 2. Permanent WeCom identity rejection -> 0 media fetches, 0 staging files!
+    wecomMode = 'perm-60011';
+    hubAuthMode = 'ok';
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'bad-wecom' },
+        msgid: 'm1-wecom-perm',
+        msgtype: 'file',
+        file: {
+          url: 'https://wwcdn.weixin.qq.com/ok.bin',
+          aeskey: encOk.aeskey,
+        },
+      },
+    });
+    await untilPartSettled(adapter, 'm1-wecom-perm');
+    assert.equal(mediaFetchCount, 0);
+    await assert.rejects(stat(stagingDir));
+
+    // 3. Authorized 200 sender -> fromBot and authorize called ONCE in step 1, uploads directly via PUT!
+    wecomMode = 'ok';
+    fromBotCalls = 0;
+    authorizeCalls = 0;
+    putCalls = 0;
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'good-peer' },
+        msgid: 'm1-ok',
+        msgtype: 'file',
+        file: {
+          url: 'https://wwcdn.weixin.qq.com/ok.bin',
+          aeskey: encOk.aeskey,
+        },
+      },
+    });
+    await untilPartSettled(adapter, 'm1-ok');
+    assert.equal(mediaFetchCount, 1);
+    assert.equal(fromBotCalls, 1);
+    assert.equal(authorizeCalls, 1);
+    assert.equal(putCalls, 1);
+    assert.deepEqual(hubStaged.get(shaOk), plainOk);
+    time += 3500;
+    await adapter.flush();
+    assert.equal(acceptedPayloads.length, 1);
+    await assert.rejects(stat(join(stagingDir, shaOk)));
+
+    // 4. Transient authorize 503 -> downloads & stages locally (skipping PUT during outage), delivers upon recovery!
+    hubAuthMode = '503';
+    putCalls = 0;
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'recover-peer' },
+        msgid: 'm1-trans-file',
+        msgtype: 'file',
+        file: {
+          url: 'https://wwcdn.weixin.qq.com/trans.bin',
+          aeskey: encTrans.aeskey,
+        },
+      },
+    });
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'recover-peer' },
+        msgid: 'm1-trans-cap',
+        msgtype: 'text',
+        text: { content: 'transient authorize caption' },
+      },
+    });
+    await untilPartSettled(adapter, 'm1-trans-file');
+    assert.equal(mediaFetchCount, 2);
+    assert.equal(putCalls, 0);
+    assert.deepEqual(await readFile(join(stagingDir, shaTrans)), plainTrans);
+
+    hubAuthMode = 'ok';
+    hubStaged.clear();
+    time += 3500;
+    await adapter.flush();
+    assert.equal(acceptedPayloads.length, 2);
+    assert.equal(acceptedPayloads[1]!.text, 'transient authorize caption');
+    assert.deepEqual(acceptedPayloads[1]!.files, [
+      { name: 'trans.bin', sha256: shaTrans, size: plainTrans.length },
+    ]);
+    await assert.rejects(stat(join(stagingDir, shaTrans)));
+  } finally {
+    console.warn = origWarn;
+    console.error = origError;
+    await adapter.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('M1-c-limits: staging limits enforce global bytes, global files, and per-sender bytes across DB and in-flight downloads with rate-limited notices', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wecom-m1-limits-'));
+  const dirConc = await mkdtemp(join(tmpdir(), 'wecom-m1-conc-'));
+  let time = 1000;
+  let mediaFetches = 0;
+  const sentNotices: Array<{ to: string; content: string }> = [];
+  const origWarn = console.warn;
+  console.warn = () => {};
+
+  const readme = await readFile(
+    new URL('./README.md', import.meta.url),
+    'utf8',
+  );
+  assert.match(readme, /maxStagingBytes/);
+  assert.match(readme, /maxStagingFiles/);
+  assert.match(readme, /maxSenderStagingBytes/);
+  assert.match(readme, /maxStagingAgeMs/);
+  assert.match(readme, /536870912/);
+  assert.match(readme, /134217728/);
+  assert.match(readme, /7200000/);
+
+  const payloads = new Map<string, Buffer>([
+    ['/a50.bin', Buffer.alloc(50, 0x41)],
+    ['/a40.bin', Buffer.alloc(40, 0x42)],
+    ['/a20.bin', Buffer.alloc(20, 0x43)],
+    ['/b30.bin', Buffer.alloc(30, 0x44)],
+    ['/b60.bin', Buffer.alloc(60, 0x45)],
+  ]);
+
+  const emitter = new EventEmitter();
+  const sdk = Object.assign(emitter, {
+    connect() {
+      emitter.emit('authenticated');
+    },
+    disconnect() {},
+    async sendMessage(to: string, body: { markdown?: { content?: string } }) {
+      sentNotices.push({ to, content: body.markdown?.content ?? '' });
+      return { headers: { req_id: 'r-limit' }, errcode: 0 };
+    },
+  });
+
+  const postSocket = (socketDir: string, payload: unknown) =>
+    new Promise<{ status: number; body: unknown }>((ok, fail) => {
+      const bytes = Buffer.from(JSON.stringify(payload));
+      const req = unixRequest(
+        {
+          socketPath: join(socketDir, 'channel.sock'),
+          path: '/chat',
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'content-length': bytes.length,
+          },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () =>
+            ok({
+              status: res.statusCode ?? 500,
+              body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
+            }),
+          );
+        },
+      );
+      req.on('error', fail);
+      req.end(bytes);
+    });
+
+  let close: (() => Promise<void>) | undefined;
+  let concAdapter: ChannelSession | undefined;
+  const concGate = deferred();
+  const concStarted = deferred();
+  try {
+    close = await serveChannel(dir, {
+      create: () => sdk as unknown as WSClient,
+      now: () => time,
+      maxStagingBytes: 200,
+      maxStagingFiles: 3,
+      maxSenderStagingBytes: 70,
+      fetcher: async (input, init) => {
+        const url = new URL(String(input));
+        if (url.hostname === 'qyapi.weixin.qq.com') {
+          if (url.pathname.endsWith('/gettoken')) {
+            return Response.json({
+              errcode: 0,
+              access_token: 'tok',
+              expires_in: 7200,
+            });
+          }
+          const id = JSON.parse(String(init?.body)).open_userid_list[0];
+          return Response.json({
+            errcode: 0,
+            userid_list: [{ open_userid: id, userid: 'u-' + id }],
+          });
+        }
+        if (url.hostname === 'wwcdn.weixin.qq.com') {
+          mediaFetches++;
+          const buf = payloads.get(url.pathname) ?? Buffer.alloc(10, 0x46);
+          return new Response(new Uint8Array(buf), {
+            status: 200,
+            headers: {
+              'content-length': String(buf.length),
+              'content-disposition': `attachment; filename="${url.pathname.slice(1)}"`,
+            },
+          });
+        }
+        const op = JSON.parse(String(init?.body));
+        if (op.action === 'authorize')
+          return new Response('down', { status: 503 });
+        if (op.action === 'next') return Response.json({ delivery: null });
+        return new Response('down', { status: 503 });
+      },
+    });
+    const cfg = await postSocket(dir, {
+      action: 'configure',
+      channel,
+      identity,
+    });
+    assert.equal(cfg.status, 200);
+
+    const emitFile = (
+      targetSdk: EventEmitter,
+      sender: string,
+      msgid: string,
+      path: string,
+    ) =>
+      targetSdk.emit('message', {
+        body: {
+          chattype: 'single',
+          aibotid: 'bot',
+          from: { userid: sender },
+          msgid,
+          msgtype: 'file',
+          file: { url: 'https://wwcdn.weixin.qq.com' + path },
+        },
+      });
+
+    // 1. sender-a stages 50B (50/70 sender, 50/200 global, 1/3 files).
+    emitFile(sdk, 'sender-a', 'lim-a1', '/a50.bin');
+    // Wait until staging file appears on disk via ChannelSession socket DB check:
+    const { DatabaseSync } = await import('node:sqlite');
+    const waitSettledDb = async (msgid: string) => {
+      const db = new DatabaseSync(join(dir, 'channel.sqlite'));
+      try {
+        const deadline = Date.now() + 5000;
+        while (Date.now() < deadline) {
+          const row = db
+            .prepare('SELECT body,files FROM part WHERE platform_id=?')
+            .get(msgid) as { body: string; files: string | null } | undefined;
+          if (row && row.files !== null) return row;
+          await new Promise<void>((ok) => setImmediate(ok));
+        }
+        throw new Error(`part ${msgid} did not settle`);
+      } finally {
+        db.close();
+      }
+    };
+    const rowA1 = await waitSettledDb('lim-a1');
+    assert.equal(JSON.parse(rowA1.files!).length, 1);
+
+    // 2. sender-a tries 40B (50 + 40 = 90 > 70 per-sender limit) -> rejected, 0 new staging file, notice sent!
+    emitFile(sdk, 'sender-a', 'lim-a2', '/a40.bin');
+    const rowA2 = await waitSettledDb('lim-a2');
+    assert.equal(rowA2.files, '[]');
+    assert.match(rowA2.body, /附件未接收/);
+    assert.equal(sentNotices.length, 1);
+    assert.equal(sentNotices[0]!.to, 'sender-a');
+    assert.match(sentNotices[0]!.content, /暂存数量或容量已达上限/);
+    assert.equal(sentNotices[0]!.content.includes('Hub'), false);
+    const sha40 = createHash('sha256')
+      .update(payloads.get('/a40.bin')!)
+      .digest('hex');
+    await assert.rejects(stat(join(dir, 'staging', sha40)));
+
+    // 3. sender-a stages 20B (50 + 20 = 70/70 sender, 70/200 global, 2/3 files).
+    emitFile(sdk, 'sender-a', 'lim-a3', '/a20.bin');
+    const rowA3 = await waitSettledDb('lim-a3');
+    assert.equal(JSON.parse(rowA3.files!).length, 1);
+
+    // 4. sender-a sends another file while at 70/70 (global 70/200, 2/3 files) -> rejected BEFORE downloading (0 media fetches) & notice rate-limited!
+    const fetchesBeforeZeroSender = mediaFetches;
+    emitFile(sdk, 'sender-a', 'lim-a4', '/a40.bin');
+    const rowA4 = await waitSettledDb('lim-a4');
+    assert.equal(rowA4.files, '[]');
+    assert.equal(mediaFetches, fetchesBeforeZeroSender);
+    assert.equal(sentNotices.length, 1);
+
+    // 5. sender-b stages 30B (30/70 sender, 100/200 global, 3/3 files); then sender-c hits globalFiles = 3/3 -> 0 media fetches & notice sent!
+    emitFile(sdk, 'sender-b', 'lim-b1', '/b30.bin');
+    const rowB1 = await waitSettledDb('lim-b1');
+    assert.equal(JSON.parse(rowB1.files!).length, 1);
+    const fetchesBeforeGlobalFiles = mediaFetches;
+    emitFile(sdk, 'sender-c', 'lim-c1', '/b60.bin');
+    const rowC1 = await waitSettledDb('lim-c1');
+    assert.equal(rowC1.files, '[]');
+    assert.equal(mediaFetches, fetchesBeforeGlobalFiles);
+    assert.equal(sentNotices.length, 2);
+    assert.equal(sentNotices[1]!.to, 'sender-c');
+    await close();
+    close = undefined;
+
+    // 6. Global bytes cap & concurrent in-flight download tracking (maxStagingBytes=80, maxStagingFiles=1, maxSenderStagingBytes=80).
+    let concFetches = 0;
+    const concEmitter = new EventEmitter();
+    const concSdk = Object.assign(concEmitter, {
+      connect() {
+        concEmitter.emit('authenticated');
+      },
+      disconnect() {},
+      async sendMessage() {
+        return { headers: { req_id: 'r' }, errcode: 0 };
+      },
+    });
+    concAdapter = new ChannelSession(
+      dirConc,
+      () => concSdk as unknown as WSClient,
+      async (input, init) => {
+        const url = new URL(String(input));
+        if (url.hostname === 'qyapi.weixin.qq.com') {
+          if (url.pathname.endsWith('/gettoken')) {
+            return Response.json({
+              errcode: 0,
+              access_token: 'tok',
+              expires_in: 7200,
+            });
+          }
+          const id = JSON.parse(String(init?.body)).open_userid_list[0];
+          return Response.json({
+            errcode: 0,
+            userid_list: [{ open_userid: id, userid: 'u-' + id }],
+          });
+        }
+        if (url.hostname === 'wwcdn.weixin.qq.com') {
+          concFetches++;
+          if (url.pathname === '/first.bin') {
+            concStarted.resolve();
+            await concGate.promise;
+          }
+          const size =
+            url.pathname === '/dup.bin'
+              ? 60
+              : url.pathname === '/fill20.bin'
+                ? 20
+                : 60;
+          const fill = url.pathname === '/fill20.bin' ? 0x52 : 0x51;
+          const buf = Buffer.alloc(size, fill);
+          return new Response(new Uint8Array(buf), {
+            status: 200,
+            headers: { 'content-length': String(buf.length) },
+          });
+        }
+        const op = JSON.parse(String(init?.body));
+        if (op.action === 'authorize')
+          return new Response('down', { status: 503 });
+        return Response.json({ delivery: null });
+      },
+      () => time,
+      undefined,
+      undefined,
+      undefined,
+      {
+        maxStagingBytes: 80,
+        maxStagingFiles: 1,
+        maxSenderStagingBytes: 80,
+      },
+    );
+    concAdapter.configure(channel, identity);
+    emitFile(concSdk, 'c-1', 'conc-first', '/first.bin');
+    await concStarted.promise;
+    // While first download is in-flight (occupying the 1 global file slot), second download rejects before fetching!
+    emitFile(concSdk, 'c-2', 'conc-second', '/second.bin');
+    await untilPartSettled(concAdapter, 'conc-second');
+    assert.equal(concFetches, 1);
+    const secondRow = concAdapter.db
+      .prepare('SELECT files FROM part WHERE platform_id=?')
+      .get('conc-second') as { files: string };
+    assert.equal(secondRow.files, '[]');
+    concGate.resolve();
+    await untilPartSettled(concAdapter, 'conc-first');
+    const firstRow = concAdapter.db
+      .prepare('SELECT files FROM part WHERE platform_id=?')
+      .get('conc-first') as { files: string };
+    assert.equal(JSON.parse(firstRow.files).length, 1);
+    await concAdapter.close();
+    concAdapter = undefined;
+
+    // 7. Standalone global bytes cap (maxStagingBytes=80, maxStagingFiles=10, maxSenderStagingBytes=80) & sha256 dedup:
+    const dirBytes = await mkdtemp(join(tmpdir(), 'wecom-m1-gbytes-'));
+    let gbytesFetches = 0;
+    const gbytesEmitter = new EventEmitter();
+    const gbytesSdk = Object.assign(gbytesEmitter, {
+      connect() {
+        gbytesEmitter.emit('authenticated');
+      },
+      disconnect() {},
+      async sendMessage() {
+        return { headers: { req_id: 'r' }, errcode: 0 };
+      },
+    });
+    const gbytesAdapter = new ChannelSession(
+      dirBytes,
+      () => gbytesSdk as unknown as WSClient,
+      async (input, init) => {
+        const url = new URL(String(input));
+        if (url.hostname === 'qyapi.weixin.qq.com') {
+          if (url.pathname.endsWith('/gettoken')) {
+            return Response.json({
+              errcode: 0,
+              access_token: 'tok',
+              expires_in: 7200,
+            });
+          }
+          const id = JSON.parse(String(init?.body)).open_userid_list[0];
+          return Response.json({
+            errcode: 0,
+            userid_list: [{ open_userid: id, userid: 'u-' + id }],
+          });
+        }
+        if (url.hostname === 'wwcdn.weixin.qq.com') {
+          gbytesFetches++;
+          const size =
+            url.pathname === '/g60.bin' || url.pathname === '/g60dup.bin'
+              ? 60
+              : url.pathname === '/g30.bin'
+                ? 30
+                : 20;
+          const fill =
+            url.pathname === '/g60.bin' || url.pathname === '/g60dup.bin'
+              ? 0x61
+              : url.pathname === '/g30.bin'
+                ? 0x62
+                : 0x63;
+          const buf = Buffer.alloc(size, fill);
+          return new Response(new Uint8Array(buf), {
+            status: 200,
+            headers: { 'content-length': String(buf.length) },
+          });
+        }
+        const op = JSON.parse(String(init?.body));
+        if (op.action === 'authorize')
+          return new Response('down', { status: 503 });
+        return Response.json({ delivery: null });
+      },
+      () => time,
+      undefined,
+      undefined,
+      undefined,
+      {
+        maxStagingBytes: 80,
+        maxStagingFiles: 10,
+        maxSenderStagingBytes: 80,
+      },
+    );
+    try {
+      gbytesAdapter.configure(channel, identity);
+      // g-1 stages 60B -> global 60/80.
+      emitFile(gbytesSdk, 'g-1', 'gb-1', '/g60.bin');
+      await untilPartSettled(gbytesAdapter, 'gb-1');
+      // g-2 tries 30B (within g-2's 80B limit & 10 files limit, but 60+30=90 > 80 global!) -> rejected!
+      emitFile(gbytesSdk, 'g-2', 'gb-2', '/g30.bin');
+      await untilPartSettled(gbytesAdapter, 'gb-2');
+      assert.equal(
+        (
+          gbytesAdapter.db
+            .prepare('SELECT files FROM part WHERE platform_id=?')
+            .get('gb-2') as { files: string }
+        ).files,
+        '[]',
+      );
+      // g-3 sends 20B -> global reaches 80/80.
+      emitFile(gbytesSdk, 'g-3', 'gb-3', '/g20.bin');
+      await untilPartSettled(gbytesAdapter, 'gb-3');
+      assert.equal(
+        JSON.parse(
+          (
+            gbytesAdapter.db
+              .prepare('SELECT files FROM part WHERE platform_id=?')
+              .get('gb-3') as { files: string }
+          ).files,
+        ).length,
+        1,
+      );
+      // g-4 tries 20B when globalBytes is 80/80 -> rejected BEFORE downloading (0 new fetches)!
+      const fetchesAtFull = gbytesFetches;
+      emitFile(gbytesSdk, 'g-4', 'gb-4', '/g20.bin');
+      await untilPartSettled(gbytesAdapter, 'gb-4');
+      assert.equal(gbytesFetches, fetchesAtFull);
+      assert.equal(
+        (
+          gbytesAdapter.db
+            .prepare('SELECT files FROM part WHERE platform_id=?')
+            .get('gb-4') as { files: string }
+        ).files,
+        '[]',
+      );
+    } finally {
+      await gbytesAdapter.close();
+      await rm(dirBytes, { recursive: true, force: true });
+    }
+  } finally {
+    concGate.resolve();
+    console.warn = origWarn;
+    await concAdapter?.close();
+    await close?.();
+    await rm(dir, { recursive: true, force: true });
+    await rm(dirConc, { recursive: true, force: true });
+  }
+});
+
+test('M1-c-expiry & M1-d: expired staging batches purge disk files immediately, clear attachments, notify sender, unblock FIFO, and rate-limit retry warnings', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wecom-m1-expiry-'));
+  const stagingDir = join(dir, 'staging');
+  let time = 1000;
+  let hubMode: '503' | '502' | 'ok' = '503';
+  const sentNotices: Array<{ to: string; content: string }> = [];
+  const acceptedInputs: Array<Record<string, unknown>> = [];
+  const warnLogs: unknown[][] = [];
+  const origWarn = console.warn;
+  console.warn = (...args: unknown[]) => warnLogs.push(args);
+
+  const emitter = new EventEmitter();
+  const sdk = Object.assign(emitter, {
+    connect() {
+      emitter.emit('authenticated');
+    },
+    disconnect() {},
+    async sendMessage(to: string, body: { markdown?: { content?: string } }) {
+      sentNotices.push({ to, content: body.markdown?.content ?? '' });
+      return { headers: { req_id: 'r-exp' }, errcode: 0 };
+    },
+  });
+
+  const fileOnlyBytes = Buffer.from('expired-file-only-payload');
+  const fileOnlySha = createHash('sha256').update(fileOnlyBytes).digest('hex');
+  const fileTextBytes = Buffer.from('expired-with-text-payload');
+  const fileTextSha = createHash('sha256').update(fileTextBytes).digest('hex');
+
+  const adapter = new ChannelSession(
+    dir,
+    () => sdk as unknown as WSClient,
+    async (input, init) => {
+      const url = new URL(String(input));
+      if (url.hostname === 'qyapi.weixin.qq.com') {
+        if (url.pathname.endsWith('/gettoken')) {
+          return Response.json({
+            errcode: 0,
+            access_token: 'tok',
+            expires_in: 7200,
+          });
+        }
+        const id = JSON.parse(String(init?.body)).open_userid_list[0];
+        return Response.json({
+          errcode: 0,
+          userid_list: [{ open_userid: id, userid: 'u-' + id }],
+        });
+      }
+      if (url.hostname === 'wwcdn.weixin.qq.com') {
+        const buf = url.pathname.endsWith('/only.bin')
+          ? fileOnlyBytes
+          : fileTextBytes;
+        return new Response(buf, {
+          status: 200,
+          headers: {
+            'content-length': String(buf.length),
+            'content-disposition': `attachment; filename="${url.pathname.slice(1)}"`,
+          },
+        });
+      }
+      if (init?.method === 'PUT') {
+        const buf = Buffer.from(await new Response(init.body).arrayBuffer());
+        return Response.json({
+          sha256: url.pathname.split('/').at(-1),
+          size: buf.length,
+        });
+      }
+      const op = JSON.parse(String(init?.body));
+      if (op.action === 'authorize') {
+        return hubMode === 'ok'
+          ? Response.json({ bound: true })
+          : new Response('down', { status: Number(hubMode) });
+      }
+      if (op.action === 'next') return Response.json({ delivery: null });
+      if (op.action === 'inbound') {
+        if (hubMode !== 'ok')
+          return new Response('down', { status: Number(hubMode) });
+        acceptedInputs.push(op);
+        return Response.json({ accepted: true });
+      }
+      return Response.json({});
+    },
+    () => time,
+    undefined,
+    undefined,
+    undefined,
+    { maxStagingAgeMs: 60_000 },
+  );
+
+  try {
+    adapter.configure(channel, identity);
+
+    // 1. Create file-only batch at t=1000, then follow-up text batch at t=5000 for same sender.
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'peer-exp' },
+        msgid: 'exp-file-only',
+        msgtype: 'file',
+        file: { url: 'https://wwcdn.weixin.qq.com/only.bin' },
+      },
+    });
+    await untilPartSettled(adapter, 'exp-file-only');
+    assert.equal((await stat(join(stagingDir, fileOnlySha))).isFile(), true);
+
+    time = 5000;
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'peer-exp' },
+        msgid: 'after-exp',
+        msgtype: 'text',
+        text: { content: 'follow-up after expiry' },
+      },
+    });
+
+    // Retry exp-file-only 4 times within 5m with same 503 error -> only 1 retry warning!
+    for (let i = 0; i < 4; i++) {
+      await adapter.flush();
+      const row = adapter.db
+        .prepare('SELECT next_at FROM batch WHERE request=?')
+        .get('exp-file-only') as { next_at: number };
+      time = row.next_at;
+    }
+    const retryWarns503 = warnLogs.filter(
+      (l) => l[0] === '[wecom] inbound batch retrying:',
+    );
+    assert.equal(retryWarns503.length, 1);
+
+    // Distinct error reason (502) for same seq logs once and also rate-limits within 5m.
+    hubMode = '502';
+    await adapter.flush();
+    time = (
+      adapter.db
+        .prepare('SELECT next_at FROM batch WHERE request=?')
+        .get('exp-file-only') as { next_at: number }
+    ).next_at;
+    await adapter.flush();
+    assert.equal(
+      warnLogs.filter((l) => l[0] === '[wecom] inbound batch retrying:').length,
+      2,
+    );
+
+    // 2. Create text+file batch at t=20000 for peer-text.
+    time = 20_000;
+    hubMode = '503';
+    sdk.emit('message', {
+      body: {
+        chattype: 'single',
+        aibotid: 'bot',
+        from: { userid: 'peer-text' },
+        msgid: 'exp-with-text',
+        msgtype: 'mixed',
+        mixed: {
+          msg_item: [
+            { msgtype: 'text', text: { content: 'keep my question' } },
+            {
+              msgtype: 'file',
+              file: { url: 'https://wwcdn.weixin.qq.com/text.bin' },
+            },
+          ],
+        },
+      },
+    });
+    await untilPartSettled(adapter, 'exp-with-text');
+    assert.equal((await stat(join(stagingDir, fileTextSha))).isFile(), true);
+
+    // 3. Advance to t = 1000 + 60_000 (exp-file-only expires, exp-with-text age=41_000 < 60_000 still kept!).
+    time = 61_000;
+    await adapter.flush();
+    const expiredBatch = adapter.db
+      .prepare('SELECT state,next_at,error FROM batch WHERE request=?')
+      .get('exp-file-only') as {
+      state: string;
+      next_at: number;
+      error: string | null;
+    };
+    const expiredPart = adapter.db
+      .prepare('SELECT files FROM part WHERE platform_id=?')
+      .get('exp-file-only') as { files: string };
+    assert.equal(expiredBatch.state, 'failed');
+    assert.equal(expiredBatch.next_at, 0);
+    assert.equal(expiredBatch.error, 'staging retention expired');
+    assert.equal(expiredPart.files, '[]');
+    await assert.rejects(stat(join(stagingDir, fileOnlySha)));
+    assert.equal((await stat(join(stagingDir, fileTextSha))).isFile(), true);
+    assert.ok(
+      sentNotices.some(
+        (n) =>
+          n.to === 'peer-exp' &&
+          /暂存超过保留时间/.test(n.content) &&
+          !n.content.includes('Hub'),
+      ),
+    );
+
+    // 4. Advance to t = 80_000 (exp-with-text expires) and recover Hub -> text + expiry notice delivers!
+    time = 80_000;
+    hubMode = 'ok';
+    await adapter.flush();
+    await assert.rejects(stat(join(stagingDir, fileTextSha)));
+    assert.ok(
+      sentNotices.some(
+        (n) => n.to === 'peer-text' && /暂存超过保留时间/.test(n.content),
+      ),
+    );
+    const followUp = acceptedInputs.find((p) => p.platformId === 'after-exp');
+    const expiredTextDelivery = acceptedInputs.find(
+      (p) => p.platformId === 'exp-with-text',
+    );
+    assert.equal(followUp?.text, 'follow-up after expiry');
+    assert.ok(expiredTextDelivery);
+    assert.equal(expiredTextDelivery!.files, undefined);
+    assert.match(
+      String(expiredTextDelivery!.text),
+      /keep my question.*附件暂存超时未送达，请重新上传/,
+    );
+  } finally {
+    console.warn = origWarn;
+    await adapter.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('S1: transferHubFile aborts stalled PUT/GET transfers without extra AbortSignal.timeout while completing slow steady multi-chunk progress', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const dir = await mkdtemp(join(tmpdir(), 'wecom-s1-stall-'));
+  let time = 1000;
+  const origWarn = console.warn;
+  console.warn = () => {};
+  const emitter = new EventEmitter();
+  const sdk = Object.assign(emitter, {
+    connect() {
+      emitter.emit('authenticated');
+    },
+    disconnect() {},
+  });
+
+  try {
+    const payload = Buffer.alloc(4096, 0x77);
+    const sha = createHash('sha256').update(payload).digest('hex');
+
+    // (i) Stalled PUT stops reading after chunk 0 -> aborts promptly at 40ms with TimeoutError (no second AbortSignal.timeout).
+    const origTimeout = AbortSignal.timeout;
+    const seenTimeouts: number[] = [];
+    AbortSignal.timeout = ((ms: number) => {
+      seenTimeouts.push(ms);
+      return origTimeout.call(AbortSignal, ms);
+    }) as typeof AbortSignal.timeout;
+    try {
+      const stalled: { error?: unknown } = {};
+      const stallFetchStarted = deferred();
+      const stalledPromise = transferHubFile(
+        async (_input, init) => {
+          assert.equal((init as { duplex?: string }).duplex, 'half');
+          const reader = (init!.body as ReadableStream<Uint8Array>).getReader();
+          await reader.read();
+          return new Promise<Response>((_resolve, reject) => {
+            init!.signal!.addEventListener(
+              'abort',
+              () => reject(init!.signal!.reason),
+              { once: true },
+            );
+            stallFetchStarted.resolve();
+          });
+        },
+        channel,
+        'member',
+        sha,
+        payload,
+        undefined,
+        { stallTimeoutMs: 40, chunkBytes: 1024 },
+      ).catch((err) => {
+        stalled.error = err;
+      });
+      await stallFetchStarted.promise;
+      t.mock.timers.tick(39);
+      await new Promise<void>((ok) => setImmediate(ok));
+      assert.equal(stalled.error, undefined);
+      t.mock.timers.tick(1);
+      await Promise.race([
+        stalledPromise,
+        new Promise<void>((ok) => setImmediate(ok)),
+      ]);
+      assert.ok(stalled.error instanceof DOMException);
+      assert.equal(stalled.error.name, 'TimeoutError');
+      assert.deepEqual(seenTimeouts, [900_000]);
+    } finally {
+      AbortSignal.timeout = origTimeout;
+    }
+
+    // (i-b) Stalled response.body on GET aborts cleanly at 40ms.
+    let getReaderCancelReason: unknown;
+    const getFirstChunkEnqueued = deferred();
+    const stalledGetResp = await transferHubFile(
+      async () => {
+        const body = new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(Buffer.from('first'));
+            getFirstChunkEnqueued.resolve();
+          },
+          cancel(reason) {
+            getReaderCancelReason = reason;
+          },
+        });
+        return new Response(body, { status: 200 });
+      },
+      channel,
+      'member',
+      sha,
+      undefined,
+      'receipt-1',
+      { stallTimeoutMs: 40 },
+    );
+    const getResult: { error?: unknown } = {};
+    const readingGet = stalledGetResp.arrayBuffer().catch((err) => {
+      getResult.error = err;
+    });
+    await getFirstChunkEnqueued.promise;
+    await new Promise<void>((ok) => setImmediate(ok));
+    t.mock.timers.tick(39);
+    await new Promise<void>((ok) => setImmediate(ok));
+    assert.equal(getResult.error, undefined);
+    t.mock.timers.tick(1);
+    await Promise.race([
+      readingGet,
+      new Promise<void>((ok) => setImmediate(ok)),
+    ]);
+    assert.ok(getResult.error instanceof DOMException);
+    assert.equal(getResult.error.name, 'TimeoutError');
+    assert.ok(getReaderCancelReason instanceof DOMException);
+
+    // (ii) Slow multi-chunk upload (> 40ms total across 4 chunks * 25ms = 100ms) completes 200.
+    let readChunks = 0;
+    const slowResp = await transferHubFile(
+      async (_input, init) => {
+        const reader = (init!.body as ReadableStream<Uint8Array>).getReader();
+        const received: Uint8Array[] = [];
+        while (true) {
+          t.mock.timers.tick(25);
+          const { done, value } = await reader.read();
+          if (done) break;
+          readChunks++;
+          received.push(value);
+        }
+        const merged = Buffer.concat(received);
+        return Response.json({
+          sha256: createHash('sha256').update(merged).digest('hex'),
+          size: merged.length,
+        });
+      },
+      channel,
+      'member',
+      sha,
+      payload,
+      undefined,
+      { stallTimeoutMs: 40, chunkBytes: 1024 },
+    );
+    assert.equal(slowResp.status, 200);
+    assert.equal(readChunks, 4);
+    assert.deepEqual(await slowResp.json(), { sha256: sha, size: 4096 });
+
+    // (iii) ChannelSession classifies a stalled PUT as transient (not permanent) and recovers on flush.
+    let failFirstPutStall = true;
+    let putStallStarted = deferred();
+    const acceptedPayloads: Array<Record<string, unknown>> = [];
+    const adapter = new ChannelSession(
+      dir,
+      () => sdk as unknown as WSClient,
+      async (input, init) => {
+        const url = new URL(String(input));
+        if (url.hostname === 'qyapi.weixin.qq.com') {
+          if (url.pathname.endsWith('/gettoken')) {
+            return Response.json({
+              errcode: 0,
+              access_token: 'tok',
+              expires_in: 7200,
+            });
+          }
+          const id = JSON.parse(String(init?.body)).open_userid_list[0];
+          return Response.json({
+            errcode: 0,
+            userid_list: [{ open_userid: id, userid: 'u-' + id }],
+          });
+        }
+        if (url.hostname === 'wwcdn.weixin.qq.com') {
+          return new Response(new Uint8Array(payload), {
+            status: 200,
+            headers: { 'content-length': String(payload.length) },
+          });
+        }
+        if (init?.method === 'PUT') {
+          if (failFirstPutStall) {
+            return new Promise<Response>((_resolve, reject) => {
+              init.signal!.addEventListener(
+                'abort',
+                () => reject(init.signal!.reason),
+                { once: true },
+              );
+              putStallStarted.resolve();
+            });
+          }
+          const buf = Buffer.from(await new Response(init.body).arrayBuffer());
+          return Response.json({
+            sha256: url.pathname.split('/').at(-1),
+            size: buf.length,
+          });
+        }
+        const op = JSON.parse(String(init?.body));
+        if (op.action === 'authorize') return Response.json({ bound: true });
+        if (op.action === 'next') return Response.json({ delivery: null });
+        if (op.action === 'inbound') {
+          if (failFirstPutStall) return Response.json({}, { status: 400 });
+          acceptedPayloads.push(op);
+          return Response.json({ accepted: true });
+        }
+        return Response.json({});
+      },
+      () => time,
+      undefined,
+      undefined,
+      undefined,
+      { transferStallTimeoutMs: 40 },
+    );
+    try {
+      adapter.configure(channel, identity);
+      sdk.emit('message', {
+        body: {
+          chattype: 'single',
+          aibotid: 'bot',
+          from: { userid: 'stall-peer' },
+          msgid: 's1-msg',
+          msgtype: 'file',
+          file: { url: 'https://wwcdn.weixin.qq.com/s1.bin' },
+        },
+      });
+      await putStallStarted.promise;
+      t.mock.timers.tick(40);
+      await untilPartSettled(adapter, 's1-msg');
+      putStallStarted = deferred();
+      time += 3500;
+      const flushing = adapter.flush();
+      await putStallStarted.promise;
+      t.mock.timers.tick(40);
+      await flushing;
+      const pendingRow = adapter.db
+        .prepare(
+          'SELECT state,attempts,transient_attempts,next_at FROM batch WHERE request=?',
+        )
+        .get('s1-msg') as {
+        state: string;
+        attempts: number;
+        transient_attempts: number;
+        next_at: number;
+      };
+      assert.equal(pendingRow.state, 'pending');
+      assert.equal(pendingRow.attempts, 0);
+      assert.equal(pendingRow.transient_attempts, 1);
+
+      failFirstPutStall = false;
+      time = pendingRow.next_at;
+      await adapter.flush();
+      assert.equal(acceptedPayloads.length, 1);
+      assert.equal(
+        (acceptedPayloads[0]!.files as Array<{ sha256: string }>)[0]!.sha256,
+        sha,
+      );
+    } finally {
+      await adapter.close();
+    }
+  } finally {
+    t.mock.timers.reset();
+    console.warn = origWarn;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('S2: formatChannelNotice maps message_not_processed and English fallback to Simplified Chinese', async () => {
+  assert.equal(
+    formatChannelNotice('message_not_processed', 'raw english'),
+    '本条消息未被处理，可以重新发送。',
+  );
+  assert.equal(
+    formatChannelNotice(
+      undefined,
+      'message was not processed; you can resend it',
+    ),
+    '本条消息未被处理，可以重新发送。',
+  );
+
+  const dir = await mkdtemp(join(tmpdir(), 'wecom-s2-notice-'));
+  const sentMessages: Array<{ to: string; body: unknown }> = [];
+  const emitter = new EventEmitter();
+  const sdk = Object.assign(emitter, {
+    connect() {
+      emitter.emit('authenticated');
+    },
+    disconnect() {},
+    async sendMessage(to: string, body: unknown) {
+      sentMessages.push({ to, body });
+      return { headers: { req_id: 'req-s2' }, errcode: 0 };
+    },
+  });
+  const text = 'message was not processed; you can resend it';
+  const intent = makeDeliveryIntent(text);
+  let delivered = false;
+  const adapter = new ChannelSession(
+    dir,
+    () => sdk as unknown as WSClient,
+    async (_input, init) => {
+      const op = JSON.parse(String(init?.body));
+      if (op.action === 'next') {
+        if (delivered) return Response.json({ delivery: null });
+        delivered = true;
+        return Response.json({
+          delivery: {
+            subject: 'member',
+            receipt: '77777777-7777-4777-8777-777777777777',
+            role: 'notice',
+            code: 'message_not_processed',
+            text,
+            sha256: intent.sha256,
+            size: intent.size,
+            file: null,
+            intent,
+          },
+        });
+      }
+      return Response.json({});
+    },
+  );
+  try {
+    adapter.configure(channel, identity);
+    await adapter.flush();
+    assert.equal(sentMessages.length, 1);
+    assert.equal(
+      (sentMessages[0]!.body as { markdown: { content: string } }).markdown
+        .content,
+      '本条消息未被处理，可以重新发送。',
+    );
+  } finally {
     await adapter.close();
     await rm(dir, { recursive: true, force: true });
   }

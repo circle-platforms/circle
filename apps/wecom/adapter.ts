@@ -17,7 +17,12 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import lockfile from 'proper-lockfile';
 import { decryptFile, WSClient } from '@wecom/aibot-node-sdk';
-import { getFile, postHub, transferHubFile } from './hub-client.ts';
+import {
+  DEFAULT_TRANSFER_STALL_TIMEOUT_MS,
+  getFile,
+  postHub,
+  transferHubFile,
+} from './hub-client.ts';
 import {
   WeComApiError,
   WeComApplication,
@@ -47,6 +52,10 @@ const BATCH_BACKOFF_BASE_MS = 1000;
 const BATCH_BACKOFF_MAX_MS = 60_000;
 const MAX_CONCURRENT_DOWNLOADS = 2;
 const STAGING_PART_MAX_AGE_MS = 15 * 60_000;
+const DEFAULT_MAX_STAGING_BYTES = 512 * 1024 * 1024;
+const DEFAULT_MAX_STAGING_FILES = 128;
+const DEFAULT_MAX_SENDER_STAGING_BYTES = 128 * 1024 * 1024;
+const DEFAULT_MAX_STAGING_AGE_MS = 2 * 60 * 60_000;
 const REJECTION_NOTICE_WINDOW_MS = 5 * 60_000;
 const MAX_HUB_INBOUND_TEXT_CHARS = 16000;
 const MAX_HUB_INBOUND_FILES = 8;
@@ -90,6 +99,7 @@ const CHANNEL_NOTICE_MESSAGES: Record<string, string> = {
   invalid_attachment_digest: '附件摘要无效，请重新上传后再试。',
   attachment_unavailable: '附件无法读取，请重新上传后再试。',
   reply_interrupted: '模型回复已中断，结果未知，请按需重试。',
+  message_not_processed: '本条消息未被处理，可以重新发送。',
 };
 
 const LEGACY_ENGLISH_NOTICE_TEXTS: Record<string, string> = {
@@ -131,6 +141,8 @@ const LEGACY_ENGLISH_NOTICE_TEXTS: Record<string, string> = {
     CHANNEL_NOTICE_MESSAGES.attachment_unavailable!,
   'model reply interrupted; outcome unknown':
     CHANNEL_NOTICE_MESSAGES.reply_interrupted!,
+  'message was not processed; you can resend it':
+    CHANNEL_NOTICE_MESSAGES.message_not_processed!,
 };
 
 export function formatChannelNotice(
@@ -194,6 +206,13 @@ class PermanentInboundError extends Error {
     super(message);
     this.name = 'PermanentInboundError';
     this.status = status;
+  }
+}
+
+class StagingLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StagingLimitError';
   }
 }
 
@@ -360,7 +379,12 @@ function splitChunkPlatformId(
 }
 
 type RejectionReason =
-  number | 'text_too_long' | 'too_many_files' | 'insecure_media_url';
+  | number
+  | 'text_too_long'
+  | 'too_many_files'
+  | 'insecure_media_url'
+  | 'staging_limit'
+  | 'staging_expired';
 
 export interface ServeChannelOptions {
   mediaHosts?: Iterable<string>;
@@ -368,6 +392,19 @@ export interface ServeChannelOptions {
   fetcher?: typeof fetch;
   now?: () => number;
   maxAttachmentBytes?: number;
+  maxStagingBytes?: number;
+  maxStagingFiles?: number;
+  maxSenderStagingBytes?: number;
+  maxStagingAgeMs?: number;
+  transferStallTimeoutMs?: number;
+}
+
+export interface ChannelSessionOptions {
+  maxStagingBytes?: number;
+  maxStagingFiles?: number;
+  maxSenderStagingBytes?: number;
+  maxStagingAgeMs?: number;
+  transferStallTimeoutMs?: number;
 }
 
 export class ChannelSession {
@@ -387,8 +424,16 @@ export class ChannelSession {
   private downloads = new Set<Promise<void>>();
   private activeDownloadCount = 0;
   private downloadQueue: Array<() => void> = [];
-  private activeStaging = new Map<string, number>();
+  private inFlightDownloads = new Map<
+    symbol,
+    { scope: string; sender: string; bytes: number }
+  >();
+  private inFlightStaged = new Map<
+    symbol,
+    { scope: string; sender: string; sha256: string; size: number }
+  >();
   private rejectionNoticeAt = new Map<string, number>();
+  private retryWarnAt = new Map<string, number>();
   readonly now: () => number;
   private timer: NodeJS.Timeout;
   private boundApp?: { id: string; value: WeComApplication };
@@ -397,6 +442,11 @@ export class ChannelSession {
   private readonly baseMediaHosts: ReadonlySet<string>;
   private allowedMediaHosts: Set<string>;
   readonly maxAttachmentBytes: number;
+  readonly maxStagingBytes: number;
+  readonly maxStagingFiles: number;
+  readonly maxSenderStagingBytes: number;
+  readonly maxStagingAgeMs: number;
+  readonly transferStallTimeoutMs: number;
   private readonly beforeStagingRename?: (
     tempPath: string,
   ) => Promise<void> | void;
@@ -419,6 +469,7 @@ export class ChannelSession {
     mediaHosts: ReadonlySet<string> = DEFAULT_WECOM_MEDIA_HOSTS,
     maxAttachmentBytes = MAX_ATTACHMENT_BYTES,
     beforeStagingRename?: (tempPath: string) => Promise<void> | void,
+    options?: ChannelSessionOptions,
   ) {
     this.directory = directory;
     this.stagingDir = join(directory, 'staging');
@@ -428,10 +479,20 @@ export class ChannelSession {
     this.baseMediaHosts = normalizeMediaHosts(mediaHosts);
     this.allowedMediaHosts = new Set(this.baseMediaHosts);
     this.maxAttachmentBytes = maxAttachmentBytes;
+    this.maxStagingBytes =
+      options?.maxStagingBytes ?? DEFAULT_MAX_STAGING_BYTES;
+    this.maxStagingFiles =
+      options?.maxStagingFiles ?? DEFAULT_MAX_STAGING_FILES;
+    this.maxSenderStagingBytes =
+      options?.maxSenderStagingBytes ?? DEFAULT_MAX_SENDER_STAGING_BYTES;
+    this.maxStagingAgeMs =
+      options?.maxStagingAgeMs ?? DEFAULT_MAX_STAGING_AGE_MS;
+    this.transferStallTimeoutMs =
+      options?.transferStallTimeoutMs ?? DEFAULT_TRANSFER_STALL_TIMEOUT_MS;
     this.beforeStagingRename = beforeStagingRename;
     this.db = new DatabaseSync(join(directory, 'channel.sqlite'));
     this.db.exec(`PRAGMA journal_mode=WAL;
-      CREATE TABLE IF NOT EXISTS batch(seq INTEGER PRIMARY KEY, scope TEXT NOT NULL,request TEXT NOT NULL,sender TEXT NOT NULL,state TEXT NOT NULL,due INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,transient_attempts INTEGER NOT NULL DEFAULT 0,sent_chunks INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,error TEXT,UNIQUE(scope,request));
+      CREATE TABLE IF NOT EXISTS batch(seq INTEGER PRIMARY KEY, scope TEXT NOT NULL,request TEXT NOT NULL,sender TEXT NOT NULL,state TEXT NOT NULL,due INTEGER NOT NULL,created_at INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0,transient_attempts INTEGER NOT NULL DEFAULT 0,sent_chunks INTEGER NOT NULL DEFAULT 0,next_at INTEGER NOT NULL DEFAULT 0,error TEXT,UNIQUE(scope,request));
       CREATE TABLE IF NOT EXISTS part(seq INTEGER PRIMARY KEY,scope TEXT NOT NULL,platform_id TEXT NOT NULL,batch INTEGER NOT NULL,body TEXT NOT NULL,files TEXT,UNIQUE(scope,platform_id));
       CREATE TABLE IF NOT EXISTS peer(scope TEXT NOT NULL,subject TEXT NOT NULL,sender TEXT NOT NULL,PRIMARY KEY(scope,subject));
     `);
@@ -442,6 +503,10 @@ export class ChannelSession {
         }>
       ).map((col) => col.name),
     );
+    if (!batchColumns.has('created_at'))
+      this.db.exec(
+        'ALTER TABLE batch ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0',
+      );
     if (!batchColumns.has('attempts'))
       this.db.exec(
         'ALTER TABLE batch ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0',
@@ -460,6 +525,9 @@ export class ChannelSession {
       );
     if (!batchColumns.has('error'))
       this.db.exec('ALTER TABLE batch ADD COLUMN error TEXT');
+    this.db.exec(
+      'CREATE INDEX IF NOT EXISTS idx_batch_scope_state_created ON batch(scope, state, created_at);',
+    );
     this.db
       .prepare("UPDATE part SET files='[]',body=body||? WHERE files IS NULL")
       .run('（附件接收中断，请重新上传）');
@@ -558,9 +626,9 @@ export class ChannelSession {
         open?.seq ??
         this.db
           .prepare(
-            "INSERT INTO batch(scope,request,sender,state,due) VALUES(?,?,?,'open',?)",
+            "INSERT INTO batch(scope,request,sender,state,due,created_at) VALUES(?,?,?,'open',?,?)",
           )
-          .run(runtime.scope, input.platformId, input.sender, now)
+          .run(runtime.scope, input.platformId, input.sender, now, now)
           .lastInsertRowid;
       this.db
         .prepare(
@@ -606,18 +674,89 @@ export class ChannelSession {
     }
   }
 
-  private retainActiveStaging(sha256: string) {
-    this.activeStaging.set(sha256, (this.activeStaging.get(sha256) ?? 0) + 1);
+  private retainActiveStaging(
+    scope: string,
+    sender: string,
+    sha256: string,
+    size: number,
+  ): symbol {
+    const token = Symbol('staged');
+    this.inFlightStaged.set(token, { scope, sender, sha256, size });
+    return token;
   }
 
-  private releaseActiveStaging(sha256: string) {
-    const count = this.activeStaging.get(sha256) ?? 0;
-    if (count <= 1) this.activeStaging.delete(sha256);
-    else this.activeStaging.set(sha256, count - 1);
+  private releaseActiveStaging(token: symbol) {
+    this.inFlightStaged.delete(token);
+  }
+
+  private getActiveStagingUsage(scope: string, sender: string) {
+    const globalBySha = new Map<string, number>();
+    let senderBytes = 0;
+    const rows = this.db
+      .prepare(
+        "SELECT b.scope, b.sender, p.files FROM part p JOIN batch b ON b.seq=p.batch WHERE b.state IN ('open','pending','sending') AND p.files IS NOT NULL AND p.files<>'[]'",
+      )
+      .all() as Array<{ scope: string; sender: string; files: string }>;
+    for (const row of rows) {
+      try {
+        const parsed = JSON.parse(row.files) as Array<{
+          sha256?: unknown;
+          size?: unknown;
+        }>;
+        if (!Array.isArray(parsed)) continue;
+        for (const file of parsed) {
+          if (
+            typeof file?.sha256 === 'string' &&
+            /^[0-9a-f]{64}$/.test(file.sha256)
+          ) {
+            const size =
+              typeof file.size === 'number' &&
+              Number.isFinite(file.size) &&
+              file.size >= 0
+                ? file.size
+                : 0;
+            globalBySha.set(
+              file.sha256,
+              Math.max(globalBySha.get(file.sha256) ?? 0, size),
+            );
+            if (row.scope === scope && row.sender === sender) {
+              senderBytes += size;
+            }
+          }
+        }
+      } catch {
+        // Ignore malformed legacy rows when collecting active staging usage.
+      }
+    }
+    for (const staged of this.inFlightStaged.values()) {
+      globalBySha.set(
+        staged.sha256,
+        Math.max(globalBySha.get(staged.sha256) ?? 0, staged.size),
+      );
+      if (staged.scope === scope && staged.sender === sender) {
+        senderBytes += staged.size;
+      }
+    }
+    let globalBytes = 0;
+    for (const size of globalBySha.values()) {
+      globalBytes += size;
+    }
+    let globalFiles = globalBySha.size;
+    for (const active of this.inFlightDownloads.values()) {
+      globalBytes += active.bytes;
+      globalFiles += 1;
+      if (active.scope === scope && active.sender === sender) {
+        senderBytes += active.bytes;
+      }
+    }
+    return { globalBySha, globalBytes, globalFiles, senderBytes };
   }
 
   private referencedStagingShas(): Set<string> {
-    const refs = new Set<string>(this.activeStaging.keys());
+    const refs = new Set<string>();
+    for (const staged of this.inFlightStaged.values()) {
+      refs.add(staged.sha256);
+    }
     const rows = this.db
       .prepare(
         "SELECT p.files FROM part p JOIN batch b ON b.seq=p.batch WHERE b.state IN ('open','pending','sending') AND p.files IS NOT NULL AND p.files<>'[]'",
@@ -706,6 +845,8 @@ export class ChannelSession {
   private async downloadEncryptedMedia(
     runtime: NonNullable<typeof this.current>,
     media: Media,
+    maxQuotaBytes?: number,
+    onProgress?: (bytes: number) => void,
   ): Promise<{ buffer: Buffer; filename?: string }> {
     if (!URL.canParse(media.url)) throw new Error('invalid media url');
     const url = new URL(media.url);
@@ -716,9 +857,20 @@ export class ChannelSession {
       !this.mediaHosts.has(url.hostname.toLowerCase())
     )
       throw new Error('media host not allowed');
-    const maxWireBytes = media.aeskey
-      ? this.maxAttachmentBytes + WECOM_AES_PADDING_BYTES
+    const limitByQuota =
+      maxQuotaBytes !== undefined && maxQuotaBytes < this.maxAttachmentBytes;
+    const effectiveMaxBytes = limitByQuota
+      ? maxQuotaBytes
       : this.maxAttachmentBytes;
+    const rejectTooLarge = (): never => {
+      if (limitByQuota) {
+        throw new StagingLimitError('staging limit exceeded');
+      }
+      throw new Error('attachment too large');
+    };
+    const maxWireBytes = media.aeskey
+      ? effectiveMaxBytes + WECOM_AES_PADDING_BYTES
+      : effectiveMaxBytes;
     const controller = new AbortController();
     const response = await this.fetcher(url, {
       method: 'GET',
@@ -739,7 +891,7 @@ export class ChannelSession {
       ) {
         await response.body?.cancel();
         controller.abort();
-        throw new Error('attachment too large');
+        rejectTooLarge();
       }
     }
     const filename = parseMediaFilename(
@@ -763,9 +915,10 @@ export class ChannelSession {
           if (total > maxWireBytes) {
             await reader.cancel().catch(() => {});
             controller.abort();
-            throw new Error('attachment too large');
+            rejectTooLarge();
           }
           chunks.push(value);
+          onProgress?.(Math.min(effectiveMaxBytes, total));
         }
       } catch (error) {
         await reader.cancel().catch(() => {});
@@ -776,8 +929,7 @@ export class ChannelSession {
     const raw = Buffer.concat(chunks, total);
     chunks.length = 0;
     const buffer = media.aeskey ? decryptFile(raw, media.aeskey) : raw;
-    if (buffer.length > this.maxAttachmentBytes)
-      throw new Error('attachment too large');
+    if (buffer.length > effectiveMaxBytes) rejectTooLarge();
     return { buffer, filename };
   }
 
@@ -785,26 +937,14 @@ export class ChannelSession {
     runtime: NonNullable<typeof this.current>,
     input: NonNullable<ReturnType<typeof privateInput>>,
   ) {
-    const retainedShas: string[] = [];
+    const retainedTokens: symbol[] = [];
+    let activeDownloadToken: symbol | undefined;
     try {
-      const files: FileRef[] = [];
-      for (const media of input.media) {
-        if (runtime !== this.current) throw new Error('channel changed');
-        const { buffer, filename } = await this.downloadEncryptedMedia(
-          runtime,
-          media,
-        );
-        const sha256 = createHash('sha256').update(buffer).digest('hex');
-        const name = safeAttachmentName(filename);
-        this.retainActiveStaging(sha256);
-        retainedShas.push(sha256);
-        await this.persistStagingFile(sha256, buffer);
-        files.push({ name, sha256, size: buffer.length });
+      if (runtime !== this.current) {
+        throw new PermanentInboundError(0, 'channel changed');
       }
+      let authorizedSubject: string | undefined;
       try {
-        if (runtime !== this.current) {
-          throw new TransientInboundError('channel changed');
-        }
         const subject = await runtime.app.fromBot(input.sender);
         const allowed = await this.post(runtime, {
           action: 'authorize',
@@ -822,65 +962,167 @@ export class ChannelSession {
             'hub authorize status ' + allowed.status,
           );
         }
-        const uploaded = new Set<string>();
-        for (const ref of files) {
-          if (uploaded.has(ref.sha256)) continue;
-          uploaded.add(ref.sha256);
-          if (runtime !== this.current) {
-            throw new TransientInboundError('channel changed');
-          }
-          const bytes = await readFile(join(this.stagingDir, ref.sha256));
-          const response = await this.transfer(
-            runtime,
-            subject,
-            ref.sha256,
-            bytes,
+        authorizedSubject = subject;
+      } catch (error) {
+        if (error instanceof PermanentInboundError) throw error;
+        if (!this.isTransientInboundError(error)) {
+          throw new PermanentInboundError(
+            0,
+            sanitizeLogError(error, this.runtimeSecrets(runtime)),
           );
-          if (!response.ok) {
-            await response.body?.cancel();
-            if (this.isTransientStatus(response.status)) {
-              throw new TransientInboundError(
+        }
+        // Preserve download/local staging across transient identity or Hub outages (F2).
+      }
+
+      const files: FileRef[] = [];
+      for (const media of input.media) {
+        if (runtime !== this.current) throw new Error('channel changed');
+        const preUsage = this.getActiveStagingUsage(
+          runtime.scope,
+          input.sender,
+        );
+        const remainingGlobalBytes =
+          this.maxStagingBytes - preUsage.globalBytes;
+        const remainingGlobalFiles =
+          this.maxStagingFiles - preUsage.globalFiles;
+        const remainingSenderBytes =
+          this.maxSenderStagingBytes - preUsage.senderBytes;
+        if (
+          remainingGlobalFiles <= 0 ||
+          remainingGlobalBytes <= 0 ||
+          remainingSenderBytes <= 0
+        ) {
+          throw new StagingLimitError('staging limit exceeded');
+        }
+        const remainingQuotaBytes = Math.min(
+          remainingGlobalBytes,
+          remainingSenderBytes,
+        );
+        const downloadToken = Symbol('download');
+        const downloadEntry = {
+          scope: runtime.scope,
+          sender: input.sender,
+          bytes: 0,
+        };
+        this.inFlightDownloads.set(downloadToken, downloadEntry);
+        activeDownloadToken = downloadToken;
+        let buffer: Buffer;
+        let filename: string | undefined;
+        try {
+          const downloaded = await this.downloadEncryptedMedia(
+            runtime,
+            media,
+            remainingQuotaBytes,
+            (bytesSoFar) => {
+              downloadEntry.bytes = Math.max(downloadEntry.bytes, bytesSoFar);
+            },
+          );
+          buffer = downloaded.buffer;
+          filename = downloaded.filename;
+        } finally {
+          this.inFlightDownloads.delete(downloadToken);
+          if (activeDownloadToken === downloadToken) {
+            activeDownloadToken = undefined;
+          }
+        }
+        const sha256 = createHash('sha256').update(buffer).digest('hex');
+        const name = safeAttachmentName(filename);
+        const postUsage = this.getActiveStagingUsage(
+          runtime.scope,
+          input.sender,
+        );
+        const isNewGlobalSha = !postUsage.globalBySha.has(sha256);
+        const extraGlobalFiles = isNewGlobalSha ? 1 : 0;
+        const extraGlobalBytes = isNewGlobalSha ? buffer.length : 0;
+        if (
+          postUsage.globalFiles + extraGlobalFiles > this.maxStagingFiles ||
+          postUsage.globalBytes + extraGlobalBytes > this.maxStagingBytes ||
+          postUsage.senderBytes + buffer.length > this.maxSenderStagingBytes
+        ) {
+          throw new StagingLimitError('staging limit exceeded');
+        }
+        const retainedToken = this.retainActiveStaging(
+          runtime.scope,
+          input.sender,
+          sha256,
+          buffer.length,
+        );
+        retainedTokens.push(retainedToken);
+        await this.persistStagingFile(sha256, buffer);
+        files.push({ name, sha256, size: buffer.length });
+      }
+      if (authorizedSubject !== undefined) {
+        try {
+          const uploaded = new Set<string>();
+          for (const ref of files) {
+            if (uploaded.has(ref.sha256)) continue;
+            uploaded.add(ref.sha256);
+            if (runtime !== this.current) {
+              throw new TransientInboundError('channel changed');
+            }
+            const bytes = await readFile(join(this.stagingDir, ref.sha256));
+            const response = await this.transfer(
+              runtime,
+              authorizedSubject,
+              ref.sha256,
+              bytes,
+            );
+            if (!response.ok) {
+              await response.body?.cancel();
+              if (this.isTransientStatus(response.status)) {
+                throw new TransientInboundError(
+                  'hub staging upload status ' + response.status,
+                );
+              }
+              throw new PermanentInboundError(
+                response.status,
                 'hub staging upload status ' + response.status,
               );
             }
-            throw new PermanentInboundError(
-              response.status,
-              'hub staging upload status ' + response.status,
-            );
+            let receipt: { sha256?: unknown; size?: unknown };
+            try {
+              receipt = (await response.json()) as {
+                sha256?: unknown;
+                size?: unknown;
+              };
+            } catch {
+              throw new PermanentInboundError(400, 'file integrity');
+            }
+            if (receipt.sha256 !== ref.sha256 || receipt.size !== ref.size) {
+              throw new PermanentInboundError(400, 'file integrity');
+            }
           }
-          let receipt: { sha256?: unknown; size?: unknown };
-          try {
-            receipt = (await response.json()) as {
-              sha256?: unknown;
-              size?: unknown;
-            };
-          } catch {
-            throw new PermanentInboundError(400, 'file integrity');
-          }
-          if (receipt.sha256 !== ref.sha256 || receipt.size !== ref.size) {
-            throw new PermanentInboundError(400, 'file integrity');
-          }
+        } catch (error) {
+          if (error instanceof PermanentInboundError) throw error;
+          // Preserve locally staged bytes and part.files across transient Hub outages.
         }
-      } catch (error) {
-        if (error instanceof PermanentInboundError) throw error;
-        // Preserve locally staged bytes and part.files across transient Hub or identity outages.
       }
       this.db
         .prepare('UPDATE part SET files=? WHERE scope=? AND platform_id=?')
         .run(JSON.stringify(files), runtime.scope, input.platformId);
-    } catch {
-      while (retainedShas.length > 0) {
-        this.releaseActiveStaging(retainedShas.pop()!);
+    } catch (error) {
+      if (activeDownloadToken !== undefined) {
+        this.inFlightDownloads.delete(activeDownloadToken);
+        activeDownloadToken = undefined;
+      }
+      while (retainedTokens.length > 0) {
+        this.releaseActiveStaging(retainedTokens.pop()!);
       }
       await this.sweepStaging().catch(() => {});
+      if (error instanceof StagingLimitError) {
+        await this.notifyRejectedSender(runtime, input.sender, 'staging_limit');
+      }
       this.db
         .prepare(
           "UPDATE part SET files='[]',body=body||? WHERE scope=? AND platform_id=?",
         )
         .run('（附件未接收，请重新上传）', runtime.scope, input.platformId);
     } finally {
-      while (retainedShas.length > 0) {
-        this.releaseActiveStaging(retainedShas.pop()!);
+      if (activeDownloadToken !== undefined) {
+        this.inFlightDownloads.delete(activeDownloadToken);
+      }
+      while (retainedTokens.length > 0) {
+        this.releaseActiveStaging(retainedTokens.pop()!);
       }
     }
   }
@@ -911,6 +1153,7 @@ export class ChannelSession {
       sha,
       buffer,
       receipt,
+      { stallTimeoutMs: this.transferStallTimeoutMs },
     );
   }
 
@@ -921,7 +1164,9 @@ export class ChannelSession {
     receipt: string,
   ) {
     if (run !== this.current) throw new Error('文件不可用');
-    return getFile(this.fetcher, run.channel, sha256, subject, receipt);
+    return getFile(this.fetcher, run.channel, sha256, subject, receipt, {
+      stallTimeoutMs: this.transferStallTimeoutMs,
+    });
   }
 
   private runtimeSecrets(run: NonNullable<typeof this.current>): string[] {
@@ -1032,6 +1277,18 @@ export class ChannelSession {
         content: '消息未送达：附件下载地址无效或未使用 HTTPS，未予接收。',
       };
     }
+    if (reason === 'staging_limit') {
+      return {
+        key: 'staging_limit',
+        content: '附件未接收：暂存数量或容量已达上限，请稍后重试或联系管理员。',
+      };
+    }
+    if (reason === 'staging_expired') {
+      return {
+        key: 'staging_expired',
+        content: '附件未送达：暂存超过保留时间已自动清理，请重新发送。',
+      };
+    }
     if (reason === 403) {
       return {
         key: '403',
@@ -1067,6 +1324,34 @@ export class ChannelSession {
       }
     }
     this.rejectionNoticeAt.set(limitKey, now);
+  }
+
+  private clearRetryWarnings(seq: number) {
+    const prefix = `${seq}\0`;
+    for (const key of this.retryWarnAt.keys()) {
+      if (key.startsWith(prefix)) {
+        this.retryWarnAt.delete(key);
+      }
+    }
+  }
+
+  private shouldLogRetryWarning(
+    seq: number,
+    reason: string,
+    now: number,
+  ): boolean {
+    const key = `${seq}\0${reason}`;
+    const last = this.retryWarnAt.get(key);
+    if (last !== undefined && now - last < REJECTION_NOTICE_WINDOW_MS) {
+      return false;
+    }
+    for (const [k, ts] of this.retryWarnAt) {
+      if (now - ts >= REJECTION_NOTICE_WINDOW_MS) {
+        this.retryWarnAt.delete(k);
+      }
+    }
+    this.retryWarnAt.set(key, now);
+    return true;
   }
 
   private async notifyRejectedSender(
@@ -1126,6 +1411,63 @@ export class ChannelSession {
   }
 
   private async flushInbound(run: NonNullable<typeof this.current>) {
+    const expireNow = this.now();
+    const expiredBatches = this.db
+      .prepare(
+        `SELECT DISTINCT b.seq, b.sender
+         FROM batch b
+         JOIN part p ON p.batch=b.seq
+         WHERE b.scope=?
+           AND b.state IN ('open','pending','sending')
+           AND b.created_at>0
+           AND ? - b.created_at >= ?
+           AND p.files IS NOT NULL
+           AND p.files<>'[]'
+           AND NOT EXISTS(SELECT 1 FROM part pending_p WHERE pending_p.batch=b.seq AND pending_p.files IS NULL)
+         ORDER BY b.seq`,
+      )
+      .all(run.scope, expireNow, this.maxStagingAgeMs) as Array<{
+      seq: number;
+      sender: string;
+    }>;
+    let clearedExpired = false;
+    for (const expired of expiredBatches) {
+      if (run !== this.current) break;
+      const parts = this.db
+        .prepare('SELECT body FROM part WHERE batch=? ORDER BY seq')
+        .all(expired.seq) as Array<{ body: string }>;
+      const hasText = parts.some((p) => p.body.trim().length > 0);
+      this.tx(() => {
+        if (!hasText) {
+          this.db
+            .prepare("UPDATE part SET files='[]' WHERE batch=?")
+            .run(expired.seq);
+          this.db
+            .prepare(
+              "UPDATE batch SET state='failed',next_at=0,error='staging retention expired' WHERE seq=?",
+            )
+            .run(expired.seq);
+        } else {
+          this.db
+            .prepare(
+              "UPDATE part SET files='[]',body=body||? WHERE batch=? AND files IS NOT NULL AND files<>'[]'",
+            )
+            .run('（附件暂存超时未送达，请重新上传）', expired.seq);
+          this.db
+            .prepare("UPDATE part SET files='[]' WHERE batch=?")
+            .run(expired.seq);
+        }
+      });
+      if (!hasText) {
+        this.clearRetryWarnings(expired.seq);
+      }
+      clearedExpired = true;
+      await this.notifyRejectedSender(run, expired.sender, 'staging_expired');
+    }
+    if (clearedExpired) {
+      await this.sweepStaging();
+    }
+
     const deferredSenders = new Set<string>();
     while (run === this.current) {
       const now = this.now();
@@ -1231,6 +1573,7 @@ export class ChannelSession {
               .prepare("UPDATE part SET body='',files='[]' WHERE batch=?")
               .run(seq);
           });
+          this.clearRetryWarnings(seq);
           await this.sweepStaging();
           progressed = true;
         } catch (error) {
@@ -1261,6 +1604,7 @@ export class ChannelSession {
                 .prepare("UPDATE part SET body='',files='[]' WHERE batch=?")
                 .run(seq);
             });
+            this.clearRetryWarnings(seq);
             await this.sweepStaging();
             console.error('[wecom] inbound batch quarantined:', {
               seq,
@@ -1293,13 +1637,15 @@ export class ChannelSession {
                 reason,
                 seq,
               );
-            console.warn('[wecom] inbound batch retrying:', {
-              seq,
-              attempts: nextAttempts,
-              transientAttempts: nextTransientAttempts,
-              nextAt: failAt + backoff,
-              error: reason,
-            });
+            if (this.shouldLogRetryWarning(seq, reason, failAt)) {
+              console.warn('[wecom] inbound batch retrying:', {
+                seq,
+                attempts: nextAttempts,
+                transientAttempts: nextTransientAttempts,
+                nextAt: failAt + backoff,
+                error: reason,
+              });
+            }
             deferredSenders.add(sender);
           }
         }
@@ -1475,6 +1821,14 @@ export async function serveChannel(
     options?.now,
     resolveServeMediaHosts(options?.mediaHosts),
     options?.maxAttachmentBytes,
+    undefined,
+    {
+      maxStagingBytes: options?.maxStagingBytes,
+      maxStagingFiles: options?.maxStagingFiles,
+      maxSenderStagingBytes: options?.maxSenderStagingBytes,
+      maxStagingAgeMs: options?.maxStagingAgeMs,
+      transferStallTimeoutMs: options?.transferStallTimeoutMs,
+    },
   );
   const server = createServer({ requestTimeout: 15000 }, async (req, res) => {
     const reply = (status: number, data: unknown) => {
