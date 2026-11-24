@@ -4363,7 +4363,7 @@ test('S1: transferHubFile aborts stalled PUT/GET transfers without extra AbortSi
       await stallFetchStarted.promise;
       t.mock.timers.tick(39);
       await new Promise<void>((ok) => setImmediate(ok));
-      assert.equal(stalled.error, undefined);
+      assert.equal(Reflect.get(stalled, 'error'), undefined);
       t.mock.timers.tick(1);
       await Promise.race([
         stalledPromise,
@@ -4407,7 +4407,7 @@ test('S1: transferHubFile aborts stalled PUT/GET transfers without extra AbortSi
     await new Promise<void>((ok) => setImmediate(ok));
     t.mock.timers.tick(39);
     await new Promise<void>((ok) => setImmediate(ok));
-    assert.equal(getResult.error, undefined);
+    assert.equal(Reflect.get(getResult, 'error'), undefined);
     t.mock.timers.tick(1);
     await Promise.race([
       readingGet,
