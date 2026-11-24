@@ -727,6 +727,19 @@ try {
     assert.equal(backend.seenBotHeaders[0]['circle-version'], undefined);
   }
 
+  if (!standalone) {
+    // Simulate a member who signed in before Hub advertised scopes_supported: strip scopes_supported from cached discovery.
+    const settingsObj = JSON.parse(await readFile(settingsPath, 'utf8'));
+    const serverKey = new URL(settingsObj.mcpServers.Hub.url).href;
+    const authFile = join(data, 'runtime-home', 'mcp-auth.json');
+    const authJson = JSON.parse(await readFile(authFile, 'utf8'));
+    if (authJson.servers?.[serverKey]?.discovery?.resourceMetadata) {
+      delete authJson.servers[serverKey].discovery.resourceMetadata
+        .scopes_supported;
+      await writeFile(authFile, JSON.stringify(authJson, null, 2));
+    }
+  }
+
   // Verify zh-CN error localization on native Electron for 403 BOT_CLIENT_FORBIDDEN (and 401 / 400 BOT_VERSION_MISMATCH in standalone).
   await Promise.race([app.close().catch(() => {}), delay(4000)]);
   try {
@@ -798,14 +811,28 @@ try {
     await page.evaluate(() => {
       location.hash = '/page/remote-bot';
     });
-    await page
-      .locator('[data-bot-error-kind="disconnected"]')
+    const pendingPanel = page.locator('[data-bot-error-kind="disconnected"]');
+    await pendingPanel
       .getByText(consentedCode, { exact: true })
       .waitFor({ timeout: 20000 });
+    assert.ok(
+      ((await pendingPanel.textContent()) ?? '').includes(
+        '请在 Hub 的确认页勾选「允许这个客户端使用我的机器人」。',
+      ),
+    );
     const pendingAuth = JSON.parse(await readFile(mcpAuthPath, 'utf8'));
     assert.equal(
       pendingAuth.servers?.[hubServerKey]?.client?.client_id,
       initialClientId,
+    );
+    assert.ok(
+      pendingAuth.servers?.[hubServerKey]?.tokens?.access_token,
+      'existing token must stay preserved until re-login completes',
+    );
+    assert.equal(
+      pendingAuth.servers?.[hubServerKey]?.discovery?.resourceMetadata
+        ?.scopes_supported,
+      undefined,
     );
 
     await backend.approveOAuth(consentedCode, { consentBot: true });

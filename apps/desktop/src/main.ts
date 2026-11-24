@@ -1232,6 +1232,9 @@ app
           ...(result.errorDetail !== undefined
             ? { detail: result.errorDetail }
             : {}),
+          ...(result.errorScope !== undefined
+            ? { scope: result.errorScope }
+            : {}),
           ...(result.errorUploaded !== undefined
             ? { uploaded: result.errorUploaded }
             : {}),
@@ -1259,6 +1262,7 @@ app
                 code?: unknown;
                 detail?: unknown;
                 remoteMessage?: unknown;
+                scope?: unknown;
                 uploaded?: unknown;
                 total?: unknown;
                 fileName?: unknown;
@@ -1277,6 +1281,9 @@ app
             : typeof meta?.remoteMessage === 'string'
               ? { errorDetail: meta.remoteMessage }
               : {}),
+          ...(typeof meta?.scope === 'string' && meta.scope
+            ? { errorScope: meta.scope }
+            : {}),
           ...(typeof meta?.uploaded === 'number'
             ? { errorUploaded: meta.uploaded }
             : {}),

@@ -734,6 +734,9 @@ export class LiveRuntime implements RuntimePort {
           ...(reply.errorDetail !== undefined
             ? { detail: reply.errorDetail }
             : {}),
+          ...(reply.errorScope !== undefined
+            ? { scope: reply.errorScope }
+            : {}),
           ...(reply.errorUploaded !== undefined
             ? { errorUploaded: reply.errorUploaded }
             : {}),

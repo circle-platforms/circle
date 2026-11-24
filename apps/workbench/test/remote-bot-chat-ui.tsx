@@ -37,7 +37,7 @@ snapshot.mcp = [hub];
 
 let discoverCalls = 0;
 let reloadCalls = 0;
-let reauthorizeCalls = 0;
+let reauthorizePayloads: Array<{ name?: unknown; scope?: unknown }> = [];
 let currentEvents: Array<{
   id: string;
   at: string;
@@ -52,6 +52,7 @@ let nextFailure:
       errorStatus?: number;
       errorCode?: string;
       errorDetail?: string;
+      errorScope?: string;
     }
   | undefined = {
   error: 'remote bot unavailable',
@@ -140,7 +141,10 @@ const host = {
       return { id: command.id, ok: true };
     }
     if (command.name === 'mcp-reauthorize-server') {
-      reauthorizeCalls += 1;
+      reauthorizePayloads.push({
+        name: command.payload.name,
+        scope: command.payload.scope,
+      });
       return { id: command.id, ok: true };
     }
     if (command.name === 'remote-bot') {
@@ -160,6 +164,9 @@ const host = {
               : {}),
             ...(nextFailure.errorDetail !== undefined
               ? { errorDetail: nextFailure.errorDetail }
+              : {}),
+            ...(nextFailure.errorScope !== undefined
+              ? { errorScope: nextFailure.errorScope }
               : {}),
           };
         }
@@ -189,6 +196,9 @@ const host = {
             ...(nextFailure.errorDetail !== undefined
               ? { errorDetail: nextFailure.errorDetail }
               : {}),
+            ...(nextFailure.errorScope !== undefined
+              ? { errorScope: nextFailure.errorScope }
+              : {}),
           };
         }
         const after = Number(command.payload.after ?? 0);
@@ -216,7 +226,8 @@ Object.assign(window, {
   remoteBotUiFixture: {
     discoverCalls: () => discoverCalls,
     reloadCalls: () => reloadCalls,
-    reauthorizeCalls: () => reauthorizeCalls,
+    reauthorizeCalls: () => reauthorizePayloads.length,
+    reauthorizePayloads: () => reauthorizePayloads,
     resetDiscoverCalls: () => {
       discoverCalls = 0;
     },
@@ -224,7 +235,7 @@ Object.assign(window, {
       reloadCalls = 0;
     },
     resetReauthorizeCalls: () => {
-      reauthorizeCalls = 0;
+      reauthorizePayloads = [];
     },
     setHubStatus: (status: McpServer['status'], error?: string) => {
       hub.status = status;
@@ -251,6 +262,7 @@ Object.assign(window, {
       errorStatus?: number;
       errorCode?: string;
       errorDetail?: string;
+      errorScope?: string;
     }) => {
       nextFailure = failure;
     },

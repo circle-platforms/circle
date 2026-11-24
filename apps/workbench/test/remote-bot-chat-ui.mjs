@@ -308,6 +308,7 @@ try {
           error: 'oauth client token rejected',
           errorStatus: 403,
           errorCode: 'BOT_CLIENT_FORBIDDEN',
+          errorScope: 'custom-bot-scope',
         },
         {
           error: '参数无效：机器人附件完整性校验未通过。请重新上传附件后再试。',
@@ -371,11 +372,11 @@ try {
             })
             .click();
           await flushMicrotasks(page);
-          assert.equal(
+          assert.deepEqual(
             await page.evaluate(() =>
-              window.remoteBotUiFixture.reauthorizeCalls(),
+              window.remoteBotUiFixture.reauthorizePayloads(),
             ),
-            1,
+            [{ name: 'Hub', scope: 'custom-bot-scope' }],
           );
         }
         if (
@@ -503,7 +504,16 @@ try {
       });
       const signInPanel = page.locator('[data-bot-error-kind="disconnected"]');
       await signInPanel.waitFor();
-      assert.match((await signInPanel.textContent()) ?? '', /WXYZ-1234/);
+      const signInText = (await signInPanel.textContent()) ?? '';
+      assert.match(signInText, /WXYZ-1234/);
+      assert.ok(
+        signInText.includes(
+          language === 'zh-CN'
+            ? '请在 Hub 的确认页勾选「允许这个客户端使用我的机器人」。'
+            : 'Check “Allow this client to use my bot” on the Hub confirmation page.',
+        ),
+        signInText,
+      );
       await page.evaluate(() => {
         window.remoteBotUiFixture.setHubSignIn(undefined);
         window.remoteBotUiFixture.setHubStatus('not connected', 'ECONNREFUSED');

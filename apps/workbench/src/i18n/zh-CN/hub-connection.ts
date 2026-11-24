@@ -51,6 +51,8 @@ export const hubConnection: Record<string, string> = {
   'Ask your Hub administrator to enable it, then retry.':
     '请联系 Hub 管理员启用后再重试。',
   'bot access not granted': '未授予机器人访问权限',
+  'Check “Allow this client to use my bot” on the Hub confirmation page.':
+    '请在 Hub 的确认页勾选「允许这个客户端使用我的机器人」。',
   'Sign in again, and check “Allow this client to use my bot” on the Hub confirmation page.':
     '重新登录，并在 Hub 的确认页勾选「允许这个客户端使用我的机器人」。',
   'Or configure a direct member Bearer token (format: Bearer <token>) for Hub headers.Authorization in {path}, then retry. Disconnecting removes manual headers; add them again after reconnecting.':

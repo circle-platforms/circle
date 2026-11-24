@@ -163,6 +163,8 @@ interface SignInShown {
 }
 /** What a server waiting for its browser sign-in says in place of its tools. */
 export const SIGN_IN_WAITING = 'waiting for sign-in in the browser';
+/** What a server says when an operation fails because the token lacks required scope. */
+export const REAUTHORIZATION_REQUIRED = 're-authorization required';
 /** The headers Circle sends of its own; lowercase, as compared. */
 const OWN_HEADERS = new Set([
   'circle-session-id',
@@ -795,7 +797,9 @@ function transportFor(
     return new StreamableHTTPClientTransport(url, {
       requestInit,
       fetch: authProvider ? authProvider.authorizedFetch(fetch) : fetch,
-      ...(authProvider ? { authProvider } : {}),
+      ...(authProvider
+        ? { authProvider, onInsufficientScope: 'throw' as const }
+        : {}),
     });
   if (connection.transport === 'ws') {
     if (requestInit) throw new Error('a ws server cannot be sent headers yet');
@@ -1890,22 +1894,11 @@ export class McpManager {
                   const live = this.servers.find(
                     (item) => item.name === connection.name,
                   );
-                  if (
-                    live &&
-                    (await abortable(
-                      this.beginReauthorization(
-                        connection,
-                        live.provider,
-                        live.state,
-                        error,
-                        true,
-                      ),
-                      own.signal,
-                    ))
-                  )
-                    throw new UnauthorizedError(
-                      `${connection.name} requires re-authorization`,
-                    );
+                  if (live?.provider?.takeInsufficientScope()) {
+                    live.state.error = REAUTHORIZATION_REQUIRED;
+                    this.services.onChange?.();
+                    throw error;
+                  }
                   const said =
                     error instanceof Error ? error.message : String(error);
                   if (notSent(error)) {
@@ -2318,11 +2311,18 @@ export class McpManager {
       state.tools = registered.map((tool) => tool.name);
       return { state, server, tools: registered, said };
     } catch (error) {
-      if (
-        signal?.aborted ||
-        !(await this.beginReauthorization(connection, provider, state, error))
-      )
+      if (signal?.aborted) {
+        // Leave aborted error path to the post-cleanup rethrow.
+      } else if (provider?.takeInsufficientScope()) {
+        state.error = REAUTHORIZATION_REQUIRED;
+      } else if (
+        error instanceof UnauthorizedError &&
+        provider?.authorizationUrl
+      ) {
+        this.signIn(connection, provider, state);
+      } else {
         state.error = hide(failureText(error));
+      }
       await client.close().catch(() => {});
       await transport?.close().catch(() => {});
       if (signal?.aborted) throw signal.reason;
@@ -2749,22 +2749,14 @@ export class McpManager {
         state.tools = listed.registered.map((tool) => tool.name);
         if (noted()) state.error = '';
       }
-    } catch (error) {
+    } catch {
       if (!current()) return;
-      if (
-        state &&
-        (await this.beginReauthorization(
-          server.connection,
-          server.provider,
-          state,
-          error,
-          true,
-        ))
-      )
-        return;
       if (state)
-        state.error =
-          why === 'changed' ? TOOLS_NOT_LISTED_AGAIN : TOOLS_EXPIRED_NOT_LISTED;
+        state.error = server.provider?.takeInsufficientScope()
+          ? REAUTHORIZATION_REQUIRED
+          : why === 'changed'
+            ? TOOLS_NOT_LISTED_AGAIN
+            : TOOLS_EXPIRED_NOT_LISTED;
     }
     // What a tool of the server returned before may not hold for the tools it has now
     this.results.forget(server.name);
@@ -3367,6 +3359,25 @@ export class McpManager {
     )
       throw new Error(`no MCP server named ${name}`);
     if (connection) {
+      const home = this.services.home;
+      if (
+        home &&
+        (connection.transport === 'http' || connection.transport === 'sse')
+      ) {
+        const resolved = resolveConnection(
+          connection,
+          process.env,
+          this.services.secrets?.() ?? {},
+        );
+        if (
+          resolved.url &&
+          !Object.keys(resolved.headers).some(credentialHeader) &&
+          keptFor(home, new URL(resolved.url).href).required_scope
+        ) {
+          await this.reauthorizeServer(name, entries, options);
+          return;
+        }
+      }
       await this.connectAgain(connection, this.lifetime.signal);
       return;
     }
@@ -3386,16 +3397,23 @@ export class McpManager {
     await McpManager.disconnect(replaced);
     this.services.onChange?.();
   }
-  /** Drops saved tokens and prompts sign-in again while keeping the registered client. */
+  /** Records additional scopes and starts sign-in while keeping the registered client and live connection until new tokens arrive. */
   async reauthorizeServer(
     name: string,
     entries: Record<string, McpServerConfig> | McpEntry[],
     options: { waiting?: McpStatus[]; trusted?: boolean; scope?: string } = {},
   ): Promise<void> {
-    const { connections } = buildMcpConnections(entries, {
+    const { connections, skipped } = buildMcpConnections(entries, {
       trusted: options.trusted,
     });
+    skipped.push(...(options.waiting ?? []));
     const connection = connections.find((item) => item.name === name);
+    if (
+      !connection &&
+      !skipped.some((item) => item.name === name) &&
+      !this.status.some((item) => item.name === name)
+    )
+      throw new Error(`no MCP server named ${name}`);
     const home = this.services.home;
     if (
       connection &&
@@ -3417,65 +3435,47 @@ export class McpManager {
           pending.cancel?.();
           await pending.done?.catch(() => {});
         }
-        await reauthorizeServer(home, server, options.scope);
+        reauthorizeServer(home, server, options.scope);
+        const provider = await this.authProvider(connection, resolved);
+        if (provider) {
+          let state = this.status.find((item) => item.name === name);
+          if (!state) {
+            state = {
+              name,
+              connection: connection.url ?? resolved.url,
+              tools: [],
+              error: '',
+              scope: connection.scope,
+            };
+            this.status.push(state);
+          }
+          try {
+            await auth(provider, {
+              serverUrl: new URL(server),
+              scope: provider.authorizationScope(),
+              forceReauthorization: true,
+              fetchFn: provider.authorizedFetch(
+                requestFetch(this.services.sessionId),
+                this.lifetime.signal,
+              ),
+            });
+          } catch (error) {
+            if (!provider.authorizationUrl) {
+              state.error = hideFilled(resolved.filled)(failureText(error));
+              this.services.onChange?.();
+              return;
+            }
+          }
+          if (provider.authorizationUrl) {
+            this.signIn(connection, provider, state);
+            return;
+          }
+        }
+        await this.connectAgain(connection, this.lifetime.signal);
+        return;
       }
     }
     await this.reloadServer(name, entries, options);
-  }
-  private async beginReauthorization(
-    connection: McpConnection,
-    provider: McpAuthProvider | undefined,
-    state: McpStatus,
-    error: unknown,
-    disconnectConnected = false,
-  ): Promise<boolean> {
-    if (!provider) return false;
-    const challenge = provider.takeInsufficientScope();
-    const needsAuth =
-      error instanceof UnauthorizedError || challenge !== undefined;
-    if (!needsAuth) return false;
-    if (!provider.authorizationUrl && challenge) {
-      try {
-        await auth(provider, {
-          serverUrl: new URL(provider.server),
-          scope: provider.authorizationScope(),
-          ...(challenge.resourceMetadataUrl
-            ? { resourceMetadataUrl: new URL(challenge.resourceMetadataUrl) }
-            : {}),
-          forceReauthorization: true,
-          fetchFn: provider.authorizedFetch(
-            requestFetch(this.services.sessionId),
-            this.lifetime.signal,
-          ),
-        });
-      } catch {
-        // Check below whether authorizationUrl was recorded for sign-in.
-      }
-    }
-    if (!provider.authorizationUrl) return false;
-    if (disconnectConnected) {
-      const live = this.servers.filter((item) => item.name === connection.name);
-      if (live.length > 0) {
-        const own = new Set(state.tools);
-        for (const server of live) {
-          server.open = false;
-          server.client.onclose = undefined;
-          void server.client.close().catch(() => {});
-        }
-        this.servers = this.servers.filter(
-          (item) => item.name !== connection.name,
-        );
-        this.tools = this.tools.filter((tool) => !own.has(tool.name));
-        for (const tool of own) this.hinted.delete(tool);
-        state.tools = [];
-        this.results.forget(connection.name);
-        this.signIn(connection, provider, state);
-        this.services.onChange?.();
-        return true;
-      }
-    }
-    this.signIn(connection, provider, state);
-    return true;
   }
   /**
    * A server connected again, after a sign-in with its tokens, for a reload of it alone or for a call (#555): its
@@ -3632,7 +3632,8 @@ export class McpManager {
             : server.error === 'disabled'
               ? '\n    disabled'
               : server.error === TOOLS_NOT_LISTED_AGAIN ||
-                  server.error === TOOLS_EXPIRED_NOT_LISTED
+                  server.error === TOOLS_EXPIRED_NOT_LISTED ||
+                  server.error === REAUTHORIZATION_REQUIRED
                 ? '\n    ' + server.tools.join(', ') + '\n    ' + server.error
                 : server.error
                   ? '\n    failed: ' + server.error

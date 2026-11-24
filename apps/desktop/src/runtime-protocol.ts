@@ -93,6 +93,7 @@ export interface RuntimeReply {
   errorStatus?: number;
   errorCode?: string;
   errorDetail?: string;
+  errorScope?: string;
   errorUploaded?: number;
   errorTotal?: number;
   errorFileName?: string;

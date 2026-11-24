@@ -1,11 +1,11 @@
 import './HubConnectionCard.css';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { useRuntime } from '../app/context';
-import { desktopHost } from '../host';
 import { locale, t, tn } from '../i18n';
 import { HUB_SERVER } from '../model/remote-bot';
 import type { McpServer } from '../model/types';
-import { Badge, Button, CopyButton, DeviceCode, Switch } from './common';
+import { Badge, Button, Switch } from './common';
+import { HubSignInButtons, HubSignInGuidance } from './HubSignIn';
 
 export { HUB_SERVER };
 
@@ -133,7 +133,6 @@ export function HubConnectionCard({
     event.preventDefault();
     if (await run('hub-connect', { address })) setAddress('');
   }
-  const https = signIn?.url.startsWith('https://') ?? false;
   return (
     <section
       className="hub-connector"
@@ -199,17 +198,7 @@ export function HubConnectionCard({
           </p>
         )}
         {available && signIn && (
-          <p className="hub-status">
-            {t(
-              'sign in on the Hub’s page with your Hub user name and password',
-            )}
-          </p>
-        )}
-        {available && signIn?.code && (
-          <DeviceCode
-            prompt={t('then enter this code there')}
-            code={signIn.code}
-          />
+          <HubSignInGuidance signIn={signIn} statusClassName="hub-status" />
         )}
         {available && row?.status === 'error' && !signIn && row.error && (
           <div className="hub-alert" role="alert">
@@ -225,22 +214,7 @@ export function HubConnectionCard({
         {available && row && (
           <div className="hub-actions">
             {signIn && (
-              <>
-                <Button
-                  className="primary"
-                  disabled={!https || !desktopHost()?.openExternal}
-                  onClick={async () => {
-                    try {
-                      await desktopHost()?.openExternal?.(signIn.url);
-                    } catch (reason) {
-                      setError(String(reason));
-                    }
-                  }}
-                >
-                  {t('open the Hub’s page')}
-                </Button>
-                <CopyButton text={signIn.url} label={t('copy link')} />
-              </>
+              <HubSignInButtons signIn={signIn} onOpenError={setError} />
             )}
             {(row.status === 'error' || row.status === 'reload required') &&
               !signIn && (

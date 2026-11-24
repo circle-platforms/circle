@@ -133,7 +133,8 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
     code: string | undefined,
     message: string,
     detail?: string,
-  ) => Object.assign(new Error(message), { status, code, detail });
+    scope?: string,
+  ) => Object.assign(new Error(message), { status, code, detail, scope });
 
   for (const lang of ['en', 'zh-CN'] as const) {
     setLanguage(lang);
@@ -204,11 +205,18 @@ test('classifyRemoteBotFailure maps distinct titles, causes, actions, and retrya
     assert.equal(authWithForbiddenCode.kind, 'auth');
     assert.equal(authWithForbiddenCode.retryable, false);
 
-    // 403 BOT_CLIENT_FORBIDDEN without manual Authorization header prompts re-login with bot consent, keeping manual fallback.
+    // 403 BOT_CLIENT_FORBIDDEN without manual Authorization header prompts re-login with WWW-Authenticate scope, keeping manual fallback.
     const forbidden = classifyRemoteBotFailure(
-      makeErr(403, 'BOT_CLIENT_FORBIDDEN', 'oauth client token rejected'),
+      makeErr(
+        403,
+        'BOT_CLIENT_FORBIDDEN',
+        'oauth client token rejected',
+        undefined,
+        'custom-bot-scope',
+      ),
     );
     assert.equal(forbidden.canReauthorize, true);
+    assert.equal(forbidden.reauthorizeScope, 'custom-bot-scope');
     assert.match(forbidden.action, /settings\.json/);
     assert.match(forbidden.action, /Bearer/);
 

@@ -56,7 +56,10 @@ import {
 import { setTimeout as delay } from 'node:timers/promises';
 import { basename, join, relative, isAbsolute, resolve, sep } from 'node:path';
 import { AgentRuntime, type InteractionContext } from '../../../src/runtime.js';
-import { TOOLS_NOT_LISTED_AGAIN } from '../../../src/mcp_loader.js';
+import {
+  REAUTHORIZATION_REQUIRED,
+  TOOLS_NOT_LISTED_AGAIN,
+} from '../../../src/mcp_loader.js';
 import { defaultRunOptions } from '../../../src/run_options.js';
 import type { Extension, ExtensionCommand } from '../../../src/extensions.js';
 import { SessionRuntimeManager } from '../../../src/session_manager.js';
@@ -3833,7 +3836,9 @@ export class RuntimeController {
               ? 'not connected'
               : status
                 ? // Tools that may be out of date are still the server's: the note says why, and it is connected
-                  status.error && status.error !== TOOLS_NOT_LISTED_AGAIN
+                  status.error &&
+                  status.error !== TOOLS_NOT_LISTED_AGAIN &&
+                  status.error !== REAUTHORIZATION_REQUIRED
                   ? 'error'
                   : 'connected'
                 : 'not connected',
@@ -4899,6 +4904,7 @@ export class RuntimeController {
                 code?: unknown;
                 detail?: unknown;
                 remoteMessage?: unknown;
+                scope?: unknown;
                 uploaded?: unknown;
                 total?: unknown;
                 fileName?: unknown;
@@ -4921,6 +4927,9 @@ export class RuntimeController {
             : {}),
           ...(typeof meta?.code === 'string' ? { errorCode: meta.code } : {}),
           ...(errorDetail ? { errorDetail } : {}),
+          ...(typeof meta?.scope === 'string' && meta.scope
+            ? { errorScope: meta.scope }
+            : {}),
           ...(typeof meta?.uploaded === 'number'
             ? { errorUploaded: meta.uploaded }
             : {}),

@@ -3661,6 +3661,224 @@ test('an MCP server that signs in after the start reaches the window without ano
   assert.ok(row(updates.at(-1)!)!.tools.length > 0);
 });
 
+test('mcp-reauthorize-server forwards scope to device auth when cached discovery lacks scopes_supported, and REAUTHORIZATION_REQUIRED keeps status connected', async (t) => {
+  const { createServer } = await import('node:http');
+  const { McpAuthProvider, redirectPort } =
+    await import('../../../src/mcp_auth.js');
+  const { REAUTHORIZATION_REQUIRED } =
+    await import('../../../src/mcp_loader.js');
+  let port = 0;
+  const base = () => `http://127.0.0.1:${port}`;
+  const seenDeviceScopes: string[] = [];
+  let tokenSeq = 0;
+  const validTokens = new Set(['tok-controller-before']);
+  let rejectToolWithScope = false;
+
+  const srv = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', base());
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf8');
+      if (url.pathname === '/.well-known/oauth-authorization-server') {
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            issuer: base(),
+            authorization_endpoint: `${base()}/authorize`,
+            token_endpoint: `${base()}/token`,
+            registration_endpoint: `${base()}/register`,
+            response_types_supported: ['code'],
+            code_challenge_methods_supported: ['S256'],
+            grant_types_supported: [
+              'authorization_code',
+              'urn:ietf:params:oauth:grant-type:device_code',
+            ],
+            device_authorization_endpoint: `${base()}/device`,
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/device') {
+        seenDeviceScopes.push(new URLSearchParams(body).get('scope') ?? '');
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            device_code: 'dc-ctrl',
+            user_code: 'BCDF-GHJK',
+            verification_uri: `${base()}/verify`,
+            verification_uri_complete: `${base()}/verify?user_code=BCDF-GHJK`,
+            expires_in: 600,
+            interval: 1,
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/token') {
+        const tok = `tok-ctrl-${++tokenSeq}`;
+        validTokens.add(tok);
+        res.writeHead(200, { 'content-type': 'application/json' }).end(
+          JSON.stringify({
+            access_token: tok,
+            token_type: 'Bearer',
+            scope: 'custom-bot',
+          }),
+        );
+        return;
+      }
+      if (url.pathname === '/mcp') {
+        const bearer = (req.headers.authorization ?? '').replace(
+          /^Bearer /i,
+          '',
+        );
+        if (!validTokens.has(bearer)) {
+          res.writeHead(401).end();
+          return;
+        }
+        const rpc = JSON.parse(body) as { id?: unknown; method?: string };
+        if (rpc.method === 'tools/call' && rejectToolWithScope) {
+          res
+            .writeHead(403, {
+              'www-authenticate':
+                'Bearer error="insufficient_scope", scope="custom-bot"',
+            })
+            .end();
+          return;
+        }
+        const result =
+          rpc.method === 'initialize'
+            ? {
+                protocolVersion: '2025-03-26',
+                capabilities: { tools: {} },
+                serverInfo: { name: 'srv', version: '1.0.0' },
+              }
+            : rpc.method === 'tools/list'
+              ? {
+                  tools: [
+                    {
+                      name: 'ping',
+                      description: 'ping',
+                      inputSchema: { type: 'object', properties: {} },
+                    },
+                  ],
+                }
+              : { content: [{ type: 'text', text: 'pong' }] };
+        res
+          .writeHead(200, { 'content-type': 'application/json' })
+          .end(
+            rpc.id === undefined
+              ? ''
+              : JSON.stringify({ jsonrpc: '2.0', id: rpc.id, result }),
+          );
+        return;
+      }
+      res.writeHead(404).end();
+    });
+  });
+  await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  port = (srv.address() as { port: number }).port;
+  const root = await mkdtemp(join(tmpdir(), 'circle-reauth-ctrl-'));
+  const home = join(root, 'home');
+  const workspace = join(root, 'workspace');
+  await mkdir(home, { recursive: true });
+  await mkdir(join(workspace, '.git'), { recursive: true });
+  const serverKey = `${base()}/mcp`;
+  const portUsed = await redirectPort(home, serverKey);
+  const seed = new McpAuthProvider(home, serverKey, portUsed);
+  seed.saveClientInformation({
+    client_id: 'cli-ctrl',
+    redirect_uris: [seed.redirectUrl],
+  });
+  seed.saveTokens({
+    access_token: 'tok-controller-before',
+    token_type: 'Bearer',
+  });
+  seed.saveDiscoveryState({
+    authorizationServerUrl: base(),
+    resourceMetadata: { resource: serverKey, authorization_servers: [base()] },
+    authorizationServerMetadata: {
+      issuer: base(),
+      authorization_endpoint: `${base()}/authorize`,
+      token_endpoint: `${base()}/token`,
+      registration_endpoint: `${base()}/register`,
+      response_types_supported: ['code'],
+      code_challenge_methods_supported: ['S256'],
+      grant_types_supported: [
+        'authorization_code',
+        'urn:ietf:params:oauth:grant-type:device_code',
+      ],
+      device_authorization_endpoint: `${base()}/device`,
+    },
+  });
+  const settings = trustFolder(defaultSettings(), workspace);
+  settings.mcpServers = { remote: { url: serverKey, type: 'http' } };
+  saveSettings(settings, home);
+
+  const updates: RuntimeUpdate[] = [];
+  const controller = new RuntimeController({
+    home,
+    workspace,
+    userHome: home,
+    model: new ScriptedModel([]),
+    emit: (update) => updates.push(update),
+    openUrl: () => {},
+  });
+  t.after(async () => {
+    await controller.close();
+    srv.closeAllConnections?.();
+    await new Promise<void>((resolve) => srv.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  });
+  const row = () =>
+    controller.snapshot().mcp.find((item) => item.name === 'remote');
+  await controller.initialize();
+  await wait(
+    () => row()?.status === 'connected' && (row()?.tools.length ?? 0) > 0,
+    'initial connected MCP server',
+  );
+
+  // REAUTHORIZATION_REQUIRED keeps status connected and keeps tools intact.
+  rejectToolWithScope = true;
+  const activeRuntime = (
+    controller as unknown as { runtime(ws: string): AgentRuntime }
+  ).runtime(workspace);
+  await assert.rejects(() =>
+    activeRuntime.mcp.tools[0]!.run({}, {
+      sessionId: controller.snapshot().activeSessionId,
+      signal: new AbortController().signal,
+      approve: async () => 'once',
+      log: () => {},
+    } as never),
+  );
+  await wait(
+    () => row()?.error === REAUTHORIZATION_REQUIRED,
+    're-authorization required note on connected server',
+  );
+  assert.equal(row()?.status, 'connected');
+  assert.equal(row()?.tools.length, 1);
+  assert.equal(
+    keptFor(home, serverKey).tokens?.access_token,
+    'tok-controller-before',
+  );
+
+  rejectToolWithScope = false;
+  const reply = await controller.dispatch({
+    id: randomUUID(),
+    name: 'mcp-reauthorize-server',
+    sessionId: controller.snapshot().activeSessionId,
+    payload: { name: 'remote', scope: 'extra-bot' },
+  });
+  assert.equal(reply.ok, true, reply.error);
+  await wait(
+    () => keptFor(home, serverKey).tokens?.access_token === 'tok-ctrl-1',
+    'reauthorized token saved after device poll',
+  );
+  await wait(
+    () => row()?.status === 'connected' && !row()?.error,
+    'reconnected without error after reauthorization',
+  );
+  assert.deepEqual(seenDeviceScopes, ['custom-bot extra-bot']);
+  assert.equal(keptFor(home, serverKey).required_scope, undefined);
+});
+
 const activeSession = (f: { controller: RuntimeController }) => {
   const snapshot = f.controller.snapshot();
   return snapshot.sessions.find((row) => row.id === snapshot.activeSessionId)!;

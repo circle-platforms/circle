@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useRuntime } from '../app/context';
 import { useStableCallback } from '../app/stable-callback';
 import { MessageView } from '../components/MessageView';
-import { Button, CopyButton, DeviceCode, FileChip } from '../components/common';
+import { Button, FileChip } from '../components/common';
+import { HubSignInButtons, HubSignInGuidance } from '../components/HubSignIn';
 import { t, useLocale } from '../i18n';
 import {
   HUB_SERVER,
@@ -50,27 +51,26 @@ function DisconnectedPanel({
   onRetry: () => void;
 }) {
   const [openError, setOpenError] = useState('');
-  const https = signIn?.url.startsWith('https://') ?? false;
   return (
     <div className="empty-state" data-bot-error-kind="disconnected">
       <h2>{t('remote bot disconnected')}</h2>
-      <p role="status">
-        {signIn
-          ? t('sign in on the Hub’s page with your Hub user name and password')
-          : t('Hub is not connected right now.')}
-      </p>
-      {!signIn && (
-        <p className="muted small">
-          {t(
-            'Check your Hub connection in Settings -> Extensions, or retry reconnecting.',
+      {signIn ? (
+        <HubSignInGuidance
+          signIn={signIn}
+          statusRole="status"
+          hint={t(
+            'Check “Allow this client to use my bot” on the Hub confirmation page.',
           )}
-        </p>
-      )}
-      {signIn?.code && (
-        <DeviceCode
-          prompt={t('then enter this code there')}
-          code={signIn.code}
         />
+      ) : (
+        <>
+          <p role="status">{t('Hub is not connected right now.')}</p>
+          <p className="muted small">
+            {t(
+              'Check your Hub connection in Settings -> Extensions, or retry reconnecting.',
+            )}
+          </p>
+        </>
       )}
       {detail && !signIn && <p className="muted small">{detail}</p>}
       {openError && (
@@ -80,24 +80,7 @@ function DisconnectedPanel({
       )}
       <span className="empty-state-actions">
         {signIn && (
-          <>
-            <Button
-              className="primary"
-              type="button"
-              disabled={!https || !desktopHost()?.openExternal}
-              onClick={async () => {
-                setOpenError('');
-                try {
-                  await desktopHost()?.openExternal?.(signIn.url);
-                } catch (reason) {
-                  setOpenError(String(reason));
-                }
-              }}
-            >
-              {t('open the Hub’s page')}
-            </Button>
-            <CopyButton text={signIn.url} label={t('copy link')} />
-          </>
+          <HubSignInButtons signIn={signIn} onOpenError={setOpenError} />
         )}
         <Button type="button" disabled={reconnecting} onClick={onRetry}>
           {t('retry')}
@@ -346,7 +329,12 @@ function Chat({
               onClick={() => {
                 setReconnecting(true);
                 void Promise.resolve(
-                  request('mcp.reauthorize-server', { name: HUB_SERVER }),
+                  request('mcp.reauthorize-server', {
+                    name: HUB_SERVER,
+                    ...(view.reauthorizeScope
+                      ? { scope: view.reauthorizeScope }
+                      : {}),
+                  }),
                 )
                   .catch(() => {})
                   .finally(() => {
