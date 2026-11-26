@@ -4,11 +4,23 @@ export interface ToolCall {
   args: Record<string, unknown>;
   raw_args?: string;
   argument_error?: string;
+  /**
+   * A Chat Completions call's `extra_content` as the endpoint sent it: Gemini signs the
+   * first call of each step there (`google.thought_signature`) and refuses the turn's next
+   * request without it. Sent back as it came, only to the connection `thinking_scope` names.
+   * A step the harness rewrote for privacy carries `UNSIGNED_GEMINI_CALL` instead.
+   */
+  extra_content?: Record<string, unknown>;
   /** Set when a hook asked for a decision. Not part of what the model sent. */
   hook_reason?: string;
   /** What a hook that asked wrote for the person (`user_message`). Shown on the card, never sent to the model. */
   hook_message?: string;
 }
+/**
+ * The thought signature Google documents for a call its API did not write: Gemini accepts
+ * the step without a thought to replay.
+ */
+export const UNSIGNED_GEMINI_CALL = 'skip_thought_signature_validator';
 export interface Usage {
   input_tokens: number;
   output_tokens: number;

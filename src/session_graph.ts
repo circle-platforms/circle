@@ -66,6 +66,7 @@ function validateMessage(message: Message, previous: Set<string>): Set<string> {
       !string(call.id) ||
       !string(call.name) ||
       !isRecord(call.args) ||
+      (call.extra_content !== undefined && !isRecord(call.extra_content)) ||
       seen.has(call.id)
     )
       throw new Error('invalid or duplicate tool call');

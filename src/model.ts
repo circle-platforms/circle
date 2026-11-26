@@ -27,7 +27,7 @@ import type {
   ModelCompletion,
   ToolCall,
 } from './types.js';
-import { emptyUsage } from './types.js';
+import { emptyUsage, UNSIGNED_GEMINI_CALL } from './types.js';
 import { commandExecutionModelContent } from './command_process.js';
 import { loadCredentials, type CircleSettings } from './settings.js';
 import {
@@ -37,6 +37,8 @@ import {
   type GuardOptions,
   isThinkingSignatureError,
   isEncryptedReasoningError,
+  isMissingThoughtSignatureError,
+  isExtraContentError,
 } from './model_guard.js';
 import { apiFamily, CHATGPT_PROTOCOL, speaksResponses } from './protocols.js';
 import { zstdCompressSync } from 'node:zlib';
@@ -205,6 +207,10 @@ export class GatewayModel implements ChatModel {
   private readonly sentParameters = new AsyncLocalStorage<Set<string>>();
   private readonly thinkingScope: string;
   private readonly rejectedThinking = new Set<string>();
+  /** Gemini refused a step with no thought signature: such steps get Google's skip value. */
+  private signUnsignedSteps = false;
+  /** The endpoint refused a call's `extra_content`: none is sent from then on. */
+  private omitExtraContent = false;
   private observedContextLimit?: number;
   private observedInputLimit?: number;
   private observedOutputLimit?: number;
@@ -762,14 +768,18 @@ export class GatewayModel implements ChatModel {
           content: message.content || '',
           ...(message.tool_calls?.length
             ? {
-                tool_calls: message.tool_calls.map((call) => ({
-                  id: call.id,
-                  type: 'function' as const,
-                  function: {
-                    name: call.name,
-                    arguments: JSON.stringify(call.args),
-                  },
-                })),
+                tool_calls: message.tool_calls.map((call, index) => {
+                  const extra = this.sentExtra(message, index);
+                  return {
+                    id: call.id,
+                    type: 'function' as const,
+                    function: {
+                      name: call.name,
+                      arguments: JSON.stringify(call.args),
+                    },
+                    ...(extra ? { extra_content: extra } : {}),
+                  };
+                }),
               }
             : {}),
         });
@@ -867,7 +877,59 @@ export class GatewayModel implements ChatModel {
     mark(body.messages.findLast((message) => message.role === 'user'));
     (body as unknown as Record<string, unknown>).cache_control = cache;
   }
+  /**
+   * What a stored call sends back in `extra_content`: its own, to the connection that
+   * wrote it. Gemini checks the first call of each step, so once it has refused an unsigned
+   * one, such a call gets Google's value for a call its API did not write.
+   */
+  private sentExtra(
+    message: Message,
+    index: number,
+  ): Record<string, unknown> | undefined {
+    if (this.omitExtraContent) return undefined;
+    const extra = message.tool_calls?.[index]?.extra_content;
+    if (extra && message.thinking_scope === this.thinkingScope) return extra;
+    return this.signUnsignedSteps && index === 0
+      ? { google: { thought_signature: UNSIGNED_GEMINI_CALL } }
+      : undefined;
+  }
   private async completeOpenAI(request: ModelRequest): Promise<ModelResponse> {
+    try {
+      return await this.sendOpenAI(request);
+    } catch (error) {
+      request.signal.throwIfAborted();
+      const steps = request.messages.filter(
+        (message) => message.role === 'assistant' && message.tool_calls?.length,
+      );
+      if (
+        isMissingThoughtSignatureError(error) &&
+        !this.signUnsignedSteps &&
+        !this.omitExtraContent &&
+        steps.some((message) => !this.sentExtra(message, 0))
+      )
+        // A step from another connection, or from before signatures were kept.
+        this.signUnsignedSteps = true;
+      else if (
+        isExtraContentError(error) &&
+        !this.omitExtraContent &&
+        steps.some((message) =>
+          message.tool_calls!.some((_call, index) =>
+            this.sentExtra(message, index),
+          ),
+        )
+      )
+        this.omitExtraContent = true;
+      else throw error;
+      request.recovery?.take();
+      try {
+        request.notice?.({ event: 'thinking_signature_retry' });
+      } catch {
+        /* Display subscribers cannot stop recovery. */
+      }
+      return this.sendOpenAI(request);
+    }
+  }
+  private async sendOpenAI(request: ModelRequest): Promise<ModelResponse> {
     const body = this.openAIBody(request);
     this.markChatCache(body);
     this.configureBody(body as unknown as Record<string, unknown>);
@@ -889,7 +951,8 @@ export class GatewayModel implements ChatModel {
     let thinking = '';
     let finish = '';
     let servedModel = this.model;
-    const calls = new Map<number, { id: string; name: string; args: string }>();
+    const calls = new Map<string, StreamedCall>();
+    let latest: string | undefined;
     const usage = emptyUsage();
     let usageReported = false;
     let inputReported = false;
@@ -942,11 +1005,23 @@ export class GatewayModel implements ChatModel {
           request.token(reasoning, true);
         }
         for (const part of delta.tool_calls ?? []) {
-          const call = calls.get(part.index) ?? { id: '', name: '', args: '' };
+          // Gemini's compatible route sends no index: a part continues the latest
+          // call unless it plainly starts another one.
+          const last = latest && calls.get(latest);
+          const key =
+            typeof part.index === 'number'
+              ? `index ${part.index}`
+              : latest && last && !startsCall(part, last)
+                ? latest
+                : `call ${calls.size}`;
+          latest = key;
+          const call = calls.get(key) ?? { id: '', name: '', args: '' };
           if (part.id) call.id = part.id;
           if (part.function?.name) call.name += part.function.name;
           if (part.function?.arguments) call.args += part.function.arguments;
-          calls.set(part.index, call);
+          const extra = (part as { extra_content?: unknown }).extra_content;
+          if (isRecord(extra)) call.extra = mergedExtra(call.extra, extra);
+          calls.set(key, call);
         }
       }
     } catch (error) {
@@ -968,6 +1043,9 @@ export class GatewayModel implements ChatModel {
         content,
         thinking,
         tool_calls,
+        ...(tool_calls.some((call) => call.extra_content)
+          ? { thinking_scope: this.thinkingScope }
+          : {}),
         ...(cacheReported ? {} : { cache_reported: false }),
         completion: completion(
           'openai',
@@ -1893,10 +1971,44 @@ const compressedFetch: typeof fetch = (input, init) => {
     body: zstdCompressSync(Buffer.from(init.body)),
   });
 };
+type StreamedCall = {
+  id: string;
+  name: string;
+  args: string;
+  extra?: Record<string, unknown>;
+};
+/** In a stream without `index`: a new id, or a name or arguments after a whole call. */
+function startsCall(
+  part: { id?: string; function?: { name?: string; arguments?: string } },
+  last: StreamedCall,
+): boolean {
+  const whole = Boolean(last.name) && isRecord(parsedJson(last.args));
+  if (part.id) return last.id ? part.id !== last.id : whole;
+  if (part.function?.name) return Boolean(last.name);
+  return Boolean(part.function?.arguments) && whole;
+}
+function parsedJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+/** A later part of a call adds to its `extra_content`; it never takes a signature away. */
+function mergedExtra(
+  into: Record<string, unknown> | undefined,
+  extra: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...into };
+  for (const [key, value] of Object.entries(extra)) {
+    const before = merged[key];
+    merged[key] =
+      isRecord(before) && isRecord(value) ? mergedExtra(before, value) : value;
+  }
+  return merged;
+}
 /** Streamed function calls as Circle stores them; a broken one keeps its raw text as evidence. */
-function finishedToolCalls(
-  calls: { id: string; name: string; args: string }[],
-): ToolCall[] {
+function finishedToolCalls(calls: StreamedCall[]): ToolCall[] {
   return calls.map((call) => {
     const incomplete = !call.id || !call.name;
     let args = parseToolInput(call.args || '{}');
@@ -1905,6 +2017,7 @@ function finishedToolCalls(
       id: call.id || randomUUID(),
       name: call.name || 'incomplete_tool_call',
       args: isRecord(args) ? args : {},
+      ...(call.extra ? { extra_content: call.extra } : {}),
       ...(incomplete || !isRecord(args)
         ? {
             raw_args: call.args,

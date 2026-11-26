@@ -84,6 +84,18 @@ reasoning items. Stripping thinking drops them, and summary requests leave them
 out. An HTTP 400 that names encrypted content triggers one retry without them,
 remembered for that model instance like a rejected signature.
 
+Chat Completions calls keep the endpoint's `extra_content` on the stored
+`ToolCall` (Gemini's thought signature), and the message gets the same scope;
+it is replayed on that call only under a matching scope. Gemini signs a step
+on its first call and refuses the step unsigned. When the harness rewrites any
+call of a message for privacy, every call of it loses `extra_content`, and one
+that held a Google thought signature gets `skip_thought_signature_validator`
+(`UNSIGNED_GEMINI_CALL`), the value Google documents for a call its API did
+not write. A 400 naming a missing thought signature, when the request had an
+unsigned step, makes the model instance put that value on the first call of
+every unsigned step and send once more; a 400 naming `extra_content` makes it
+send none. Both are remembered for that instance.
+
 ## Tools and safety
 
 | Module                 | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |

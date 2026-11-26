@@ -15,7 +15,7 @@ import type {
   ToolContext,
   ToolModelCall,
 } from './types.js';
-import { emptyUsage, addUsage } from './types.js';
+import { emptyUsage, addUsage, UNSIGNED_GEMINI_CALL } from './types.js';
 import { EventBus } from './events.js';
 import { ApprovalPolicy, wildcard, type ApprovalMode } from './approvals.js';
 import { CheckpointStore, type Session } from './checkpoint_store.js';
@@ -255,6 +255,21 @@ export interface QueuedMessage {
   display: string;
   pastes?: Record<string, string>;
   attachments?: MediaAttachment[];
+}
+/**
+ * A step the harness rewrote no longer matches the thought signed with it, and that thought
+ * can hold what the rewrite took out. Gemini signs a step on its first call and refuses the
+ * step unsigned, so a signed call gets the value Google documents for a call its API did not write.
+ */
+function unsignedCall(call: ToolCall, original: ToolCall): ToolCall {
+  const { extra_content: _thought, ...rest } = call;
+  const google = original.extra_content?.google;
+  return isRecord(google) && typeof google.thought_signature === 'string'
+    ? {
+        ...rest,
+        extra_content: { google: { thought_signature: UNSIGNED_GEMINI_CALL } },
+      }
+    : rest;
 }
 /** A hook asked about this call: the card shows what it wrote for the person, the model reads its reason. */
 function hookAsked(call: ToolCall, batch: HookBatch): ToolCall {
@@ -1427,9 +1442,13 @@ export class Harness {
               (call, index) => call !== originalCalls?.[index],
             )
           ) {
-            // Provider blocks and encrypted reasoning still hold the original call.
+            // Provider blocks, encrypted reasoning and the step's thought signature
+            // still hold the original calls.
             response.message.provider_content = undefined;
             response.message.reasoning_items = undefined;
+            response.message.tool_calls = response.message.tool_calls.map(
+              (call, index) => unsignedCall(call, originalCalls![index]!),
+            );
           }
           const message = {
             ...response.message,
