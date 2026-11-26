@@ -353,8 +353,25 @@ export function isEncryptedReasoningError(error: unknown): boolean {
     /encrypted[_ ]content/i.test(String(record(error).message || error))
   );
 }
+/** Gemini refusing a step whose first call came back without its thought signature. */
+export function isMissingThoughtSignatureError(error: unknown): boolean {
+  if (statusOf(error) !== 400) return false;
+  return /missing\s+a\s+thought_signature/i.test(
+    String(record(error).message || error),
+  );
+}
+/** An endpoint that will not take a tool call's `extra_content` back. */
+export function isExtraContentError(error: unknown): boolean {
+  if (![400, 422].includes(statusOf(error) ?? 0)) return false;
+  return /\bextra_content\b/i.test(String(record(error).message || error));
+}
 export function rejectedParameters(error: unknown): string[] {
-  if (isThinkingSignatureError(error) || isEncryptedReasoningError(error))
+  if (
+    isThinkingSignatureError(error) ||
+    isEncryptedReasoningError(error) ||
+    isMissingThoughtSignatureError(error) ||
+    isExtraContentError(error)
+  )
     return [];
   if (![400, 422].includes(statusOf(error) ?? 0)) return [];
   const text = String(record(error).message || error).toLowerCase();
